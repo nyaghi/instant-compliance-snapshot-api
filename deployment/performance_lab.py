@@ -175,36 +175,6 @@ def final_four_asset(name, text):
       trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||""});
       onResult(result);''')
         replace('      connectorStarted=true;', '      connectorStarted=true;trace("browser collectors dispatched",{states:[...external]});')
-        # Trial-only transport control: at most four browser-driven Standard
-        # collectors at once. Start the observed long-tail sources first, but
-        # preserve each registry's query plan, status rules, result order, and
-        # Sales' existing immediate launch. The durable workflow still sees
-        # the same settled-state acknowledgements.
-        replace('connector=Promise.all(external.map(async state=>{', '''const ordered=mode==='standard'
-        ? [...external].sort((a,b)=>{
-            const priority=['GA','MS','NM','AL','IL','NC','NV','NY','TN'];
-            const rank=state=>{
-              const index=priority.indexOf(state);
-              return index<0?priority.length:index;
-            };
-            return rank(a)-rank(b);
-          })
-        : external;
-      const limit=mode==='standard'?4:external.length;
-      let active=0;
-      const waiting=[];
-      const acquire=async()=>{
-        if(active<limit){active++;return;}
-        await new Promise(resolve=>waiting.push(resolve));
-        active++;
-      };
-      const release=()=>{active--;waiting.shift()?.();};
-      connector=Promise.all(ordered.map(async state=>{
-        await acquire();
-        if(signal?.aborted){release();return;}
-        trace("browser collector launched",{state,active});''')
-        replace('finally{settledExternal.add(state);}',
-                'finally{settledExternal.add(state);trace("browser collector settled",{state});release();}')
         replace('        token=accepted.token;', '        token=accepted.token;trace("backend workflow accepted",{progressive_external_release:accepted.progressive_external_release===true});')
         replace("            try{await call('release-external');released=true;}catch{signal?.throwIfAborted();}", "            try{await call('release-external');released=true;trace('external collectors released');}catch{signal?.throwIfAborted();}")
         replace('      return states.map(state=>results.get(state));', '      trace("workflow finished",{result_count:results.size});\n      return states.map(state=>results.get(state));', 2)
