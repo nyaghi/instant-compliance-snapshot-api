@@ -19,6 +19,16 @@ STAGING = {
     'srv-d8a38lnavr4c73d4ib30': 'https://instant-compliance-snapshot-api-staging-8dnk.onrender.com',
     'srv-d82afqjrjlhs738j7or0': 'https://instant-compliance-snapshot-api-staging.onrender.com',
 }
+TRIAL_BROWSER_RESERVED_SLOTS = 8
+
+
+def trial_settled_slots(count):
+    """The trial has nine browser states but reserves only eight queue slots.
+
+    Browser completion may reach nine; release acknowledgements count reserved
+    slots, not states. Keep the queue's own lower-bound/type validation.
+    """
+    return min(count, TRIAL_BROWSER_RESERVED_SLOTS) if type(count) is int else count
 
 
 def enabled(master):
@@ -184,7 +194,7 @@ def handle(master, handler, *, trial_queue=None):
             cutoff = trial_sales_cutoff(payload, trial)
             data = prepare(master, payload, owner, transport=transport,
                            external_states={'NY', 'IL', 'GA', 'AL', 'NC', 'NV', 'TN', 'NM', 'MS'} if trial else None,
-                           external_slots=8 if trial else None,
+                           external_slots=TRIAL_BROWSER_RESERVED_SLOTS if trial else None,
                            sales_cutoff_seconds=cutoff if 'sales_cutoff_seconds' in payload else None)
             if trial:
                 data['progressive_external_release'] = True
@@ -193,7 +203,7 @@ def handle(master, handler, *, trial_queue=None):
             path = '/api/lab/workflows/' + record['id']
             if action == 'poll':
                 if trial and 'settled_count' in payload:
-                    transport(path + '/release-external', {'settled_count': payload['settled_count']})
+                    transport(path + '/release-external', {'settled_count': trial_settled_slots(payload['settled_count'])})
                 status = transport(path)
                 if (status.get('source_version') != os.environ.get('CE_STAGING_WORKFLOW_VERSION')
                         or status.get('ein') != record['ein']): raise ValueError('Worker release mismatch')
@@ -205,7 +215,7 @@ def handle(master, handler, *, trial_queue=None):
             elif action in ('cancel', 'release-external'):
                 update = {}
                 if trial and action == 'release-external' and 'settled_count' in payload:
-                    update['settled_count'] = payload['settled_count']
+                    update['settled_count'] = trial_settled_slots(payload['settled_count'])
                 transport(path + '/' + action, update)
                 data = {'ok': True}
             else: raise ValueError('Invalid workflow action')

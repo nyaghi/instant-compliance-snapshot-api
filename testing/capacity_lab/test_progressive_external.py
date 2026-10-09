@@ -79,7 +79,7 @@ class ProgressiveExternalControls(unittest.TestCase):
 
     def test_transport_negotiates_only_for_trial_and_forwards_cumulative_count(self):
         master=types.SimpleNamespace(APP_VERSION='fixture',NY_CONNECTOR_SIGNING_KEY='x'*48,
-            SUPPORTED_STATES=['CO','IL','NY','NM'],IDENTITY_STATES=['CO'],
+            SUPPORTED_STATES=['CO','IL','NY','NM','GA','AL','NC','NV','TN','MS'],IDENTITY_STATES=['CO'],
             canonical_ein_digits=lambda v:v.replace('-',''),normalize_email=lambda v:v,
             normalize_device_id=lambda v:v,staging_access_error=lambda *args:False,
             is_verified_internal_passcode=lambda *args:True,log_error=lambda *args:None)
@@ -107,6 +107,19 @@ class ProgressiveExternalControls(unittest.TestCase):
             request({'action':'poll','token':result['token'],'settled_count':3})
         self.assertEqual([c[0] for c in queue.mock_calls],['release_external_slots','status'])
         queue.release_external_slots.assert_called_once_with('private-performance-lab',ident,3)
+        queue.reset_mock()
+        all_browser={**start,'states':['CO','NY','IL','GA','AL','NC','NV','TN','NM','MS']}
+        with patch('deployment.durable_queue.trial_identity',return_value={'origin':'fixture'}):
+            nine=request(all_browser)
+        queued_payload=queue.submit.call_args.args[2]
+        self.assertEqual(queued_payload['external_state_slots'],8)
+        queue.reset_mock()
+        with patch.dict(os.environ,{'CE_STAGING_WORKFLOW_VERSION':'fixture'}):
+            request({'action':'poll','token':nine['token'],'settled_count':9})
+        queue.release_external_slots.assert_called_once_with('private-performance-lab',ident,8)
+        queue.reset_mock()
+        request({'action':'release-external','token':nine['token'],'settled_count':9})
+        queue.release_external_slots.assert_called_once_with('private-performance-lab',ident,8)
         with patch.object(workflows,'call',return_value={'id':ident}) as transport:
             legacy=request(start,trial=False)
             self.assertNotIn('progressive_external_release',legacy)
