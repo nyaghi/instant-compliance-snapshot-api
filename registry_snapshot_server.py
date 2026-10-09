@@ -27893,6 +27893,73 @@ def search_batch_browser_state(page, org, state: str):
     return copy_external_result(org, state, external_result)
 
 
+def ok_reviewed_initialism_probe(name: str, ein: str) -> str:
+    """Use a distinctive dotted initialism already verified for this EIN."""
+    name_letters = re.findall(r"[A-Za-z0-9]+", name or "")
+    first = "".join(name_letters[:10]).casefold()
+    for reviewed in known_names_for_ein(ein):
+        match = re.match(r"^\s*((?:[A-Za-z]\.){4,10})", reviewed)
+        if match and first.startswith(match.group(1).replace(".", "").casefold()):
+            return match.group(1)
+    return ""
+
+
+def ok_one_edit_word(left: str, right: str) -> bool:
+    if min(len(left), len(right)) < 5 or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) == 1
+    short, long = sorted((left, right), key=len)
+    return any(long[:index] + long[index + 1:] == short for index in range(len(long)))
+
+
+def ok_reviewed_near_name(registry_name: str, original_name: str, ein: str) -> bool:
+    """Identify a single transcription difference; detail corroboration is still required."""
+    probe = ok_reviewed_initialism_probe(original_name, ein)
+    if not probe or not re.match(r"^\s*" + re.escape(probe), registry_name, re.I):
+        return False
+    def remainder_tokens(value: str) -> list[str]:
+        value = re.sub(r"^\s*(?:[A-Za-z]\.){4,10}|^\s*[A-Z]{4,10}\b", "", value, count=1)
+        tokens = [item.casefold() for item in re.findall(r"[A-Za-z0-9]+", value)]
+        while tokens and tokens[-1] in {"inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}:
+            tokens.pop()
+        return tokens
+    found = remainder_tokens(registry_name)
+    for reviewed in known_names_for_ein(ein):
+        if not re.match(r"^\s*" + re.escape(probe), reviewed, re.I):
+            continue
+        requested = remainder_tokens(reviewed)
+        if len(requested) < 2 or len(requested) != len(found):
+            continue
+        changed = [(a, b) for a, b in zip(requested, found) if a != b]
+        if len(changed) == 1 and ok_one_edit_word(*changed[0]) and any(
+                a == b and len(a) >= 6 for a, b in zip(requested, found)):
+            return True
+    return False
+
+
+def ok_tentative_detail_corroborated(detail_text: str, tentative_name: str, ein: str, module) -> bool:
+    displayed_name = module.extract_labeled_value_from_text(detail_text, ["Entity Name"])
+    address_section = re.search(
+        r"Entity Address\s*:?\s*(.*?)\s*(?:Registered Agent Information|PRINCIPALS|NAMES INFORMATION)",
+        detail_text, re.I | re.S)
+    profile = public_profile_for_ein(ein).get("organization") or {}
+    street_number = re.match(r"\s*(\d+)", str(profile.get("address") or ""))
+    zipcode = re.match(r"(\d{5})", str(profile.get("zipcode") or ""))
+    city, state = str(profile.get("city") or "").strip(), str(profile.get("state") or "").strip()
+    address_text = re.sub(r"\s+", " ", address_section.group(1)) if address_section else ""
+    city_pattern = re.escape(city).replace(r"\ ", r"\s+") if city else ""
+    return bool(
+        complete_name_identity_key(displayed_name) == complete_name_identity_key(tentative_name)
+        and canonical_ein_digits(str(profile.get("ein") or "")) == canonical_ein_digits(ein)
+        and street_number and zipcode and city_pattern and re.fullmatch(r"[A-Za-z]{2}", state)
+        and re.search(r"\b" + re.escape(street_number.group(1)) + r"\b", address_text)
+        and re.search(city_pattern + r"\s*,\s*" + re.escape(state) + r"\b", address_text, re.I)
+        and re.search(r"\b" + re.escape(zipcode.group(1)) + r"\b", address_text)
+        and registry_address_evidence(ein, f"{city}, {state}", registry_state="OK").get("decision") == "corroborated"
+    )
+
+
 def search_ok_with_variants(page, org, module):
     original_name = getattr(org, "organization_name", "") or ""
     variants = build_search_queries(
@@ -27954,7 +28021,9 @@ def search_ok_with_variants(page, org, module):
         query = ok_search_name_for_org(org_with_name(org, variant))
         if query and query.casefold() not in {v.casefold() for v in specific}:
             specific.append(query)
-    variants = list(dict.fromkeys([*specific[:phrase_slots], *probes, *specific[phrase_slots:]]))
+    initialism = ok_reviewed_initialism_probe(original_name, org.ein)
+    variants = list(dict.fromkeys([*([initialism] if initialism else []),
+                                   *specific[:phrase_slots], *probes, *specific[phrase_slots:]]))
     best_result = None
     started = time.perf_counter()
     attempted_variants: list[str] = []
@@ -28013,7 +28082,8 @@ def search_ok_with_variants(page, org, module):
             continue
         if public_status(result) != "Not Registered":
             matched_name = getattr(result, "matched_registry_name", "") or ""
-            if matched_name and not registry_name_is_safe_for_org(matched_name, original_name, getattr(org, "ein", "")):
+            if matched_name and not (registry_name_is_safe_for_org(matched_name, original_name, getattr(org, "ein", ""))
+                                     or getattr(result, "ok_name_location_corroborated", False)):
                 result.rejected_candidates = list(dict.fromkeys([
                     *(getattr(result, "rejected_candidates", []) or []),
                     matched_name,
@@ -28034,6 +28104,11 @@ def search_ok_with_variants(page, org, module):
                 best_result.rejected_candidates = [matched_name]
                 best_result.rejection_reason = "REJECT_VARIANT_MATCH_NOT_SAFE_FOR_ORIGINAL_NAME"
                 continue
+            if getattr(result, "ok_name_location_corroborated", False):
+                result.source_note = " ".join(part for part in [
+                    getattr(result, "source_note", "") or "",
+                    "The Oklahoma record differs by one name character; the same-EIN organization address corroborates the selected detail."
+                ] if part).strip()
             if variant != original_name:
                 result.source_note = " ".join(part for part in [
                     getattr(result, "source_note", "") or "",
@@ -28126,6 +28201,7 @@ def ok_choose_safe_result_row_on_page(page, org, module):
     best_score = -10000
     best_rank = (-10000, -1)
     equivalent_records = []
+    tentative = []
     try:
         rows = page.locator("tr")
         row_count = rows.count()
@@ -28195,7 +28271,10 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         if not registry_name:
             raise ValueError("Oklahoma filing link has no readable organization name")
 
-        if not registry_name_is_safe_for_org(registry_name, getattr(org, "original_organization_name", getattr(org, "organization_name", "")), getattr(org, "ein", "")):
+        original_name = getattr(org, "original_organization_name", getattr(org, "organization_name", ""))
+        if not registry_name_is_safe_for_org(registry_name, original_name, getattr(org, "ein", "")):
+            if ok_reviewed_near_name(registry_name, original_name, getattr(org, "ein", "")):
+                tentative.append((row, filing_link, registry_name, filing_number))
             continue
         score = target_name_score(registry_name, safe_targets)
         # The master already accepts a complete distinctive core with generic
@@ -28211,6 +28290,9 @@ def ok_choose_safe_result_row_on_page(page, org, module):
             best_score = score
             best = (row, filing_link, registry_name, filing_number)
 
+    if (not best or best_score < 450) and len(tentative) == 1:
+        org.ok_tentative_candidate_name = tentative[0][2]
+        return tentative[0]
     if not best or best_score < 450:
         return None
     if not registry_name_is_safe_for_org(best[2], getattr(org, "original_organization_name", getattr(org, "organization_name", "")), getattr(org, "ein", "")):
@@ -28765,6 +28847,17 @@ def search_ok_precise(page, org, module):
         matched_name, filing_number = ok_open_latest_equivalent_detail(page, org, module, selected)
 
         detail_text = module.body_text(page, timeout=15000)
+        tentative_name = getattr(org, "ok_tentative_candidate_name", "")
+        if tentative_name:
+            if not ok_tentative_detail_corroborated(detail_text, tentative_name, org.ein, module):
+                result.status = "Unable to Verify"
+                result.raw_status_text = "Oklahoma near-name candidate identity could not be corroborated"
+                result.source_note = "A similar Oklahoma name was found, but its full detail and same-EIN organization address did not establish a safe match; no negative conclusion was made."
+                result.reason_code = "OK_NEAR_NAME_IDENTITY_UNCONFIRMED"
+                result.rejected_candidates = [tentative_name]
+                result.success = False
+                return result
+            result.ok_name_location_corroborated = True
         status_text = module.extract_labeled_value_from_text(detail_text, ["Status"])
         if not status_text:
             result.status = module.STATUS_UNKNOWN
