@@ -185,6 +185,7 @@ def final_four_asset(name, text):
           trace("browser collector scheduled",{state,delay_ms:launchDelayMs});
           await new Promise(resolve=>setTimeout(resolve,launchDelayMs));
         }
+        if(signal?.aborted) return;
         trace("browser collector launched",{state});''')
         replace('        token=accepted.token;', '        token=accepted.token;trace("backend workflow accepted",{progressive_external_release:accepted.progressive_external_release===true});')
         replace("            try{await call('release-external');released=true;}catch{signal?.throwIfAborted();}", "            try{await call('release-external');released=true;trace('external collectors released');}catch{signal?.throwIfAborted();}")
