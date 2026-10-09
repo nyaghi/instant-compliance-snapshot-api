@@ -138,7 +138,7 @@ def final_four_asset(name, text):
                   il_dom: Array.isArray(detail.il_dom) ? detail.il_dom : null,
                   nv_readiness: detail.nv_readiness || null,
                   nv_filings: detail.nv_filings || null});
-                if (events.length > 300) events.splice(0, events.length - 300);
+                if (events.length > 2000) events.splice(0, events.length - 2000);
                 let traceNode = document.getElementById("cc-lab-state-trace");
                 if (!traceNode) {
                   traceNode = document.createElement("script");
@@ -148,6 +148,14 @@ def final_four_asset(name, text):
                 }
                 traceNode.textContent = JSON.stringify(events);
               }''')
+        # Keep the full first-pass timing evidence in the existing download.
+        # An HTML comment leaves the visible spreadsheet unchanged and lets a
+        # diagnostic survive a browser-control disconnect without another run.
+        replace('      const blob = new Blob([html], { type: "application/vnd.ms-excel" });', '''      const labTrace = encodeURIComponent(JSON.stringify({
+        schema:"cc-lab-trace-v1",exported_at:new Date().toISOString(),
+        events:Array.isArray(window.__CCLabStateTrace)?window.__CCLabStateTrace:[]
+      }));
+      const blob = new Blob([`<!--CC_LAB_TRACE_V1:${labTrace}-->`,html], { type: "application/vnd.ms-excel" });''')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
           result.reviewed_alternate_names = [...alternateNames];''')
         replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; Isolated Trial')
@@ -155,6 +163,21 @@ def final_four_asset(name, text):
         # User-approved Sales contract: entered name/EIN, no alias preparation.
         # Keep the protected staging template unchanged.
         replace("states, aliases=[], mode='standard', credentials,", "states, aliases:providedAliases=[], mode='standard', credentials,")
+        replace("    const results=new Map(), external=states.filter(s=>s==='IL'||s==='GA');", '''    const runStarted=Date.now();
+    const trace=(stage,detail={})=>{
+      const events=window.__CCLabStateTrace ||= [];
+      events.push({at:Date.now(),state:"*",stage,elapsed_ms:Date.now()-runStarted,...detail});
+      if(events.length>2000)events.splice(0,events.length-2000);
+    };
+    trace("workflow started",{mode,states:[...states]});
+    const results=new Map(), external=states.filter(s=>s==='IL'||s==='GA');''')
+        replace('      results.set(result.state,result);onResult(result);', '''      results.set(result.state,result);
+      trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||""});
+      onResult(result);''')
+        replace('      connectorStarted=true;', '      connectorStarted=true;trace("browser collectors dispatched",{states:[...external]});')
+        replace('        token=accepted.token;', '        token=accepted.token;trace("backend workflow accepted",{progressive_external_release:accepted.progressive_external_release===true});')
+        replace("            try{await call('release-external');released=true;}catch{signal?.throwIfAborted();}", "            try{await call('release-external');released=true;trace('external collectors released');}catch{signal?.throwIfAborted();}")
+        replace('      return states.map(state=>results.get(state));', '      trace("workflow finished",{result_count:results.size});\n      return states.map(state=>results.get(state));', 2)
         replace("    const results=new Map(),", "    const aliases=mode==='sales'?[]:providedAliases;\n    const results=new Map(),")
         replace("const needsIdentity=mode==='sales'&&external.length>0&&aliases.length===0;", "const needsIdentity=false;")
         replace('signal, onResult=()=>{}, externalLookup} = options;', 'signal, onResult=()=>{}, externalLookup, sales_cutoff_seconds} = options;')
@@ -201,6 +224,16 @@ def final_four_asset(name, text):
     };
     async function api(fields, cleanup = false) {
       if (!cleanup) trace("master request", null, {action:fields.action});''')
+        replace('      let connection = await bridge("ping", null, null, null, null, signal);',
+                '      trace("connector handshake started");\n      let connection = await bridge("ping", null, null, null, null, signal);')
+        replace('      let acquired = connection;',
+                '      trace("connector handshake returned",null,{ok:connection.ok===true,reason:connection.reason||""});\n      let acquired = connection;')
+        replace('        acquired = await bridge("acquire", null, lookupId,',
+                '        trace("connector queue entered");\n        acquired = await bridge("acquire", null, lookupId,', 2)
+        replace('      // Start the signed continuation only after queue admission.',
+                '      trace("connector queue returned",null,{ok:acquired.ok===true,reason:acquired.reason||""});\n      // Start the signed continuation only after queue admission.')
+        replace('          if (!recoveryUsed && !finalFour) throw error;',
+                '          trace("browser query exception",state.query,{name:error?.name||"Error",reason:error?.message||""});\n          if (!recoveryUsed && !finalFour) throw error;')
         replace('      const payload = await response.json();', '      const payload = await response.json();\n      if (!cleanup) trace("master response", null, {action:fields.action,http_status:response.status,phase:payload.phase,diagnostic:payload.result?.lab_diagnostic||null});')
         replace('        let completed;', '        let completed;\n        trace("browser query started", state.query);')
         replace('progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.',
