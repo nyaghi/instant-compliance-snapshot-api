@@ -69,7 +69,7 @@ class Repairs(unittest.TestCase):
         legacy=base.ConnectorTests();legacy.setUp();self.addCleanup(legacy.doCleanups)
         with patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
             for state in ('NY','GA','IL'):
-                for version in ('0.6.111','0.6.112'):
+                for version in ('0.6.111','0.6.112','0.6.113'):
                     with self.subTest(state=state,version=version):
                         code,response=legacy.request(action='start',state=state,
                             organization_name=base.ROW['orgName'],ein=base.ROW['ein'],
@@ -80,7 +80,7 @@ class Repairs(unittest.TestCase):
             with self.subTest(state=state,trial=False):
                 code,_=legacy.request(action='start',state=state,
                     organization_name=base.ROW['orgName'],ein=base.ROW['ein'],
-                    connector_version='0.6.112')
+                    connector_version='0.6.113')
                 self.assertEqual(code,400)
     def test_tn_stale_complete_history_without_expiration_is_delinquent(self):
         for period in ['09/30/2015','09/30/2017']:
