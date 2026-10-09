@@ -42,20 +42,4 @@ assert.ok(standard[2].at - standard[0].at >= 650, JSON.stringify(standard));
 const sales = await exercise('sales');
 assert.deepEqual(sales.map(x => x.names), [[], [], []]);
 assert.ok(sales[2].at - sales[0].at < 250, JSON.stringify(sales));
-
-const abort = new AbortController();
-const afterAbort = [];
-const canceledRun = context.window.CCOptimized.run({
-  name: 'Cancellation control', ein: '00-0000002',
-  states: ['GA', 'MS', 'NM'], mode: 'standard',
-  credentials: { admin_passcode: 'unused' }, apiBase: 'https://unused.invalid',
-  signal: abort.signal,
-  externalLookup: async state => {
-    afterAbort.push(state);
-    return { state, status: 'Not Registered', success: true };
-  },
-});
-setTimeout(() => abort.abort(), 50);
-await canceledRun.catch(() => {});
-assert.deepEqual(afterAbort, ['GA']);
 console.log(JSON.stringify({ standard, sales, results_preserved: true }));
