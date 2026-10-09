@@ -665,6 +665,7 @@ class LookupControls(unittest.TestCase):
                     'verification_pending': False, 'rows': [], 'total': 0,
                     'search_mode': query.get('search_mode', 'STARTS_WITH')}
         with patch.object(cc, 'licensed_charity_names', return_value=(required, generated)), \
+             patch.object(cc, 'known_names_for_ein', return_value=required[1:]), \
              patch.object(cc, 'trial_identity', return_value={'origin': 'isolated'}):
             result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', empty)
         self.assertEqual(result.status, 'Not Registered')
@@ -687,6 +688,7 @@ class LookupControls(unittest.TestCase):
                         **(changes if query.get('search_mode') == 'ALL_WORDS' else {})}
             with self.subTest(changes=changes), \
                  patch.object(cc, 'licensed_charity_names', return_value=(required, generated)), \
+                 patch.object(cc, 'known_names_for_ein', return_value=required[1:]), \
                  patch.object(cc, 'trial_identity', return_value={'origin': 'isolated'}), \
                  self.assertRaises(ValueError):
                 cc.final_four_browser_lookup(self.orgs['NC'], 'NC', source)
@@ -719,6 +721,23 @@ class LookupControls(unittest.TestCase):
                           if q['operation'] == 'search'],
                          [('Better World Foundation', 'STARTS_WITH'),
                           ('Better World', 'ALL_WORDS')])
+
+    def test_nc_grouped_public_search_does_not_change_sales_without_discovered_names(self):
+        required = ['Entered Relief Name', 'Entered Arts Center']
+        generated = ['Arts Center Network', 'Arts Center Services']
+        calls = []
+        def empty(query):
+            calls.append(dict(query))
+            return {'state': 'NC', 'query': query, 'complete': True,
+                    'verification_pending': False, 'rows': [], 'total': 0,
+                    'search_mode': 'STARTS_WITH'}
+        with patch.object(cc, 'licensed_charity_names', return_value=(required, generated)), \
+             patch.object(cc, 'known_names_for_ein', return_value=[]), \
+             patch.object(cc, 'trial_identity', return_value={'origin': 'isolated'}):
+            result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', empty)
+        self.assertEqual(result.status, 'Not Registered')
+        self.assertTrue(calls)
+        self.assertTrue(all('search_mode' not in query for query in calls))
 
     def test_nc_incomplete_prefix_never_covers_a_later_search(self):
         for changed in [{'complete':False}, {'total':1}, {'verification_pending':True}]:

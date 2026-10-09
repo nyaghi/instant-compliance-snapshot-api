@@ -6699,7 +6699,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             generated = [name for name in generated if not any(
                 other != name and name.startswith(other) for other in planned)]
     nc_all_words_probes = (nc_grouped_all_words_probes(required, generated)
-                           if state == "NC" and trial_identity() else {})
+                           if state == "NC" and trial_identity()
+                           and known_names_for_ein(org.ein) else {})
     if state == "TN":
         generated = tn_browser_generated_queries(required, generated)
     if (state in {"AL", "NV"} or state == "NC" and trial_identity()) and all(
