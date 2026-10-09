@@ -999,10 +999,11 @@
       throw new Error('REGISTRY_NC_QUERY_INVALID');
     if(location.pathname!=='/online_services/search/by_title/search_charities')throw new Error('REGISTRY_NC_FORM_CHANGED');
     const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
-    const starts=words&&[...words.options].find(o=>text(o)==='Starting With');
+    if(query.search_mode&&query.search_mode!=='ALL_WORDS')throw new Error('REGISTRY_NC_QUERY_INVALID');
+    const starts=words&&[...words.options].find(o=>text(o)===(query.search_mode==='ALL_WORDS'?'All Words':'Starting With'));
     if(!input||!starts||!visible(button)||button.disabled||!print)throw new Error('REGISTRY_NC_FORM_CHANGED');
     // NC wires SearchTypeChanged() to change. Do not dispatch it again when
-    // the requested Starting With mode is already selected.
+    // the requested public mode is already selected.
     if(words.value!==starts.value)set(words,starts.value);
     set(input,query.name);if(print.checked)print.click();
     // Dispatch the ordinary form action before acknowledging it. A deferred
@@ -1017,7 +1018,7 @@
       return false;
     if(location.pathname!=='/online_services/search/by_title/search_charities'||!registryDocumentReady())return false;
     const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
-    const starts=words&&[...words.options].find(o=>text(o)==='Starting With');
+    const starts=words&&[...words.options].find(o=>text(o)===(query.search_mode==='ALL_WORDS'?'All Words':'Starting With'));
     return !!(input&&input.value===query.name&&starts&&words.value===starts.value&&print&&!print.checked
       &&visible(button)&&!button.disabled&&text(button)==='Search');
   }
@@ -1036,7 +1037,7 @@
     if(location.pathname!=='/online_services/search/by_title/search_charities'||!registryDocumentReady())
       return {ok:false,phase:'pending'};
     const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
-    const starts=words&&[...words.options].find(o=>text(o)==='Starting With');
+    const starts=words&&[...words.options].find(o=>text(o)===(query.search_mode==='ALL_WORDS'?'All Words':'Starting With'));
     if(!input||input.value!==query.name||!starts||words.value!==starts.value||!print||print.checked
         ||!visible(button)||button.disabled||text(button)!=='Search')return {ok:false,phase:'changed'};
     // Ordinary public action only: no reload, challenge action, private
@@ -1047,8 +1048,9 @@
     const deadline=Date.now()+Math.max(1,Math.min(45000,budgetMs));
     if(location.pathname!=='/online_services/search/Charities_Results')throw new Error('REGISTRY_NC_RESULTS_CHANGED');
     const main=document.querySelector('main'),body=text(main);
-    const count=/Records Found:\s*(\d+)\b/.exec(body),searched=/Words:\s*Starting With\s+Organization Name\s+(.+?)\s+Search Time\s/.exec(body);
-    if(!count||!searched||searched[1].toLocaleLowerCase()!==query.name.replace(/\s+/g,' ').trim().toLocaleLowerCase())throw new Error('REGISTRY_NC_QUERY_CHANGED');
+    const count=/Records Found:\s*(\d+)\b/.exec(body),searched=/Words:\s*(Starting With|All Words)\s+Organization Name\s+(.+?)\s+Search Time\s/.exec(body);
+    const expectedMode=query.search_mode==='ALL_WORDS'?'All Words':'Starting With';
+    if(!count||!searched||searched[1]!==expectedMode||searched[2].toLocaleLowerCase()!==query.name.replace(/\s+/g,' ').trim().toLocaleLowerCase())throw new Error('REGISTRY_NC_QUERY_CHANGED');
     const total=Number(count[1]),buttons=[...main.querySelectorAll('#resultsSection .usa-accordion__button')];
     // A larger paginated result is incomplete until every displayed record can
     // be collected. Never infer zero from an absent or partially loaded card.
@@ -1110,7 +1112,7 @@
       .map(row=>row.License||'pending:'+row['CSL Legal Name']));
     if(rows.length!==total&&grouped.size!==total&&registrationGroups.size!==total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
     return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,
-      search_mode:'STARTS_WITH',total:rows.length,rows},
+      search_mode:query.search_mode==='ALL_WORDS'?'ALL_WORDS':'STARTS_WITH',total:rows.length,rows},
       diagnostics:rows.length===total?[]:[{phase:'pending-count',displayed:total,cards:rows.length,groups:grouped.size}]};
   }
   function ncProfile(query) {

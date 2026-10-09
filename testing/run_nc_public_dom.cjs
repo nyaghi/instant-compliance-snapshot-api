@@ -9,7 +9,7 @@ const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organ
 const withdrawnApplication={'CSL Legal Name':'Generic Literacy Organization','CSL Type':'In-Process',Status:'Withdrawn',License:''};
 const txt=innerText=>({innerText,querySelector:()=>null});
 function labels(values){return Object.entries(values).map(([key,value])=>({innerText:key+':',parentElement:txt(key+': '+value)}));}
-function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null,addressCount=1,profileIds=null}={}){
+function harness({cards=[active],total=cards.length,query="America's Charities",searchMode='Starting With',url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null,addressCount=1,profileIds=null}={}){
  const panels=new Map(),buttons=[];let clicks=0,formClicks=0;
  for(const [i,row] of cards.entries()){
   let expanded=false;
@@ -18,12 +18,12 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
  }
  const addressValues=['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'];
  const address={innerText:'Address',parentElement:{querySelectorAll:s=>(s===':scope > .para-small > span'?addressValues:s==='.para-small > span'?['Address',...addressValues]:[]).map(txt)}};
- const main={innerText:`Records Found: ${total} Words: Starting With Organization Name ${query} Search Time 9/29/2026 03:50 PM`,
+ const main={innerText:`Records Found: ${total} Words: ${searchMode} Organization Name ${query} Search Time 9/29/2026 03:50 PM`,
   querySelectorAll:s=>s==='#resultsSection .usa-accordion__button'?buttons:s==='.para-small > .boldSpan'?[...labels(fields||{}),...Array(addressCount).fill(address)]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname.replace('charities_profile','charities_filings')}]:[]};
  class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
  class Select extends Input{};
  Object.defineProperty(Select.prototype,'value',Object.getOwnPropertyDescriptor(Input.prototype,'value'));
- const input=new Input(),words=new Select();words.options=[{innerText:'Starting With',value:'0'}];
+ const input=new Input(),words=new Select();words.options=[{innerText:'Starting With',value:'0'},{innerText:'All Words',value:'1'}];
  const print={checked:true,click:()=>{print.checked=false;}},button={innerText:'Search',disabled:false,getClientRects:()=>[{}],click:()=>formClicks++};
  const win={};win.top=win;
  const context=vm.createContext({window:win,URL,location:{origin,pathname:new URL(url).pathname,href:url},crypto:{randomUUID:()=> 'fixture'},
@@ -43,6 +43,22 @@ test('NC retains a withdrawn unissued card and keeps an in-process card pending'
   assert.equal(row.Status,status);
   assert.equal(row.License,'');
  }
+});
+
+test('NC All Words uses only the public form and binds result mode and query',async()=>{
+ const query={state:'NC',operation:'search',name:'Better World',search_mode:'ALL_WORDS'};
+ const form=harness({url:origin+'/online_services/search/by_title/search_charities'});
+ form.api.ncForm(query);
+ assert.equal(form.words.value,'1');
+ assert.equal(form.input.value,'Better World');
+ assert.equal(form.formClicks(),1);
+ const result=harness({query:'Better World',searchMode:'All Words',cards:[active]});
+ const evidence=(await result.api.ncRows(query)).evidence;
+ assert.equal(evidence.search_mode,'ALL_WORDS');
+ assert.equal(evidence.rows.length,1);
+ await assert.rejects(result.api.ncRows({...query,search_mode:undefined}),/QUERY_CHANGED/);
+ const noRecord=harness({query:'Unmatched Charity',searchMode:'All Words',cards:[]});
+ assert.equal((await noRecord.api.ncRows({...query,name:'Unmatched Charity'})).evidence.total,0);
 });
 
 test('NC passive timing separates completed HTTP failures from idle submission without leaking request data',async()=>{

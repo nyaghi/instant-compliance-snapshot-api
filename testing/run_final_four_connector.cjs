@@ -441,8 +441,10 @@ test('NC production and staging remain unable to start the trial-only path',()=>
 test('NC protocol accepts only observed-shape charity profile URLs and bounded name searches',()=>{
  const {h,search,detail}=ncFixture(),valid=q=>vm.runInContext(`P.validQuery(${JSON.stringify(q)})`,h.context);
  assert.equal(valid(search),true);assert.equal(valid(detail),true);
+ assert.equal(valid({...search,search_mode:'ALL_WORDS'}),true);
  for(const q of [{...detail,url:detail.url+'?token=secret'},{...detail,url:detail.url.replace('charities_profile','business_profile')},
-  {...detail,identifier:'PF123'},{...detail,url:detail.url.replace('www.sosnc.gov','example.com')},{...search,ein:'123456789'}])assert.equal(valid(q),false);
+  {...detail,identifier:'PF123'},{...detail,url:detail.url.replace('www.sosnc.gov','example.com')},
+  {...search,ein:'123456789'},{...search,search_mode:'ANY_WORDS'}])assert.equal(valid(q),false);
 });
 
 test('AL ordinary searches reuse only the trial-owned verified page, not another organization response',async()=>{

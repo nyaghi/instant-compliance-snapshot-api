@@ -652,6 +652,74 @@ class LookupControls(unittest.TestCase):
         self.assertEqual(result.status, 'Not Registered')
         self.assertEqual(calls, ['Example', 'Example Reviewed', 'example lower', 'Other'])
 
+    def test_nc_grouped_public_search_reduces_multiname_no_record_without_changing_identity(self):
+        required = ['American Indian', 'Alaska Native Tourism Association',
+                    'American Indigenous Tourism Association Inc']
+        generated = ['indian alaska native',
+                     'AMERICAN-INDIAN ALASKA NATIVE TOURISM ASSOCIATION',
+                     'American Indigenous Tourism', 'indigenous tourism']
+        calls = []
+        def empty(query):
+            calls.append(dict(query))
+            return {'state': 'NC', 'query': query, 'complete': True,
+                    'verification_pending': False, 'rows': [], 'total': 0,
+                    'search_mode': query.get('search_mode', 'STARTS_WITH')}
+        with patch.object(cc, 'licensed_charity_names', return_value=(required, generated)), \
+             patch.object(cc, 'trial_identity', return_value={'origin': 'isolated'}):
+            result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', empty)
+        self.assertEqual(result.status, 'Not Registered')
+        self.assertEqual([(q['name'], q.get('search_mode', 'STARTS_WITH')) for q in calls],
+                         [('American Indian', 'STARTS_WITH'),
+                          ('Alaska Native', 'ALL_WORDS'),
+                          ('Indigenous Tourism', 'ALL_WORDS')])
+
+    def test_nc_grouped_public_search_requires_matching_mode_and_complete_result(self):
+        required = ['Example Relief', 'Independent Native Arts', 'Other Name']
+        generated = ['Native Arts Institute', 'National Native Arts']
+        for changes in [{'search_mode': 'STARTS_WITH'}, {'complete': False},
+                        {'total': 1}, {'verification_pending': True}]:
+            calls = []
+            def source(query):
+                calls.append(dict(query))
+                return {'state': 'NC', 'query': query, 'complete': True,
+                        'verification_pending': False, 'rows': [], 'total': 0,
+                        'search_mode': query.get('search_mode', 'STARTS_WITH'),
+                        **(changes if query.get('search_mode') == 'ALL_WORDS' else {})}
+            with self.subTest(changes=changes), \
+                 patch.object(cc, 'licensed_charity_names', return_value=(required, generated)), \
+                 patch.object(cc, 'trial_identity', return_value={'origin': 'isolated'}), \
+                 self.assertRaises(ValueError):
+                cc.final_four_browser_lookup(self.orgs['NC'], 'NC', source)
+            self.assertEqual(len(calls), 2)
+
+    def test_nc_grouped_public_search_still_opens_and_matches_an_alias_record(self):
+        org = cc.checker.Organization('Better World Foundation', '58-2366765')
+        alias = 'Better World Fund'
+        required = [org.organization_name, alias]
+        generated = ['Better World Fund Inc', 'Better World Education Fund']
+        calls = []
+        def source(query):
+            calls.append(dict(query))
+            if query['operation'] == 'search':
+                rows = [] if query['name'] == org.organization_name else [
+                    {**NC, 'CSL Legal Name': alias}]
+                return {'state': 'NC', 'query': query, 'complete': True,
+                        'verification_pending': False, 'rows': rows, 'total': len(rows),
+                        'search_mode': query.get('search_mode', 'STARTS_WITH')}
+            return {'query': query, 'complete': True,
+                    'fields': {**NC_PROFILE, 'Name': alias}}
+        token = cc.REVIEWED_NAME_CONTEXT.set({'582366765': (alias,)})
+        self.addCleanup(cc.REVIEWED_NAME_CONTEXT.reset, token)
+        with patch.object(cc, 'licensed_charity_names', return_value=(required, generated)), \
+             patch.object(cc, 'trial_identity', return_value={'origin': 'isolated'}):
+            result = cc.final_four_browser_lookup(org, 'NC', source)
+        self.assertTrue(result.success)
+        self.assertEqual(result.matched_registry_identifier, 'SL000448')
+        self.assertEqual([(q['name'], q.get('search_mode', 'STARTS_WITH')) for q in calls
+                          if q['operation'] == 'search'],
+                         [('Better World Foundation', 'STARTS_WITH'),
+                          ('Better World', 'ALL_WORDS')])
+
     def test_nc_incomplete_prefix_never_covers_a_later_search(self):
         for changed in [{'complete':False}, {'total':1}, {'verification_pending':True}]:
             with patch.object(cc, 'licensed_charity_names', return_value=(['Example'],['Example Foundation'])):
