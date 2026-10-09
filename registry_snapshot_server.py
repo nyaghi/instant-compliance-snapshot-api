@@ -7254,8 +7254,11 @@ def final_four_clean_evidence(payload, query):
     if query.get("operation") == "search":
         allowed_search = {"state", "query", "complete", "verification_pending", "total", "rows", "headers"}
         if state == "NV": allowed_search.update({"search_mode", "broad_total"})
+        if state == "NC": allowed_search.add("search_mode")
         if set(payload) - allowed_search:
             raise ValueError("Unexpected search evidence fields")
+        if state == "NC" and "search_mode" in payload and payload["search_mode"] != "STARTS_WITH":
+            raise ValueError("North Carolina collector did not confirm Starting With mode")
         allowed = ({"CSL Legal Name", "CSL Type", "Status", "License", "Expiration Date", "Extension End Date", "profile_url", "display_name", "aliases"} if state == "NC" else
                    {"name", "identifier", "entity_type", "raw_status", "entity_number", "business_identifier_missing"} if state == "NV" else
                    {"name", "identifier", "city", "region", "aliases", "raw_status", "registration_date"})

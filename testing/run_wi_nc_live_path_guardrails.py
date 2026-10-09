@@ -74,6 +74,19 @@ class WisconsinLivePath(unittest.TestCase):
 
 
 class NorthCarolinaPlanning(unittest.TestCase):
+    def test_nc_completed_search_mode_passes_signed_evidence_boundary(self):
+        query={'state':'NC','operation':'search','name':'Beacon Literacy'}
+        base={'state':'NC','query':query,'complete':True,
+              'verification_pending':False,'rows':[],'total':0}
+        marked={**base,'search_mode':'STARTS_WITH'}
+        self.assertEqual(c.final_four_clean_evidence(marked,query),marked)
+        self.assertEqual(c.final_four_clean_evidence(base,query),base)
+        for bad in ({**base,'search_mode':'EXACT_MATCH'},
+                    {**base,'search_mode':'UNVERIFIED'},
+                    {**marked,'complete':False}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                c.final_four_clean_evidence(bad,query)
+
     def run_lookup(self,name,aliases=(),address='corroborated',empty=False):
         calls=[]
         org=c.checker.Organization(name,'452894444')
