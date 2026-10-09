@@ -175,6 +175,17 @@ def final_four_asset(name, text):
       trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||""});
       onResult(result);''')
         replace('      connectorStarted=true;', '      connectorStarted=true;trace("browser collectors dispatched",{states:[...external]});')
+        # Spread only Standard browser starts over 3.2 seconds at most. This
+        # avoids a nine-tab Chrome launch burst without changing any state's
+        # query plan, deadline, status interpretation, or the 60-second Sales
+        # contract. Keep release/settlement behavior in Promise.all unchanged.
+        replace('connector=Promise.all(external.map(async state=>{', '''connector=Promise.all(external.map(async (state, launchIndex)=>{
+        if(mode==='standard' && launchIndex>0) {
+          const launchDelayMs=launchIndex*400;
+          trace("browser collector scheduled",{state,delay_ms:launchDelayMs});
+          await new Promise(resolve=>setTimeout(resolve,launchDelayMs));
+        }
+        trace("browser collector launched",{state});''')
         replace('        token=accepted.token;', '        token=accepted.token;trace("backend workflow accepted",{progressive_external_release:accepted.progressive_external_release===true});')
         replace("            try{await call('release-external');released=true;}catch{signal?.throwIfAborted();}", "            try{await call('release-external');released=true;trace('external collectors released');}catch{signal?.throwIfAborted();}")
         replace('      return states.map(state=>results.get(state));', '      trace("workflow finished",{result_count:results.size});\n      return states.map(state=>results.get(state));', 2)
