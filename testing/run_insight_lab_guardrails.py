@@ -20,6 +20,7 @@ class InsightLabTests(unittest.TestCase):
     def test_latest_trial_frontend_assembles_38_states_and_connected_report(self):
         with patch.object(lab,'trial_identity',return_value={'origin':'https://charityclarity-final-four-29-2.onrender.com'}),patch.object(lab,'LAB_ORIGIN','https://charityclarity-final-four-29-2.onrender.com'):
             html=lab.lab_asset('/')[0].decode()
+            connector=lab.lab_asset('/ny-connector.js')[0].decode()
         self.assertEqual(len(re.findall(r'name="states" value="[A-Z]{2}"',html)),38)
         self.assertIn('Connect to Insight',html)
         self.assertIn('head_start:assessment',html)
@@ -27,7 +28,12 @@ class InsightLabTests(unittest.TestCase):
         self.assertIn('head-start-bridge.js',html)
         self.assertIn('head-start/journey.css',html)
         self.assertIn('sales-extract.js',html)
+        self.assertIn('["GA","MS","NC"].includes(registryState)',connector)
         self.assertIn('!results.length || !window.CCHeadStart?.hasAssessment()',html)
+        bridge=lab.lab_asset('/head-start-bridge.js')[0].decode()
+        self.assertIn('hasAssessment:()=>!!assessment && compatible()',bridge)
+        self.assertIn("button.classList.toggle('hidden', !compatible()",bridge)
+        self.assertIn('!compatible(event.detail.results)',bridge)
         self.assertNotIn('instant-compliance-snapshot-api-hn4v.onrender.com',html)
         self.assertNotIn('https://staging.compliance-express.com',html)
         self.assertIn('mode="standard"',html)

@@ -41,7 +41,7 @@
     description.textContent=`${assessment.organization_name} · EIN ${normalizeEin(assessment.ein).replace(/^(\d{2})(\d{7})$/,'$1-$2')} · Requirements assessed ${new Date(assessment.assessed_at).toLocaleDateString()}`;
     const button=document.getElementById('generateReportButton');
     brandInsightButton(button);
-    if(button && document.getElementById('resultRows')?.children.length)button.classList.remove('hidden');
+    if(button)button.classList.toggle('hidden', !compatible() || !document.getElementById('resultRows')?.children.length);
     if(!compatible())message.textContent='The organization differs from Head Start. Return to the assessed organization or create a new assessment before combining the results.';
   }
   function applyStates() {
@@ -75,14 +75,14 @@
       if(!response.ok){const body=await response.json().catch(()=>({}));throw Error(body.error||'The Head Start assessment could not be saved. Your browser copy is retained.');}
     }finally{clearTimeout(timeout);}
   }
-  window.CCHeadStart=Object.freeze({refresh,applyStates,save,hasAssessment:()=>!!assessment,forResults(rows){
+  window.CCHeadStart=Object.freeze({refresh,applyStates,save,hasAssessment:()=>!!assessment && compatible(),forResults(rows){
     if(!assessment)return undefined;
     if(!compatible(rows))throw Error('These results and the Head Start assessment describe different organizations. Run Aurora for the assessed organization before generating Insight.');
     return structuredClone(assessment);
   }});
   for(const field of Object.values(fields()))field.addEventListener('input',refresh);
   window.addEventListener('cc-sales-complete',event=>{
-    if(!assessment || !Array.isArray(event.detail?.results))return;
+    if(!assessment || !Array.isArray(event.detail?.results) || !compatible(event.detail.results))return;
     // Consume settled raw results only, after Sales has ended; add no searches or time.
     window.CCHeadStartConfig().renderResults(event.detail.results);
     const panel=document.getElementById('ccSalesResults');if(!panel)return;
