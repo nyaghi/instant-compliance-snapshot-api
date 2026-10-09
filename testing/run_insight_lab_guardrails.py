@@ -28,6 +28,7 @@ class InsightLabTests(unittest.TestCase):
         self.assertIn('head-start-bridge.js',html)
         self.assertIn('head-start/journey.css',html)
         self.assertIn('sales-extract.js',html)
+        self.assertIn('["NM", "MS", "IL", "NV", "GA", "NC"].includes(detail.state)',html)
         self.assertIn('["GA","MS","NC"].includes(registryState)',connector)
         self.assertIn('!results.length || !window.CCHeadStart?.hasAssessment()',html)
         bridge=lab.lab_asset('/head-start-bridge.js')[0].decode()
