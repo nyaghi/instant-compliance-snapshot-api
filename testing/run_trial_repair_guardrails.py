@@ -61,6 +61,24 @@ class Repairs(unittest.TestCase):
             code,_=legacy.request(action='start',organization_name=base.ROW['orgName'],
                                    ein=base.ROW['ein'],connector_version='0.6.29')
             self.assertEqual(code,400)
+
+    def test_packaged_trial_version_starts_every_mature_browser_state(self):
+        # A prior Mississippi-only candidate passed local controls but its
+        # version was rejected by NY/GA/IL before any registry query began.
+        from testing import run_ny_connector_guardrails as base
+        legacy=base.ConnectorTests();legacy.setUp();self.addCleanup(legacy.doCleanups)
+        with patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            for state in ('NY','GA','IL'):
+                with self.subTest(state=state):
+                    code,response=legacy.request(action='start',state=state,
+                        organization_name=base.ROW['orgName'],ein=base.ROW['ein'],
+                        connector_version='0.6.111')
+                    self.assertEqual(code,200,response)
+                    self.assertEqual(response['phase'],'search')
+            code,_=legacy.request(action='start',state='NY',
+                organization_name=base.ROW['orgName'],ein=base.ROW['ein'],
+                connector_version='0.6.112')
+            self.assertEqual(code,400)
     def test_tn_stale_complete_history_without_expiration_is_delinquent(self):
         for period in ['09/30/2015','09/30/2017']:
             r=cc.tn_charity_detail_evidence({**TN,'Expiration Date':'','financial_periods':[period],'financial_count':1},'CO3674',TN_ROW)

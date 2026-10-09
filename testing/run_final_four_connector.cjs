@@ -48,6 +48,17 @@ test('MS closes only its owned public search tab after collection',async()=>{
  assert.equal(h.tabs.has(4),true);
 });
 
+test('isolated MS lane has a one-minute ceiling without shortening other states',async()=>{
+ for(const [state,allowance] of [['MS',60000],['NV',300000]]){
+  const h=fixture(),p=connect(h,state);await tick();
+  const jobs=h.data.session.ccnyRuntime?.queue||[];
+  const job=jobs.find(value=>value.registryState===state);
+  assert.ok(job,`Missing admitted ${state} collector`);
+  assert.equal(job.activeExpiresAt-job.enqueuedAt,allowance);
+  p.onMessage.emit({action:'finish',id:id(90)});await tick();
+ }
+});
+
 test('NM public error aborts readiness immediately rather than consuming thirty seconds',async()=>{
  const h=fixture();h.tabs.set(3,{id:3,windowId:10,url:'https://secure.nmdoj.gov/CharitySearch/'});
  let checks=0;h.chrome.tabs.sendMessage=async()=>{checks++;return {ready:false,source_failure:'REGISTRY_NM_SOURCE_ERROR'};};

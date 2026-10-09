@@ -213,7 +213,9 @@ function pump() {
   }
   if(P.TRIAL_ORIGIN)activeLanes.set(job.registryState,job);else active=job;
   diagnostic('admitted',job,`${job.registryState} queue_ms=${Date.now()-job.enqueuedAt}`);
-  job.activeExpiresAt ??= Date.now()+ACTIVE_TTL;
+  // The isolated MS public grid can stall after several negative name probes.
+  // Bound its complete collector lane; a partial search remains inconclusive.
+  job.activeExpiresAt ??= Date.now()+(P.TRIAL_ORIGIN && job.registryState==='MS' ? 60000 : ACTIVE_TTL);
   arm(job);
   saveRuntime().then(()=>{
     if(job.closed)return;

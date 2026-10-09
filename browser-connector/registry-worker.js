@@ -291,7 +291,8 @@ async function registryMessage(job, message) {
     // leave the grid unchanged, while hidden-tab timers delay the page error.
     // Bound that wait and use the same-query fresh-form recovery below.
     const waitMs=Math.max(1,Math.min(message.requireFreshGrid?8000:12000,
-      message.budgetMs,job.activeExpiresAt-Date.now()));
+      message.budgetMs,job.activeExpiresAt-Date.now(),
+      (job.msDeadlineAt ?? job.activeExpiresAt)-Date.now()));
     let timer;
     try {
       return await Promise.race([send(),new Promise(resolve=>{
@@ -573,7 +574,8 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
     if(P.TRIAL_ORIGIN && job.registryState==='MS')
       diagnostic('ms-tab-created',job,`ms=${Date.now()-navigationStarted}`);
   }
-    const ready=await registryReady(job,previous,new URL(url).pathname,freshNvRecovery?Math.max(1,deadline-Date.now()):budgetMs);
+    const ready=await registryReady(job,previous,new URL(url).pathname,
+      freshNvRecovery || job.registryState==='MS' ? Math.max(1,deadline-Date.now()) : budgetMs);
     if(P.TRIAL_ORIGIN && job.registryState==='MS')
       diagnostic('ms-page-ready',job,`ms=${Date.now()-navigationStarted} tab=${job.tab}`);
     return ready;
@@ -608,6 +610,13 @@ async function registryIllinoisVerification(job, collect) {
 async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
   if(query.state==='MS') {
+    // The public MS page can take nearly a minute to reload after a stalled
+    // Kendo query. Bound the complete state sequence, not each generated name
+    // separately; unfinished searches remain inconclusive.
+    job.msDeadlineAt ??= Math.min(job.activeExpiresAt,Date.now()+60000);
+    const remaining=()=>Math.min(job.activeExpiresAt,job.msDeadlineAt)-Date.now();
+    const allowance=max=>{if(remaining()<=0)throw new Error('NY_CONNECTOR_TIMEOUT');
+      return Math.max(1,Math.min(max,remaining()));};
     if(query.operation==='search') {
       // Reuse a completed search form within this owned trial job. The page
       // handler must see a new Kendo render after submission; its old grid is
@@ -617,31 +626,30 @@ async function performRegistryQuery(job, query) {
       const reuse=!!P.TRIAL_ORIGIN && job.msReusableForm===true && current?.url===registryStart('MS');
       const navigationStarted=Date.now();
       diagnostic('ms-navigation-start',job,reuse?'reuse ready form':'open fresh form');
-      if(reuse) await registryReady(job,null,new URL(registryStart('MS')).pathname,
-        Math.min(30000,job.activeExpiresAt-Date.now()));
-      else await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
+      if(reuse) await registryReady(job,null,new URL(registryStart('MS')).pathname,allowance(30000));
+      else await registryNavigate(job,registryStart('MS'),allowance(30000));
       diagnostic('ms-navigation-done',job,`reuse=${reuse} ms=${Date.now()-navigationStarted}`);
       job.msReusableForm=false;
       const started=Date.now();
       let result=await registryMessage(job,{action:'registry-ms',query,requireFreshGrid:reuse,
-        budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
+        budgetMs:allowance(30000)});
       diagnostic('ms-command',job,`reuse=${reuse} ms=${Date.now()-started} ${result?.ok?'complete':result?.reason||'incomplete'}`);
       if(P.TRIAL_ORIGIN && result?.ms_diagnostic)
         diagnostic('ms-page',job,JSON.stringify(result.ms_diagnostic));
-      if(!result?.ok && job.activeExpiresAt-Date.now()>35000 &&
+      if(!result?.ok && remaining()>20000 &&
           (reuse || ['REGISTRY_GRID_WATCHDOG','REGISTRY_RESPONSE_INCOMPLETE']
             .includes(result.ms_diagnostic?.source_error))) {
         diagnostic('ms-fresh-recovery',job,'repeating identical signed query on new public form');
-        await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
+        await registryNavigate(job,registryStart('MS'),allowance(10000));
         result=await registryMessage(job,{action:'registry-ms',query,
-          budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
+          budgetMs:allowance(10000)});
       }
       job.msReusableForm=result?.ok===true;
       return result;
     }
     if(job.tab===null)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
     job.msReusableForm=false;
-    return registryMessage(job,{action:'registry-ms',query,budgetMs:Math.max(1,Math.min(20000,job.activeExpiresAt-Date.now()))});
+    return registryMessage(job,{action:'registry-ms',query,budgetMs:allowance(20000)});
   }
   if(query.state==='NM') {
     if(query.operation==='search') {
