@@ -1109,7 +1109,8 @@
     const registrationGroups=new Set(rows.filter(row=>row.License||!licensedNames.has(row['CSL Legal Name']))
       .map(row=>row.License||'pending:'+row['CSL Legal Name']));
     if(rows.length!==total&&grouped.size!==total&&registrationGroups.size!==total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
-    return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,total:rows.length,rows},
+    return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,
+      search_mode:'STARTS_WITH',total:rows.length,rows},
       diagnostics:rows.length===total?[]:[{phase:'pending-count',displayed:total,cards:rows.length,groups:grouped.size}]};
   }
   function ncProfile(query) {

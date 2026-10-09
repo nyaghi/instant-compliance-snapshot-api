@@ -127,6 +127,79 @@ class NorthCarolinaPlanning(unittest.TestCase):
         self.assertEqual(result.status,'Not Registered')
         self.assertIn('Child Aid',[q.get('name') for q in calls])
 
+    def test_completed_starting_with_covers_longer_reviewed_nc_name(self):
+        org=c.checker.Organization('Beacon Literacy Network','452894444')
+        cases=[
+            (['Beacon Literacy','BEACON LITERACY NETWORK'], 'STARTS_WITH',
+             ['Beacon Literacy']),
+            (['Beacon Literacy','Beacon-Literacy Network'], 'STARTS_WITH',
+             ['Beacon Literacy','Beacon-Literacy Network']),
+            (['Beacon Literacy','Beacon Literacy Network'], 'EXACT_MATCH',
+             ['Beacon Literacy','Beacon Literacy Network']),
+        ]
+        for required,first_mode,expected in cases:
+            with self.subTest(required=required,first_mode=first_mode):
+                calls=[]
+                def source(query):
+                    calls.append(query['name'])
+                    return {'state':'NC','query':query,'complete':True,
+                            'verification_pending':False,
+                            'search_mode':first_mode if len(calls)==1 else 'STARTS_WITH',
+                            'rows':[],'total':0}
+                with patch.object(c,'trial_identity',return_value={'origin':'isolated'}), \
+                     patch.object(c,'licensed_charity_names',return_value=(required,[])):
+                    result=c.final_four_browser_lookup(org,'NC',source)
+                self.assertEqual(calls,expected)
+                self.assertEqual(result.status,'Not Registered')
+
+    def test_incomplete_nc_prefix_cannot_cover_longer_name(self):
+        org=c.checker.Organization('Beacon Literacy Network','452894444')
+        calls=[]
+        def source(query):
+            calls.append(query['name'])
+            return {'state':'NC','query':query,'complete':False,
+                    'verification_pending':False,'search_mode':'STARTS_WITH',
+                    'rows':[],'total':0}
+        with patch.object(c,'trial_identity',return_value={'origin':'isolated'}), \
+             patch.object(c,'licensed_charity_names',return_value=(
+                 ['Beacon Literacy','Beacon Literacy Network'],[])):
+            with self.assertRaises(ValueError):
+                c.final_four_browser_lookup(org,'NC',source)
+        self.assertEqual(calls,['Beacon Literacy'])
+
+    def test_reported_nc_fourth_query_is_covered_without_state_exception(self):
+        org=c.checker.Organization('American Indian/Alaska Native Tourism Association','450541654')
+        reviewed=['American Indian','Alaska Native Tourism Association',
+                  'AMERICAN INDIAN ALASKA NATIVE TOURISM ASSOCIATION, INC.',
+                  'ALASKA NATIVE TOURISM ASSOCIATION, INC. (AIANTA)']
+        calls=[]
+        def source(query):
+            calls.append(query['name'])
+            if len(calls)==4:
+                raise RuntimeError('simulated source rate limit')
+            return {'state':'NC','query':query,'complete':True,
+                    'verification_pending':False,'search_mode':'STARTS_WITH',
+                    'rows':[],'total':0}
+        with patch.object(c,'trial_identity',return_value={'origin':'isolated'}), \
+             patch.object(c,'licensed_charity_names',return_value=(reviewed,[])):
+            result=c.final_four_browser_lookup(org,'NC',source)
+        self.assertEqual(calls,reviewed[:2])
+        self.assertEqual(result.status,'Not Registered')
+        self.assertIn({'reviewed_name_coverage':{'name':reviewed[2],
+                       'completed_starts_with':reviewed[0]}},result.source_attempts)
+        self.assertIn({'reviewed_name_coverage':{'name':reviewed[3],
+                       'completed_starts_with':reviewed[1]}},result.source_attempts)
+
+    def test_trial_connector_labels_only_fully_read_nc_starting_with_result(self):
+        source=(Path(__file__).resolve().parents[1]/'browser-connector/registry-content.js').read_text()
+        start=source.index('  async function ncRows(')
+        end=source.index('  function ncProfile(',start)
+        block=source[start:end]
+        self.assertIn("searched=/Words:\\s*Starting With",block)
+        self.assertIn("search_mode:'STARTS_WITH'",block)
+        self.assertLess(block.index('if(rows.length!==total'),
+                        block.index("search_mode:'STARTS_WITH'"))
+
     def test_trial_browser_asset_classifies_explicit_429_only(self):
         from deployment import performance_lab as lab
         root=Path(__file__).resolve().parents[1]
