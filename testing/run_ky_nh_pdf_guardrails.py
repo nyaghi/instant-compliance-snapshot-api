@@ -105,6 +105,18 @@ class PdfGuardrails(unittest.TestCase):
             result=c.search_nh_live_pdf(org)
         self.assertEqual(result.status,c.checker.STATUS_NOT_REGISTERED)
 
+    def test_joined_brand_word_matches_same_full_spaced_name_only(self):
+        for entered,registry,expected in [
+            ('RezilientKidz','Rezilient Kidz','27199'),
+            ('BrightSeed Foundation','Bright Seed Foundation','27199'),
+            ('RezilientKidz','Rezilient Kidz Foundation',''),
+            ('BrightSeed Foundation','Bright Seed Foundation Chapter',''),
+        ]:
+            records=[c.nh_record_from_cells(['27199',registry,'G','2/14/2027'])]
+            with self.subTest(entered=entered,registry=registry),patch.object(c,'nh_live_pdf_records',return_value=(records,'September 28, 2026')):
+                result=c.search_nh_live_pdf(c.checker.Organization(entered,'12-3456789'))
+            self.assertEqual(result.matched_registry_identifier,expected)
+
     def test_snapshot_must_reference_exact_pdf(self):
         with tempfile.TemporaryDirectory() as folder:
             snapshot=Path(folder)/'rows.json';pdf=Path(folder)/'source.pdf';pdf.write_bytes(b'changed')

@@ -8827,6 +8827,11 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
         return False
     if institutional_subunit_identity_conflict(original_name, registry_name):
         return False
+    # A joined brand word and the same words separated by whitespace are the
+    # same full name. Preserve the scope/conflict guards above and require
+    # equality of the entire normalized name, never just a shared prefix.
+    if compact_normalized_name_key(original_name) == compact_normalized_name_key(registry_name):
+        return True
     if explicit_legal_identity_match(original_name, registry_name):
         return True
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
@@ -13757,6 +13762,12 @@ def normalized_match_name(value: str) -> str:
     normalized = checker.normalize_name(value or "") if hasattr(checker, "normalize_name") else re.sub(r"\W+", " ", (value or "").lower()).strip()
     normalized = re.sub(r"\b(the|a|an|inc|incorporated|corp|corporation|llc|ltd|limited)\b", " ", normalized, flags=re.I)
     return re.sub(r"\s+", " ", normalized).strip()
+
+
+@lru_cache(maxsize=32768)
+def compact_normalized_name_key(value: str) -> str:
+    """Exact full-name key for a joined word versus spaced registry words."""
+    return normalized_match_name(value).replace(" ", "")
 
 
 @lru_cache(maxsize=8192)
@@ -26960,7 +26971,11 @@ def search_nh_live_pdf(org):
             # Each reviewed name is an alternative identity, not extra words
             # required of the original. Keep short exact names eligible while
             # leaving the existing scoring and safe-match gates unchanged.
-            if target_word_sets and not any(
+            exact_spacing_match = (
+                compact_normalized_name_key(original_name)
+                == compact_normalized_name_key(registry_name)
+            )
+            if target_word_sets and not exact_spacing_match and not any(
                 len(registry_words & words) >= (1 if len(words) <= 2 else 2)
                 for words in target_word_sets
             ):
