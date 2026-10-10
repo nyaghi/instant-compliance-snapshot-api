@@ -1,4 +1,4 @@
-"""Deployment identities for the approved pool and the disposable 29.2 trial.
+"""Deployment identities for the approved pool and the isolated 29.2 release.
 
 This module contains no state rules. The trial requires an immutable resource
 manifest populated by provisioning; changing a public URL alone cannot enable
@@ -29,6 +29,7 @@ TRIAL_VERSION = '2026.09.29.2-performance-lab'
 TRIAL_RELEASE_LABEL = '29.2EF'
 TRIAL_DATABASE_NAME = 'cc_final_four_29_2'
 MANIFEST = Path(__file__).with_name('final-four-resources.json')
+STAGING_MANIFEST = Path(__file__).with_name('permanent-staging-resources.json')
 
 
 def trial_sales_cutoff(payload, identity):
@@ -40,6 +41,10 @@ def trial_sales_cutoff(payload, identity):
     if 'sales_cutoff_seconds' not in payload:
         return 60
     value = payload['sales_cutoff_seconds']
+    if identity and identity.get('permanent_staging'):
+        if payload.get('mode') == 'sales' and type(value) is int and value == 60:
+            return 60
+        raise ValueError('Sales remains fixed at 60 seconds in staging')
     if (not identity or payload.get('mode') != 'sales'
             or payload.get('kind', 'registration') != 'registration'
             or type(value) is not int or value not in (60, 70, 80, 90)):
@@ -57,9 +62,63 @@ def _manifest():
         return None
 
 
+def permanent_staging_identity(env=None, manifest=None):
+    """Bind the former lab pool to a durable staging role, without expiry.
+
+    The existing API, worker, database and connector origin stay paired. This
+    rejects the old staging, production and any newly provisioned mirror pool.
+    """
+    env = os.environ if env is None else env
+    if env.get('CE_PERMANENT_STAGING') != '1' or env.get('CE_FINAL_FOUR_TRIAL') == '1':
+        return None
+    try:
+        data = (json.loads(STAGING_MANIFEST.read_text(encoding='utf-8'))
+                if manifest is None else manifest)
+        if data['version'] != TRIAL_VERSION or env.get('CE_APP_VERSION') != TRIAL_VERSION:
+            return None
+        origin, api, worker, database = (data[k] for k in ('origin','api','worker','database'))
+        old = _manifest()
+        if not isinstance(old, dict) or any(data[k] != old[k] for k in ('origin','api','worker','database')):
+            return None
+        url = urlparse(origin)
+        if (origin in PROTECTED_ORIGINS or url.scheme != 'https' or url.path or url.query
+                or url.fragment or url.username or url.password or url.port
+                or not (url.hostname or '').endswith('.onrender.com')
+                or env.get('PUBLIC_BASE_URL') != origin):
+            return None
+        if (api['id'] in PROTECTED_SERVICES or worker['id'] in PROTECTED_SERVICES
+                or api['id'] == worker['id']
+                or api['name'] != 'charityclarity-final-four-29-2'
+                or worker['name'] != 'charityclarity-final-four-29-2-worker'):
+            return None
+        role = worker if env.get('CE_LAB_ROLE') == 'worker' else api
+        if env.get('RENDER_SERVICE_ID') != role['id'] or env.get('RENDER_SERVICE_NAME') != role['name']:
+            return None
+        if database['host'] == APPROVED_DATABASE or database['name'] != TRIAL_DATABASE_NAME:
+            return None
+        if env.get('CE_FINAL_FOUR_CHILD') == '1':
+            if (env.get('CE_LAB_DURABLE_QUEUE') != '0' or env.get('CE_LAB_DATABASE_URL')
+                    or env.get('CE_TEST_DATABASE_URL') or env.get('RENDER_API_KEY')):
+                return None
+        else:
+            dsn = urlparse(env.get('CE_LAB_DATABASE_URL', ''))
+            if (dsn.scheme not in ('postgres','postgresql')
+                    or dsn.hostname not in (database['host'],database['host']+'.oregon-postgres.render.com')
+                    or dsn.path != '/' + TRIAL_DATABASE_NAME
+                    or env.get('CE_LAB_DURABLE_QUEUE') != '1'):
+                return None
+        return {**data, 'permanent_staging': True}
+    except (OSError, KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def trial_identity(env=None, manifest=None, now=None):
     """Return a fully isolated active identity, or fail closed with None."""
     env = os.environ if env is None else env
+    # Existing 29.2 feature gates retain one isolated identity interface.
+    # The permanent staging branch has its own manifest and no trial deadline.
+    if env.get('CE_PERMANENT_STAGING') == '1':
+        return permanent_staging_identity(env)
     if env.get('CE_FINAL_FOUR_TRIAL') != '1':
         return None
     data = _manifest() if manifest is None else manifest
@@ -128,6 +187,8 @@ def trial_access_expired(env=None, manifest=None, now=None):
 
 def performance_origin_enabled(env=None):
     env = os.environ if env is None else env
+    if env.get('CE_PERMANENT_STAGING') == '1':
+        return permanent_staging_identity(env) is not None
     if env.get('CE_FINAL_FOUR_TRIAL') == '1':
         return trial_identity(env) is not None
     # Preserve the existing release's origin condition exactly.
@@ -135,6 +196,11 @@ def performance_origin_enabled(env=None):
 
 
 def configured_lab_origin():
+    if os.environ.get('CE_PERMANENT_STAGING') == '1':
+        identity = permanent_staging_identity()
+        if identity is None:
+            raise RuntimeError('29.2 staging requires the proven API, worker and queue')
+        return identity['origin']
     if os.environ.get('CE_FINAL_FOUR_TRIAL') != '1':
         return APPROVED_ORIGIN
     identity = trial_identity()

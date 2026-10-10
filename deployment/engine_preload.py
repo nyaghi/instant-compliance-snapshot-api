@@ -33,7 +33,7 @@ if not sys.platform.startswith('linux'):
 for key in ('CE_LAB_DATABASE_URL','CE_TEST_DATABASE_URL','RENDER_API_KEY'):
     os.environ.pop(key,None)
 os.environ['CE_LAB_DURABLE_QUEUE']='0'
-if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':
+if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1' or os.environ.get('CE_PERMANENT_STAGING') == '1':
     # validate_environment above confirmed the parent resource identity. The
     # forkserver template also needs the credential-free child identity before
     # multiprocessing reimports the API entry point in its warm-ready child.

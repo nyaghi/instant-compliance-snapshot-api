@@ -24623,7 +24623,7 @@ NY_CONNECTOR_PRODUCTION_ORIGINS = frozenset({"https://www.compliance-express.com
 def ny_connector_origin_allowed(origin):
     # Environment isolation is independent of user authentication. A production
     # API never accepts staging continuations, or vice versa.
-    if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':
+    if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1' or os.environ.get('CE_PERMANENT_STAGING') == '1':
         identity = trial_identity()
         return bool(identity and origin == identity['origin'])
     return (origin == NY_CONNECTOR_ORIGIN if APP_VERSION.endswith("-staging")
