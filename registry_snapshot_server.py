@@ -29343,6 +29343,27 @@ def ar_wait_for_search_form(page, timeout_ms: int) -> bool:
     return False
 
 
+def ar_distinctive_infix_probe(name):
+    """A short literal substring for long names with a generic opening.
+
+    Arkansas's name field matches text inside a registry name. The probe is
+    only retrieval evidence; candidate identity still uses the full name/EIN.
+    """
+    literal = canonical_name_punctuation(name)
+    words = literal.split()
+    if len(literal) <= 60 or len(distinctive_match_tokens(" ".join(words[:3]))) >= 2:
+        return ""
+    for start in range(1, len(words) - 1):
+        if not any(len(token) >= 8 for token in distinctive_match_tokens(words[start])):
+            continue
+        for end in range(start + 1, min(len(words), start + 4)):
+            phrase = " ".join(words[start:end + 1])
+            strong = [token for token in distinctive_match_tokens(phrase) if len(token) >= 8]
+            if len(strong) >= 2 and len(phrase) <= 45 and not re.search(r"[%_]", phrase):
+                return phrase
+    return ""
+
+
 def ar_reviewed_search_plan(org, generated):
     """Short retrieval phrases remain tied to full reviewed identities.
 
@@ -29371,9 +29392,13 @@ def ar_reviewed_search_plan(org, generated):
     queries, seen = [], set()
     for name in [org.organization_name, *known_names_for_ein(org.ein)]:
         probe = by_identity.get(identity_name_key(name))
+        infix = ar_distinctive_infix_probe(name)
         if probe and probe.casefold() in prefixes and probe.casefold() not in seen:
             # The phrase occupies its identity's reviewed-name priority slot.
             queries.append(probe); seen.add(probe.casefold())
+            if infix and infix.casefold() not in seen:
+                queries.append(infix); seen.add(infix.casefold())
+                prefixes.setdefault(infix.casefold(), []).append(name)
             # An empty phrase already covers this literal form. If the phrase
             # instead returns unrelated rows, the full-name search must remain
             # available before absence can be established.
@@ -29387,6 +29412,9 @@ def ar_reviewed_search_plan(org, generated):
             # primary name too, before aliases can consume the time budget.
             forms = literal_name_retrieval_forms(name)
             queries.append(name); seen.add(name.casefold())
+            if infix and infix.casefold() not in seen:
+                queries.append(infix); seen.add(infix.casefold())
+                prefixes.setdefault(infix.casefold(), []).append(name)
             query = forms[0] if forms else name
             if query.casefold() not in seen:
                 queries.append(query); seen.add(query.casefold())
@@ -29465,7 +29493,10 @@ def search_ar_precise(page, org):
         completed = {query.casefold() for query in completed_variants}
         return [query for query in required_retrieval_queries
                 if query.casefold() not in completed and not any(
-                    query.casefold().startswith(empty.casefold()) for empty in empty_variants)]
+                    query.casefold().startswith(empty.casefold()) or any(
+                        identity_name_key(query) == identity_name_key(name)
+                        for name in empty_prefixes.get(empty.casefold(), []))
+                    for empty in empty_variants)]
 
     def record_progress():
         result.queries_attempted = list(attempted_variants)
@@ -29479,7 +29510,10 @@ def search_ar_precise(page, org):
         # identity normalization. "Institute Inc." cannot cover "Institute"
         # or "Institute, Inc."; keep those existing fallback searches.
         if any(
-            variant.casefold().startswith(query.casefold()) for query in empty_variants
+            variant.casefold().startswith(query.casefold()) or any(
+                identity_name_key(variant) == identity_name_key(name)
+                for name in empty_prefixes.get(query.casefold(), []))
+            for query in empty_variants
         ):
             continue
         remaining = deadline - time.perf_counter()

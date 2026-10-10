@@ -59,6 +59,36 @@ class ArkansasCompletionTests(unittest.TestCase):
         r,queries=self.lookup(name=name,aliases=[],seconds_per_query=c.AR_NAME_SEARCH_MAX_SECONDS)
         self.assertEqual(queries,['Association for the Advancement of'])
         self.assertEqual(c.public_status(r),'Not Registered');self.assertTrue(r.success)
+    def test_generic_opening_uses_distinctive_literal_infix_after_unrelated_rows(self):
+        name='Association for the Advancement of Sustainability in Higher Education'
+        prefix='Association for the Advancement of'
+        infix='Advancement of Sustainability'
+        unrelated={'name':'American Association for the Advancement of Science','status':'Current','type':'Charity'}
+        r,queries=self.lookup({prefix:{'body':'Back to Search Form Registration Date','rows':[unrelated]}},
+                              name=name,aliases=[],seconds_per_query=c.AR_NAME_SEARCH_MAX_SECONDS/3)
+        self.assertEqual(queries[:2],[prefix,infix])
+        self.assertNotIn(name,queries)
+        self.assertEqual(c.public_status(r),'Not Registered');self.assertTrue(r.success)
+        self.assertNotIn(infix,c.organization_match_target_variants(name,EIN))
+    def test_incomplete_infix_cannot_prove_absence(self):
+        name='Association for the Advancement of Sustainability in Higher Education'
+        prefix='Association for the Advancement of'
+        infix='Advancement of Sustainability'
+        unrelated={'name':'American Association for the Advancement of Science','status':'Current','type':'Charity'}
+        r,queries=self.lookup({prefix:{'body':'Back to Search Form Registration Date','rows':[unrelated]},
+                               infix:{'body':'Back to Search Form Registration Date'}},
+                              name=name,aliases=[],seconds_per_query=c.AR_NAME_SEARCH_MAX_SECONDS/2)
+        self.assertEqual(queries,[prefix,infix])
+        self.assertEqual(r.status,'Unable to Verify');self.assertFalse(r.success)
+    def test_distinctive_infix_record_still_requires_full_identity(self):
+        name='Association for the Advancement of Sustainability in Higher Education'
+        prefix='Association for the Advancement of'
+        infix='Advancement of Sustainability'
+        unrelated={'name':'Foundation for the Advancement of Sustainability','status':'Current','type':'Charity'}
+        r,_=self.lookup({prefix:{'body':'Back to Search Form Registration Date','rows':[unrelated]},
+                         infix:{'body':'Back to Search Form Registration Date','rows':[unrelated]}},
+                        name=name,aliases=[])
+        self.assertNotEqual(r.status,'Current');self.assertFalse(r.matched_registry_name)
     def test_descriptive_separator_orders_full_left_right_before_variants(self):
         name='Example Education Institute — Bright Futures Foundation'
         org=c.checker.Organization(name,'12-3456789')
