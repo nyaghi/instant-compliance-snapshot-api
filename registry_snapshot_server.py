@@ -7926,7 +7926,7 @@ def nc_primary_all_words_probe(primary, generated):
     if len(primary) < 50 or not generated:
         return ""
     useful = [word for word in re.findall(r"[A-Za-z0-9]+", primary)
-              if word.casefold() in distinctive_match_tokens(primary) and len(word) >= 5]
+              if word.casefold() in distinctive_match_tokens(primary) and len(word) >= 10]
     probes = []
     for left, right in itertools.combinations(dict.fromkeys(useful), 2):
         phrase = f"{left} {right}"

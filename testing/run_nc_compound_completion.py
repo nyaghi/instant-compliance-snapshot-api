@@ -77,7 +77,7 @@ class CompoundCompletion(unittest.TestCase):
             self.lookup(status='Revoked')
 
     def test_long_name_uses_complete_all_words_evidence_to_avoid_rate_limit(self):
-        org=cc.checker.Organization('Example Association for Environmental Education and Sustainability','12-3456789')
+        org=cc.checker.Organization('Example Association for Environmental Sustainability and Education','12-3456789')
         queries=[]
         def provider(q):
             queries.append(q)
@@ -91,12 +91,20 @@ class CompoundCompletion(unittest.TestCase):
         self.assertTrue(cc.nc_all_words_covers(queries[0]['name'],org.organization_name))
 
     def test_incomplete_all_words_probe_never_proves_no_record(self):
-        org=cc.checker.Organization('Example Association for Environmental Education and Sustainability','12-3456789')
+        org=cc.checker.Organization('Example Association for Environmental Sustainability and Education','12-3456789')
         def blocked(q):
             raise ValueError('NC HTTP 429')
         with patch.object(cc,'trial_identity',return_value={'origin':'fixture'}), \
              self.assertRaisesRegex(ValueError,'429'):
             cc.final_four_browser_lookup(org,'NC',blocked,time.monotonic()+10)
+
+    def test_long_common_opening_words_keep_existing_search_plan(self):
+        for name in ['Planned Parenthood Minnesota, North Dakota, South Dakota',
+                     'Consumer Advocates for Smoke-free Alternatives Association — CASAA']:
+            with self.subTest(name=name):
+                org=cc.checker.Organization(name,'12-3456789')
+                required,generated=cc.licensed_charity_names(org)
+                self.assertEqual(cc.nc_primary_all_words_probe(required[0],generated),'')
 
 if __name__=='__main__':
     unittest.main()
