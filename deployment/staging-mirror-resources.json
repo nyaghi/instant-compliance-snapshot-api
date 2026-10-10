@@ -1,0 +1,7 @@
+{
+  "version": "2026.09.29.2-performance-lab",
+  "origin": "https://charityclarity-staging-ef-api.onrender.com",
+  "api": {"id": "srv-pendingapi", "name": "charityclarity-staging-ef-api"},
+  "worker": {"id": "srv-pendingworker", "name": "charityclarity-staging-ef-worker"},
+  "database": {"host": "dpg-db5886nlot8c73e287fg-a", "name": "cc_staging_ef"}
+}

@@ -31,9 +31,10 @@ DISABLED_CONNECTIONS = (
 
 
 def validate_environment(env):
-    trial = trial_identity(env) if env.get('CE_FINAL_FOUR_TRIAL') == '1' else None
-    if env.get('CE_FINAL_FOUR_TRIAL') == '1' and trial is None:
-        raise RuntimeError('29.2 requires its own active services and queue database')
+    isolated = env.get('CE_FINAL_FOUR_TRIAL') == '1' or env.get('CE_STAGING_MIRROR') == '1'
+    trial = trial_identity(env) if isolated else None
+    if isolated and trial is None:
+        raise RuntimeError('29.2 requires its own API, worker and queue database')
     if env.get('PUBLIC_BASE_URL') != LAB_ORIGIN:
         raise RuntimeError('Performance entry point requires its isolated lab origin')
     service = env.get('RENDER_SERVICE_ID', LAB_SERVICE_ID)
@@ -158,7 +159,8 @@ def final_four_asset(name, text):
       const blob = new Blob([`<!--CC_LAB_TRACE_V1:${labTrace}-->`,html], { type: "application/vnd.ms-excel" });''')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
           result.reviewed_alternate_names = [...alternateNames];''')
-        replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; Isolated Trial')
+        release_environment = 'Staging Mirror' if identity.get('staging_mirror') else 'Isolated Trial'
+        replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; '+release_environment)
     elif name == 'optimized-workflows.js':
         # User-approved Sales contract: entered name/EIN, no alias preparation.
         # Keep the protected staging template unchanged.
@@ -189,7 +191,8 @@ def final_four_asset(name, text):
         replace('const NAMES = {', 'const NAMES = {"AL":"Alabama","NC":"North Carolina","NV":"Nevada","TN":"Tennessee",')
         replace('Choose any or all 34 states.', 'Choose any or all ${STATES.length} states.')
         replace('Select all 34</button>', 'Select all ${STATES.length}</button>')
-        replace('Staging · Sales Mode ${VERSION}', 'Isolated Trial · Sales Mode ${VERSION}')
+        release_environment = 'Staging Mirror' if identity.get('staging_mirror') else 'Isolated Trial'
+        replace('Staging · Sales Mode ${VERSION}', release_environment+' · Sales Mode ${VERSION}')
         replace('{signal:controller.signal}', '{signal:controller.signal,mode:"sales"}', 2)
     elif name == 'ny-connector.js':
         diagnostic_source = (Path(__file__).resolve().parents[1]/'browser-connector'/'protocol.js').read_text(encoding='utf-8')
@@ -366,7 +369,8 @@ def build_handler(master, key, capacity=None, durable=None):
             return False
 
         def _send_healthz(self, include_body=True):
-            data = {'ok': True, 'app_version': master.APP_VERSION, 'environment': 'performance-lab',
+            data = {'ok': True, 'app_version': master.APP_VERSION,
+                    'environment': 'staging' if os.environ.get('CE_STAGING_MIRROR') == '1' else 'performance-lab',
                     'supported_states': master.SUPPORTED_STATES, 'private_access': True,
                     'ny_browser_validation_enabled': os.environ.get('CE_LAB_NY_BROWSER') == '1', 'shared_helpers_enabled': False,
                     'durable_workflows_enabled': durable is not None,
@@ -379,6 +383,8 @@ def build_handler(master, key, capacity=None, durable=None):
                 from charity_clarity_report import INSIGHT_VERSION
                 data['trial_release'] = TRIAL_RELEASE_LABEL
                 data['insight_report_version'] = INSIGHT_VERSION
+                if os.environ.get('CE_STAGING_MIRROR') == '1':
+                    data['staging_mirror'] = True
             body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -402,7 +408,8 @@ def build_handler(master, key, capacity=None, durable=None):
                 if include_body:self.wfile.write(body)
                 return
             if not self.authorized(): return
-            if self.path == '/api/lab/trial-export' and trial_identity() and durable is not None:
+            if (self.path == '/api/lab/trial-export' and os.environ.get('CE_FINAL_FOUR_TRIAL') == '1'
+                    and trial_identity() and durable is not None):
                 # Authenticated evidence export before retiring this disposable
                 # database. The approved pool never exposes this endpoint.
                 with durable.transaction() as (connection, _):

@@ -7668,7 +7668,9 @@ def al_verification_continuation(record, evidence):
 def final_four_connector_request(payload, origin):
     """Isolated trial route; the approved NY/IL/GA continuation is unchanged."""
     identity = trial_identity()
-    if not identity or origin != identity["origin"]:
+    expected_origin = ("https://staging.compliance-express.com"
+                       if identity and identity.get('staging_mirror') else identity['origin'] if identity else None)
+    if not identity or origin != expected_origin:
         return 404, {"error": "Not found"}
     if not isinstance(payload, dict):
         return 400, {"error": "Invalid registry connector request."}
@@ -24623,9 +24625,11 @@ NY_CONNECTOR_PRODUCTION_ORIGINS = frozenset({"https://www.compliance-express.com
 def ny_connector_origin_allowed(origin):
     # Environment isolation is independent of user authentication. A production
     # API never accepts staging continuations, or vice versa.
-    if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':
+    if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1' or os.environ.get('CE_STAGING_MIRROR') == '1':
         identity = trial_identity()
-        return bool(identity and origin == identity['origin'])
+        expected_origin = (NY_CONNECTOR_ORIGIN if identity and identity.get('staging_mirror')
+                           else identity['origin'] if identity else None)
+        return bool(identity and origin == expected_origin)
     return (origin == NY_CONNECTOR_ORIGIN if APP_VERSION.endswith("-staging")
             else origin in NY_CONNECTOR_PRODUCTION_ORIGINS)
 
@@ -33787,9 +33791,10 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        staging_mirror = os.environ.get('CE_STAGING_MIRROR') == '1' and trial_identity()
+        self.send_header("Access-Control-Allow-Origin", NY_CONNECTOR_ORIGIN if staging_mirror else "*")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization" if staging_mirror else "Content-Type")
         for name, value in (extra_headers or {}).items():
             self.send_header(name, value)
         self.end_headers()

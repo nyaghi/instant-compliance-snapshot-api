@@ -29,6 +29,7 @@ TRIAL_VERSION = '2026.09.29.2-performance-lab'
 TRIAL_RELEASE_LABEL = '29.2EF'
 TRIAL_DATABASE_NAME = 'cc_final_four_29_2'
 MANIFEST = Path(__file__).with_name('final-four-resources.json')
+STAGING_MIRROR_MANIFEST = Path(__file__).with_name('staging-mirror-resources.json')
 
 
 def trial_sales_cutoff(payload, identity):
@@ -40,6 +41,8 @@ def trial_sales_cutoff(payload, identity):
     if 'sales_cutoff_seconds' not in payload:
         return 60
     value = payload['sales_cutoff_seconds']
+    if identity and identity.get('staging_mirror'):
+        raise ValueError('Cutoff studies are unavailable in staging')
     if (not identity or payload.get('mode') != 'sales'
             or payload.get('kind', 'registration') != 'registration'
             or type(value) is not int or value not in (60, 70, 80, 90)):
@@ -57,9 +60,67 @@ def _manifest():
         return None
 
 
+def staging_mirror_identity(env=None, manifest=None):
+    """Exact, separate staging API/worker/queue identity for the EF promotion.
+
+    This deliberately does not accept either existing staging service, either
+    lab service, or the protected production pool. The manifest has resource
+    identifiers only; credentials remain in Render environment variables.
+    """
+    env = os.environ if env is None else env
+    if env.get('CE_STAGING_MIRROR') != '1' or env.get('CE_FINAL_FOUR_TRIAL') == '1':
+        return None
+    try:
+        data = (json.loads(STAGING_MIRROR_MANIFEST.read_text(encoding='utf-8'))
+                if manifest is None else manifest)
+        if data.get('version') != TRIAL_VERSION or env.get('CE_APP_VERSION') != TRIAL_VERSION:
+            return None
+        origin, api, worker, database = (data[k] for k in ('origin', 'api', 'worker', 'database'))
+        url = urlparse(origin)
+        if (origin in PROTECTED_ORIGINS or origin == _manifest().get('origin')
+                or url.scheme != 'https' or url.path or url.query or url.fragment
+                or not (url.hostname or '').endswith('.onrender.com')):
+            return None
+        if env.get('PUBLIC_BASE_URL') != origin:
+            return None
+        if (api['name'] != 'charityclarity-staging-ef-api'
+                or worker['name'] != 'charityclarity-staging-ef-worker'
+                or api['id'] == worker['id']):
+            return None
+        trial = _manifest() or {}
+        forbidden = PROTECTED_SERVICES | {trial.get('api', {}).get('id'), trial.get('worker', {}).get('id')}
+        for item in (api, worker):
+            if item['id'] in forbidden or not re.fullmatch(r'srv-[a-z0-9]+', item['id']):
+                return None
+        if (database['host'] in {APPROVED_DATABASE, trial.get('database', {}).get('host')}
+                or not re.fullmatch(r'dpg-[a-z0-9]+-a', database['host'])
+                or database['name'] != 'cc_staging_ef'):
+            return None
+        role = worker if env.get('CE_LAB_ROLE') == 'worker' else api
+        if (env.get('RENDER_SERVICE_ID') != role['id']
+                or env.get('RENDER_SERVICE_NAME') != role['name']):
+            return None
+        if env.get('CE_FINAL_FOUR_CHILD') == '1':
+            if (env.get('CE_LAB_DURABLE_QUEUE') != '0' or env.get('CE_LAB_DATABASE_URL')
+                    or env.get('CE_TEST_DATABASE_URL') or env.get('RENDER_API_KEY')):
+                return None
+        else:
+            dsn = urlparse(env.get('CE_LAB_DATABASE_URL', ''))
+            if (dsn.scheme not in ('postgres', 'postgresql')
+                    or dsn.hostname not in (database['host'], database['host'] + '.oregon-postgres.render.com')
+                    or dsn.path != '/' + database['name']
+                    or env.get('CE_LAB_DURABLE_QUEUE') != '1'):
+                return None
+        return {**data, 'staging_mirror': True}
+    except (OSError, KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def trial_identity(env=None, manifest=None, now=None):
     """Return a fully isolated active identity, or fail closed with None."""
     env = os.environ if env is None else env
+    if env.get('CE_STAGING_MIRROR') == '1':
+        return staging_mirror_identity(env)
     if env.get('CE_FINAL_FOUR_TRIAL') != '1':
         return None
     data = _manifest() if manifest is None else manifest
@@ -128,6 +189,8 @@ def trial_access_expired(env=None, manifest=None, now=None):
 
 def performance_origin_enabled(env=None):
     env = os.environ if env is None else env
+    if env.get('CE_STAGING_MIRROR') == '1':
+        return staging_mirror_identity(env) is not None
     if env.get('CE_FINAL_FOUR_TRIAL') == '1':
         return trial_identity(env) is not None
     # Preserve the existing release's origin condition exactly.
@@ -135,6 +198,11 @@ def performance_origin_enabled(env=None):
 
 
 def configured_lab_origin():
+    if os.environ.get('CE_STAGING_MIRROR') == '1':
+        identity = staging_mirror_identity()
+        if identity is None:
+            raise RuntimeError('29.2EF staging requires its own API, worker and queue')
+        return identity['origin']
     if os.environ.get('CE_FINAL_FOUR_TRIAL') != '1':
         return APPROVED_ORIGIN
     identity = trial_identity()
