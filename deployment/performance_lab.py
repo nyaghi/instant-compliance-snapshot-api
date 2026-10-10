@@ -194,6 +194,10 @@ def final_four_asset(name, text):
     elif name == 'sales-mode.js':
         replace("const VERSION = '2026.09.29.1-sales';", "const VERSION = '2026.09."+TRIAL_RELEASE_LABEL+"-sales-trial';")
         replace('const NAMES = {', 'const NAMES = {"AL":"Alabama","NC":"North Carolina","NV":"Nevada","TN":"Tennessee",')
+        # Staging has one check workflow. Keep only the existing display-status
+        # formatter for the instant Sales report; do not mount the old mode UI.
+        replace("  const main = document.querySelector('#appShell main');",
+                "  window.CCSales=Object.freeze({version:VERSION,states:STATES,displayStatus});\n  return;\n  const main = document.querySelector('#appShell main');")
         replace('Choose any or all 34 states.', 'Choose any or all ${STATES.length} states.')
         replace('Select all 34</button>', 'Select all ${STATES.length}</button>')
         environment_label = 'Staging' if identity.get('permanent_staging') else 'Isolated Trial'

@@ -48,6 +48,18 @@ class InsightLabTests(unittest.TestCase):
         result=subprocess.run(['git','diff','--name-only','--','web-staging'],cwd=ROOT,capture_output=True,text=True,check=True)
         self.assertEqual(result.stdout.strip(),'')
 
+    def test_staging_has_one_check_workflow_and_sales_export_formatter(self):
+        with patch.object(lab,'trial_identity',return_value={'origin':'https://charityclarity-final-four-29-2.onrender.com','permanent_staging':True}),patch.object(lab,'LAB_ORIGIN','https://charityclarity-final-four-29-2.onrender.com'):
+            script=lab.lab_asset('/sales-mode.js')[0].decode()
+        check='''const vm=require('node:vm');let touched=false;
+const window={};const document={querySelector(){touched=true;throw Error('Mode UI mounted')}};
+vm.runInNewContext(require('node:fs').readFileSync(0,'utf8'),{window,document,location:{origin:'https://charityclarity-final-four-29-2.onrender.com'}});
+if(touched || !window.CCSales)throw Error('The old mode UI was mounted');
+if(window.CCSales.displayStatus({state:'NC',status:'Not Registered',success:true})!=='Not Found')throw Error('Sales report formatter changed');
+if(window.CCSales.displayStatus({state:'NC',status:'Current',success:false})!=='Unable to Confirm')throw Error('Inconclusive result became conclusive');'''
+        result=subprocess.run(['node','-e',check],input=script,text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def test_head_start_assets_never_expose_json_or_escape_the_public_asset_folder(self):
         self.assertIn(b'continueAurora',lab.lab_asset('/head-start/app.js')[0])
         self.assertIn(b'head-start-logo.png',lab.lab_asset('/head-start/')[0])
