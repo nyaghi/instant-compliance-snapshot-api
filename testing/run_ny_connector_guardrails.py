@@ -59,6 +59,44 @@ class ConnectorTests(unittest.TestCase):
         _,result=self.submit(self.start(),[{**ROW,'ein':'987654321','orgName':'Other Corporation','orgID':'11-22-33'},ROW])
         self.assertEqual(result['result']['status'],'Current')
         self.assertEqual(self.session.get.call_args.kwargs['params'],{'orgID':'10-20-30'})
+    def test_unrelated_malformed_ein_row_does_not_abort_complete_negative_search(self):
+        state=self.start()
+        for _ in range(3):
+            _,state=self.submit(state,[{**ROW,'ein':'legacy format','orgName':'Unrelated Community Trust'}])
+        self.assertEqual(state['result']['status'],'Not Registered')
+        self.assertEqual(state['result']['status_reason'],'NY_COMPLETED_SEARCH_NO_MATCH')
+        self.session.get.assert_not_called()
+    def test_unrelated_malformed_ein_row_does_not_hide_valid_match(self):
+        other={**ROW,'ein':'legacy format','orgName':'Unrelated Community Trust','orgID':'11-22-33'}
+        _,result=self.submit(self.start(),[other,ROW])
+        self.assertEqual(result['result']['status'],'Current')
+        self.assertEqual(self.session.get.call_args.kwargs['params'],{'orgID':ROW['orgID']})
+    def test_possible_malformed_ein_identity_remains_inconclusive(self):
+        cases=[{**ROW,'ein':'legacy format'},
+               {**ROW,'ein':'EIN 12-3456789','orgName':'Unrelated Community Trust'}]
+        for row in cases:
+            _,result=self.submit(self.start(),[row])
+            self.assertEqual(result['result']['status'],'Unable to Confirm')
+            self.assertNotEqual(result['result']['status_reason'],'NY_COMPLETED_SEARCH_NO_MATCH')
+        self.session.get.assert_not_called()
+    def test_malformed_ein_cannot_supply_a_discovered_name(self):
+        code, state = self.request(action='start', purpose='identity',
+                                   organization_name=ROW['orgName'], ein=ROW['ein'])
+        self.assertEqual(code, 200)
+        possible = {**ROW, 'ein': 'EIN 12-3456789', 'orgName': 'Unrelated Community Trust'}
+        _, result = self.submit(state, [possible])
+        identity = result['result']['identity']
+        self.assertFalse(identity['complete'])
+        self.assertEqual(identity['names'], [])
+
+        _, state = self.request(action='start', purpose='identity',
+                                organization_name=ROW['orgName'], ein=ROW['ein'])
+        unrelated = {**ROW, 'ein': 'legacy format',
+                     'orgName': 'Unrelated Community Trust', 'orgID': '11-22-33'}
+        _, result = self.submit(state, [unrelated, ROW])
+        identity = result['result']['identity']
+        self.assertTrue(identity['complete'])
+        self.assertEqual(len(identity['names']), 1)
     def test_wrong_live_detail_ein_or_id_is_inconclusive(self):
         for field,value in [('ein','987654321'),('orgID','11-22-33')]:
             self.session.get.return_value.json.return_value={'success':True,'statusCode':200,'data':{**DETAIL,field:value}}
@@ -177,7 +215,7 @@ with patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'bu
                    'organization_name': ROW['orgName'], 'ein': ROW['ein']}
         with patch.object(c, 'trial_identity', return_value={'origin': origin}), \
                 patch.dict(os.environ, {'CE_FINAL_FOUR_TRIAL': '1'}):
-            for version in ('0.6.96', '0.6.97', '0.6.98', '0.6.100', '0.6.101', '0.6.102'):
+            for version in ('0.6.96', '0.6.97', '0.6.98', '0.6.100', '0.6.101', '0.6.102', '0.6.125'):
                 for state in ('NY', 'IL', 'GA'):
                     with self.subTest(version=version, state=state):
                         code, result = c.ny_connector_request(

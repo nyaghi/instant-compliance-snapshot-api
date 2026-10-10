@@ -155,7 +155,10 @@
         // Preserve the row; the master still confirms its name and detail ID.
         const ein = row.ein === null ? "" : row.ein;
         if (typeof ein !== "string") throw new Error("NY_CONNECTOR_SEARCH_EIN_TYPE");
-        if (ein && !/^[0-9]{2}-?[0-9]{7}$/.test(ein)) throw new Error("NY_CONNECTOR_SEARCH_EIN_FORMAT");
+        // Keep a bounded public EIN value for the master to judge alongside
+        // the requested identity. One unrelated legacy row must not abort a
+        // complete search, but a possible match must still fail closed there.
+        if (ein.length > 100 || /[\u0000-\u001f\u007f]/.test(ein)) throw new Error("NY_CONNECTOR_SEARCH_EIN_FORMAT");
         return { orgID: row.orgID, orgName: row.orgName, ein };
       }) };
   }

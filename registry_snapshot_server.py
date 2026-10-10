@@ -6012,7 +6012,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -24296,6 +24296,17 @@ def ny_confirmed_annual_dates(annual: list) -> tuple[list[date], int]:
     return dates, len(undated)
 
 
+def ny_search_row_unrecognized_ein(raw_ein):
+    return bool(raw_ein and not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", raw_ein))
+
+
+def ny_search_row_could_match_without_valid_ein(name, ein, row):
+    raw_ein = row["ein"]
+    name_decision = score_candidate(name, "", {"name": row["orgName"]})["decision"]
+    return (bool(ein and canonical_ein_digits(raw_ein) == ein)
+            or name_decision in {"accepted", "possible"})
+
+
 def search_ny_direct(org, browser_page=None, registry_search_provider=None, registry_detail_provider=None):
     """Read the official site's completed JSON responses, never its loading table."""
     result = checker.StateResult(org.organization_name, format_ein(org.ein), "NY", "Unable to Confirm",
@@ -24375,10 +24386,24 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                 rows = request_data(session, "RegistrySearch", query, list)
                 candidates = {}
                 possible = False
+                unrelated_malformed_eins = 0
                 for row in rows:
                     if (not isinstance(row, dict) or not row.get("orgID") or not row.get("orgName")
                             or "ein" not in row):
                         raise ValueError("Incomplete New York search row")
+                    raw_ein = row["ein"]
+                    if raw_ein is not None and (not isinstance(raw_ein, str) or len(raw_ein) > 100
+                                                or re.search(r"[\x00-\x1f\x7f]", raw_ein)):
+                        raise ValueError("New York search row EIN evidence is incomplete")
+                    if ny_search_row_unrecognized_ein(raw_ein):
+                        # A malformed EIN on an unrelated search hit is not
+                        # evidence that the requested organization exists.
+                        # Keep any possible identity inconclusive instead of
+                        # silently turning it into a negative or a match.
+                        if ny_search_row_could_match_without_valid_ein(org.organization_name, requested_ein, row):
+                            raise ValueError("New York returned an unrecognized EIN for a possible organization match")
+                        unrelated_malformed_eins += 1
+                        continue
                     candidate_ein = re.sub(r"\D", "", str(row.get("ein") or ""))
                     if candidate_ein == "000000000":
                         candidate_ein = ""
@@ -24388,6 +24413,9 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                         candidates[str(row["orgID"])] = (score["score"], row)
                     elif score["decision"] == "possible":
                         possible = True
+                if unrelated_malformed_eins:
+                    result.source_attempts.append(
+                        f"NY RegistrySearch: excluded {unrelated_malformed_eins} unrelated row(s) with unrecognized EINs")
                 if possible and not candidates:
                     raise ValueError("New York search returned ambiguous organization identities")
                 if candidates:
@@ -24663,7 +24691,8 @@ def ny_connector_clean_response(payload, expected_query):
             raise ValueError("The New York record identifier is invalid.")
         if not isinstance(row["orgName"], str) or not 1 <= len(row["orgName"].strip()) <= 500:
             raise ValueError("The New York organization name is invalid.")
-        if not isinstance(row["ein"], str) or (row["ein"] and not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", row["ein"])):
+        if (not isinstance(row["ein"], str) or len(row["ein"]) > 100
+                or re.search(r"[\x00-\x1f\x7f]", row["ein"])):
             raise ValueError("The New York record EIN is invalid.")
         cleaned.append(dict(row))
     return cleaned
@@ -24681,12 +24710,17 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
             rows = search_response({"ein": ein}).json()["data"]
-            identity = identity_rows_names("NY", rows, ein, "https://charities-search.ag.ny.gov/RegistrySearch")
+            usable_rows = [row for row in rows if not ny_search_row_unrecognized_ein(row["ein"])]
+            identity = identity_rows_names("NY", usable_rows, ein, "https://charities-search.ag.ny.gov/RegistrySearch")
+            if any(ny_search_row_could_match_without_valid_ein(org.organization_name, ein, row)
+                   for row in rows if ny_search_row_unrecognized_ein(row["ein"])):
+                identity["complete"] = False
+                identity["limitation"] = "New York returned an unrecognized EIN for a possible organization match."
             return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
                     "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
         result = search_ny_direct(org, registry_search_provider=search_response,
@@ -24731,7 +24765,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
