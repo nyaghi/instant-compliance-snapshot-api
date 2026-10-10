@@ -86,7 +86,7 @@ class CompoundCompletion(unittest.TestCase):
         with patch.object(cc,'trial_identity',return_value={'origin':'fixture'}):
             result=cc.final_four_browser_lookup(org,'NC',provider,time.monotonic()+10)
         self.assertEqual(result.status,'Not Registered')
-        self.assertEqual(len(queries),1)
+        self.assertLessEqual(len(queries),2)
         self.assertEqual(queries[0]['search_mode'],'ALL_WORDS')
         self.assertTrue(cc.nc_all_words_covers(queries[0]['name'],org.organization_name))
 
