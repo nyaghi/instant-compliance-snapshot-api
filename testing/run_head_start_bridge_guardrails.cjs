@@ -9,7 +9,7 @@ function setup({sender='http://127.0.0.1:8000',nonce='4d43f91a-52fa-48f3-a4b4-ef
   class Element{
     constructor(){this.events={};this.children=[];this.style={};this.dataset={};this.classList={add:()=>{},toggle:()=>{}};this.value='';this.checked=false;this.textContent='';this.innerHTML='';this.hidden=false;}
     setAttribute(name,value){this[name]=value;} append(...children){this.children.push(...children);for(const child of children)if(child.id)elements[child.id]=child;}
-    before(child){elements.card=child;} addEventListener(type,handler){this.events[type]=handler;} dispatchEvent(event){this.events[event.type]?.(event);}
+    before(child){if(child.id)elements[child.id]=child;else elements.card=child;} addEventListener(type,handler){this.events[type]=handler;} dispatchEvent(event){this.events[event.type]?.(event);}
   }
   for(const id of ['snapshotForm','organizationName','ein','generateReportButton','ccSalesSelectedCount','ccSalesResults'])elements[id]=new Element();
   const boxes=['PA','HI','CA','CT','CO','WA','NY','AK'].flatMap(value=>[Object.assign(new Element(),{value}),Object.assign(new Element(),{value})]);
@@ -43,6 +43,12 @@ test('Back to Head Start restores saved answers when the original tab is unavail
   c.elements.ccBackToHeadStart.events.click();
   assert.equal(c.navigated,'/head-start/?return=aurora');
   assert.equal(JSON.parse(c.returnSaved).base,packet.profile.base);
+  assert.equal(c.requests.length,0);
+});
+test('Aurora also offers Head Start navigation before an assessment is connected',()=>{
+  const c=setup({sender:null});
+  c.elements.ccBackToHeadStart.events.click();
+  assert.equal(c.navigated,'/head-start/');
   assert.equal(c.requests.length,0);
 });
 test('untrusted opener gets no message and cannot activate the assessment',()=>{

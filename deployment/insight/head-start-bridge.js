@@ -22,9 +22,10 @@
   const message = document.createElement('p'); message.setAttribute('role','status'); message.style.cssText = 'font-size:13px;margin:6px 0 0';
   const back = document.createElement('button'); back.type='button'; back.id='ccBackToHeadStart';
   back.textContent='← Back to Head Start';
-  back.style.cssText='margin-top:12px;padding:8px 12px;border:1px solid #0B2A5B;border-radius:6px;background:white;color:#0B2A5B;font-weight:700;cursor:pointer';
-  card.append(title,description,back,message);
-  document.getElementById('snapshotForm').before(card);
+  back.style.cssText='display:block;margin:0 0 12px;padding:8px 12px;border:1px solid #0B2A5B;border-radius:6px;background:white;color:#0B2A5B;font-weight:700;cursor:pointer';
+  card.append(title,description,message);
+  const form=document.getElementById('snapshotForm');
+  form.before(back);form.before(card);
 
   function validate(value) {
     if(!value || value.schema_version !== 'cc.head-start/1' || !value.organization_name || !/^\d{9}$/.test(normalizeEin(value.ein)) ||
@@ -105,7 +106,7 @@
   const sender=fragment.get('hs_sender'),nonce=fragment.get('hs_nonce');
   const allowed=new Set([location.origin,'http://127.0.0.1:8000','http://localhost:8000','https://charityclarity-head-start-test.nyaghi17.chatgpt.site']);
   back.addEventListener('click',()=>{
-    if (!assessment) return;
+    if (!assessment) { window.location.assign('/head-start/'); return; }
     // Head Start opened Aurora in a new tab. Return to that exact assessment
     // when its original tab still exists; keep a same-origin fallback for reloads.
     if (sender && allowed.has(sender) && window.opener && !window.opener.closed) {
