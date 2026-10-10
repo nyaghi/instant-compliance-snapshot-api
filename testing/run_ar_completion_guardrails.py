@@ -54,6 +54,18 @@ class ArkansasCompletionTests(unittest.TestCase):
         r,queries=self.lookup(name=name,aliases=[],seconds_per_query=c.AR_NAME_SEARCH_MAX_SECONDS)
         self.assertEqual(queries,['Example Wildlife Alliance'])
         self.assertEqual(c.public_status(r),'Not Registered');self.assertTrue(r.success)
+    def test_long_legal_name_completes_from_explicitly_empty_prefix(self):
+        name='Association for the Advancement of Sustainability in Higher Education'
+        r,queries=self.lookup(name=name,aliases=[],seconds_per_query=c.AR_NAME_SEARCH_MAX_SECONDS)
+        self.assertEqual(queries,['Association for the Advancement of'])
+        self.assertEqual(c.public_status(r),'Not Registered');self.assertTrue(r.success)
+    def test_descriptive_separator_orders_full_left_right_before_variants(self):
+        name='Example Education Institute — Bright Futures Foundation'
+        org=c.checker.Organization(name,'12-3456789')
+        _,generated=c.licensed_charity_names(org)
+        with patch.object(c,'known_names_for_ein',return_value=[]):
+            queries,_=c.ar_reviewed_search_plan(org,generated)
+        self.assertEqual(queries[:3],[name,'Example Education Institute','Bright Futures Foundation'])
     def test_same_literal_query_can_certify_complete_no_record(self):
         name='Example Wildlife Alliance'
         r,_=self.lookup(name=name,aliases=[name],seconds_per_query=c.AR_NAME_SEARCH_MAX_SECONDS)

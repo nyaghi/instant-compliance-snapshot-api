@@ -255,6 +255,31 @@ class IntegrationControls(unittest.TestCase):
             self.assertEqual(response,{'phase':'complete','result':{'status':'Current'}})
             self.assertGreater(len(record['completed']),35)
 
+    def test_ga_complete_distinctive_prefix_covers_only_its_literal_family(self):
+        org=cc.checker.Organization('Example Wildlife Education Foundation','12-3456789')
+        names=['Example Wildlife Education Foundation','Example Wildlife Education Fund',
+               'Former Conservation Alliance']
+        requests=[]
+        with patch.object(cc,'licensed_charity_names',return_value=(names,[])):
+            result=cc.il_ga_browser_lookup(org,'GA',lambda q:(requests.append(q) or {'rows':[]}))
+        self.assertEqual(result.status,'Not Registered')
+        self.assertEqual([q['orgName'] for q in requests],
+                         ['Example Wildlife','Former Conservation Alliance'])
+
+    def test_ga_failed_prefix_retries_exact_plan_without_false_negative(self):
+        org=cc.checker.Organization('Example Wildlife Education Foundation','12-3456789')
+        names=['Example Wildlife Education Foundation','Example Wildlife Education Fund']
+        requests=[]
+        def evidence(q):
+            requests.append(q['orgName'])
+            if q['orgName']=='Example Wildlife':
+                raise ValueError('incomplete prefix result')
+            return {'rows':[]}
+        with patch.object(cc,'licensed_charity_names',return_value=(names,[])):
+            result=cc.il_ga_browser_lookup(org,'GA',evidence)
+        self.assertEqual(result.status,'Not Registered')
+        self.assertEqual(requests,['Example Wildlife',*names])
+
     def test_ga_empty_is_not_registered_not_il_label(self):
         result=cc.il_ga_browser_lookup(self.org,'GA',lambda q:{'rows':[]})
         self.assertEqual(cc.public_status(result),'Not Registered')

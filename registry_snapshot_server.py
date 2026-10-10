@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import hmac
 import importlib.util
+import itertools
 import http.cookiejar
 import html
 import io
@@ -5837,6 +5838,22 @@ def il_ga_clean_evidence(payload, query):
     return {"rows": cleaned}
 
 
+def ga_distinctive_covering_prefix(name):
+    """A literal GA wildcard prefix that can cover longer planned spellings.
+
+    This changes retrieval volume only. Every row still passes the existing
+    identity, detail, duplicate, and status checks. Weak one-word probes are
+    deliberately excluded from this optimization.
+    """
+    tokens = list(re.finditer(r"[A-Za-z0-9]+", name or ""))
+    distinctive = distinctive_match_tokens(name)
+    useful = [match for match in tokens if match.group().casefold() in distinctive]
+    if len(useful) < 2:
+        return ""
+    prefix = name[:useful[1].end()].strip()
+    return prefix if len(prefix) >= 12 and len(prefix) < len(name) else ""
+
+
 def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     """Master-owned discovery, matching, duplicate resolution and interpretation."""
     deadline = time.monotonic() + 40
@@ -5846,12 +5863,38 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         names = il_browser_name_queries(required, generated) if state == "IL" else required + generated
         queries += [{"state": state, "orgName": name} for name in names]
     records, seen, completed = [], set(), []
-    for query_index, query in enumerate(queries):
+    covered_ga_names = set()
+    failed_ga_prefixes = set()
+    for query in queries:
         # Exact EIN is decisive for IL. Name fallbacks never admit a different EIN.
         if state == "IL" and records:
             break
-        found = evidence(query)["rows"]
-        completed.append(query)
+        planned_name = query.get("orgName", "")
+        if state == "GA" and planned_name.casefold() in covered_ga_names:
+            continue
+        probe = query
+        coverage = [planned_name]
+        if state == "GA" and purpose != "identity":
+            prefix = ga_distinctive_covering_prefix(planned_name)
+            if prefix and prefix.casefold() not in failed_ga_prefixes:
+                coverage = [name for name in names if name.casefold().startswith(prefix.casefold())]
+                if len(coverage) > 1:
+                    probe = {"state": state, "orgName": prefix}
+        try:
+            found = evidence(probe)["rows"]
+        except Exception:
+            if probe is query:
+                raise
+            # A broad, blocked, or incomplete prefix proves no coverage.
+            # Fall back to the original exact planned query and its normal
+            # failure classification instead of treating omitted names as empty.
+            failed_ga_prefixes.add(probe["orgName"].casefold())
+            probe = query
+            coverage = [planned_name]
+            found = evidence(query)["rows"]
+        completed.append(probe)
+        if state == "GA":
+            covered_ga_names.update(name.casefold() for name in coverage)
         for row in found:
             identity = ga_charity_record_key(row) if state == "GA" else row["identifier"]
             if identity in seen:
@@ -5897,7 +5940,7 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
             records.append(record)
         # A confirmed primary record completes registration research without
         # requiring every generated phrase; all rows of that query are evaluated.
-        if state == "GA" and records and query_index >= len(required) - 1:
+        if state == "GA" and records and all(name.casefold() in covered_ga_names for name in required):
             selected, review = select_licensed_charity(org, records, state, deadline)
             if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:
                 break
@@ -6665,8 +6708,19 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         # slash. These are retrieval probes, not newly accepted identities.
         # Both sides must complete; the original master targets still select
         # every returned row. Ordinary word hyphens remain intact.
-        required = list(dict.fromkeys(part for name in required
-            for part in (licensed_compound_retrieval_names(name) or [name])))
+        if state == "NC":
+            # Descriptive halves are reviewed completion probes: full name,
+            # then the entered left and right sides. A short brand retains
+            # the established component-only path and its completion gate.
+            required = list(dict.fromkeys(part for name in required
+                for part in ([name, *licensed_compound_retrieval_names(name)]
+                             if licensed_compound_retrieval_names(name)
+                             and all(len(distinctive_match_tokens(half)) >= 2
+                                     for half in licensed_compound_retrieval_names(name))
+                             else licensed_compound_retrieval_names(name) or [name])))
+        else:
+            required = list(dict.fromkeys(part for name in required
+                for part in (licensed_compound_retrieval_names(name) or [name])))
         generated = [name for name in generated if not licensed_compound_retrieval_names(name)]
         if state == "NC":
             # Splitting a display label can recreate a reviewed name already
@@ -6710,6 +6764,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     nc_all_words_probes = (nc_grouped_all_words_probes(required, generated)
                            if state == "NC" and trial_identity()
                            and known_names_for_ein(org.ein) else {})
+    if state == "NC" and trial_identity() and required:
+        primary_probe = nc_primary_all_words_probe(required[0], generated)
+        if primary_probe:
+            nc_all_words_probes[required[0]] = primary_probe
     if state == "TN":
         generated = tn_browser_generated_queries(required, generated)
     if (state in {"AL", "NV"} or state == "NC" and trial_identity()) and all(
@@ -6747,7 +6805,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         generated = sorted(generated, key=lambda name: len(name))
     for index, name in enumerate(required + generated):
         completed_all_words = (next((phrase for phrase in nc_completed_all_words
-                                     if nc_phrase_in_name(phrase, name)), None)
+                                     if nc_all_words_covers(phrase, name)), None)
                                if state == "NC" else None)
         if completed_all_words:
             if index < len(required):
@@ -7850,6 +7908,32 @@ def nc_phrase_in_name(phrase, name):
     """Recognize a literal two-word phrase without treating partial words as coverage."""
     return bool(re.search(r"(?<![A-Za-z0-9])" + re.escape(phrase)
                           + r"(?![A-Za-z0-9])", name, re.IGNORECASE))
+
+
+def nc_all_words_covers(phrase, name):
+    """Only complete public All Words results cover names containing each word."""
+    words = [word.casefold() for word in re.findall(r"[A-Za-z0-9]+", phrase)]
+    target = {word.casefold() for word in re.findall(r"[A-Za-z0-9]+", name)}
+    return len(words) >= 2 and all(word in target for word in words)
+
+
+def nc_primary_all_words_probe(primary, generated):
+    """One distinctive NC query can cover a long name and its word-order form.
+
+    This is a retrieval optimization only. An incomplete result proves no
+    coverage, and the ordinary row identity rules still decide every match.
+    """
+    if len(primary) < 50 or not generated:
+        return ""
+    useful = [word for word in re.findall(r"[A-Za-z0-9]+", primary)
+              if word.casefold() in distinctive_match_tokens(primary) and len(word) >= 5]
+    probes = []
+    for left, right in itertools.combinations(dict.fromkeys(useful), 2):
+        phrase = f"{left} {right}"
+        covered = [name for name in generated if nc_all_words_covers(phrase, name)]
+        if covered and len(phrase) >= 15:
+            probes.append((len(covered), -len(phrase), phrase))
+    return max(probes, key=lambda item: item[0])[2] if probes else ""
 
 
 def nc_grouped_all_words_probes(required, generated):
@@ -29308,12 +29392,21 @@ def ar_reviewed_search_plan(org, generated):
                 queries.append(query); seen.add(query.casefold())
             if query != name and canonical_name_punctuation(name).casefold().startswith(query.casefold()):
                 prefixes.setdefault(query.casefold(), []).append(name)
-    if not known_names_for_ein(org.ein):
-        return planned, {}
     for query in planned:
         if query.casefold() not in seen:
             queries.append(query); seen.add(query.casefold())
-    return queries, prefixes
+    # For a display name with an explicit separator, follow the entered full
+    # name with each descriptive half before speculative spelling variants.
+    # Ordinary word hyphens do not create a separate organization name.
+    halves = [part for part in licensed_compound_retrieval_names(org.organization_name)
+              if len(distinctive_match_tokens(part)) >= 2]
+    if not known_names_for_ein(org.ein) and len(org.organization_name) <= 50 and not halves:
+        return planned, {}
+    if halves:
+        priority = [org.organization_name, *halves]
+        queries = list(dict.fromkeys([*priority, *queries]))
+    return (queries[:AR_NAME_SEARCH_MAX_VARIANTS] if not known_names_for_ein(org.ein)
+            else queries), prefixes
 
 
 def ar_completed_empty_identities(empty_queries, prefixes, planned_queries=()):
@@ -29385,7 +29478,7 @@ def search_ar_precise(page, org):
         # Empty retrieval evidence is literal, not the more permissive name
         # identity normalization. "Institute Inc." cannot cover "Institute"
         # or "Institute, Inc."; keep those existing fallback searches.
-        if known_names_for_ein(org.ein) and any(
+        if any(
             variant.casefold().startswith(query.casefold()) for query in empty_variants
         ):
             continue
