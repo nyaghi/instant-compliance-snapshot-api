@@ -162,6 +162,10 @@ def final_four_asset(name, text):
           result.reviewed_alternate_names = [...alternateNames];''')
         environment_label = 'Staging' if identity.get('permanent_staging') else 'Isolated Trial'
         replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; '+environment_label)
+    elif name == 'organization-identity.js':
+        # The server returns partial evidence by 28 seconds; stop the browser
+        # at 30 seconds so a stalled transport cannot extend discovery.
+        replace('setTimeout(() => controller.abort(), 70000)', 'setTimeout(() => controller.abort(), 30000)')
     elif name == 'optimized-workflows.js':
         # User-approved Sales contract: entered name/EIN, no alias preparation.
         # Keep the protected staging template unchanged.
@@ -277,7 +281,7 @@ def insight_asset(name, text):
         ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length || !window.CCHeadStart?.hasAssessment();'),
         ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
         ('</head>', '  <link rel="stylesheet" href="/head-start/journey.css?v=20261008.1">\n</head>'),
-        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.2"></script>\n  <script src="/sales-extract.js?v=1"></script>\n</body>'),
+        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.3"></script>\n  <script src="/sales-extract.js?v=2"></script>\n</body>'),
     ]
     for old, new in replacements:
         if text.count(old) != 1:

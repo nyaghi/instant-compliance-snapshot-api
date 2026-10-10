@@ -1917,7 +1917,10 @@ IDENTITY_WA_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="identit
 # Discovery has its own bounded capacity; it does not change workflow admission.
 IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(256)
 IDENTITY_BROWSER_SLOTS = threading.BoundedSemaphore(4)
-IDENTITY_DEADLINE_SECONDS = 60.0
+# Leave room for the browser/network round trip within the 30-second
+# user-facing discovery limit. Sources still run in parallel and may return
+# partial, EIN-backed names until this deadline.
+IDENTITY_DEADLINE_SECONDS = 28.0
 IDENTITY_MAX_NAMES = 32
 IDENTITY_REQUEST_TRACE = ContextVar("identity_request_trace", default=None)
 

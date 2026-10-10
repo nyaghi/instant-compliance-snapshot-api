@@ -5,21 +5,23 @@ const packet=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/connected-
 const source=fs.readFileSync(path.join(__dirname,'../deployment/insight/head-start-bridge.js'),'utf8');
 function setup({sender='http://127.0.0.1:8000',nonce='4d43f91a-52fa-48f3-a4b4-ef7e04a690d3',stored,unlocked=true}={}){
   const elements={},listeners={},posts=[],requests=[],timers=new Map(),rendered=[];
-  let nextTimer=0,storage=stored,replaced=null,reports=0;
+  let nextTimer=0,storage=stored,replaced=null,reports=0,navigated=null,returnSaved=null;
   class Element{
-    constructor(){this.events={};this.children=[];this.style={};this.dataset={};this.classList={add:()=>{}};this.value='';this.checked=false;this.textContent='';this.innerHTML='';this.hidden=false;}
+    constructor(){this.events={};this.children=[];this.style={};this.dataset={};this.classList={add:()=>{},toggle:()=>{}};this.value='';this.checked=false;this.textContent='';this.innerHTML='';this.hidden=false;}
     setAttribute(name,value){this[name]=value;} append(...children){this.children.push(...children);for(const child of children)if(child.id)elements[child.id]=child;}
     before(child){elements.card=child;} addEventListener(type,handler){this.events[type]=handler;} dispatchEvent(event){this.events[event.type]?.(event);}
   }
   for(const id of ['snapshotForm','organizationName','ein','generateReportButton','ccSalesSelectedCount','ccSalesResults'])elements[id]=new Element();
   const boxes=['PA','HI','CA','CT','CO','WA','NY','AK'].flatMap(value=>[Object.assign(new Element(),{value}),Object.assign(new Element(),{value})]);
-  const opener={postMessage:(...args)=>posts.push(args)};
+  let openerFocused=false;
+  const opener={postMessage:(...args)=>posts.push(args),focus:()=>{openerFocused=true;},closed:false};
   const config={apiBase:'http://127.0.0.1:8766',email:'test@example.test',passcode:'fixture',unlocked,renderResults:rows=>rendered.push(rows),generateReport:()=>reports++};
   const window={opener,CCHeadStartConfig:()=>config,addEventListener:(type,handler)=>listeners[type]=handler,removeEventListener:(type,handler)=>{if(listeners[type]===handler)delete listeners[type];}};
-  const context={window,document:{createElement:()=>new Element(),getElementById:id=>elements[id],querySelectorAll:()=>boxes},location:{origin:'http://127.0.0.1:8766',pathname:'/instant-compliance-snapshot',search:'',hash:sender?'#'+new URLSearchParams({hs_sender:sender,hs_nonce:nonce}):''},URLSearchParams,structuredClone,AbortController,setTimeout:()=>1,clearTimeout(){},Event:class{constructor(type){this.type=type;}},sessionStorage:{getItem:()=>storage,setItem:(_key,value)=>storage=value},history:{replaceState:(_a,_b,value)=>replaced=value},setInterval:handler=>{timers.set(++nextTimer,handler);return nextTimer;},clearInterval:id=>timers.delete(id),fetch:async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {ok:true};}};
+  const context={window,document:{createElement:()=>new Element(),getElementById:id=>elements[id],querySelectorAll:()=>boxes},location:{origin:'http://127.0.0.1:8766',pathname:'/instant-compliance-snapshot',search:'',hash:sender?'#'+new URLSearchParams({hs_sender:sender,hs_nonce:nonce}):'',assign:value=>navigated=value},URLSearchParams,structuredClone,AbortController,setTimeout:()=>1,clearTimeout(){},Event:class{constructor(type){this.type=type;}},sessionStorage:{getItem:()=>storage,setItem:(key,value)=>{if(key==='cc.headstart.return.v1')returnSaved=value;else storage=value;}},history:{replaceState:(_a,_b,value)=>replaced=value},setInterval:handler=>{timers.set(++nextTimer,handler);return nextTimer;},clearInterval:id=>timers.delete(id),fetch:async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {ok:true};}};
+  window.location=context.location;
   vm.createContext(context);vm.runInContext(source,context);
   const deliver=(overrides={})=>listeners.message?.({source:opener,origin:sender,data:{type:'cc.headstart.assessment',nonce,assessment:structuredClone(packet)},...overrides});
-  return {window,elements,boxes,config,posts,requests,timers,rendered,deliver,listeners,get storage(){return storage;},get replaced(){return replaced;},get reports(){return reports;}};
+  return {window,elements,boxes,config,posts,requests,timers,rendered,deliver,listeners,get storage(){return storage;},get replaced(){return replaced;},get reports(){return reports;},get openerFocused(){return openerFocused;},get navigated(){return navigated;},get returnSaved(){return returnSaved;}};
 }
 test('origin, source and nonce must all match before accepting any organization facts',()=>{
   const c=setup();c.deliver({origin:'https://untrusted.example'});c.deliver({source:{}});c.deliver({data:{type:'cc.headstart.assessment',nonce:'wrong',assessment:packet}});
@@ -28,6 +30,20 @@ test('origin, source and nonce must all match before accepting any organization 
 });
 test('ready and acknowledgement contain only a correlation nonce, not financial or identity facts',()=>{
   const c=setup();assert.deepEqual(Object.keys(c.posts[0][0]).sort(),['nonce','type']);c.deliver();assert.deepEqual(Object.keys(c.posts[1][0]).sort(),['nonce','type']);assert.equal(c.requests.length,0);
+});
+test('Back to Head Start focuses the original assessment without a registry request',()=>{
+  const c=setup();c.deliver();
+  assert.equal(c.elements.ccBackToHeadStart.textContent,'← Back to Head Start');
+  c.elements.ccBackToHeadStart.events.click();
+  assert.equal(c.openerFocused,true);
+  assert.equal(c.requests.length,0);
+});
+test('Back to Head Start restores saved answers when the original tab is unavailable',()=>{
+  const c=setup({sender:null,stored:JSON.stringify(packet)});
+  c.elements.ccBackToHeadStart.events.click();
+  assert.equal(c.navigated,'/head-start/?return=aurora');
+  assert.equal(JSON.parse(c.returnSaved).base,packet.profile.base);
+  assert.equal(c.requests.length,0);
 });
 test('untrusted opener gets no message and cannot activate the assessment',()=>{
   const c=setup({sender:'https://untrusted.example'});assert.equal(c.posts.length,0);assert.equal(c.listeners.message,undefined);assert.equal(c.window.CCHeadStart.hasAssessment(),false);

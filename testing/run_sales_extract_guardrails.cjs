@@ -29,6 +29,7 @@ test('Sales-format export uses only settled Standard rows and no lookup',()=>{
   assert.equal(searches,0);
   assert.match(html,/<th>Organization<\/th><th>EIN<\/th><th>State<\/th><th>Status<\/th>/);
   assert.match(html,/<td>Not Found<\/td>/);
+  assert.match(html,/Compliance Express/);
   assert.doesNotMatch(html,/SECRET COMMENT|SECRET DATE|Renewal Date|Initial Registration Date/);
   assert.equal(created.at(-1).clicked,true);
 });

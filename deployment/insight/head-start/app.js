@@ -151,7 +151,7 @@ function renderReport(){
 function headStartPacket(name,ein){
  const eligibility=new Map(groups.potentialExemption.map(r=>[r.code,r]));
  return {schema_version:'cc.head-start/1',assessment_id:crypto.randomUUID(),organization_name:name,ein,
-  assessed_at:report.assessedAt,engine_version:report.version,ui_version:'0.19.1',rules_reviewed_at:report.reviewDate,
+  assessed_at:report.assessedAt,engine_version:report.version,ui_version:'0.19.2',rules_reviewed_at:report.reviewDate,
   profile:structuredClone(prepareProfile(profile)),requirements:report.results.map(r=>({...structuredClone(r),
    exemption_evidence:eligibility.get(r.code)?.exemptionEvidence||null,possible_exemption:eligibility.has(r.code),
    approvalRequired:!!r.approvalRequired,discretionaryRequest:!!r.discretionaryRequest,deferred:!!r.deferred,nexusPending:!!r.nexusPending}))};
@@ -329,4 +329,15 @@ if(document.modelContext?.registerTool){
   profile=candidate;createReport();return {content:[{type:'text',text:JSON.stringify({scope:'Current answers; unreported activity is shown in the first column without granting statutory clearance',displayedCounts:{noRegistrationIndicated:groups.notRequired.length+groups.notAssessed.length,potentialExemption:groups.potentialExemption.length,mayRequired:groups.mayRequired.length},classificationCounts:Object.fromEntries(Object.entries(groups).map(([k,v])=>[k,v.length])),reviewDate:REVIEW_DATE})}]};
  }});
 }
-render();
+// If Aurora's original Head Start tab was closed, restore the same answers in
+// this tab before showing the assessment. This does not change state rules.
+let returned=false;
+try{
+ const saved=sessionStorage.getItem('cc.headstart.return.v1');
+ if(saved){
+  const value=JSON.parse(saved),candidate=initial();
+  for(const key of Object.keys(candidate))if(Object.hasOwn(value,key))candidate[key]=value[key];
+  if(!inputErrors(candidate).length){profile=candidate;returned=createReport();sessionStorage.removeItem('cc.headstart.return.v1');}
+ }
+}catch{/* Ignore an invalid browser copy; the questionnaire remains available. */}
+if(!returned)render();
