@@ -47,7 +47,7 @@ class MississippiBrowserFallbackControls(unittest.TestCase):
 
         result = cc.ms_browser_lookup(org, evidence)
         self.assertEqual(result.status, 'Upcoming Filing')
-        self.assertEqual(searched, [name, registry_name])
+        self.assertEqual(searched, [name, 'WGU Corporation', registry_name])
         self.assertEqual(result.matched_registry_identifier, '100000801')
 
         # A matching search response containing a different entity is not a match.
@@ -56,6 +56,30 @@ class MississippiBrowserFallbackControls(unittest.TestCase):
             return self.search(query, [unrelated] if query['name'] == registry_name else [])
         unmatched = cc.ms_browser_lookup(org, unrelated_evidence)
         self.assertNotIn(unmatched.status, {'Current', 'Upcoming Filing', 'Exempt'})
+
+    def test_exact_acronym_legal_component_needs_reviewed_identity(self):
+        name = 'ABC Corporation - Atlantic Benefit College'
+        org = cc.checker.Organization(name, '12-3456789')
+        row = {'name': 'ABC Corporation', 'identifier': '100000801',
+               'raw_status': 'Current - Registered'}
+        searched = []
+
+        def evidence(query):
+            if query['operation'] == 'detail':
+                return self.detail(query, name=row['name'])
+            searched.append(query['name'])
+            return self.search(query, [row] if query['name'] == row['name'] else [])
+
+        # The exact supplied side is searched, but a row without corroborated
+        # identity cannot be promoted from the combined name alone.
+        uncorroborated = cc.ms_browser_lookup(org, evidence)
+        self.assertIn('ABC Corporation', searched)
+        self.assertNotIn(uncorroborated.status, {'Current', 'Upcoming Filing', 'Exempt'})
+
+        searched.clear()
+        corroborated = cc.ms_browser_lookup(org, evidence, ['ABC Corporation'])
+        self.assertEqual(corroborated.status, 'Upcoming Filing')
+        self.assertEqual(searched[:2], [name, 'ABC Corporation'])
 
     def test_empty_completed_searches_are_required_for_negative(self):
         calls = []

@@ -29846,11 +29846,14 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     # former names without adding identity evidence.
     name = ascii_dash_search_name(name)
     # A spaced dash can separate two complete supplied names. Search each
-    # descriptive component before shortening the combined name into prefixes;
-    # a fragment such as an acronym plus "Corporation" is too broad by itself.
+    # descriptive component before shortening the combined name into prefixes.
+    # An exact acronym-plus-legal-wrapper component is also a useful literal
+    # query; it is never a standalone acronym probe or identity shortcut.
     dash_components = (
         [part for part in licensed_compound_retrieval_names(name)
-         if len(search_query_tokens(part)) >= 2]
+         if len(search_query_tokens(part)) >= 2
+         or (len(re.findall(r"[A-Za-z0-9]+", part)) >= 2
+             and distinctive_acronym_core_probe(part))]
         if re.search(r"\s+-+\s+", name) else []
     )
     priority = [name, *dash_components, distinctive_acronym_core_probe(name),
@@ -29861,7 +29864,8 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     without_article = re.sub(r"^the\s+", "", name, flags=re.I)
     if without_article != name and len(distinctive_match_tokens(without_article)) >= 2:
         priority.extend(literal_name_retrieval_forms(without_article))
-    priority = [value for value in priority if value and not ms_search_variant_too_broad(value)]
+    priority = [value for value in priority if value and
+                (value in dash_components or not ms_search_variant_too_broad(value))]
     generated = list(dict.fromkeys([*priority, *ms_preferred_search_variants(name, ein)]))
     planned = reviewed_queries_first(name, ein, generated, limit=6, transform=ascii_dash_search_name)
     # These are retrieval probes only; search_ms_fast still checks full row and

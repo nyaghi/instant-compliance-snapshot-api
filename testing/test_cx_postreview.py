@@ -59,8 +59,8 @@ class MississippiPlanner(unittest.TestCase):
     def test_descriptive_spaced_dash_components_precede_shortened_queries(self):
         name = "WGU Corporation - Western Governors University"
         plan = cc.ms_name_search_plan(name)
-        self.assertEqual(plan[:2], [name, "Western Governors University"])
-        self.assertNotIn("WGU Corporation", plan)
+        self.assertEqual(plan[:3], [name, "WGU Corporation", "Western Governors University"])
+        self.assertNotIn("WGU", plan)
 
         independent = "Northern Children's Literacy Center - Bright Futures"
         self.assertEqual(cc.ms_name_search_plan(independent)[:3], [
