@@ -56,6 +56,21 @@ class WisconsinPossessiveComponent(unittest.TestCase):
 
 
 class MississippiPlanner(unittest.TestCase):
+    def test_descriptive_spaced_dash_components_precede_shortened_queries(self):
+        name = "WGU Corporation - Western Governors University"
+        plan = cc.ms_name_search_plan(name)
+        self.assertEqual(plan[:2], [name, "Western Governors University"])
+        self.assertNotIn("WGU Corporation", plan)
+
+        independent = "Northern Children's Literacy Center - Bright Futures"
+        self.assertEqual(cc.ms_name_search_plan(independent)[:3], [
+            independent, "Northern Children's Literacy Center", "Bright Futures"])
+
+        # A hyphen inside a legal name is not a separator, and generic one-word
+        # fallbacks remain excluded from a multiword name.
+        self.assertEqual(cc.licensed_compound_retrieval_names("Make-A-Wish Foundation"), [])
+        self.assertNotIn("Avenue", cc.ms_name_search_plan("Saks Fifth Avenue Foundation"))
+
     def test_discard_generic_single_word_probes(self):
         for name, blocked in (("Saks Fifth Avenue Foundation", "Avenue"),
                               ("Imagine School Nonprofit", "School"),

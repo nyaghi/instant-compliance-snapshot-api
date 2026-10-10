@@ -31,6 +31,32 @@ class MississippiBrowserFallbackControls(unittest.TestCase):
         self.assertEqual(result.matched_registry_identifier, '100000800')
         self.assertIn('Expiration Date: 11/15/2026', result.raw_status_text)
 
+    def test_descriptive_dash_component_retrieves_record_without_relaxing_identity(self):
+        name = 'WGU Corporation - Western Governors University'
+        org = cc.checker.Organization(name, '12-3456789')
+        registry_name = 'Western Governors University'
+        row = {'name': registry_name, 'identifier': '100000801',
+               'raw_status': 'Current - Registered'}
+        searched = []
+
+        def evidence(query):
+            if query['operation'] == 'detail':
+                return self.detail(query, name=registry_name)
+            searched.append(query['name'])
+            return self.search(query, [row] if query['name'] == registry_name else [])
+
+        result = cc.ms_browser_lookup(org, evidence)
+        self.assertEqual(result.status, 'Upcoming Filing')
+        self.assertEqual(searched, [name, registry_name])
+        self.assertEqual(result.matched_registry_identifier, '100000801')
+
+        # A matching search response containing a different entity is not a match.
+        unrelated = {**row, 'name': 'Western Governors Foundation'}
+        def unrelated_evidence(query):
+            return self.search(query, [unrelated] if query['name'] == registry_name else [])
+        unmatched = cc.ms_browser_lookup(org, unrelated_evidence)
+        self.assertNotIn(unmatched.status, {'Current', 'Upcoming Filing', 'Exempt'})
+
     def test_empty_completed_searches_are_required_for_negative(self):
         calls = []
         def evidence(query):

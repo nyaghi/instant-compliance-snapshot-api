@@ -29845,7 +29845,16 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     # Keeping both typographic and ASCII dashes here delays distinct reviewed
     # former names without adding identity evidence.
     name = ascii_dash_search_name(name)
-    priority = [name, distinctive_acronym_core_probe(name), *literal_name_retrieval_forms(name)]
+    # A spaced dash can separate two complete supplied names. Search each
+    # descriptive component before shortening the combined name into prefixes;
+    # a fragment such as an acronym plus "Corporation" is too broad by itself.
+    dash_components = (
+        [part for part in licensed_compound_retrieval_names(name)
+         if len(search_query_tokens(part)) >= 2]
+        if re.search(r"\s+-+\s+", name) else []
+    )
+    priority = [name, *dash_components, distinctive_acronym_core_probe(name),
+                *literal_name_retrieval_forms(name)]
     # The literal public filter can require the registry's article-free legal
     # spelling. Reach that same identity before dozens of reviewed program
     # aliases, while retaining every alias if no qualifying record is found.
