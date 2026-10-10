@@ -78,6 +78,20 @@ test('NY explicit null EIN is preserved as blank; missing and malformed fields r
   }
 });
 
+test('packaged New York page uses the same bounded search-row rule',()=>{
+  const source=fs.readFileSync(path.join(root,'ny-main.js'),'utf8');
+  if(!source.includes('const CCNYProtocol =')) return; // mature package loads protocol.js separately
+  const page=vm.createContext({URL,location:{origin:'https://example.test'},window:{}});
+  page.window.top=page.window;
+  vm.runInContext(source.replace('const P = CCNYProtocol;',
+    'globalThis.__pageProtocol = CCNYProtocol; const P = CCNYProtocol;'),page);
+  const request={kind:'search',query:{ein:'123456789'}};
+  const good={success:true,statusCode:200,data:[{...row,ein:'legacy format'}]};
+  assert.deepEqual(normal(page.__pageProtocol.publicResponse(request,200,good).rows),good.data);
+  assert.throws(()=>page.__pageProtocol.publicResponse(request,200,
+    {...good,data:[{...row,ein:'x'.repeat(101)}]}),/NY_CONNECTOR_SEARCH_EIN_FORMAT/);
+});
+
 test('production bridge rejects lookalike, insecure and unrelated origins',()=>{
   for(const origin of ['https://www.compliance-express.com','https://compliance-express.com',P.STAGING]) assert.equal(P.allowedOrigin(origin),true);
   for(const origin of ['http://www.compliance-express.com','https://www.compliance-express.com.evil.example','https://example.com','null']) assert.equal(P.allowedOrigin(origin),false);
