@@ -1730,7 +1730,9 @@ def or_live_period_evidence(source: str, row: list[str]) -> dict:
     if not name or not address:
         return {}
     name, address = html_to_text(name.group(1)), html_to_text(address.group(1))
-    status = labels.get('Status', '')
+    if 'Status' not in labels:
+        return {}
+    status = labels['Status']
     # Exact EIN and registration identify the entity even after a move/name change.
     # Retain address and name for audit rather than rejecting a confirmed move.
     if status in {'Suspended', 'Revoked', 'Withdrawn', 'Closed', 'Exempt'}:
@@ -1745,7 +1747,10 @@ def or_live_period_evidence(source: str, row: list[str]) -> dict:
         if not start or not end or not start <= end <= date.today() or (end - start).days > 370:
             return {}
         periods.append((end, start))
-    if not periods or status != 'Registered':
+    # Oregon sometimes leaves Status blank while displaying the same exact-EIN
+    # registration and filing periods as its public charity export. A blank
+    # label is not a conflicting status; unknown nonblank labels remain unsafe.
+    if not periods or status not in {'Registered', ''}:
         return {}  # Unrecognized/overriding statuses require existing state review.
     end, start = max(periods)
     exported_end = parse_ce_date(row[15])
@@ -1842,9 +1847,13 @@ def or_confirm_snapshot_delinquency(org, result):
     result.fiscal_year_end = f'{end.month}/{end.day}'
     result.next_required_period = format_date(add_months_preserving_end_of_month(end, 12))
     result.computed_due_date = format_date(due)
-    result.raw_status_text = (f'Status: Registered | Latest Fiscal Period End Year: {end.year} | Fiscal Period End: {format_date(end)} | '
+    live_status_label = 'Registered' if evidence['status'] == 'Registered' else 'Not displayed on live page'
+    result.raw_status_text = (f'Status: {live_status_label} | Latest Fiscal Period End Year: {end.year} | Fiscal Period End: {format_date(end)} | '
                               f'Fiscal Year Start: {format_date(start)} | Next Due: {format_date(due)}')
-    result.source_note = (f'Oregon\'s live record confirms the exact EIN and registration number, with the latest filed fiscal period ending {format_date(end)}. '
+    blank_status_note = (' The live Status field is blank; the latest available Oregon public charity export reviewed by CharityClarity supplies the registration record. '
+                         'That downloadable list may not update in real time; confirm time-sensitive decisions directly with the state.'
+                         if not evidence['status'] else '')
+    result.source_note = (f'Oregon\'s live record confirms the exact EIN and registration number, with the latest filed fiscal period ending {format_date(end)}.{blank_status_note} '
                           f'The next annual filing is due {format_date(due)}; CharityClarity therefore reports {result.status}. '
                           'The live filing history was checked because the downloadable export can lag newer reports.')
     return result

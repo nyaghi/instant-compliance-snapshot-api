@@ -57,6 +57,15 @@ class Controls(unittest.TestCase):
     def test_confirmed_overdue_record_stays_delinquent(self):
         source=self.source.replace('1/1/2025 and Ending 12/31/2025','1/1/2024 and Ending 12/31/2024')
         r,_=self.run_live(source);self.assertEqual(r.status,'Delinquent');self.assertEqual(r.computed_due_date,'5/15/2026')
+    def test_blank_live_status_with_same_exact_record_and_period_uses_filing_evidence(self):
+        source=self.source.replace('>Registered</abbr>', '></abbr>')
+        source=source.replace('1/1/2025 and Ending 12/31/2025','1/1/2024 and Ending 12/31/2024')
+        r,_=self.run_live(source)
+        self.assertEqual(r.status,'Delinquent')
+        self.assertEqual(r.status_reason,'OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD')
+        self.assertIn('Status field is blank',r.source_note)
+        self.assertIn('Not displayed on live page',r.raw_status_text)
+        self.assertNotIn('Status: Registered',r.raw_status_text)
     def test_noncalendar_period_uses_actual_end(self):
         source=self.source.replace('1/1/2025 and Ending 12/31/2025','7/1/2024 and Ending 6/30/2025')
         r,_=self.run_live(source);self.assertEqual(r.computed_due_date,'11/15/2026');self.assertEqual(r.status,'Upcoming Filing')
@@ -64,7 +73,8 @@ class Controls(unittest.TestCase):
         for source in (self.source.replace('39-1383650','39-1383651'),self.source.replace('#19363','#99999'),
                        self.source.replace('class="reportperiod"','class="unrecognized"'),
                        self.source.replace('1/1/2025 and Ending 12/31/2025','1/1/2025 and Ending 12/31/2030'),
-                       self.source.replace('>Registered</abbr>','>Unknown</abbr>'),'<html>temporarily unavailable</html>'):
+                       self.source.replace('>Registered</abbr>','>Unknown</abbr>'),
+                       self.source.replace('Status:', 'State:'),'<html>temporarily unavailable</html>'):
             r,_=self.run_live(source);self.assertEqual(r.status,'Unable to Confirm')
             self.assertIsNone(c.filing_context(r,'')['due_date'])
         r,_=self.run_live(failure=True);self.assertEqual(r.status,'Unable to Confirm')
