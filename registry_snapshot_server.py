@@ -12253,6 +12253,7 @@ def search_or_completed(page, org, module):
         return module.search_or(page, org)
     query = re.sub(r"\s+", " ", org.organization_name).strip()
     failure = []
+    failure_detail = []
     completed = []
 
     def is_query(request):
@@ -12278,10 +12279,18 @@ def search_or_completed(page, org, module):
                     self.target.click(*args, **kwargs)
                 response = event.value.response()
                 if response is None or response.status != 200:
+                    failure_detail.append(f"http_{response.status if response else 'missing'}")
                     raise ValueError("Oregon submitted search returned an unsuccessful response")
                 body = response.text()  # requestfinished confirms the full response body arrived.
-                if (not body.strip() or len(body)>1_000_000 or re.search(
-                        r"verify you are human|captcha|access denied|service unavailable", body, re.I)):
+                blocked = re.search(
+                    r"verify you are human|captcha|access denied|service unavailable", body, re.I)
+                if not body.strip():
+                    failure_detail.append("empty_body")
+                elif len(body) > 1_000_000:
+                    failure_detail.append(f"oversized_body_{len(body)}")
+                elif blocked:
+                    failure_detail.append("blocked_body_" + re.sub(r"\s+", "_", blocked.group()).lower())
+                if failure_detail:
                     raise ValueError("Oregon search response was empty, blocked or invalid")
                 remaining = deadline-time.monotonic()
                 if remaining <= 0:
@@ -12326,7 +12335,9 @@ def search_or_completed(page, org, module):
                     return actual && source !== null && snapshot(actual) === source;
                 }""", arg=body, timeout=max(1, int(remaining*1000)))
                 completed.append(True)
-            except Exception:
+            except Exception as exc:
+                if not failure_detail:
+                    failure_detail.append(type(exc).__name__)
                 failure.append(True)
                 raise
 
@@ -12356,6 +12367,7 @@ def search_or_completed(page, org, module):
         search.__kwdefaults__ = original.__kwdefaults__
     result = search(SearchPage(), org)
     if failure or not completed:
+        result.error = "OR response guard: " + ",".join(failure_detail or ["not_completed"])
         result.status = "Unable to Verify"
         result.raw_status_text = "Oregon submitted search did not finish with confirmed results"
         result.source_note = ("Oregon did not finish displaying a complete response for the submitted search. "

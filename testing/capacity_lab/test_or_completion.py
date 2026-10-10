@@ -49,10 +49,13 @@ class OregonCompletion(unittest.TestCase):
             self.assertEqual(result.status,'Unable to Verify');self.assertFalse(result.success)
             self.assertEqual(result.reason_code,'OR_INCOMPLETE_QUERY_RESPONSE')
     def test_invalid_responses_cannot_be_classified(self):
-        for code,body in [(503,self.body),(200,''),(200,'Verify you are human'),(200,'x'*1_000_001)]:
+        for code,body,category in [(503,self.body,'http_503'),(200,'','empty_body'),
+                                   (200,'Verify you are human','blocked_body_verify_you_are_human'),
+                                   (200,'x'*1_000_001,'oversized_body_1000001')]:
             self.response.status=code;self.response.text.return_value=body
             result=m.search_or_completed(self.page,self.org,self.module)
             self.assertFalse(result.success);self.assertEqual(result.reason_code,'OR_INCOMPLETE_QUERY_RESPONSE')
+            self.assertEqual(result.error,'OR response guard: '+category)
     def test_completed_negative_keeps_original_rule(self):
         self.result.status='Not Registered';self.response.text.return_value='<div>No record found</div>'
         result=m.search_or_completed(self.page,self.org,self.module)
