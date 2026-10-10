@@ -1,4 +1,4 @@
-"""Prove only Oregon's search acquisition gains a completion fence."""
+"""Prove Oregon's parser and filing rules survive its bounded search guards."""
 import ast
 import copy
 from pathlib import Path
@@ -15,21 +15,27 @@ def strip_or_completion(tree):
         cwd=Path(__file__).resolve().parents[2]).decode())
     original=next(n for n in old.body if getattr(n,'name','')=='search_bundled_extension_state')
     expected=copy.deepcopy(original)
-    calls=0;guards=0
+    calls=0;guards=0;variant_filters=0
     for n in ast.walk(expected):
         if isinstance(n,ast.Call) and ast.unparse(n.func)=='module.search_or':
             n.func=ast.Name(id='search_or_completed',ctx=ast.Load())
             n.args.append(ast.Name(id='module',ctx=ast.Load()));calls+=1
         if isinstance(getattr(n,'body',None),list):
             for i,item in reversed(list(enumerate(n.body))):
+                if isinstance(item,ast.Assign) and ast.unparse(item)=="variants = prioritized_institutional_variants(variants)":
+                    n.body[i+1:i+1]=ast.parse('''if len(re.findall(r"[A-Za-z0-9]+", org.organization_name or "")) > 1:
+    variants = [value for value in variants
+                if len(re.findall(r"[A-Za-z0-9]+", value)) > 1]
+''').body
+                    variant_filters+=1
                 if isinstance(item,ast.Assign) and ast.unparse(item)=="result = copy_external_result(org, 'OR', external_result)":
                     n.body[i+1:i+1]=ast.parse('''if getattr(result, "reason_code", "") == "OR_INCOMPLETE_QUERY_RESPONSE":
     result.success = False
     return result
 ''').body
                     guards+=1
-    assert (calls,guards)==(3,2)
+    assert (calls,guards,variant_filters)==(3,2,1)
     actual=next(n for n in tree.body if getattr(n,'name','')=='search_bundled_extension_state')
-    assert ast.dump(actual)==ast.dump(expected), 'Oregon matching/filing rules changed beyond completion guard'
+    assert ast.dump(actual)==ast.dump(expected), 'Oregon matching/filing rules changed beyond approved search guards'
     tree.body[tree.body.index(actual)]=original
     tree.body.remove(helper)

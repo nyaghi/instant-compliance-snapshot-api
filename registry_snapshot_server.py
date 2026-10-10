@@ -12544,6 +12544,13 @@ def search_bundled_extension_state(page, org, state: str):
             max_queries=24,
         )
         variants = prioritized_institutional_variants(variants)
+        # A generated one-word fragment of a multiword name can return an
+        # enormous unrelated Oregon grid (for example, a common category word).
+        # Keep actual one-word entered or reviewed names searchable, but use
+        # descriptive multiword variants for a multiword source name.
+        if len(re.findall(r"[A-Za-z0-9]+", org.organization_name or "")) > 1:
+            variants = [value for value in variants
+                        if len(re.findall(r"[A-Za-z0-9]+", value)) > 1]
 
         def or_variant_priority(value: str) -> tuple[int, int, str]:
             cleaned = re.sub(r"\s+", " ", value or "").strip()

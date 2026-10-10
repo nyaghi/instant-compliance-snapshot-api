@@ -60,6 +60,29 @@ class OregonCompletion(unittest.TestCase):
         self.result.status='Not Registered';self.response.text.return_value='<div>No record found</div>'
         result=m.search_or_completed(self.page,self.org,self.module)
         self.assertIs(result,self.result);self.assertTrue(result.success)
+    def test_or_multiword_name_skips_generated_one_word_grids(self):
+        seen=[]
+        def search(page,org,module):
+            seen.append(org.organization_name)
+            return m.checker.StateResult(org.organization_name,org.ein,'OR',
+                m.checker.STATUS_NOT_REGISTERED,'https://justice.oregon.gov/charities',
+                raw_status_text='No record found',success=True)
+        module=SimpleNamespace(Organization=m.checker.Organization)
+        for name in ('Association for the Advancement of Sustainability in Higher Education',
+                     'Ceres'):
+            seen.clear()
+            page=MagicMock();page.evaluate.return_value=[]
+            with patch.object(m,'state_extension_module',return_value=module),\
+                 patch.object(m,'search_or_completed',side_effect=search):
+                result=m.search_bundled_extension_state(
+                    page,m.checker.Organization(name,'22-3319874'),'OR')
+            self.assertEqual(m.public_status(result),'Not Registered')
+            self.assertEqual(seen[0],name)
+            if name=='Ceres':
+                self.assertIn('Ceres',seen)
+            else:
+                self.assertNotIn('Education',seen)
+                self.assertTrue(all(len(m.re.findall(r'[A-Za-z0-9]+',q))>1 for q in seen))
     def test_no_search_event_is_not_success(self):
         self.module.search_or=lambda page,org:self.result
         result=m.search_or_completed(self.page,self.org,self.module)
