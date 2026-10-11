@@ -9,4 +9,11 @@
 .cc-journey-mark--insight img{height:auto;position:absolute;left:17px;top:-2px;width:152px}
 .cc-journey-script{position:absolute;right:12px;bottom:-3px;color:#0b2a5b;font-family:'CharityClarity Signature',cursive;font-weight:400;font-size:33px;line-height:1;transform:rotate(-3deg);pointer-events:none}
 @media(max-width:480px){.cc-journey-cta{gap:8px;padding-left:10px}.cc-journey-lead{font-size:11px}.cc-journey-mark{width:155px;height:54px}.cc-journey-mark--insight img{left:12px;width:130px}.cc-journey-script{font-size:28px}}
+/* The connector's rail still tests for removed Standard/Sales mode buttons.
+   Use the current Aurora completion markers so finished results get full width. */
+@media(min-width:1600px){
+  body:has(#ccCollectorRail):has(#resultPanel:not(.hidden)):has(#resultElapsed:not(:empty)):has(#submitButton:not(:disabled)){background:#fff!important}
+  body:has(#ccCollectorRail):has(#resultPanel:not(.hidden)):has(#resultElapsed:not(:empty)):has(#submitButton:not(:disabled)) #appShell{width:100%!important;max-width:none!important;border-right:0!important;box-shadow:none!important}
+  body:has(#ccCollectorRail):has(#resultPanel:not(.hidden)):has(#resultElapsed:not(:empty)):has(#submitButton:not(:disabled)) #ccCollectorRail{display:none!important}
+}
 @media print{.cc-journey-cta{display:none!important}}
