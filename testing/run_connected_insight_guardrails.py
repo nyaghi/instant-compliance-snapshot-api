@@ -175,7 +175,7 @@ class ConnectedInsightTests(unittest.TestCase):
         combined = report.reconcile_head_start(self.rows, self.assessment)
         blocks, unchecked = report.compliance_matrix(combined)
         all_states = [state for states in blocks.values() for state in states]
-        self.assertEqual(len(all_states), len(self.rows))
+        self.assertEqual(len(all_states), 51)
         self.assertEqual(len(set(all_states)), len(all_states))
         self.assertEqual(unchecked, 51 - len(self.rows))
         for status, expected in [
@@ -194,6 +194,50 @@ class ConnectedInsightTests(unittest.TestCase):
         self.assertNotIn('application', recorded['action'].lower())
         blocks, _ = report.compliance_matrix([recorded])
         self.assertEqual(blocks['No registration needed'], ['HI'])
+
+    def test_unchecked_head_start_no_registration_findings_survive_the_handoff(self):
+        assessment = copy.deepcopy(self.assessment)
+        no_registration = {'AZ','DE','ID','IN','IA','MT','NE','SD','UT','VT','WY'}
+        for requirement in assessment['requirements']:
+            if requirement['code'] in no_registration:
+                requirement['registration_group'] = 'notRequired'
+                if requirement['code'] in {'IN','IA','NE','SD','VT'}:
+                    requirement['status'] = 'review'
+            elif requirement['code'] == 'MO':
+                requirement.update(status='none', filing='optional', exemption_evidence='answers',
+                                   registration_group='potentialExemption')
+            elif requirement['code'] == 'TN':
+                requirement.update(status='required', registration_group='mayRequired')
+            else:
+                requirement['registration_group'] = 'mayRequired'
+        report.validate_head_start(assessment)
+        combined = report.reconcile_head_start(self.rows, assessment)
+        blocks, unchecked = report.compliance_matrix(combined)
+        self.assertEqual(set(blocks['No registration needed']), no_registration | {'MO'})
+        self.assertEqual(unchecked, 51 - len(self.rows))
+        self.assertEqual(sum(map(len, blocks.values())), 51)
+        findings = {finding['state']: finding for finding in combined}
+        for state in {'IN','IA','MO'}:
+            self.assertNotEqual(findings[state]['finding'], 'Registration status not checked')
+            self.assertEqual(findings[state]['priority'], 4)
+        self.assertEqual(findings['TN']['finding'], 'Registration status not checked')
+        self.assertIn('WA', blocks['Action needed'])
+        payload = copy.deepcopy(self.payload)
+        payload['head_start'] = assessment
+        first_page = PdfReader(BytesIO(report.generate_report(payload, cc.SUPPORTED_STATES))).pages[0].extract_text()
+        self.assertRegex(' '.join(first_page.split()), r'12\s+No registration needed')
+
+    def test_unassessed_head_start_first_column_does_not_become_a_gap(self):
+        finding = self.finding('IN', registration_group='notAssessed')
+        self.assertEqual(finding['finding'], 'No registration indicated for reported activity')
+        self.assertEqual(finding['priority'], 4)
+        blocks, _ = report.compliance_matrix([finding])
+        self.assertEqual(blocks['No registration needed'], ['IN'])
+
+    def test_legacy_handoff_marks_missing_registration_categories_incomplete(self):
+        first_page = PdfReader(BytesIO(report.generate_report(self.payload, cc.SUPPORTED_STATES))).pages[0].extract_text()
+        self.assertRegex(' '.join(first_page.split()), r'\?\s+No registration needed')
+        self.assertIn('registration-category transfer', first_page)
 
     def test_explicit_failed_lookup_can_never_create_a_registration_gap(self):
         payload=copy.deepcopy(self.payload)

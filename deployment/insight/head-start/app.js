@@ -150,9 +150,11 @@ function renderReport(){
 }
 function headStartPacket(name,ein){
  const eligibility=new Map(groups.potentialExemption.map(r=>[r.code,r]));
+ const presentation=new Map(Object.entries(groups).flatMap(([group,states])=>states.map(r=>[r.code,group])));
  return {schema_version:'cc.head-start/1',assessment_id:crypto.randomUUID(),organization_name:name,ein,
-  assessed_at:report.assessedAt,engine_version:report.version,ui_version:'0.19.2',rules_reviewed_at:report.reviewDate,
+  assessed_at:report.assessedAt,engine_version:report.version,ui_version:'0.19.3',rules_reviewed_at:report.reviewDate,
   profile:structuredClone(prepareProfile(profile)),requirements:report.results.map(r=>({...structuredClone(r),
+   registration_group:presentation.get(r.code)||'notAssessed',
    exemption_evidence:eligibility.get(r.code)?.exemptionEvidence||null,possible_exemption:eligibility.has(r.code),
    approvalRequired:!!r.approvalRequired,discretionaryRequest:!!r.discretionaryRequest,deferred:!!r.deferred,nexusPending:!!r.nexusPending}))};
 }

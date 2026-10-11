@@ -16,7 +16,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, CondPageBreak, KeepTogether
 
 REPORT_VERSION = "1.3.3"
-INSIGHT_VERSION = "2.0.2"
+INSIGHT_VERSION = "2.0.3"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -479,6 +479,8 @@ def validate_head_start(value, identity=None):
         seen.add(r["code"])
         if r.get("status") not in {"required", "exemption", "none", "review", "outside"} or r.get("filing") not in HEAD_START_FILINGS:
             raise ValueError("The Head Start assessment has an unsupported finding or filing route.")
+        if r.get("registration_group") not in {None, "notRequired", "potentialExemption", "mayRequired", "notAssessed"}:
+            raise ValueError("The Head Start assessment has an unsupported registration group.")
         for key in ("name", "why", "action"):
             if not isinstance(r.get(key), str) or len(r[key]) > 15000:
                 raise ValueError("The Head Start assessment is missing its finding explanation.")
@@ -509,6 +511,10 @@ def reconcile_head_start(rows, assessment):
         outside = status == "outside" or h.get("deferred", False)
         supported = not outside and not h.get("discretionaryRequest") and h.get("exemption_evidence") == "answers"
         possible = not outside and (h.get("possible_exemption") or status == "exemption" or supported)
+        # Head Start displays both categories in its first, activity-scoped column.
+        no_registration_group = h.get("registration_group") in {"notRequired", "notAssessed"}
+        supported_no_filing = (supported and status == "none" and not h.get("approvalRequired")
+                               and h.get("filing") in {None, "none", "optional"})
         requirement = "No reported connection" if outside else "Registration indicated" if status == "required" else "Eligibility supported" if supported else "Potential exemption" if possible else "No registration indicated" if status == "none" else "Requirement needs clarification"
         if supported:
             requirement += ": " + ("state approval needed" if h.get("approvalRequired") else procedures.get(h.get("filing"), "filing procedure to confirm"))
@@ -529,6 +535,13 @@ def reconcile_head_start(rows, assessment):
             priority, finding = 2, "Registration status unresolved"
             action = "Resolve the registry access, identity or evidence issue shown in Aurora before treating this state as unregistered."
             why = "An incomplete or ambiguous search is not a negative registration result."
+        elif actual == "Not checked" and no_registration_group:
+            finding = "No registration indicated for reported activity"
+            why = "Head Start places this state in its registration-may-not-be-required column based on the supplied activity. Aurora did not check its registry status."
+        elif actual == "Not checked" and supported_no_filing:
+            finding = "Eligibility supports registration relief"
+            action = h["action"]
+            why = "The supplied facts support a category-based registration exception without a required approval; Aurora did not check the state record."
         elif actual == "Not checked" and not outside and (status in {"required", "review", "exemption"} or supported):
             priority, finding = 2, "Registration status not checked"
             action = "Check the existing registration or exemption record through Aurora where supported, otherwise with the state directly."
@@ -607,13 +620,17 @@ def executive_metrics(combined):
 
 
 def compliance_matrix(combined):
-    """Place each checked state in one plain-language summary block."""
+    """Place each assessed state once, distinguishing Head Start-only findings."""
     blocks = {"No registration needed": [], "On track / deadline approaching": [],
               "Action needed": [], "Needs confirmation": []}
     unchecked = 0
     for finding in combined:
         if finding["aurora_row"] is None:
             unchecked += 1
+            bucket = ("No registration needed" if finding["finding"] in {
+                "No registration indicated for reported activity", "Eligibility supports registration relief"
+            } else "Needs confirmation")
+            blocks[bucket].append(finding["state"])
             continue
         actual = finding["aurora_status"]
         assessment = finding["head_start"]
@@ -716,9 +733,9 @@ def generate_report(payload, supported_states):
         ]))
         return KeepTogether([grid, Spacer(1, 6), p("Counts describe state findings and can overlap. Exemption and withdrawal opportunities require review; keep existing obligations current until the applicable procedure is confirmed.", "small")])
 
-    def matrix_cards(blocks):
+    def matrix_cards(blocks, incomplete_category=False):
         captions = {
-            "No registration needed": "Based on the supplied activity facts or a matching recorded exemption.",
+            "No registration needed": "Based on supplied activity facts, category relief, or a matching recorded exemption.",
             "On track / deadline approaching": "A current registration is found; plan any approaching filing.",
             "Action needed": "A gap or adverse registry status calls for follow-up.",
             "Needs confirmation": "Evidence or requirement scope is not yet sufficient for a conclusion.",
@@ -727,9 +744,10 @@ def generate_report(payload, supported_states):
         cells = []
         for label in labels:
             states = blocks[label]
-            cells.append([p(f"{len(states)}  {label}", "matrix_head"),
-                          p(captions[label], "matrix_states"),
-                          p(", ".join(states) if states else "None among checked states", "matrix_states")])
+            category_missing = incomplete_category and label == "No registration needed"
+            cells.append([p(f"{'?' if category_missing else len(states)}  {label}", "matrix_head"),
+                          p("Reconnect Head Start to include its registration-may-not-be-required states." if category_missing else captions[label], "matrix_states"),
+                          p(", ".join(states) if states else "None indicated", "matrix_states")])
         grid = Table([cells[:2], cells[2:]], colWidths=[264, 264], hAlign="LEFT")
         grid.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -774,6 +792,7 @@ def generate_report(payload, supported_states):
         story.insert(0, p("Illustrative example - fictional organization and registry results", "small")) if payload.get("illustrative_example") else None
         assessment_date = stamp(datetime.fromisoformat(linked['assessed_at'].replace('Z', '+00:00')).timestamp())
         blocks, unchecked = compliance_matrix(combined)
+        incomplete_category = any(requirement.get("registration_group") is None for requirement in linked["requirements"])
         action_count = len(blocks["Action needed"])
         unclear_count = len(blocks["Needs confirmation"])
         if action_count:
@@ -785,8 +804,10 @@ def generate_report(payload, supported_states):
         else:
             verdict = "Generally on track in the checked states"
         story.extend([p(verdict + ".", "verdict"),
-                      matrix_cards(blocks), Spacer(1, 8),
-                      p(f"Each of the {len(rows)} checked states appears once. {unchecked} other assessed states were not checked by Aurora and are not counted as clear.", "small")])
+                      matrix_cards(blocks, incomplete_category), Spacer(1, 8),
+                      p(f"Each of the {len(combined)} assessed states appears once. {unchecked} were not checked by Aurora; Head Start-only conclusions use the supplied activity and are not verified registry statuses.", "small")])
+        if incomplete_category:
+            story.append(p("This saved Head Start handoff predates the registration-category transfer. Its no-registration-needed count is incomplete; return to Head Start and continue to Aurora again before relying on that count.", "small"))
         profile = linked["profile"]
         type_label, amount, online_label = profile_summary(profile)
         story.extend([p(f"Aurora status indicator: {risk}", "h3"), status_key(),

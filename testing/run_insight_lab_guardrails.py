@@ -67,6 +67,7 @@ if(window.CCSales.displayStatus({state:'NC',status:'Current',success:false})!=='
 
     def test_head_start_assets_never_expose_json_or_escape_the_public_asset_folder(self):
         self.assertIn(b'continueAurora',lab.lab_asset('/head-start/app.js')[0])
+        self.assertIn(b'registration_group:presentation.get(r.code)',lab.lab_asset('/head-start/app.js')[0])
         self.assertIn(b'head-start-logo.png',lab.lab_asset('/head-start/')[0])
         self.assertIn(b'collector_layout',lab.lab_asset('/head-start/app.js')[0])
         self.assertTrue(lab.lab_asset('/head-start/journey.css')[0])
