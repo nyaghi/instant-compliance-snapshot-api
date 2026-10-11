@@ -275,7 +275,7 @@ def insight_asset(name, text):
         ('>Generate report</button>', '>Connect to Insight</button>'),
         ('    const STAGING_ACCESS_REQUIRED = true;', '    const STAGING_ACCESS_REQUIRED = true;\n    window.CCHeadStartConfig = () => ({apiBase:API_BASE,email:email.value.trim(),passcode:adminPasscode.value.trim(),unlocked:internalUnlocked,generateReport,renderResults});'),
         ('      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";', '      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";\n      window.CCHeadStart?.applyStates();'),
-        ('      generateReportButton.disabled = false;', '      generateReportButton.disabled = false;\n      window.CCHeadStart?.refresh();'),
+        ('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCHeadStart?.refresh();'),
         ('      generateReportButton.classList.toggle("hidden", !results.length);', '      generateReportButton.classList.toggle("hidden", !results.length || !window.CCHeadStart?.hasAssessment());\n      window.dispatchEvent(new CustomEvent("cc-standard-results", { detail: { results } }));'),
         ('const reportFields = ["organization_name",', 'const reportFields = ["success", "error", "organization_name",'),
         ('        const response = await fetch(`${API_BASE}/api/report`, {', '        const assessment = window.CCHeadStart?.forResults(results);\n        window.CCHeadStart?.save().catch(() => {});\n        const response = await fetch(`${API_BASE}/api/report`, {'),

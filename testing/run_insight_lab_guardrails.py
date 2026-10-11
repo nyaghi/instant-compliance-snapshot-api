@@ -32,6 +32,8 @@ class InsightLabTests(unittest.TestCase):
         self.assertIn('["AL", "NM", "MS", "IL", "NV", "GA", "NC"].includes(detail.state)',html)
         self.assertIn('["GA","MS","NC"].includes(registryState)',connector)
         self.assertIn('!results.length || !window.CCHeadStart?.hasAssessment()',html)
+        result_render=html.split('function renderResults(results,',1)[1].split('function downloadLeadLog',1)[0]
+        self.assertGreater(result_render.index('window.CCHeadStart?.refresh()'),result_render.index('resultRows.appendChild(row)'))
         bridge=lab.lab_asset('/head-start-bridge.js')[0].decode()
         self.assertIn('setTimeout(() => controller.abort(), 30000)',discovery)
         self.assertNotIn('setTimeout(() => controller.abort(), 70000)',discovery)
