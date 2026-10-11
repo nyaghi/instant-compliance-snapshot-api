@@ -6195,7 +6195,13 @@ def nc_charity_record_evidence(fields):
             raise ValueError("North Carolina expired numberless record has no expiration date")
         return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1], ein="", aliases=aliases,
                     unissued_application=True, raw_status=raw,
-                    status="Pending" if raw == "In-Process" else licensed_charity_status(raw, extension or expiration),
+                    # The source categorizes this numberless record as an
+                    # unissued application. An "Expired License" label and
+                    # historical dates do not establish an issued license.
+                    # Withdrawn remains an explicit terminal application
+                    # status; otherwise the application is pending.
+                    status=(licensed_charity_status(raw, extension or expiration)
+                            if re.search(r"\bwithdrawn\b", raw, re.I) else "Pending"),
                     url=fields["profile_url"],
                     expiration=extension or expiration, base_expiration=expiration, extension_end=extension,
                     initial=None, renewal=None, street="", location="")
@@ -6275,7 +6281,8 @@ def final_four_license_result(org, state, records, deadline, source):
         if selected['raw_status'].casefold() == 'expired license':
             result.source_note = (f"North Carolina lists a confirmed matching record for {selected['name']} in its In-Process category "
                                   f"with status {selected['raw_status']}. CharityClarity reports {selected['status']}; "
-                                  "the record does not display an issued charity license number.")
+                                  "the record does not display an issued charity license number, so its application remains Pending. "
+                                  "The state's expired label and dates are shown below for review.")
             if selected.get("base_expiration"):
                 result.source_note += f" The state displays an expiration date of {selected['base_expiration'].isoformat()}."
             if selected.get("extension_end"):
