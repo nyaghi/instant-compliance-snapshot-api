@@ -293,6 +293,22 @@ class SourceControls(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 cc.nc_charity_record_evidence({**fields, **bad})
 
+    def test_nc_numberless_in_process_expired_license_keeps_adverse_status_and_dates(self):
+        fields = {**NC, 'CSL Legal Name': 'Sample Community Foundation',
+                  'License': '', 'CSL Type': 'In-Process', 'Status': 'Expired License',
+                  'Expiration Date': '5/15/2025', 'Extension End Date': '11/15/2025'}
+        row = cc.nc_charity_record_evidence(fields)
+        self.assertTrue(row['unissued_application'])
+        self.assertEqual(row['status'], 'Delinquent')
+        self.assertEqual(row['base_expiration'], date(2025, 5, 15))
+        self.assertEqual(row['extension_end'], date(2025, 11, 15))
+        self.assertEqual(row['expiration'], date(2025, 11, 15))
+        for bad in [{'Status': 'Active'}, {'CSL Type': 'Charitable Organization'},
+                    {'Expiration Date': ''}, {'Expiration Date': '2/31/2025'},
+                    {'profile_url': 'https://example.com/profile/1'}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                cc.nc_charity_record_evidence({**fields, **bad})
+
     def test_nc_extension_does_not_require_special_status_wording(self):
         for raw in ['Active', 'Current', 'Current Active']:
             self.assertEqual(cc.nc_charity_record_evidence({**NC, 'Status': raw})['status'], 'Upcoming Filing')
@@ -1452,6 +1468,23 @@ class LookupControls(unittest.TestCase):
             self.assertEqual(result.status, expected)
             if expected.startswith('Closed'):
                 self.assertIn('not an issued charity license', result.source_note)
+
+    def test_nc_expired_numberless_card_matches_only_the_confirmed_identity(self):
+        for name, expected in [("America's Charities", 'Delinquent'),
+                               ('Unrelated Junior League', 'Not Registered')]:
+            calls = []
+            def expired(query):
+                calls.append(query)
+                row = {**NC, 'CSL Legal Name': name, 'License': '', 'CSL Type': 'In-Process',
+                       'Status': 'Expired License', 'Expiration Date': '5/15/2025',
+                       'Extension End Date': '11/15/2025'}
+                return {'state':'NC', 'query':query, 'complete':True, 'verification_pending':False,
+                        'total':1, 'rows':[row]}
+            result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', expired)
+            self.assertEqual(result.status, expected)
+            self.assertFalse(any(q['operation'] == 'detail' for q in calls))
+            if expected == 'Delinquent':
+                self.assertIn('does not display an issued charity license number', result.source_note)
 
     def test_nv_blank_search_status_does_not_classify_a_matching_record(self):
         self.nvrow['raw_status'] = ''

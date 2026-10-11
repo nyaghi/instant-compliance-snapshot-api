@@ -135,6 +135,20 @@ test('NC preserves an explicitly In-Process application without inventing an iss
   await assert.rejects(harness({cards:[bad],query:'Junior'}).api.ncRows({state:'NC',operation:'search',name:'Junior'}),/CARD_CHANGED/);
 });
 
+test('NC reads a numberless In-Process card with explicit Expired License evidence',async()=>{
+ const card={'CSL Legal Name':'Sample Community Foundation','CSL Type':'In-Process',Status:'Expired License',
+  'Expiration Date':'5/15/2025','Extension End Date':'11/15/2025'};
+ const h=harness({cards:[card],query:'Sample Community Foundation'});
+ const row=(await h.api.ncRows({state:'NC',operation:'search',name:'Sample Community Foundation'})).evidence.rows[0];
+ assert.equal(row.display_name,card['CSL Legal Name']);
+ assert.equal(row.License,'');assert.equal(row.Status,'Expired License');
+ assert.equal(row['Expiration Date'],'5/15/2025');assert.equal(row['Extension End Date'],'11/15/2025');
+ assert.equal(row.profile_url,profile);
+ const missingStatus={...card};delete missingStatus.Status;
+ for(const changed of [{...card,Status:'Active'},{...card,'CSL Type':'Charitable Organization'},missingStatus])
+  await assert.rejects(harness({cards:[changed],query:'Sample Community Foundation'}).api.ncRows({state:'NC',operation:'search',name:'Sample Community Foundation'}),/CARD_CHANGED/);
+});
+
 test('NC repeated legal names and DBAs are retained as aliases on one identified card',async()=>{
  const q={state:'NC',operation:'search',name:"America's Charities"};
  for(const displayName of ["America's Charities",'Former Charity Name','Public DBA']) {
