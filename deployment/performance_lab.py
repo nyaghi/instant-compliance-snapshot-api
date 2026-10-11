@@ -285,7 +285,7 @@ def insight_asset(name, text):
         ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length || !window.CCHeadStart?.hasAssessment();'),
         ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
         ('</head>', '  <link rel="stylesheet" href="/head-start/journey.css?v=20261011.1">\n</head>'),
-        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.5"></script>\n  <script src="/sales-extract.js?v=2"></script>\n</body>'),
+        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.5"></script>\n  <script src="/sales-extract.js?v=3"></script>\n</body>'),
     ]
     for old, new in replacements:
         if text.count(old) != 1:
