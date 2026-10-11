@@ -31,14 +31,15 @@ test('origin, source and nonce must all match before accepting any organization 
 test('ready and acknowledgement contain only a correlation nonce, not financial or identity facts',()=>{
   const c=setup();assert.deepEqual(Object.keys(c.posts[0][0]).sort(),['nonce','type']);c.deliver();assert.deepEqual(Object.keys(c.posts[1][0]).sort(),['nonce','type']);assert.equal(c.requests.length,0);
 });
-test('Back to Head Start focuses the original assessment without a registry request',()=>{
+test('CharityClarity Head Start button focuses the original assessment without a registry request',()=>{
   const c=setup();c.deliver();
-  assert.equal(c.elements.ccBackToHeadStart.textContent,'← Back to Head Start');
+  assert.equal(c.elements.ccBackToHeadStart['aria-label'],'CharityClarity Head Start');
+  assert.match(c.elements.ccBackToHeadStart.innerHTML,/head-start-logo\.png/);
   c.elements.ccBackToHeadStart.events.click();
   assert.equal(c.openerFocused,true);
   assert.equal(c.requests.length,0);
 });
-test('Back to Head Start restores saved answers when the original tab is unavailable',()=>{
+test('Head Start button restores saved answers when the original tab is unavailable',()=>{
   const c=setup({sender:null,stored:JSON.stringify(packet)});
   c.elements.ccBackToHeadStart.events.click();
   assert.equal(c.navigated,'/head-start/?return=aurora');

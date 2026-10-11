@@ -21,8 +21,10 @@
   const description = document.createElement('p'); description.style.cssText = 'font-size:14px;margin:6px 0 0';
   const message = document.createElement('p'); message.setAttribute('role','status'); message.style.cssText = 'font-size:13px;margin:6px 0 0';
   const back = document.createElement('button'); back.type='button'; back.id='ccBackToHeadStart';
-  back.textContent='← Back to Head Start';
-  back.style.cssText='display:block;margin:0 0 12px;padding:8px 12px;border:1px solid #0B2A5B;border-radius:6px;background:white;color:#0B2A5B;font-weight:700;cursor:pointer';
+  back.classList.add('cc-journey-cta');
+  back.setAttribute('aria-label','CharityClarity Head Start');
+  back.innerHTML='<span class="cc-journey-mark"><img src="/head-start/head-start-logo.png" alt="CharityClarity Head Start"></span>';
+  back.style.margin='0 0 12px';
   card.append(title,description,message);
   const form=document.getElementById('snapshotForm');
   form.before(back);form.before(card);
