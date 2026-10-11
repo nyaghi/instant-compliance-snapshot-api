@@ -266,6 +266,50 @@ class IntegrationControls(unittest.TestCase):
         self.assertEqual([q['orgName'] for q in requests],
                          ['Example Wildlife','Former Conservation Alliance'])
 
+    def test_ga_minor_full_name_typo_is_reviewed_not_a_false_negative(self):
+        org=cc.checker.Organization("Primrose Schools Children's Foundation",'58-2580120')
+        row=search_row("Primrose Schools Chidren's Foundation",'CH015483',
+                       'eb801fad-eb7f-422d-93f0-2f46299613a7')
+        queries=[]
+        def evidence(query):
+            queries.append(query)
+            return ({'body':ga_html(full_name=row['name'],license_no=row['identifier'],expiry='1/6/2027')}
+                    if 'identifier' in query else {'rows':[row]})
+        result=cc.il_ga_browser_lookup(org,'GA',evidence)
+        self.assertEqual(queries[0]['orgName'],'Primrose Schools')
+        self.assertEqual(len([query for query in queries if 'identifier' in query]),1)
+        self.assertEqual(result.status,'Needs Review')
+        self.assertFalse(result.success)
+        self.assertIn(row['name'],result.source_note)
+        self.assertFalse(getattr(result,'matched_registry_identifier',''))
+        self.assertEqual(result._cc_identity_review['records'][0]['match']['reason'],
+                         'MATCH_SINGLE_TOKEN_TYPO_REVIEW')
+
+    def test_ga_minor_typo_rule_is_general_and_excludes_lookalikes(self):
+        cases=[
+            ('Horizon Valley Literacy Foundation','Horizon Valley Litracy Foundation',True),
+            ('Horizon Valley Literacy Foundation','Horizon Valley Library Foundation',False),
+            ('Horizon Valley Literacy Foundation','Horizon Valley Litracy Foundation of Georgia',False),
+            ('Horizon Valley Literacy Foundation','Horizon River Litracy Foundation',False),
+            ('Horizon Valley Literacy Foundation','Horizon Valley Literacy Fund',False),
+            ('Acme Foundation','Acme Foundaton',False),
+        ]
+        for entered, displayed, expected in cases:
+            with self.subTest(entered=entered,displayed=displayed):
+                self.assertEqual(cc.single_token_typo_review_candidate(entered,displayed),expected)
+        org=cc.checker.Organization('Horizon Valley Literacy Foundation','12-3456789')
+        lookalike=search_row('Horizon Valley Library Foundation','CH009999',
+                             '11111111-1111-1111-1111-111111111111')
+        def evidence(query):
+            if 'identifier' in query: raise AssertionError('lookalike detail must not open')
+            return {'rows':[lookalike]}
+        self.assertEqual(cc.il_ga_browser_lookup(org,'GA',evidence).status,'Not Registered')
+        different_ein={**search_row('Horizon Valley Litracy Foundation','CH009998',
+                                    '22222222-2222-2222-2222-222222222222'),
+                       'ein':'98-7654321'}
+        self.assertEqual(cc.il_ga_browser_lookup(org,'GA',lambda q:{'rows':[different_ein]}).status,
+                         'Not Registered')
+
     def test_ga_failed_prefix_retries_exact_plan_without_false_negative(self):
         org=cc.checker.Organization('Example Wildlife Education Foundation','12-3456789')
         names=['Example Wildlife Education Foundation','Example Wildlife Education Fund']

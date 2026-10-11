@@ -5857,6 +5857,31 @@ def ga_distinctive_covering_prefix(name):
     return prefix if len(prefix) >= 12 and len(prefix) < len(name) else ""
 
 
+def single_token_typo_review_candidate(expected_name, registry_name):
+    """Retain a close full-name spelling variant for review, never auto-match it.
+
+    Two distinctive words must match exactly, and the complete ordered name
+    may differ by only one character in one substantial word. This does not
+    permit an extra chapter, geography, entity, or a different EIN.
+    """
+    expected = normalized_match_name(expected_name).split()
+    displayed = normalized_match_name(registry_name).split()
+    if len(expected) < 3 or len(expected) != len(displayed):
+        return False
+    if len(distinctive_match_tokens(expected_name) & distinctive_match_tokens(registry_name)) < 2:
+        return False
+    differences = [(left, right) for left, right in zip(expected, displayed) if left != right]
+    if len(differences) != 1:
+        return False
+    left, right = differences[0]
+    if min(len(left), len(right)) < 6 or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) == 1
+    shorter, longer = sorted((left, right), key=len)
+    return any(longer[:index] + longer[index + 1:] == shorter for index in range(len(longer)))
+
+
 def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     """Master-owned discovery, matching, duplicate resolution and interpretation."""
     deadline = time.monotonic() + 40
@@ -5908,6 +5933,9 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                 # or turn that ambiguity into a completed negative search.
                 if state == "GA" and score_candidate(org.organization_name, "", {"name": row["name"]})["decision"] == "possible":
                     row = dict(row, _review_name_only=True)
+                elif state == "GA" and not row.get("ein") and any(
+                        single_token_typo_review_candidate(name, row["name"]) for name in required):
+                    row = dict(row, _review_minor_typo=True)
                 else:
                     continue
             detail_query = {"state": state, "identifier": row["identifier"]}
@@ -8272,6 +8300,11 @@ def licensed_charity_identity(org, row, state, deadline):
                 row["address_evidence"] = {"decision": "unavailable", "basis":
                     "The DC label begins with the complete organization name but includes additional text. Identity requires confirmation."}
                 return "possible"
+    if state == "GA" and decision["decision"] == "rejected" and row.get("_review_minor_typo") and not row.get("ein"):
+        row["match"] = {"decision": "possible", "score": 55, "reason": "MATCH_SINGLE_TOKEN_TYPO_REVIEW"}
+        row["address_evidence"] = {"decision": "unavailable", "basis":
+            "The Georgia name differs by one character; the public record has no EIN to confirm identity."}
+        return "possible"
     if decision["decision"] == "rejected" and row.get("_review_name_only") and not row.get("ein"):
         # Georgia's legacy display names may append a parenthesized filing
         # year. A reviewed-name context must not make that exact full name
