@@ -23,7 +23,7 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
  class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
  class Select extends Input{};
  Object.defineProperty(Select.prototype,'value',Object.getOwnPropertyDescriptor(Input.prototype,'value'));
- const input=new Input(),words=new Select();words.options=[{innerText:'Starting With',value:'0'},{innerText:'All Words',value:'1'}];
+ const input=new Input(),words=new Select();words.options=[{innerText:'Starting With',value:'0'},{innerText:'All Words',value:'1'},{innerText:'Exact',value:'2'}];
  const print={checked:true,click:()=>{print.checked=false;}},button={innerText:'Search',disabled:false,getClientRects:()=>[{}],click:()=>formClicks++};
  const win={};win.top=win;
  const context=vm.createContext({window:win,URL,location:{origin,pathname:new URL(url).pathname,href:url},crypto:{randomUUID:()=> 'fixture'},
@@ -59,6 +59,16 @@ test('NC All Words uses only the public form and binds result mode and query',as
  await assert.rejects(result.api.ncRows({...query,search_mode:undefined}),/QUERY_CHANGED/);
  const noRecord=harness({query:'Unmatched Charity',searchMode:'All Words',cards:[]});
  assert.equal((await noRecord.api.ncRows({...query,name:'Unmatched Charity'})).evidence.total,0);
+});
+
+test('NC Exact mode binds a short component and a completed no-record result',async()=>{
+ const query={state:'NC',operation:'search',name:'GRACE',search_mode:'EXACT_MATCH'};
+ const form=harness({url:origin+'/online_services/search/by_title/search_charities'});
+ form.api.ncForm(query);
+ assert.equal(form.words.value,'2');assert.equal(form.input.value,'GRACE');assert.equal(form.formClicks(),1);
+ const noRecord=harness({query:'GRACE',searchMode:'Exact',cards:[]});
+ assert.equal((await noRecord.api.ncRows(query)).evidence.total,0);
+ await assert.rejects(noRecord.api.ncRows({...query,search_mode:'ALL_WORDS'}),/QUERY_CHANGED/);
 });
 
 test('NC passive timing separates completed HTTP failures from idle submission without leaking request data',async()=>{

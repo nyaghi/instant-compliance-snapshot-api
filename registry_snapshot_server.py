@@ -6067,7 +6067,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6611,8 +6611,8 @@ def final_four_search_evidence(payload, state, query):
     if state == "NC":
         expected_mode = query.get("search_mode", "STARTS_WITH")
         observed_mode = payload.get("search_mode")
-        if (expected_mode not in {"STARTS_WITH", "ALL_WORDS"}
-                or observed_mode not in ({"ALL_WORDS"} if expected_mode == "ALL_WORDS"
+        if (expected_mode not in {"STARTS_WITH", "ALL_WORDS", "EXACT_MATCH"}
+                or observed_mode not in ({expected_mode} if expected_mode != "STARTS_WITH"
                                          else {None, "STARTS_WITH"})):
             raise ValueError("North Carolina search mode differs from the requested public form")
     rows, seen = [], set()
@@ -6712,14 +6712,13 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         # Both sides must complete; the original master targets still select
         # every returned row. Ordinary word hyphens remain intact.
         if state == "NC":
-            # Descriptive halves are reviewed completion probes: full name,
-            # then the entered left and right sides. A short brand retains
-            # the established component-only path and its completion gate.
+            # A descriptive left half plus a short brand still begins with
+            # the complete entered name. If the complete and descriptive
+            # queries find no corroborated record, the brand remains required.
             required = list(dict.fromkeys(part for name in required
                 for part in ([name, *licensed_compound_retrieval_names(name)]
                              if licensed_compound_retrieval_names(name)
-                             and all(len(distinctive_match_tokens(half)) >= 2
-                                     for half in licensed_compound_retrieval_names(name))
+                             and nc_full_compound_probe(name)
                              else licensed_compound_retrieval_names(name) or [name])))
         else:
             required = list(dict.fromkeys(part for name in required
@@ -6858,6 +6857,12 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                  "name": all_words_phrase or name}
         if all_words_phrase:
             query["search_mode"] = "ALL_WORDS"
+        elif state == "NC" and nc_short_compound_exact_probe(org.organization_name, name):
+            # A one-word brand from a descriptive entered display label can
+            # make Starting With return many unrelated or malformed cards.
+            # Search that literal component using the public Exact option;
+            # other reviewed names and generated spelling probes remain.
+            query["search_mode"] = "EXACT_MATCH"
         if state == "NV":
             # User-approved Nevada strategy: inspect the first complete result
             # page, then use the public Exact Match option above twenty hits.
@@ -7352,7 +7357,7 @@ def final_four_clean_evidence(payload, query):
         if set(payload) - allowed_search:
             raise ValueError("Unexpected search evidence fields")
         if state == "NC" and payload.get("search_mode") not in (
-                {"ALL_WORDS"} if query.get("search_mode") == "ALL_WORDS"
+                {query["search_mode"]} if query.get("search_mode") in {"ALL_WORDS", "EXACT_MATCH"}
                 else {None, "STARTS_WITH"}):
             raise ValueError("North Carolina collector did not confirm the requested search mode")
         allowed = ({"CSL Legal Name", "CSL Type", "Status", "License", "Expiration Date", "Extension End Date", "profile_url", "display_name", "aliases"} if state == "NC" else
@@ -7853,6 +7858,21 @@ def licensed_compound_retrieval_names(name):
     return list(dict.fromkeys(parts))
 
 
+def nc_full_compound_probe(name):
+    """Retain the entered label before components when its left side is specific."""
+    parts = licensed_compound_retrieval_names(name)
+    return bool(parts and (all(len(distinctive_match_tokens(part)) >= 2 for part in parts)
+        or len(parts) == 2 and len(distinctive_match_tokens(parts[0])) >= 3))
+
+
+def nc_short_compound_exact_probe(entered_name, query_name):
+    """Use the NC public Exact mode only for an entered short brand component."""
+    parts = licensed_compound_retrieval_names(entered_name)
+    return bool(len(parts) == 2 and len(distinctive_match_tokens(parts[0])) >= 3
+        and len(distinctive_match_tokens(parts[1])) == 1
+        and query_name.casefold() == parts[1].casefold())
+
+
 def licensed_dash_retrieval_forms(name):
     """Literal-search probes only; never shorten accepted identity targets."""
     original = canonical_name_punctuation(name)
@@ -7926,7 +7946,7 @@ def nc_primary_all_words_probe(primary, generated):
     This is a retrieval optimization only. An incomplete result proves no
     coverage, and the ordinary row identity rules still decide every match.
     """
-    if len(primary) < 50 or not generated:
+    if len(primary) < 50 or not generated or licensed_compound_retrieval_names(primary):
         return ""
     useful = [word for word in re.findall(r"[A-Za-z0-9]+", primary)
               if word.casefold() in distinctive_match_tokens(primary) and len(word) >= 10]
@@ -7993,10 +8013,23 @@ def nc_entered_components_complete(org, row, completed_searches):
         return False
     parts = licensed_compound_retrieval_names(org.organization_name)
     completed = {name.casefold() for name in completed_searches}
-    return bool(parts and all(part.casefold() in completed for part in parts)
-                and any(len(distinctive_match_tokens(part)) >= 2
-                        and normalized_match_name(row.get("name", "")) == normalized_match_name(part)
-                        for part in parts))
+    if not parts:
+        return False
+    matched_parts = [part for part in parts
+                     if len(distinctive_match_tokens(part)) >= 2
+                     and normalized_match_name(row.get("name", "")) == normalized_match_name(part)]
+    if all(part.casefold() in completed for part in parts):
+        return bool(matched_parts)
+    # A complete search of the full supplied label followed by a completed,
+    # highly descriptive left component can establish a positive identity
+    # without forcing a broad one-word brand query. The caller also requires
+    # an accepted master match and independently corroborated address. A
+    # negative, adverse or ambiguous result still searches the brand.
+    return bool(len(parts) == 2 and len(distinctive_match_tokens(parts[0])) >= 3
+                and len(distinctive_match_tokens(parts[1])) == 1
+                and org.organization_name.casefold() in completed
+                and parts[0].casefold() in completed
+                and parts[0] in matched_parts)
 
 
 def licensed_primary_positive_complete(org, selected, records, *, unreviewed_scope=False, state=None,
@@ -24836,7 +24869,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -24891,7 +24924,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

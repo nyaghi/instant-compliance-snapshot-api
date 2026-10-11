@@ -14,7 +14,7 @@
   const documentId = crypto.randomUUID();
   const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
   const visible = el => !!el && el.getClientRects().length > 0;
-  function wait(fn, ms = 25000, {root = document.documentElement, action, relevant, settle = 0, sameCandidate = null, trace = () => {}} = {}) {
+  function wait(fn, ms = 25000, {root = document.documentElement, action, relevant, settle = 0, sameCandidate = null, trace = () => {}, signal = null} = {}) {
     // Observe before acting. Hidden-page timers may wake much later than the
     // DOM update; they are watchdogs, not the sole observers of completion.
     return new Promise((resolve, reject) => {
@@ -23,6 +23,7 @@
       const finish = (value, error) => {
         if (done) return;
         done = true; observer.disconnect(); clearTimeout(timer); clearTimeout(settleTimer);
+        if (signal) signal.target.removeEventListener(signal.type, inspect);
         trace(error ? "incomplete" : "ready", Date.now()-start);
         error ? reject(error) : resolve(value);
       };
@@ -66,6 +67,7 @@
         // their mutation leaves a complete form waiting until the watchdog.
         attributeFilter:["style", "class", "aria-busy", "disabled", "aria-disabled", "hidden",
           ...(NV ? ["aria-selected", "data-value"] : [])]});
+      if (signal) signal.target.addEventListener(signal.type, inspect);
       timer = setTimeout(() => candidateAt === null ? incomplete() : settleCandidate(), ms);
       try { action?.(); inspect(); } catch (error) { finish(null, error); }
     });
@@ -999,8 +1001,9 @@
       throw new Error('REGISTRY_NC_QUERY_INVALID');
     if(location.pathname!=='/online_services/search/by_title/search_charities')throw new Error('REGISTRY_NC_FORM_CHANGED');
     const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
-    if(query.search_mode&&query.search_mode!=='ALL_WORDS')throw new Error('REGISTRY_NC_QUERY_INVALID');
-    const starts=words&&[...words.options].find(o=>text(o)===(query.search_mode==='ALL_WORDS'?'All Words':'Starting With'));
+    if(query.search_mode&&!['ALL_WORDS','EXACT_MATCH'].includes(query.search_mode))throw new Error('REGISTRY_NC_QUERY_INVALID');
+    const mode=query.search_mode==='ALL_WORDS'?'All Words':query.search_mode==='EXACT_MATCH'?'Exact':'Starting With';
+    const starts=words&&[...words.options].find(o=>text(o)===mode);
     if(!input||!starts||!visible(button)||button.disabled||!print)throw new Error('REGISTRY_NC_FORM_CHANGED');
     // NC wires SearchTypeChanged() to change. Do not dispatch it again when
     // the requested public mode is already selected.
@@ -1018,7 +1021,8 @@
       return false;
     if(location.pathname!=='/online_services/search/by_title/search_charities'||!registryDocumentReady())return false;
     const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
-    const starts=words&&[...words.options].find(o=>text(o)===(query.search_mode==='ALL_WORDS'?'All Words':'Starting With'));
+    const mode=query.search_mode==='ALL_WORDS'?'All Words':query.search_mode==='EXACT_MATCH'?'Exact':'Starting With';
+    const starts=words&&[...words.options].find(o=>text(o)===mode);
     return !!(input&&input.value===query.name&&starts&&words.value===starts.value&&print&&!print.checked
       &&visible(button)&&!button.disabled&&text(button)==='Search');
   }
@@ -1037,7 +1041,8 @@
     if(location.pathname!=='/online_services/search/by_title/search_charities'||!registryDocumentReady())
       return {ok:false,phase:'pending'};
     const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
-    const starts=words&&[...words.options].find(o=>text(o)===(query.search_mode==='ALL_WORDS'?'All Words':'Starting With'));
+    const mode=query.search_mode==='ALL_WORDS'?'All Words':query.search_mode==='EXACT_MATCH'?'Exact':'Starting With';
+    const starts=words&&[...words.options].find(o=>text(o)===mode);
     if(!input||input.value!==query.name||!starts||words.value!==starts.value||!print||print.checked
         ||!visible(button)||button.disabled||text(button)!=='Search')return {ok:false,phase:'changed'};
     // Ordinary public action only: no reload, challenge action, private
@@ -1048,8 +1053,8 @@
     const deadline=Date.now()+Math.max(1,Math.min(45000,budgetMs));
     if(location.pathname!=='/online_services/search/Charities_Results')throw new Error('REGISTRY_NC_RESULTS_CHANGED');
     const main=document.querySelector('main'),body=text(main);
-    const count=/Records Found:\s*(\d+)\b/.exec(body),searched=/Words:\s*(Starting With|All Words)\s+Organization Name\s+(.+?)\s+Search Time\s/.exec(body);
-    const expectedMode=query.search_mode==='ALL_WORDS'?'All Words':'Starting With';
+    const count=/Records Found:\s*(\d+)\b/.exec(body),searched=/Words:\s*(Starting With|All Words|Exact)\s+Organization Name\s+(.+?)\s+Search Time\s/.exec(body);
+    const expectedMode=query.search_mode==='ALL_WORDS'?'All Words':query.search_mode==='EXACT_MATCH'?'Exact':'Starting With';
     if(!count||!searched||searched[1]!==expectedMode||searched[2].toLocaleLowerCase()!==query.name.replace(/\s+/g,' ').trim().toLocaleLowerCase())throw new Error('REGISTRY_NC_QUERY_CHANGED');
     const total=Number(count[1]),buttons=[...main.querySelectorAll('#resultsSection .usa-accordion__button')];
     // A larger paginated result is incomplete until every displayed record can
@@ -1112,7 +1117,7 @@
       .map(row=>row.License||'pending:'+row['CSL Legal Name']));
     if(rows.length!==total&&grouped.size!==total&&registrationGroups.size!==total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
     return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,
-      search_mode:query.search_mode==='ALL_WORDS'?'ALL_WORDS':'STARTS_WITH',total:rows.length,rows},
+      search_mode:query.search_mode==='ALL_WORDS'?'ALL_WORDS':query.search_mode==='EXACT_MATCH'?'EXACT_MATCH':'STARTS_WITH',total:rows.length,rows},
       diagnostics:rows.length===total?[]:[{phase:'pending-count',displayed:total,cards:rows.length,groups:grouped.size}]};
   }
   function ncProfile(query) {
@@ -1340,7 +1345,9 @@
       search_enabled:[...document.querySelectorAll('button')].some(el=>text(el)==='Search'&&visible(el)&&!el.disabled)
     };
   }
-  let msLastRows=null, msLastDiagnostic=null;
+  let msLastRows=null, msLastPages=null, msLastQuery=null, msLastDiagnostic=null;
+  const msChannel='cc-final-four-ms-search-v1';
+  const msSignal='cc-final-four-ms-search-observed';
   function msGrid(query) {
     if(document.querySelector('#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox')?.value!==query.name)
       throw new Error('REGISTRY_FILTER_CHANGED');
@@ -1357,12 +1364,43 @@
       return {name:cells[0],identifier:cells[1],raw_status:cells[2]};
     });
     const total=empty?0:Number(count[3]);
-    if((empty&&rows.length)||(count&&(Number(count[1])!==1||Number(count[2])!==rows.length))
-        ||total!==rows.length||total>100||new Set(rows.map(r=>r.identifier)).size!==rows.length)
+    const start=empty?0:Number(count[1]),end=empty?0:Number(count[2]);
+    if((empty&&rows.length)||(count&&(start<1||end<start||end-start+1!==rows.length||end>total))
+        ||total>100||new Set(rows.map(r=>r.identifier)).size!==rows.length)
       throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
-    return {rows,total};
+    return {rows,total,start,end};
+  }
+  function msPageLink(page) {
+    return [...document.querySelectorAll('#kendoSearchResults .k-pager-numbers a.k-link[data-page]')]
+      .find(link=>Number(link.getAttribute('data-page'))===page&&visible(link));
+  }
+  async function msCollectPages(query,first,deadline,identifiers) {
+    if(first.start!==0&&first.start!==1)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+    const rows=[...first.rows],pages=new Map(first.rows.map(row=>[row.identifier,1]));
+    let current=first,page=1;
+    while(current.end<first.total) {
+      if(++page>10)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      const link=msPageLink(page);
+      if(!link)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      const expectedStart=current.end+1;
+      current=await wait(()=>{
+        const shown=msGrid(query);
+        if(!shown||shown.start!==expectedStart)return null;
+        if(shown.total!==first.total)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        return shown;
+      },Math.max(1,deadline-Date.now()),{action:()=>link.click(),settle:300,
+        sameCandidate:(a,b)=>a.start===b.start&&JSON.stringify(a.rows)===JSON.stringify(b.rows)});
+      for(const row of current.rows) {
+        if(pages.has(row.identifier))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        rows.push(row);pages.set(row.identifier,page);
+      }
+    }
+    if(rows.length!==first.total || (identifiers&&JSON.stringify(rows.map(row=>row.identifier))!==JSON.stringify(identifiers)))
+      throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+    return {rows,pages};
   }
   async function msSearch(query,deadline,requireFreshGrid=false) {
+    msLastRows=null;msLastPages=null;msLastQuery=null;
     msLastDiagnostic={visibility:document.visibilityState,ready_state:document.readyState,
       reused_form:requireFreshGrid,grid_rebound:!requireFreshGrid,
       relevant_mutations:0,events:[]};
@@ -1372,9 +1410,52 @@
     const button=document.querySelector('#SearchButton');
     if(!field||!visible(field)||!button||!visible(button)||button.disabled)throw new Error('REGISTRY_FORM_CHANGED');
     set(field,query.name);
+    const id=crypto.randomUUID();
+    let armed=false, response=null, resolveArm, clickStartedAt=0;
+    const armPromise=new Promise(resolve=>{resolveArm=resolve;});
+    const onMessage=event=>{
+      const message=event.data;
+      if(event.source!==window || event.origin!==location.origin || message?.channel!==msChannel
+          || message.id!==id)return;
+      if(message.kind==='armed' || message.kind==='unavailable') {
+        armed=message.kind==='armed';
+        resolveArm(armed);
+      } else if(armed && message.kind==='started') {
+        // The main-world observer sees the exact-name public AJAX request.
+        // Record this separately from an unresponsive request or a click that
+        // never reached the public search handler; do not alter the result.
+        msLastDiagnostic.request_started=true;
+        msLastDiagnostic.request_started_ms=clickStartedAt?Date.now()-clickStartedAt:null;
+      } else if(armed && message.kind==='success' && Array.isArray(message.identifiers)) {
+        response=message.identifiers;
+        msLastDiagnostic.response_confirmed=true;
+        document.dispatchEvent(new Event(msSignal));
+      } else if(armed && ['error','invalid'].includes(message.kind)) {
+        msLastDiagnostic.response_error=typeof message.reason==='string'
+          ? message.reason:message.kind;
+        if(message.reason==='missing-table' && message.shape && typeof message.shape==='object')
+          msLastDiagnostic.response_shape=message.shape;
+      }
+    };
+    window.addEventListener('message',onMessage);
+    window.postMessage({channel:msChannel,kind:'arm',id,name:query.name},location.origin);
+    const armTimer=setTimeout(()=>resolveArm(false),Math.min(500,Math.max(1,deadline-Date.now())));
+    await armPromise;
+    clearTimeout(armTimer);
+    msLastDiagnostic.response_observer=armed;
     let gridRebound=!requireFreshGrid;
-    const found=await wait(()=>gridRebound?msGrid(query):null,Math.max(1,deadline-Date.now()),{
-      action:()=>button.click(),settle:300,
+    try {
+    const found=await wait(()=>{
+      const grid=(gridRebound||response)?msGrid(query):null;
+      if(!grid || !response || !requireFreshGrid)return grid;
+      // A successful request for this exact name must agree with the visible
+      // grid. An old empty pager after an AJAX error never meets this test.
+      return grid.total===response.length
+        &&JSON.stringify(grid.rows.map(row=>row.identifier))===JSON.stringify(response.slice(0,grid.rows.length))
+        ?grid:null;
+    },Math.max(1,deadline-Date.now()),{
+      action:()=>{clickStartedAt=Date.now();msLastDiagnostic.click_dispatched=true;button.click();},settle:300,
+      signal:{target:document,type:msSignal},
       // The public page keeps its previous Kendo grid on screen while the
       // next AJAX request runs. Only a new grid render after this click can
       // make a reused-page result complete. An AJAX error leaves the old grid
@@ -1391,13 +1472,34 @@
       },
       sameCandidate:(a,b)=>a.total===b.total&&JSON.stringify(a.rows)===JSON.stringify(b.rows),
       trace:(event,elapsed)=>msLastDiagnostic.events.push({event,elapsed_ms:elapsed})});
-    msLastDiagnostic.rows=found.rows.length;
-    msLastRows=found.rows;
-    return {state:'MS',query,complete:true,verification_pending:false,rows:found.rows,total:found.total};
+    const collected=await msCollectPages(query,found,deadline,response);
+    msLastDiagnostic.rows=collected.rows.length;
+    msLastDiagnostic.pages=Math.max(1,...collected.pages.values());
+    msLastRows=collected.rows;msLastPages=collected.pages;msLastQuery=query;
+    return {state:'MS',query,complete:true,verification_pending:false,rows:collected.rows,total:found.total};
+    } finally {
+      msLastDiagnostic.request_started=msLastDiagnostic.request_started===true;
+      msLastDiagnostic.field_still_matches=field.value===query.name;
+      msLastDiagnostic.button_disabled=button.disabled;
+      msLastDiagnostic.grid_present=!!document.querySelector('#kendoSearchResults');
+      window.removeEventListener('message',onMessage);
+    }
   }
   async function msDetail(query,deadline) {
     if(query?.operation!=='detail'||query.state!=='MS'||!Array.isArray(msLastRows)
         ||!msLastRows.some(row=>row.identifier===query.identifier))throw new Error('REGISTRY_COMMAND_INVALID');
+    const page=msLastPages?.get(query.identifier);
+    if(!page||!msLastQuery)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+    if(![...document.querySelectorAll('#kendoSearchResults tbody tr[role="row"]')]
+          .some(r=>text(r.querySelector('td[role="gridcell"]:nth-child(2)'))===query.identifier)) {
+      const link=msPageLink(page);
+      if(!link)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      await wait(()=>{
+        const shown=msGrid(msLastQuery);
+        return shown?.rows.some(row=>row.identifier===query.identifier)?shown:null;
+      },Math.max(1,deadline-Date.now()),{action:()=>link.click(),settle:300,
+        sameCandidate:(a,b)=>a.start===b.start&&JSON.stringify(a.rows)===JSON.stringify(b.rows)});
+    }
     const rows=[...document.querySelectorAll('#kendoSearchResults tbody tr[role="row"]')];
     const row=rows.find(r=>text(r.querySelector('td[role="gridcell"]:nth-child(2)'))===query.identifier);
     const link=row?.querySelector('a.k-grid-Details');
@@ -1614,12 +1716,12 @@
       return new Promise(resolve=>{
         const receive=event=>{
           const r=event.data;
-          if(event.source!==window || event.origin!==location.origin || r?.channel!=='cc-ga-public-pager-v1' || r.direction!=='response' || r.id!==id)return;
+          if(event.source!==window || event.origin!==location.origin || r?.channel!=='cc-final-four-ga-pager-v1' || r.direction!=='response' || r.id!==id)return;
           clearTimeout(timer);window.removeEventListener('message',receive);resolve({ok:r.ok===true});
         };
         const timer=setTimeout(()=>{window.removeEventListener('message',receive);resolve({ok:false});},3000);
         window.addEventListener('message',receive);
-        window.postMessage({channel:'cc-ga-public-pager-v1',direction:'request',id,page:m.page},location.origin);
+        window.postMessage({channel:'cc-final-four-ga-pager-v1',direction:'request',id,page:m.page},location.origin);
       });
     }
     if (m.action === "registry-ga-detail") {

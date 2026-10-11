@@ -147,8 +147,8 @@ class NorthCarolinaPlanning(unittest.TestCase):
              ['Beacon Literacy']),
             (['Beacon Literacy','Beacon-Literacy Network'], 'STARTS_WITH',
              ['Beacon Literacy','Beacon-Literacy Network']),
-            (['Beacon Literacy','Beacon Literacy Network'], 'EXACT_MATCH',
-             ['Beacon Literacy','Beacon Literacy Network']),
+            (['Beacon Literacy','Beacon Literacy Network'], 'STARTS_WITH',
+             ['Beacon Literacy']),
         ]
         for required,first_mode,expected in cases:
             with self.subTest(required=required,first_mode=first_mode):
@@ -208,10 +208,10 @@ class NorthCarolinaPlanning(unittest.TestCase):
         start=source.index('  async function ncRows(')
         end=source.index('  function ncProfile(',start)
         block=source[start:end]
-        self.assertIn("searched=/Words:\\s*Starting With",block)
-        self.assertIn("search_mode:'STARTS_WITH'",block)
+        self.assertIn('Starting With|All Words|Exact',block)
+        self.assertIn("search_mode:query.search_mode",block)
         self.assertLess(block.index('if(rows.length!==total'),
-                        block.index("search_mode:'STARTS_WITH'"))
+                        block.index('search_mode:query.search_mode'))
 
     def test_trial_browser_asset_classifies_explicit_429_only(self):
         from deployment import performance_lab as lab

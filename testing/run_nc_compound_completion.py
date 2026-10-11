@@ -44,6 +44,30 @@ class CompoundCompletion(unittest.TestCase):
                 self.assertEqual([q.get('name') for q in calls if q['operation']=='search'],
                                  [*expected,legal,brand])
 
+    def test_descriptive_half_finds_positive_before_short_brand(self):
+        legal='Global Resource for Advancing Cancer Education'
+        result,calls=self.lookup(legal,'GRACE',aliases=[legal,'GRACE','Later Campaign'])
+        self.assertTrue(result.success)
+        self.assertEqual([q.get('name') for q in calls if q['operation']=='search'],
+                         [f'{legal} — GRACE',legal])
+
+    def test_descriptive_half_does_not_hide_incomplete_brand_or_adverse_record(self):
+        legal='Global Resource for Advancing Cancer Education'
+        with self.assertRaisesRegex(ValueError,'later search'):
+            self.lookup(legal,'GRACE',address='unavailable',fail_component=True,
+                        aliases=[legal,'GRACE','Later Campaign'])
+        with self.assertRaisesRegex(ValueError,'later search'):
+            self.lookup(legal,'GRACE',status='Revoked',fail_component=True,
+                        aliases=[legal,'GRACE','Later Campaign'])
+
+    def test_short_brand_uses_exact_only_for_descriptive_compound(self):
+        self.assertTrue(cc.nc_short_compound_exact_probe(
+            'Global Resource for Advancing Cancer Education — GRACE', 'GRACE'))
+        self.assertFalse(cc.nc_short_compound_exact_probe(
+            'Global Resource for Advancing Cancer Education — GRACE',
+            'Global Resource for Advancing Cancer Education'))
+        self.assertFalse(cc.nc_short_compound_exact_probe('RedRover — GRACE', 'GRACE'))
+
     def test_component_must_complete_before_early_exit(self):
         with self.assertRaisesRegex(ValueError,'later search'):
             self.lookup(fail_component=True)

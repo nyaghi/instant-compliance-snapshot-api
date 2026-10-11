@@ -24,6 +24,8 @@ test('matched public result retains identifier and raw status',()=>{
   assert.equal(found.total,1);assert.equal(found.rows[0].identifier,'100000800');
   assert.equal(found.rows[0].raw_status,'Current - Registered');
 });
-test('truncated public result page cannot certify a negative',()=>{
-  assert.throws(()=>gridFixture('1 - 1 of 2 items',['Fixture Charity','100000800','Current - Registered','Details']),/REGISTRY_RESPONSE_INCOMPLETE/);
+test('public pager identifies a partial first page without classifying it complete',()=>{
+  const page=gridFixture('1 - 1 of 2 items',['Fixture Charity','100000800','Current - Registered','Details']);
+  assert.equal(page.start,1);assert.equal(page.end,1);assert.equal(page.total,2);
+  assert.throws(()=>gridFixture('1 - 2 of 2 items',['Fixture Charity','100000800','Current - Registered','Details']),/REGISTRY_RESPONSE_INCOMPLETE/);
 });
