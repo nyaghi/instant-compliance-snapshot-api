@@ -213,19 +213,30 @@ class ConnectedInsightTests(unittest.TestCase):
         report.validate_head_start(assessment)
         combined = report.reconcile_head_start(self.rows, assessment)
         blocks, unchecked = report.compliance_matrix(combined)
-        self.assertEqual(set(blocks['No registration needed']), no_registration | {'MO'})
+        self.assertEqual(set(blocks['No registration needed']), no_registration)
+        self.assertIn('MO', blocks['Needs confirmation'])
         self.assertEqual(unchecked, 51 - len(self.rows))
         self.assertEqual(sum(map(len, blocks.values())), 51)
         findings = {finding['state']: finding for finding in combined}
         for state in {'IN','IA','MO'}:
             self.assertNotEqual(findings[state]['finding'], 'Registration status not checked')
             self.assertEqual(findings[state]['priority'], 4)
+        self.assertEqual(findings['MO']['finding'], 'Eligibility supports registration relief')
         self.assertEqual(findings['TN']['finding'], 'Registration status not checked')
         self.assertIn('WA', blocks['Action needed'])
         payload = copy.deepcopy(self.payload)
         payload['head_start'] = assessment
         first_page = PdfReader(BytesIO(report.generate_report(payload, cc.SUPPORTED_STATES))).pages[0].extract_text()
-        self.assertRegex(' '.join(first_page.split()), r'12\s+No registration needed')
+        self.assertRegex(' '.join(first_page.split()), r'11\s+No registration needed')
+
+    def test_completed_no_record_follows_head_start_category_not_eligibility_alone(self):
+        facts = dict(requirement='none', filing='optional', exemption_evidence='answers',
+                     approvalRequired=False)
+        potential = self.finding('CT', registration_group='potentialExemption', **facts)
+        first_column = self.finding('CT', registration_group='notRequired', **facts)
+        self.assertEqual(potential['finding'], 'Eligibility supports registration relief')
+        self.assertEqual(report.compliance_matrix([potential])[0]['Needs confirmation'], ['CT'])
+        self.assertEqual(report.compliance_matrix([first_column])[0]['No registration needed'], ['CT'])
 
     def test_unassessed_head_start_first_column_does_not_become_a_gap(self):
         finding = self.finding('IN', registration_group='notAssessed')

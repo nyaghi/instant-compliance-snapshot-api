@@ -16,7 +16,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, CondPageBreak, KeepTogether
 
 REPORT_VERSION = "1.3.3"
-INSIGHT_VERSION = "2.0.3"
+INSIGHT_VERSION = "2.0.4"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -627,9 +627,10 @@ def compliance_matrix(combined):
     for finding in combined:
         if finding["aurora_row"] is None:
             unchecked += 1
-            bucket = ("No registration needed" if finding["finding"] in {
-                "No registration indicated for reported activity", "Eligibility supports registration relief"
-            } else "Needs confirmation")
+            # Keep Head Start's first-column finding distinct from a potential
+            # exemption route even when the latter has supporting intake facts.
+            bucket = ("No registration needed" if finding["finding"] ==
+                      "No registration indicated for reported activity" else "Needs confirmation")
             blocks[bucket].append(finding["state"])
             continue
         actual = finding["aurora_status"]
@@ -638,7 +639,8 @@ def compliance_matrix(combined):
         if finding["finding"] in {"Existing registration needs attention", "Registration gap indicated"}:
             bucket = "Action needed"
         elif finding["finding"] in {"Exemption findings align", "Exemption recorded"} or (
-                assessment["status"] in {"none", "outside"} and actual == "Not Registered"):
+                assessment.get("registration_group") in {"notRequired", "notAssessed"}
+                and actual == "Not Registered"):
             bucket = "No registration needed"
         elif actual in {"Current", "Upcoming Filing"} and (
                 required or finding["finding"] == "Exemption opportunity"):
@@ -735,7 +737,7 @@ def generate_report(payload, supported_states):
 
     def matrix_cards(blocks, incomplete_category=False):
         captions = {
-            "No registration needed": "Based on supplied activity facts, category relief, or a matching recorded exemption.",
+            "No registration needed": "Based on Head Start's activity finding or a matching recorded exemption.",
             "On track / deadline approaching": "A current registration is found; plan any approaching filing.",
             "Action needed": "A gap or adverse registry status calls for follow-up.",
             "Needs confirmation": "Evidence or requirement scope is not yet sufficient for a conclusion.",
