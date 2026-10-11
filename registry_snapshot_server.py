@@ -7216,6 +7216,25 @@ def nm_browser_lookup(org, evidence):
 MS_BROWSER_SOURCE = 'https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx'
 
 
+def ms_suggested_review_identifier(entered_name, rows):
+    """Suggest a uniquely closer complete name; never turn that suggestion into identity proof."""
+    entered = normalized_match_name(entered_name).split()
+    if len(entered) < 3:
+        return ''
+    ranked = []
+    for row in rows:
+        words = normalized_match_name(row['name']).split()
+        if words == entered:
+            rank = (2, 0)
+        elif words[:len(entered)] == entered:
+            rank = (1, -len(words[len(entered):]))
+        else:
+            rank = (0, 0)
+        ranked.append((rank, row['identifier']))
+    ranked.sort(reverse=True)
+    return ranked[0][1] if ranked and ranked[0][0][0] and (len(ranked) == 1 or ranked[0][0] > ranked[1][0]) else ''
+
+
 def ms_browser_clean_evidence(payload, query):
     """Keep only bounded, query-bound public Mississippi registry fields."""
     if not isinstance(payload, dict) or payload.get('query') != query or payload.get('complete') is not True:
@@ -7273,7 +7292,6 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
         raise ValueError('No safe Mississippi name search')
     attempted = []
     possible = []
-    ambiguous = False
     for name in planned:
         query = {'state': 'MS', 'operation': 'search', 'name': name}
         rows = ms_browser_clean_evidence(evidence(query), query)['rows']
@@ -7290,10 +7308,36 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
                 accepted.append(row)
             elif best and best['decision'] in {'accepted', 'possible'}:
                 possible.append(row['name'])
-        # Do not select the first of multiple plausible state identities.
+        # Two plausible filing numbers need a user identity decision. Read each
+        # detail now so later confirmation can apply only signed state evidence.
         if len(accepted) > 1:
-            ambiguous = True
-            break
+            suggestion = ms_suggested_review_identifier(org.organization_name, accepted)
+            candidates = []
+            for row in accepted:
+                detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
+                fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
+                attempted.append({'query': detail_query, 'completed': True})
+                if (normalized_match_name(fields['Name']) != normalized_match_name(row['name'])
+                        or not fields['Filing Status'].strip()):
+                    raise ValueError('Mississippi detail identity or status changed')
+                expiration = module.parse_mmddyyyy_date(fields['Expiration Date']) if fields['Expiration Date'] else None
+                if fields['Expiration Date'] and not expiration:
+                    raise ValueError('Mississippi expiration date is malformed')
+                candidates.append({'name': row['name'], 'identifier': row['identifier'],
+                                   'url': MS_BROWSER_SOURCE, 'raw_status': fields['Filing Status'].strip(),
+                                   'expiration': expiration.isoformat() if expiration else '',
+                                   'suggested': row['identifier'] == suggestion,
+                                   '_identity_outcome': 'possible'})
+            candidates.sort(key=lambda candidate: not candidate['suggested'])
+            result = checker.StateResult(org.organization_name, org.ein, 'MS', 'Needs Review', MS_BROWSER_SOURCE)
+            result.success = False
+            result.reason_code = 'MS_MULTIPLE_IDENTITIES_REVIEW'
+            result.queries_attempted = attempted
+            result.source_note = ('Mississippi returned multiple plausible filing numbers. The closest name is a suggestion only; '
+                                  'confirm the correct state record before CharityClarity applies its status.')
+            result._cc_identity_review = {'records': candidates, 'search_complete': False,
+                                          'freshness': '', 'exclusive': True}
+            return result
         if not accepted:
             continue
         selected = accepted[0]
@@ -7327,9 +7371,9 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
             'The public Mississippi search row and detail filing number matched; status uses the displayed Filing Status and Expiration Date.'
         return result
     result = checker.StateResult(org.organization_name, org.ein, 'MS',
-                                  'Needs Review' if possible or ambiguous else 'Not Registered',
+                                  'Needs Review' if possible else 'Not Registered',
                                  MS_BROWSER_SOURCE)
-    result.success = not (possible or ambiguous)
+    result.success = not possible
     result.queries_attempted = attempted
     result.source_note = ('Mississippi returned one or more possible identities, but none was confirmed safely.'
                           if not result.success else
@@ -33461,9 +33505,11 @@ def identity_review_unpack(token, email, device):
 def identity_review_view(record):
     return {"token": identity_review_pack(record), "expires_at": record["expires"],
             "search_complete": record["search_complete"], "scope": "this_snapshot",
+            "exclusive": record.get("exclusive") is True,
             "candidates": [{"id": row["id"], "name": row["name"], "identifier": row["identifier"],
                 "location": row.get("location", ""), "source_url": row.get("url", ""),
                 "raw_status": row.get("raw_status", ""), "expiration": row.get("expiration", ""),
+                "suggested": row.get("suggested") is True,
                 "decision": record["decisions"].get(row["id"], {}).get("decision", "")}
                 for row in record["records"] if row["reviewable"]]}
 
@@ -33490,6 +33536,7 @@ def attach_identity_review(data, context):
             continue
         clean = {key: row.get(key, "") for key in
                  ("name", "identifier", "ein", "location", "url", "raw_status", "expiration", "license_category", "initial")}
+        clean["suggested"] = row.get("suggested") is True
         if data["state"] in {"AL", "NC", "NV", "TN"}:
             # Keep the master interpretation of complete state evidence in the
             # signed snapshot. Identity acceptance cannot substitute a generic
@@ -33511,6 +33558,7 @@ def attach_identity_review(data, context):
     record = {"issued": now, "expires": min(now + 86400, midnight), "version": APP_VERSION,
               "base": {k: v for k, v in data.items() if k not in {"debug_trace", "identity_review"}},
               "records": rows, "search_complete": context.get("search_complete") is True,
+              "exclusive": context.get("exclusive") is True,
               "freshness": context.get("freshness", ""), "decisions": {},
               "history": list(prior.get("history", [])) if same_review else [],
               "rejected": list(prior.get("rejected", [])) if same_review else []}
@@ -33543,6 +33591,11 @@ def identity_review_state_status(state, row):
             "Unable to Confirm", "Needs Review"} else "Unable to Confirm"
     if state == "WI":
         return identity_review_wi_status(row)
+    if state == "MS":
+        module = state_batch_modules(['MS'])[load_state_batch_bundle().STATE_TO_MODULE['MS']]
+        return ms_status_from_filing_status(row.get("raw_status", ""),
+                                            parse_due_date(row.get("expiration", "")),
+                                            module.classify_ms_registration)
     expiry = parse_due_date(row.get("expiration", ""))
     raw, category = row.get("raw_status", ""), row.get("license_category", "")
     status = licensed_charity_status(raw, expiry)
@@ -33572,8 +33625,21 @@ def resolve_identity_review(payload, email, device):
                 "reviewed_by": email, "reviewed_at": int(time.time())}
     record["owner"] = [email, device]
     record["history"].append(decision)
-    if action == "clear": record["decisions"].pop(selected["id"], None)
-    else: record["decisions"][selected["id"]] = decision
+    if action == "clear":
+        record["decisions"].pop(selected["id"], None)
+        if record.get("exclusive"):
+            for key, prior in list(record["decisions"].items()):
+                if prior.get("implicit"):
+                    record["decisions"].pop(key, None)
+    else:
+        record["decisions"][selected["id"]] = decision
+        if action == "accept" and record.get("exclusive"):
+            for row in record["records"]:
+                if row["id"] != selected["id"]:
+                    record["decisions"][row["id"]] = {
+                        "candidate_id": row["id"], "identifier": row["identifier"],
+                        "decision": "reject", "reviewed_by": email, "reviewed_at": decision["reviewed_at"],
+                        "implicit": True}
     data = dict(base)
     pending = [r for r in record["records"] if r["reviewable"] and r["id"] not in record["decisions"]]
     accepted = [r for r in record["records"] if not r["reviewable"] or record["decisions"].get(r["id"], {}).get("decision") == "accept"]

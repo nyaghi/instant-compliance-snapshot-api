@@ -25,9 +25,12 @@
     }
     if (review?.candidates?.length) {
       add(box, 'p', 'Confirm the organization', 'font-semibold text-slate-900');
-      add(box, 'p', 'Accept or reject the identity. CharityClarity Aurora calculates the status from the state record. This decision applies to this snapshot.', 'mt-1 text-xs text-slate-600');
+      add(box, 'p', review.exclusive
+        ? 'The registry returned more than one filing. Choose the record for your organization. The suggested match is based on its closer name, and no status is applied until you confirm it.'
+        : 'Accept or reject the identity. CharityClarity Aurora calculates the status from the state record. This decision applies to this snapshot.', 'mt-1 text-xs text-slate-600');
       for (const candidate of review.candidates) {
         const card = add(box, 'div', '', 'mt-3 rounded-md border border-slate-200 p-3');
+        if (review.exclusive && candidate.suggested) add(card, 'p', 'Suggested match · confirm before using its status', 'mb-1 text-xs font-semibold text-slate-900');
         add(card, 'p', candidate.name, 'font-semibold');
         add(card, 'p', [candidate.identifier, candidate.location].filter(Boolean).join(' · '), 'mt-1 text-xs');
         add(card, 'p', [candidate.raw_status, candidate.expiration ? `Expiration: ${candidate.expiration}` : ''].filter(Boolean).join(' · '), 'mt-1 text-xs text-slate-600');
@@ -40,7 +43,7 @@
         } catch { /* No public link was supplied. */ }
         if (candidate.decision) add(card, 'p', candidate.decision === 'accept' ? 'Identity accepted by user' : 'Identity rejected by user', 'mt-2 text-xs font-semibold');
         const controls = add(card, 'div', '', 'mt-2 flex flex-wrap gap-2');
-        action(controls, 'Accept match', () => decide(candidate.id, 'accept'), candidate.decision === 'accept').setAttribute('aria-pressed', String(candidate.decision === 'accept'));
+        action(controls, review.exclusive ? 'Confirm this record' : 'Accept match', () => decide(candidate.id, 'accept'), candidate.decision === 'accept').setAttribute('aria-pressed', String(candidate.decision === 'accept'));
         action(controls, 'Reject match', () => decide(candidate.id, 'reject'), candidate.decision === 'reject').setAttribute('aria-pressed', String(candidate.decision === 'reject'));
         if (candidate.decision) action(controls, 'Undo match', () => decide(candidate.id, 'clear'));
       }

@@ -2,6 +2,7 @@
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+from datetime import date, timedelta
 
 import registry_snapshot_server as cc
 from deployment import performance_lab
@@ -122,8 +123,73 @@ class MississippiBrowserFallbackControls(unittest.TestCase):
             result = cc.ms_browser_lookup(self.org, lambda query: self.search(query, [unrelated]))
         self.assertNotIn(result.status, {'Current', 'Upcoming Filing', 'Exempt'})
         with patch.object(cc, 'ms_name_search_plan', return_value=['Better World Fund, Inc.']):
-            result = cc.ms_browser_lookup(self.org, lambda query: self.search(query, [self.row, {**self.row, 'identifier': '100000801'}]))
+            result = cc.ms_browser_lookup(self.org, lambda query: (
+                self.search(query, [self.row, {**self.row, 'identifier': '100000801'}])
+                if query['operation'] == 'search' else self.detail(query)))
         self.assertEqual(result.status, 'Needs Review')
+
+    def test_two_plausible_filings_offer_ranked_one_step_identity_choice(self):
+        entered = 'National Cultural Memorial and Museum'
+        current_name = entered + ' at the Historic Center'
+        former_name = current_name + ' Foundation, Inc.'
+        org = cc.checker.Organization(entered, '61-1745872')
+        rows = [{'name': current_name, 'identifier': '100032485', 'raw_status': 'Current - Registered'},
+                {'name': former_name, 'identifier': '100009103', 'raw_status': 'Closed - Expired'}]
+        due = date.today() + timedelta(days=90)
+        def evidence(query):
+            if query['operation'] == 'search':
+                return self.search(query, rows)
+            row = next(row for row in rows if row['identifier'] == query['identifier'])
+            fields = {'Name': row['name'], 'Filing Number': row['identifier'],
+                      'Filing Status': row['raw_status'],
+                      'Expiration Date': due.strftime('%m/%d/%Y') if row is rows[0] else '11/03/2011',
+                      'Registered Name': row['name']}
+            return {'query': query, 'complete': True, 'fields': fields, 'source_url': cc.MS_BROWSER_SOURCE}
+        with patch.object(cc, 'ms_name_search_plan', side_effect=lambda name, ein: [name]):
+            result = cc.ms_browser_lookup(org, evidence, [current_name, former_name])
+        self.assertEqual(result.status, 'Needs Review')
+        self.assertFalse(result.success)
+        review = result._cc_identity_review
+        self.assertTrue(review['exclusive'])
+        self.assertFalse(review['search_complete'])
+        self.assertEqual(len(review['records']), 2)
+        self.assertEqual([row['suggested'] for row in review['records']], [True, False])
+        def reversed_evidence(query):
+            return self.search(query, list(reversed(rows))) if query['operation'] == 'search' else evidence(query)
+        with patch.object(cc, 'ms_name_search_plan', side_effect=lambda name, ein: [name]):
+            reversed_result = cc.ms_browser_lookup(org, reversed_evidence, [current_name, former_name])
+        self.assertEqual([row['identifier'] for row in reversed_result._cc_identity_review['records']],
+                         [rows[0]['identifier'], rows[1]['identifier']])
+        base = {'organization_name': entered, 'ein': org.ein, 'state': 'MS',
+                'status': result.status, 'success': result.success, 'comments': result.source_note}
+        with patch.object(cc, 'APP_VERSION', 'fixture-staging'), \
+             patch.object(cc, 'NY_CONNECTOR_SIGNING_KEY', 'test-only-not-a-real-secret-' * 3), \
+             patch.object(cc, 'log_event'):
+            cc.attach_identity_review(base, review)
+            view = base['identity_review']
+            self.assertEqual([row['suggested'] for row in view['candidates']], [True, False])
+            def decide(snapshot, index, action):
+                payload = {'token': snapshot['identity_review']['token'],
+                           'candidate_id': snapshot['identity_review']['candidates'][index]['id'],
+                           'action': action, 'ein': org.ein, 'state': 'MS'}
+                return cc.resolve_identity_review(payload, 'reviewer@example.test', 'test-device')
+            selected = decide(base, 0, 'accept')
+            self.assertEqual(selected['status'], 'Upcoming Filing')
+            self.assertEqual(selected['matched_registry_identifier'], rows[0]['identifier'])
+            self.assertEqual([row['decision'] for row in selected['identity_review']['candidates']],
+                             ['accept', 'reject'])
+            self.assertEqual(decide(selected, 0, 'clear')['status'], 'Needs Review')
+            former = decide(base, 1, 'accept')
+            self.assertEqual(former['status'], 'Closed / Withdrawn / Canceled')
+            self.assertEqual(former['matched_registry_identifier'], rows[1]['identifier'])
+
+    def test_suggestion_requires_unique_complete_name_advantage(self):
+        rows = [{'name': 'Example National Museum at the Center', 'identifier': '100000800'},
+                {'name': 'Example National Museum at the Center Foundation', 'identifier': '100000801'}]
+        self.assertEqual(cc.ms_suggested_review_identifier('Example National Museum', rows), '100000800')
+        self.assertEqual(cc.ms_suggested_review_identifier('Example National Museum at the Center Foundation', rows), '100000801')
+        self.assertEqual(cc.ms_suggested_review_identifier('Example National Museum',
+            [{**rows[0], 'identifier': '100000802'}, rows[0]]), '')
 
     def test_partial_or_mismatched_evidence_cannot_become_not_registered(self):
         query = {'state': 'MS', 'operation': 'search', 'name': self.org.organization_name}
