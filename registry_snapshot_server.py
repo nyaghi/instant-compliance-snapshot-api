@@ -8507,6 +8507,13 @@ def select_licensed_charity(org, rows, state, deadline):
         keys = {normalized_match_name(r["name"]) for r in pool}
         addresses_agree = all(r.get("address_evidence", {}).get("decision") == "corroborated" for r in pool)
         if len(keys) > 1 and not addresses_agree and not licensed_same_legal_dba_records(pool):
+            if state == "NV":
+                # Both records passed automated identity checks, but the state
+                # cannot establish which registration belongs to this entity.
+                # Keep the status unresolved and offer the already retrieved
+                # records for an exclusive, signed user identity decision.
+                for row in accepted:
+                    row["_optional_identity_review"] = True
             return None, f"{state} returned multiple matching registrations whose identities could not be distinguished safely. Confirm the registration number."
         top_date = max((r.get("expiration") or date.min) for r in pool)
         tied = [r for r in pool if (r.get("expiration") or date.min) == top_date]
@@ -8539,8 +8546,9 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
     selected, review = select_licensed_charity(org, rows, state, deadline)
     if review:
         result.status = "Needs Review"; result.success = False; result.source_note = review
-        if any(r.get("_identity_outcome") in {"possible", "conflict"} for r in rows):
-            result._cc_identity_review = {"records": rows, "search_complete": True, "freshness": freshness}
+        if any(r.get("_identity_outcome") in {"possible", "conflict"} or r.get("_optional_identity_review") for r in rows):
+            result._cc_identity_review = {"records": rows, "search_complete": True, "freshness": freshness,
+                                          "exclusive": state == "NV" and any(r.get("_optional_identity_review") for r in rows)}
     elif selected:
         result.status = selected["status"]; result.success = result.status != "Unable to Confirm"
         result.matched_registry_name = selected["name"]
@@ -26650,6 +26658,24 @@ def ky_candidate_passes_fast_prefilter(registry_norm: str, target_first_words: s
     return False
 
 
+def ky_one_letter_review_candidate(expected_name: str, registry_name: str) -> bool:
+    """A full-name, single-character gap can be reviewed, never auto-matched."""
+    expected = normalized_match_name(expected_name).split()
+    displayed = normalized_match_name(registry_name).split()
+    if len(expected) < 3 or len(expected) != len(displayed):
+        return False
+    differences = [(left, right) for left, right in zip(expected, displayed) if left != right]
+    if len(differences) != 1 or sum(a == b for a, b in zip(expected, displayed)) < 2:
+        return False
+    left, right = differences[0]
+    if min(len(left), len(right)) < 6 or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) == 1
+    shorter, longer = sorted((left, right), key=len)
+    return any(longer[:index] + longer[index + 1:] == shorter for index in range(len(longer)))
+
+
 def saint_university_canonical(value: str) -> tuple[str, ...]:
     tokens = normalized_match_name(value).split()
     if not tokens:
@@ -26691,12 +26717,34 @@ def search_ky_strict_snapshot(org):
         *category_preferred_name_variants(original_name),
         *organization_match_target_variants(original_name, org.ein),
     ]
+    original_target_norms = {normalized_match_name(target) for target in original_targets}
+    review_context = USER_IDENTITY_CONTEXT.get()
+    reviewed_row = review_context.get("accepted", {}) if (
+        review_context.get("state") == "KY"
+        and review_context.get("ein") == canonical_ein_digits(org.ein)) else {}
     target_norms = {normalized_match_name(target) for target in targets}
     target_first_words = {target.split()[0] for target in target_norms if target.split()}
+    review_first_words = {words[0] for name in original_target_norms
+                          if len(words := name.split()) >= 3}
+    review_second_third = {(words[1], words[2]) for name in original_target_norms
+                           if len(words := name.split()) >= 3}
     best = None
     best_score = (-1000, -1000, 0)
     tied_records = []
+    near_rows = []
     for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
+        registry_norm = normalized_match_name(registry_name)
+        registry_words = registry_norm.split()
+        exact_target = registry_norm in original_target_norms
+        review_prefilter = len(registry_words) >= 3 and (
+            registry_words[0] in review_first_words or
+            tuple(registry_words[1:3]) in review_second_third)
+        one_letter_gap = not exact_target and review_prefilter and any(
+            ky_one_letter_review_candidate(target, registry_name) for target in original_targets)
+        user_confirmed_row = (reviewed_row.get("identifier") == registry_id
+                              and reviewed_row.get("name") == registry_name and one_letter_gap)
+        if one_letter_gap and not user_confirmed_row:
+            near_rows.append((registry_id, registry_name, filed_year, record_text))
         names = ky_registry_name_variants(registry_name)
         # Some legal-name cells contain an explicit DBA marker themselves.
         # Keep both stated identities; every segment still needs the guard below.
@@ -26708,17 +26756,20 @@ def search_ky_strict_snapshot(org):
         ]))
         for name_index, candidate_name in enumerate(names):
             registry_norm = normalized_match_name(candidate_name)
-            if not ky_candidate_passes_fast_prefilter(registry_norm, target_first_words, target_norms):
+            confirmed_candidate = user_confirmed_row and candidate_name == registry_name
+            if one_letter_gap and not confirmed_candidate:
+                continue
+            if not confirmed_candidate and not ky_candidate_passes_fast_prefilter(registry_norm, target_first_words, target_norms):
                 continue
             if len(names) > 1 and not ky_registry_column_name_is_safe(
                     candidate_name, getattr(org, "original_organization_name", org.organization_name), org.ein):
                 continue
-            score = ky_strict_name_score(candidate_name, target_norms, org.organization_name)
+            score = 700 if confirmed_candidate else ky_strict_name_score(candidate_name, target_norms, org.organization_name)
             if score < 700:
                 continue
             # Apply the outer lookup's identity guard before choosing a winner.
             # Otherwise a generated fragment can hide a valid reviewed alias.
-            if not ky_snapshot_registry_name_is_safe(candidate_name, original_targets, original_name, org.ein):
+            if not confirmed_candidate and not ky_snapshot_registry_name_is_safe(candidate_name, original_targets, original_name, org.ein):
                 continue
             match_score = target_name_score(candidate_name, targets)
             composite_score = (score, match_score, registry_identity_preference(candidate_name, org.organization_name, org.ein))
@@ -26729,6 +26780,26 @@ def search_ky_strict_snapshot(org):
             elif composite_score == best_score:
                 tied_records.append((registry_id, name_index))
     if not best or best_score[0] < 700:
+        if near_rows and org.organization_name == original_name:
+            result.status = "Needs Review"
+            result.success = False
+            result.status_reason = "KY_SINGLE_LETTER_IDENTITY_REVIEW"
+            result.raw_status_text = "Kentucky returned a complete-name candidate differing by one letter."
+            result.source_note = (
+                "Kentucky's downloadable list does not include an EIN for this row. "
+                "A one-letter name difference is not proof of identity. Review the state record "
+                "and select Accept or Reject; CharityClarity will calculate status from the "
+                "same Kentucky filing row only after acceptance."
+            )
+            result._cc_identity_review = {
+                "records": [{"name": name, "identifier": identifier, "ein": "",
+                             "url": downloadable_data_info("KY").get("source_url", ""),
+                             "raw_status": f"Yr Last Filed: {year}" if year else "",
+                             "expiration": "", "initial": "", "location": "",
+                             "_identity_outcome": "possible", "status": "Needs Review"}
+                            for identifier, name, year, _ in near_rows[:10]],
+                "search_complete": len(near_rows) <= 10, "exclusive": True, "freshness": "",
+            }
         return result
     if any(index > 0 for _, index in tied_records) and len({identifier for identifier, _ in tied_records}) > 1:
         result.status = "Needs Review"
@@ -26757,7 +26828,10 @@ def search_ky_strict_snapshot(org):
     result.matched_registry_name = registry_name
     result.matched_registry_identifier = registry_id
     result.source_note = (
-        "Kentucky downloadable public charity registration snapshot matched the organization name under strict master-code validation."
+        "Kentucky downloadable public charity registration snapshot matched the organization name "
+        + ("after the user confirmed this one-letter identity difference."
+           if reviewed_row.get("identifier") == registry_id and reviewed_row.get("name") == registry_name
+           else "under strict master-code validation.")
     )
     if filed_year and re.fullmatch(r"20\d{2}", filed_year):
         evidence = irs_period_for_label(org.ein, int(filed_year), time.monotonic() + 14.0)
@@ -27305,7 +27379,14 @@ def search_snapshot_or_embedded_state(org, state: str):
                     *category_preferred_name_variants(original_name),
                     *organization_match_target_variants(original_name, getattr(org, "ein", "")),
                 ]
-                if matched_name and not ky_snapshot_registry_name_is_safe(matched_name, original_targets, original_name, getattr(org, "ein", "")):
+                review_context = USER_IDENTITY_CONTEXT.get()
+                accepted_row = review_context.get("accepted", {}) if (
+                    review_context.get("state") == "KY" and
+                    review_context.get("ein") == canonical_ein_digits(getattr(org, "ein", ""))) else {}
+                user_confirmed_match = (accepted_row.get("name") == matched_name and
+                    accepted_row.get("identifier") == getattr(result, "matched_registry_identifier", "") and
+                    any(ky_one_letter_review_candidate(target, matched_name) for target in original_targets))
+                if matched_name and not user_confirmed_match and not ky_snapshot_registry_name_is_safe(matched_name, original_targets, original_name, getattr(org, "ein", "")):
                     best_result = checker.StateResult(original_name, getattr(org, "ein", ""), state, checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
                     best_result.raw_status_text = "Kentucky registry row matched a generated variant but not the requested organization"
                     best_result.source_note = (
@@ -33699,6 +33780,32 @@ def resolve_identity_review(payload, email, device):
                     success=record["search_complete"], matched_registry_name="", matched_registry_identifier="",
                     raw_status_text="User rejected the retrieved identity candidates", computed_due_date="",
                     comments=note + ("The completed search has no remaining qualifying registration record." if record["search_complete"] else "The search is incomplete; rejecting this candidate does not establish non-registration."))
+    elif base["state"] == "KY":
+        # Re-evaluate the signed, user-selected identity against the current
+        # Kentucky snapshot. Its filed-year and IRS fiscal-period rules remain
+        # in the ordinary state lookup; an identity decision never supplies a
+        # status or date from the browser.
+        if len(accepted) != 1:
+            data.update(status="Needs Review", success=False,
+                        comments=note + "Select only one Kentucky registration for this snapshot.")
+        else:
+            source_row = accepted[0]
+            token = USER_IDENTITY_CONTEXT.set({
+                "ein": canonical_ein_digits(base["ein"]), "state": "KY",
+                "accepted": {"identifier": source_row["identifier"], "name": source_row["name"]},
+            })
+            names_token = REVIEWED_NAME_CONTEXT.set({
+                **REVIEWED_NAME_CONTEXT.get(), canonical_ein_digits(base["ein"]): base.get("reviewed_alternate_names", [])})
+            try:
+                data = run_state_lookup(base["organization_name"], base["ein"], "KY")
+            finally:
+                REVIEWED_NAME_CONTEXT.reset(names_token); USER_IDENTITY_CONTEXT.reset(token)
+            if (data.get("matched_registry_identifier") != source_row["identifier"] or
+                    data.get("matched_registry_name") != source_row["name"]):
+                data.update(status="Unable to Confirm", success=False,
+                            matched_registry_name="", matched_registry_identifier="",
+                            comments="The reviewed Kentucky row is no longer confirmed in the current snapshot. Rerun the state check.")
+            data["comments"] = note + data["comments"]
     else:
         org = checker.Organization(base["organization_name"], base["ein"])
         candidates = []
