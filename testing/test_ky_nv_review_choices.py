@@ -52,35 +52,34 @@ class KentuckyReviewChoices(unittest.TestCase):
                 self.assertEqual(answer.get("matched_registry_identifier") or "", "18871" if action == "accept" else "")
 
 
-class NevadaReviewChoices(unittest.TestCase):
-    def test_duplicate_registrations_offer_exclusive_choice(self):
+class NevadaRecentRecordChoices(unittest.TestCase):
+    def test_later_expiration_selects_confirmed_record(self):
         org = cc.checker.Organization("Sexually Abused Children's Relief Endeavor — SACRED", "27-0567085")
-        rows = [{"name": name, "identifier": str(index), "status": "Current", "ein": "",
-                 "raw_status": "Registered", "expiration": date(2027, 6, 1), "initial": "",
+        rows = [{"name": name, "identifier": str(index), "status": "Delinquent", "ein": "",
+                 "raw_status": "Expired", "expiration": expiration, "initial": "",
                  "url": "https://esos.nv.gov/EntitySearch/OnlineEntitySearch", "location": ""}
-                for index, name in enumerate(("SACRED", "Sexually Abused Children's Relief Endeavor"), 1)]
+                for index, (name, expiration) in enumerate((
+                    ("Sexually Abused Children's Relief Endeavor", date(2026, 8, 31)),
+                    ("SACRED", date(2022, 9, 30))), 1)]
         def accepted(_org, row, _state, _deadline):
             row["match"] = {"decision": "accepted"}
             row["address_evidence"] = {"decision": "unavailable"}
             return "accepted"
-        with patch.object(cc, "licensed_charity_identity", side_effect=accepted), patch.object(
-                cc, "NY_CONNECTOR_SIGNING_KEY", "x" * 48), patch.object(cc, "APP_VERSION", "test-staging"):
+        with patch.object(cc, "licensed_charity_identity", side_effect=accepted):
             result = cc.licensed_charity_result(org, "NV", rows, time.monotonic() + 5, "https://esos.nv.gov/")
-            self.assertEqual(result.status, "Needs Review")
-            self.assertTrue(result._cc_identity_review["exclusive"])
-            data = {"ein": org.ein, "state": "NV", "organization_name": org.organization_name,
-                    "comments": result.source_note, "status": result.status}
-            cc.attach_identity_review(data, result._cc_identity_review)
-            self.assertEqual(len(data["identity_review"]["candidates"]), 2)
-            self.assertTrue(all(row["_optional_identity_review"] for row in result._cc_identity_review["records"]))
-            first = data["identity_review"]["candidates"][0]
-            choice = cc.resolve_identity_review({"token": data["identity_review"]["token"],
-                "ein": org.ein, "state": "NV", "action": "accept", "candidate_id": first["id"]},
-                "review@example.org", "test-device")
-            self.assertEqual(choice["status"], "Current")
-            self.assertEqual(choice["matched_registry_identifier"], first["identifier"])
-            self.assertEqual(len([decision for decision in choice["identity_review"]["candidates"]
-                                  if decision["decision"] == "reject"]), 1)
+        self.assertEqual(result.matched_registry_identifier, "1")
+        self.assertEqual(result.status, "Delinquent")
+        self.assertFalse(getattr(result, "_cc_identity_review", None))
+
+        for expirations in ((date(2026, 8, 31), date(2026, 8, 31)), (None, None)):
+            with self.subTest(expirations=expirations), patch.object(
+                    cc, "licensed_charity_identity", side_effect=accepted):
+                for row, expiration in zip(rows, expirations):
+                    row["expiration"] = expiration
+                unresolved = cc.licensed_charity_result(org, "NV", rows, time.monotonic() + 5,
+                                                        "https://esos.nv.gov/")
+            self.assertEqual(unresolved.status, "Needs Review")
+            self.assertFalse(getattr(unresolved, "matched_registry_identifier", ""))
 
 
 if __name__ == "__main__":

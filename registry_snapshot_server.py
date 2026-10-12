@@ -8506,17 +8506,14 @@ def select_licensed_charity(org, rows, state, deadline):
     if len(pool) > 1:
         keys = {normalized_match_name(r["name"]) for r in pool}
         addresses_agree = all(r.get("address_evidence", {}).get("decision") == "corroborated" for r in pool)
-        if len(keys) > 1 and not addresses_agree and not licensed_same_legal_dba_records(pool):
-            if state == "NV":
-                # Both records passed automated identity checks, but the state
-                # cannot establish which registration belongs to this entity.
-                # Keep the status unresolved and offer the already retrieved
-                # records for an exclusive, signed user identity decision.
-                for row in accepted:
-                    row["_optional_identity_review"] = True
-            return None, f"{state} returned multiple matching registrations whose identities could not be distinguished safely. Confirm the registration number."
         top_date = max((r.get("expiration") or date.min) for r in pool)
         tied = [r for r in pool if (r.get("expiration") or date.min) == top_date]
+        if len(keys) > 1 and not addresses_agree and not licensed_same_legal_dba_records(pool):
+            # For Nevada, the confirmed identities can be resolved by a unique
+            # later displayed renewal/expiration date. An absent or tied date
+            # still cannot distinguish separate records safely.
+            if state != "NV" or top_date == date.min or len(tied) != 1:
+                return None, f"{state} returned multiple matching registrations whose identities could not be distinguished safely. Confirm the registration number."
         if len({r["status"] for r in tied}) > 1:
             return None, f"{state} returned equally matching registrations with conflicting statuses and no later period to resolve the difference."
     return max(pool, key=lambda r: (r.get("expiration") or date.min, r["identifier"])), ""
@@ -8546,9 +8543,8 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
     selected, review = select_licensed_charity(org, rows, state, deadline)
     if review:
         result.status = "Needs Review"; result.success = False; result.source_note = review
-        if any(r.get("_identity_outcome") in {"possible", "conflict"} or r.get("_optional_identity_review") for r in rows):
-            result._cc_identity_review = {"records": rows, "search_complete": True, "freshness": freshness,
-                                          "exclusive": state == "NV" and any(r.get("_optional_identity_review") for r in rows)}
+        if any(r.get("_identity_outcome") in {"possible", "conflict"} for r in rows):
+            result._cc_identity_review = {"records": rows, "search_complete": True, "freshness": freshness}
     elif selected:
         result.status = selected["status"]; result.success = result.status != "Unable to Confirm"
         result.matched_registry_name = selected["name"]
@@ -26804,8 +26800,12 @@ def search_ky_strict_snapshot(org):
     if any(index > 0 for _, index in tied_records) and len({identifier for identifier, _ in tied_records}) > 1:
         result.status = "Needs Review"
         result.status_reason = "KY_AMBIGUOUS_DBA_MATCH"
-        result.raw_status_text = "The same qualifying name matches multiple Kentucky registration IDs, including a DBA."
-        result.source_note = "The Kentucky list does not provide EINs to resolve these equally matching records."
+        result.raw_status_text = "Kentucky's downloadable list contains multiple registration records with the same qualifying name, including a DBA match."
+        result.source_note = (
+            "These are separate registration records, not multiple annual filings for one record. "
+            "The list does not provide EINs, so CharityClarity cannot determine which record belongs "
+            "to this organization. Review the candidate records before choosing one."
+        )
         return result
     registry_id, registry_name, filed_year, record_text = best
     result.status = checker.STATUS_CURRENT

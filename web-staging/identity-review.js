@@ -26,7 +26,9 @@
     if (review?.candidates?.length) {
       add(box, 'p', 'Confirm the organization', 'font-semibold text-slate-900');
       add(box, 'p', review.exclusive
-        ? 'The registry returned more than one filing. Choose the record for your organization. The suggested match is based on its closer name, and no status is applied until you confirm it.'
+        ? (review.candidates.length > 1
+          ? 'The registry returned multiple possible organization records. Choose the record that belongs to your organization. No status is applied until you confirm its identity.'
+          : 'The registry returned a possible organization record. Confirm whether it belongs to your organization. No status is applied until you confirm its identity.')
         : 'Accept or reject the identity. CharityClarity Aurora calculates the status from the state record. This decision applies to this snapshot.', 'mt-1 text-xs text-slate-600');
       for (const candidate of review.candidates) {
         const card = add(box, 'div', '', 'mt-3 rounded-md border border-slate-200 p-3');
