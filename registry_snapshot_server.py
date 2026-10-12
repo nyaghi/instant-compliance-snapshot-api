@@ -30874,6 +30874,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
         best = None
         best_score = -10000
         best_rank = (-1, -10000, -1)
+        best_kind = "weak"
         searched_queries: list[str] = []
         progress = getattr(org, "_cc_wv_progress", {})
         completed_queries = progress.setdefault("completed", [])
@@ -30962,21 +30963,25 @@ def search_wv_precise(page, org, *, public_lookup=None):
                     continue
                 score = target_name_score(registry_name, query_targets)
                 safe_candidate = score >= 450 and (safe_identity(registry_name, safe_targets) or exact_legal_side(registry_name))
+                article_candidate = wv_unreviewed_indefinite_article_conflict(
+                    org.organization_name, registry_name, org.ein)
                 # Status only breaks a tie after safety and name strength.
-                rank = (int(safe_candidate), score, registry_exact_active_tiebreak(registry_name, safe_targets, status_text))
+                rank = (2 if safe_candidate else 1 if article_candidate else 0,
+                        score, registry_exact_active_tiebreak(registry_name, safe_targets, status_text))
                 if rank > best_rank:
                     best_rank = rank
                     best_score = score
+                    best_kind = "safe" if safe_candidate else "article" if article_candidate else "weak"
                     best = (row, registry_id, registry_name, status_text, query_targets)
             if not readable_record_rows:
                 raise TimeoutError("West Virginia returned neither readable results nor its completed no-record message")
-            if best is not None and best_score >= 450:
+            if best is not None and (best_score >= 450 or best_kind == "article"):
                 # Keep this query eligible for recovery until the selected
                 # record opens. A found row is not a completed detail read.
                 break
             completed_queries.append(query_name)
 
-        if best is None or best_score < 450:
+        if best is None or (best_score < 450 and best_kind != "article"):
             result.queries_attempted = completed_queries or searched_queries
             result.source_attempts = [
                 f"WV completed {len(completed_queries)} of {len(planned_queries)} bounded name/alias query attempts."
@@ -31065,6 +31070,26 @@ def search_wv_precise(page, org, *, public_lookup=None):
             result.identity_evidence = {"entered_name": org.organization_name, "registry_dotted_name": matched_name}
             result.identity_anchor = "MATCH_WV_DOTTED_ACRONYM"
             result.reason_code = "MATCH_WV_DOTTED_ACRONYM"
+        elif (best_kind == "article" and
+              wv_unreviewed_indefinite_article_conflict(org.organization_name, matched_name, org.ein)):
+            status_text = text_between_labels(detail_text, "Status", ["Street Address", "County", "DBA", "Tax Information", "Restrictions"]) or row_status
+            expiration_text = text_between_labels(detail_text, "Expiration Date", ["Contact Name", "Status", "Street Address", "County"]) or ""
+            result.status = "Needs Review"
+            result.reason_code = "WV_CLOSE_NAME_IDENTITY_REVIEW"
+            result.raw_status_text = "Possible West Virginia record differs by a leading A or An"
+            result.source_note = (
+                "West Virginia returned a closely matching record, but its complete name differs by a leading "
+                "A or An. Confirm or reject this record's identity before CharityClarity applies its registry status."
+            )
+            result.queries_attempted = completed_queries
+            result._cc_identity_review = {"search_complete": False, "freshness": "", "records": [{
+                "name": matched_name, "identifier": registry_id, "ein": "",
+                "location": text_between_labels(detail_text, "Street Address", ["County", "Purpose", "Representative Information", "DBA"]),
+                "url": WV_SEARCH_URL, "raw_status": status_text, "expiration": expiration_text,
+                "license_category": "Charity", "_identity_outcome": "possible",
+            }]}
+            result.success = False
+            return result
         elif matched_name and not normal_identity:
             result = wv_completed_no_match_result(
                 result,

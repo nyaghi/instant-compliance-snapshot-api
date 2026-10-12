@@ -78,11 +78,60 @@ class SpacingTests(unittest.TestCase):
             with self.subTest(entered=entered, candidate=candidate), patch.object(c, 'known_names_for_ein', return_value=[]):
                 result, _ = fixture.wv([('999', candidate, 'Active')], name=entered)
                 self.assertFalse(result.matched_registry_identifier)
+                self.assertEqual(result.status, 'Needs Review')
+                self.assertEqual(result.reason_code, 'WV_CLOSE_NAME_IDENTITY_REVIEW')
+                self.assertEqual(result._cc_identity_review['records'][0]['name'], candidate)
         with patch.object(c, 'known_names_for_ein', return_value=[]):
             result, _ = fixture.wv([('3478', 'The Cure PSP, Inc.', 'Active')], name='CurePSP, Inc.')
         self.assertEqual(result.matched_registry_identifier, '3478')
+        for exact_name in ['A Cure PSP, Inc.', 'American Relief Initiative, Inc.']:
+            with self.subTest(exact_name=exact_name), patch.object(c, 'known_names_for_ein', return_value=[]):
+                exact, _ = fixture.wv([('3478', exact_name, 'Active')], name=exact_name)
+                self.assertEqual(exact.matched_registry_identifier, '3478')
         with patch.object(c, 'is_reviewed_alias', return_value=True):
             self.assertFalse(c.wv_unreviewed_indefinite_article_conflict('CurePSP, Inc.', 'A Cure PSP, Inc.', '010885377'))
+
+    def test_article_review_accepts_identity_but_not_user_supplied_status(self):
+        fixture = selection.SelectionTests()
+        with patch.object(c, 'known_names_for_ein', return_value=[]):
+            result, _ = fixture.wv([('999', 'A Cure PSP, Inc.', 'Active')], name='CurePSP, Inc.')
+        data = {'state': 'WV', 'ein': '01-0885377', 'organization_name': 'CurePSP, Inc.',
+                'status': result.status, 'comments': result.source_note,
+                'matched_registry_name': '', 'matched_registry_identifier': ''}
+        with patch.object(c, 'APP_VERSION', '29.2-test-staging'), \
+                patch.object(c, 'NY_CONNECTOR_SIGNING_KEY', 'a' * 64):
+            c.attach_identity_review(data, result._cc_identity_review)
+            self.assertEqual(data['identity_review']['candidates'][0]['identifier'], '999')
+            payload = {'token': data['identity_review']['token'], 'ein': data['ein'],
+                       'state': 'WV', 'action': 'accept',
+                       'candidate_id': data['identity_review']['candidates'][0]['id'],
+                       'status': 'Exempt'}
+            accepted = c.resolve_identity_review(payload, 'reviewer@example.org', 'test-device')
+            self.assertEqual(accepted['status'], c.wv_status_from_fields('Active', '03/14/2027'))
+            self.assertEqual(accepted['matched_registry_identifier'], '999')
+            rejected = c.resolve_identity_review({**payload, 'action': 'reject'},
+                                                  'reviewer@example.org', 'test-device')
+            self.assertEqual(rejected['status'], 'Unable to Confirm')
+            self.assertFalse(rejected['matched_registry_identifier'])
+
+    def test_exact_candidate_beats_article_review_in_either_result_order(self):
+        fixture = selection.SelectionTests()
+        exact = ('3478', 'Cure PSP, Inc.', 'Active')
+        article = ('999', 'A Cure PSP, Inc.', 'Active')
+        for rows in ([article, exact], [exact, article]):
+            with self.subTest(rows=rows), patch.object(c, 'known_names_for_ein', return_value=[]):
+                result, _ = fixture.wv(rows, name='CurePSP, Inc.')
+                self.assertEqual(result.matched_registry_identifier, '3478')
+                self.assertNotEqual(result.status, 'Needs Review')
+
+    def test_unrelated_or_mismatched_detail_has_no_article_review(self):
+        fixture = selection.SelectionTests()
+        with patch.object(c, 'known_names_for_ein', return_value=[]):
+            unrelated, _ = fixture.wv([('999', 'Cure PSP Foundation', 'Active')], name='CurePSP, Inc.')
+            mismatched, _ = fixture.wv([('999', 'A Cure PSP, Inc.', 'Active')],
+                                       name='CurePSP, Inc.', detail_name='Different Organization, Inc.')
+        self.assertFalse(getattr(unrelated, '_cc_identity_review', None))
+        self.assertFalse(getattr(mismatched, '_cc_identity_review', None))
 
     def test_missing_spacing_probe_cannot_complete_a_negative(self):
         self.assertFalse(c.wv_core_search_completed(['CurePSP', 'CurePSP, Inc.'],
