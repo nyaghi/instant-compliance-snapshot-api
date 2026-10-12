@@ -22095,6 +22095,10 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         evidence_value = getattr(result, evidence_key, None)
         if evidence_value is not None:
             data[evidence_key] = evidence_value
+    if state == "WV" and getattr(result, "reason_code", "") == "MATCH_WV_DETAIL_LEGAL_DBA":
+        data["identity_evidence"] = result.identity_evidence
+        data["comments"] += (f" West Virginia's selected detail independently lists DBA "
+                             f"{result.identity_evidence['detail_dba']}; the DBA confirms this legal-name match.")
     data["debug_trace"] = json.dumps(debug_trace_for_result(result, org, state, data["status"]), sort_keys=True)
     data.update(registration_date_metadata(result, data["status"], body))
     data.update(renewal_filing_metadata(result, data, data["status"], body))
@@ -22173,6 +22177,8 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
             decision = {"decision": "accepted", "reason": "MATCH_STATE_CONFIRMED_ALTERNATE_NAME", "score": 80}
         if state == "DC":
             decision = dc_corroborated_result_match(result) or decision
+        if state == "WV" and getattr(result, "reason_code", "") == "MATCH_WV_DETAIL_LEGAL_DBA":
+            decision = {"decision": "accepted", "reason": "MATCH_WV_DETAIL_LEGAL_DBA", "score": 100}
         status_reason_code = getattr(result, "reason_code", "") or reason_code_for_result(result, interpreted_status)
         if (
             decision.get("decision") == "rejected"
@@ -30984,6 +30990,8 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 result.success = False
                 return result
             result.identity_evidence = {"legal_name": legal_dba[0], "detail_dba": detail_dba}
+            result.identity_anchor = "MATCH_WV_DETAIL_LEGAL_DBA"
+            result.reason_code = "MATCH_WV_DETAIL_LEGAL_DBA"
         elif matched_name and not normal_identity:
             result = wv_completed_no_match_result(
                 result,

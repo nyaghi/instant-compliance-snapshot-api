@@ -1,5 +1,7 @@
 """Joined words must be retrievable without accepting a different entity."""
 import sys
+import json
+import time
 import unittest
 from datetime import date
 from pathlib import Path
@@ -115,6 +117,13 @@ class LegalDbaTests(unittest.TestCase):
         self.assertEqual(result.status, 'Upcoming Filing')
         self.assertEqual(result.matched_registry_identifier, '24035')
         self.assertEqual(result.identity_evidence['detail_dba'], 'ACIR')
+        org = c.checker.Organization('The Fritsch Foundation \u2014 ACIR', '473974944')
+        data = c.response_data_for_lookup(result, '', org, org.organization_name,
+                                          org.ein, 'WV', time.perf_counter())
+        self.assertEqual(data['reason_code'], 'MATCH_WV_DETAIL_LEGAL_DBA')
+        self.assertEqual(data['identity_anchor'], 'MATCH_WV_DETAIL_LEGAL_DBA')
+        self.assertEqual(data['identity_evidence']['detail_dba'], 'ACIR')
+        self.assertEqual(json.loads(data['debug_trace'])['accepted_candidate']['decision'], 'accepted')
 
     def test_independent_descriptive_legal_name_and_acronym(self):
         result, queries = self.run_lookup(
