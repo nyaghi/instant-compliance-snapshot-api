@@ -1,0 +1,174 @@
+{
+  "source": "validation21/workbook-data.json; October 10, 2026 first-pass exports",
+  "scope": "saved-evidence selector replay, not live registry search",
+  "cases": [
+    {
+      "organization": "Achieving the Dream, Inc.",
+      "ein": "27-1635830",
+      "saved_status": "Not Registered",
+      "registry_name": "",
+      "registry_id": "",
+      "raw_status": ""
+    },
+    {
+      "organization": "Better World Fund, Inc.",
+      "ein": "58-2366765",
+      "saved_status": "Revoked",
+      "registry_name": "BETTER WORLD FUND, INC.",
+      "registry_id": "NV20081653535",
+      "raw_status": "Revoked, entity type Foreign Non-Profit Corporation (80)"
+    },
+    {
+      "organization": "College of William & Mary",
+      "ein": "54-6001718",
+      "saved_status": "Not Registered",
+      "registry_name": "",
+      "registry_id": "",
+      "raw_status": ""
+    },
+    {
+      "organization": "YWCA USA, Inc",
+      "ein": "13-1624103",
+      "saved_status": "Not Registered",
+      "registry_name": "",
+      "registry_id": "",
+      "raw_status": ""
+    },
+    {
+      "organization": "Partnership for Civil Justice Fund",
+      "ein": "26-2851211",
+      "saved_status": "Delinquent",
+      "registry_name": "PARTNERSHIP FOR CIVIL JUSTICE FUND",
+      "registry_id": "NV20171153762",
+      "raw_status": "Expired, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "United Animal Nations — RedRover",
+      "ein": "68-0124097",
+      "saved_status": "Delinquent",
+      "registry_name": "United Animal Nations dba RedRover",
+      "registry_id": "NV20201732931",
+      "raw_status": "Expired, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "Language Connects Foundation",
+      "ein": "88-3775364",
+      "saved_status": "Closed / Withdrawn / Canceled",
+      "registry_name": "LANGUAGE CONNECTS FOUNDATION",
+      "registry_id": "NV20253473148",
+      "raw_status": "Withdrawn, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "National Parks Traveler",
+      "ein": "26-2378789",
+      "saved_status": "Delinquent",
+      "registry_name": "NATIONAL PARKS TRAVELER",
+      "registry_id": "NV20201755474",
+      "raw_status": "Expired, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "NHL Foundation U.S.",
+      "ein": "13-3498589",
+      "saved_status": "Current",
+      "registry_name": "NHL Foundation U.S., Inc",
+      "registry_id": "NV20263580627",
+      "raw_status": "Registered, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "Planned Parenthood Minnesota, North Dakota, South Dakota",
+      "ein": "41-0948382",
+      "saved_status": "Delinquent",
+      "registry_name": "PLANNED PARENTHOOD MINNESOTA, NORTH DAKOTA, SOUTH DAKOTA",
+      "registry_id": "NV20181029329",
+      "raw_status": "Expired, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "Research Data Access and Preservation Association",
+      "ein": "83-1435053",
+      "saved_status": "Current",
+      "registry_name": "Research Data Access and Preservation Association",
+      "registry_id": "NV20222452873",
+      "raw_status": "Registered, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "WGU Corporation — Western Governors University",
+      "ein": "84-1383926",
+      "saved_status": "Upcoming Filing",
+      "registry_name": "WGU CORPORATION",
+      "registry_id": "NV20232944182",
+      "raw_status": "Active, entity type Foreign Non-Profit Corporation (80)"
+    },
+    {
+      "organization": "American Indian/Alaska Native Tourism Association",
+      "ein": "45-0541654",
+      "saved_status": "Upcoming Filing",
+      "registry_name": "American Indian Alaska Native Tourism Association",
+      "registry_id": "NV20232978970",
+      "raw_status": "Registered, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "ASPEN Rhoads Research Foundation",
+      "ein": "65-1226034",
+      "saved_status": "Upcoming Filing",
+      "registry_name": "A.S.P.E.N. Rhoads Research Foundation",
+      "registry_id": "NV20171148278",
+      "raw_status": "Registered, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "Joslin Diabetes Center",
+      "ein": "04-2203836",
+      "saved_status": "Delinquent",
+      "registry_name": "JOSLIN DIABETES CENTER, INC.",
+      "registry_id": "NV20171566908",
+      "raw_status": "Expired, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "RezilientKidz",
+      "ein": "45-2158585",
+      "saved_status": "Upcoming Filing",
+      "registry_name": "RezilientKidz",
+      "registry_id": "NV20171757458",
+      "raw_status": "Registered, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "RHF Charitable Foundation",
+      "ein": "47-2747112",
+      "saved_status": "Not Registered",
+      "registry_name": "",
+      "registry_id": "",
+      "raw_status": ""
+    },
+    {
+      "organization": "Association for the Advancement of Sustainability in Higher Education",
+      "ein": "22-3319874",
+      "saved_status": "Not Registered",
+      "registry_name": "",
+      "registry_id": "",
+      "raw_status": ""
+    },
+    {
+      "organization": "Brown Girls Do, Inc.",
+      "ein": "81-0945532",
+      "saved_status": "Not Registered",
+      "registry_name": "",
+      "registry_id": "",
+      "raw_status": ""
+    },
+    {
+      "organization": "Consumer Advocates for Smoke-free Alternatives Association — CASAA",
+      "ein": "30-0580814",
+      "saved_status": "Delinquent",
+      "registry_name": "Consumer Advocates For Smoke Free Alternatives Association, CASAA",
+      "registry_id": "NV20232761999",
+      "raw_status": "Expired, entity type Foreign Entities Not Required to Register In Nevada"
+    },
+    {
+      "organization": "Cure Violence Global",
+      "ein": "82-3471223",
+      "saved_status": "Delinquent",
+      "registry_name": "Cure Violence Global",
+      "registry_id": "NV20212026417",
+      "raw_status": "Expired, entity type Foreign Entities Not Required to Register In Nevada"
+    }
+  ]
+}
