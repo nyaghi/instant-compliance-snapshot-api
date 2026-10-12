@@ -22099,6 +22099,10 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         data["identity_evidence"] = result.identity_evidence
         data["comments"] += (f" West Virginia's selected detail independently lists DBA "
                              f"{result.identity_evidence['detail_dba']}; the DBA confirms this legal-name match.")
+    if state == "WV" and getattr(result, "reason_code", "") in {
+        "MATCH_WV_ENTERED_ACRONYM_EXPANSION", "MATCH_WV_DOTTED_ACRONYM"
+    }:
+        data["identity_evidence"] = result.identity_evidence
     data["debug_trace"] = json.dumps(debug_trace_for_result(result, org, state, data["status"]), sort_keys=True)
     data.update(registration_date_metadata(result, data["status"], body))
     data.update(renewal_filing_metadata(result, data, data["status"], body))
@@ -22177,8 +22181,10 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
             decision = {"decision": "accepted", "reason": "MATCH_STATE_CONFIRMED_ALTERNATE_NAME", "score": 80}
         if state == "DC":
             decision = dc_corroborated_result_match(result) or decision
-        if state == "WV" and getattr(result, "reason_code", "") == "MATCH_WV_DETAIL_LEGAL_DBA":
-            decision = {"decision": "accepted", "reason": "MATCH_WV_DETAIL_LEGAL_DBA", "score": 100}
+        if state == "WV" and getattr(result, "reason_code", "") in {
+            "MATCH_WV_DETAIL_LEGAL_DBA", "MATCH_WV_ENTERED_ACRONYM_EXPANSION", "MATCH_WV_DOTTED_ACRONYM"
+        }:
+            decision = {"decision": "accepted", "reason": result.reason_code, "score": 100}
         status_reason_code = getattr(result, "reason_code", "") or reason_code_for_result(result, interpreted_status)
         if (
             decision.get("decision") == "rejected"
@@ -30342,6 +30348,26 @@ def explicit_legal_dba_acronym(name: str) -> tuple[str, str] | None:
     return legal, match.group(2)
 
 
+def explicit_legal_acronym_expansion(name: str) -> tuple[str, str] | None:
+    """A legal-name segment whose initialism spells the descriptive second side."""
+    match = re.fullmatch(r"\s*([A-Z]{2,8}\s+(?:Corporation|Corp\.?|Inc\.?|Incorporated|Foundation))\s+[\u2010-\u2015-]\s+(.+?)\s*", name or "")
+    if not match:
+        return None
+    expanded = re.findall(r"[A-Za-z]+", match.group(2))
+    acronym = match.group(1).split()[0]
+    if len(expanded) < 2 or "".join(word[0].upper() for word in expanded) != acronym:
+        return None
+    return match.group(1).strip(), match.group(2).strip()
+
+
+def dotted_leading_acronym(name: str) -> str:
+    """Generate only the literal dotted spelling of an entered full name."""
+    match = re.fullmatch(r"\s*([A-Z]{3,8})\s+(.+?)\s*", name or "")
+    if not match or len(normalized_match_name(match.group(2)).split()) < 2:
+        return ""
+    return ".".join(match.group(1)) + ". " + match.group(2)
+
+
 def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list[str]:
     """Search suffix-light WV names first while keeping row acceptance strict."""
     name = canonical_name_punctuation(name)
@@ -30456,6 +30482,13 @@ def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list
         # row filed under its legal name with the DBA shown only in the detail.
         legal_query = re.sub(r"^(?:the|a|an)\s+", "", legal_dba[0], flags=re.I)
         planned = [planned[0], legal_query, *[query for query in planned[1:] if query.casefold() != legal_query.casefold()]]
+    legal_expansion = explicit_legal_acronym_expansion(name)
+    if legal_expansion:
+        legal_query = legal_expansion[0]
+        planned = [planned[0], legal_query, *[query for query in planned[1:] if query.casefold() != legal_query.casefold()]]
+    dotted_query = "" if legal_expansion else dotted_leading_acronym(name)
+    if dotted_query:
+        planned = [planned[0], dotted_query, *[query for query in planned[1:] if query.casefold() != dotted_query.casefold()]]
     # reviewed_queries_first already bounds generated probes while preserving
     # every reviewed identity. Do not apply the generated-probe cap to aliases.
     return planned
@@ -30789,7 +30822,12 @@ def search_wv_precise(page, org, *, public_lookup=None):
     try:
         safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(org.organization_name, org.ein)
         legal_dba = explicit_legal_dba_acronym(org.organization_name)
-        legal_query = re.sub(r"^(?:the|a|an)\s+", "", legal_dba[0], flags=re.I) if legal_dba else ""
+        legal_expansion = explicit_legal_acronym_expansion(org.organization_name)
+        legal_query = (re.sub(r"^(?:the|a|an)\s+", "", legal_dba[0], flags=re.I) if legal_dba else
+                       legal_expansion[0] if legal_expansion else "")
+        dotted_query = "" if legal_expansion else dotted_leading_acronym(org.organization_name)
+        if dotted_query:
+            safe_targets = list(dict.fromkeys([*safe_targets, dotted_query]))
         def exact_legal_side(registry_name):
             return bool(legal_query and normalized_match_name(registry_name) == normalized_match_name(legal_query))
         spaced_name = case_boundary_name_variant(org.organization_name)
@@ -30823,6 +30861,8 @@ def search_wv_precise(page, org, *, public_lookup=None):
         required_queries = equivalent_name_queries(org.organization_name, org.ein) if known_names_for_ein(org.ein) else []
         if legal_query:
             required_queries = list(dict.fromkeys([*required_queries, legal_query]))
+        if dotted_query:
+            required_queries = list(dict.fromkeys([*required_queries, dotted_query]))
         if spaced_name:
             required_queries = list(dict.fromkeys([*required_queries, spaced_name]))
         # Reviewed identities add real queries; keep a bounded allowance for them
@@ -30968,7 +31008,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
         normal_identity = location_identity_is_safe(matched_name) and safe_identity(matched_name, selected_targets)
         legal_side_identity = exact_legal_side(matched_name)
         detail_dba = ""
-        if legal_side_identity:
+        if legal_side_identity and legal_dba:
             # Match the labeled DBA block, not the earlier "dba" in the
             # Organization Name field. The latter can include the whole page.
             dba_field = re.search(r"(?im)^DBA\s*\r?\nName\s*\r?\n([^\r\n]+)", detail_text)
@@ -30992,6 +31032,18 @@ def search_wv_precise(page, org, *, public_lookup=None):
             result.identity_evidence = {"legal_name": legal_dba[0], "detail_dba": detail_dba}
             result.identity_anchor = "MATCH_WV_DETAIL_LEGAL_DBA"
             result.reason_code = "MATCH_WV_DETAIL_LEGAL_DBA"
+        elif legal_side_identity and legal_expansion:
+            # The registry detail exactly names the entered legal side, and
+            # the entered second side spells out its initialism. A branch or
+            # unrelated suffix cannot satisfy this relation.
+            result.identity_evidence = {"legal_name": legal_expansion[0], "acronym_expansion": legal_expansion[1]}
+            result.identity_anchor = "MATCH_WV_ENTERED_ACRONYM_EXPANSION"
+            result.reason_code = "MATCH_WV_ENTERED_ACRONYM_EXPANSION"
+        elif (dotted_query and normal_identity and
+              complete_name_identity_key(matched_name) == complete_name_identity_key(dotted_query)):
+            result.identity_evidence = {"entered_name": org.organization_name, "registry_dotted_name": matched_name}
+            result.identity_anchor = "MATCH_WV_DOTTED_ACRONYM"
+            result.reason_code = "MATCH_WV_DOTTED_ACRONYM"
         elif matched_name and not normal_identity:
             result = wv_completed_no_match_result(
                 result,

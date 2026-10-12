@@ -181,5 +181,58 @@ class LegalDbaTests(unittest.TestCase):
                          'Cure PSP Charleston')
 
 
+class AcronymRetrievalTests(unittest.TestCase):
+    class Lookup:
+        def __init__(self, query, registry_name):
+            self.query, self.registry_name, self.queries = query, registry_name, []
+
+        def search(self, query):
+            self.queries.append(query)
+            if query != self.query:
+                return 'No records found', []
+            return 'Search results', [{'index': 0, 'count': 5,
+                    'values': ['471', self.registry_name, 'Active'], 'target': '1'}]
+
+        def detail(self, target, identifier):
+            assert (target, identifier) == ('1', '471')
+            return (f'Organization Name\n{self.registry_name}\nExpiration Date\n09/15/2027\n'
+                    'Contact Name\nControl\nStatus\nActive\nStreet Address\nAddress\n'
+                    'County\nDBA\nName\nNo Records\nTax Information')
+
+    def run_lookup(self, name, query, registry_name):
+        lookup = self.Lookup(query, registry_name)
+        with patch.object(c, 'known_names_for_ein', return_value=[]):
+            org = c.checker.Organization(name, '123456789')
+            result = c.search_wv_precise(None, org, public_lookup=lookup)
+            data = c.response_data_for_lookup(result, '', org, name, org.ein, 'WV', time.perf_counter())
+        return data, lookup.queries
+
+    def test_expanded_initialism_probes_exact_entered_legal_segment(self):
+        name = 'WGU Corporation \u2014 Western Governors University'
+        data, queries = self.run_lookup(name, 'WGU Corporation', 'WGU Corporation')
+        self.assertEqual(queries[:2], ['WGU Corporation - Western Governors University', 'WGU Corporation'])
+        self.assertEqual((data['status'], data['matched_registry_identifier']), ('Current', '471'))
+        self.assertEqual(data['reason_code'], 'MATCH_WV_ENTERED_ACRONYM_EXPANSION')
+        self.assertEqual(json.loads(data['debug_trace'])['accepted_candidate']['decision'], 'accepted')
+
+    def test_dotted_initialism_probes_literal_registry_spelling(self):
+        data, queries = self.run_lookup('ASPEN Rhoads Research Foundation',
+                                        'A.S.P.E.N. Rhoads Research Foundation',
+                                        'A.S.P.E.N. Rhoads Research Foundation, Inc.')
+        self.assertEqual(queries[:2], ['ASPEN Rhoads Research Foundation',
+                                       'A.S.P.E.N. Rhoads Research Foundation'])
+        self.assertEqual((data['status'], data['matched_registry_identifier']), ('Current', '471'))
+        self.assertEqual(data['reason_code'], 'MATCH_WV_DOTTED_ACRONYM')
+
+    def test_unrelated_expansion_and_nearby_dotted_record_are_not_accepted(self):
+        self.assertIsNone(c.explicit_legal_acronym_expansion('WGU Corporation - Western Governors College'))
+        self.assertIsNone(c.explicit_legal_acronym_expansion('WGU Corporation - Charleston'))
+        self.assertEqual(c.dotted_leading_acronym('River Rhoads Research Foundation'), '')
+        data, _ = self.run_lookup('ASPEN Rhoads Research Foundation',
+                                  'A.S.P.E.N. Rhoads Research Foundation',
+                                  'A.S.P.E.N. Rhoads Foundation')
+        self.assertFalse(data['matched_registry_identifier'])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
