@@ -1,6 +1,7 @@
 """Joined words must be retrievable without accepting a different entity."""
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -70,6 +71,105 @@ class SpacingTests(unittest.TestCase):
             ['CurePSP', 'Cure PSP, Inc.', 'CurePSP, Inc.'], ['Cure PSP, Inc.']))
         self.assertTrue(c.wv_core_search_completed(['CurePSP', 'Cure PSP, Inc.'],
             ['CurePSP', 'Cure PSP, Inc.', 'CurePSP, Inc.'], ['Cure PSP, Inc.']))
+
+
+class LegalDbaTests(unittest.TestCase):
+    class Today(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 12)
+
+    class Lookup:
+        def __init__(self, registry_name='Fritsch Foundation, Inc. dba ACIR (The)', detail_dba='ACIR',
+                     legal_query='Fritsch Foundation'):
+            self.registry_name = registry_name
+            self.detail_dba = detail_dba
+            self.legal_query = legal_query
+            self.queries = []
+
+        def search(self, query):
+            self.queries.append(query)
+            if query != self.legal_query:
+                return 'No records found', []
+            return 'Search results', [{
+                'index': 0, 'count': 5,
+                'values': ['24035', self.registry_name, 'Active'], 'target': '10727',
+            }]
+
+        def detail(self, target, identifier):
+            assert (target, identifier) == ('10727', '24035')
+            return (f'Organization Name\n{self.registry_name}\nExpiration Date\n02/14/2027\n'
+                    f'Contact Name\nControl\nStatus\nActive\nStreet Address\nAddress\n'
+                    f'County\nDBA\nName\n{self.detail_dba}\nTax Information\nIRS Exempt\nYes')
+
+    def run_lookup(self, registry_name='Fritsch Foundation, Inc. dba ACIR (The)', detail_dba='ACIR',
+                   name='The Fritsch Foundation \u2014 ACIR', legal_query='Fritsch Foundation'):
+        lookup = self.Lookup(registry_name, detail_dba, legal_query)
+        with patch.object(c, 'known_names_for_ein', return_value=[]), patch.object(c, 'date', self.Today):
+            result = c.search_wv_precise(None, c.checker.Organization(name, '473974944'), public_lookup=lookup)
+        return result, lookup.queries
+
+    def test_legal_name_probe_is_early_and_dba_detail_confirms_identity(self):
+        result, queries = self.run_lookup()
+        self.assertEqual(queries[:2], ['The Fritsch Foundation - ACIR', 'Fritsch Foundation'])
+        self.assertEqual(result.status, 'Upcoming Filing')
+        self.assertEqual(result.matched_registry_identifier, '24035')
+        self.assertEqual(result.identity_evidence['detail_dba'], 'ACIR')
+
+    def test_independent_descriptive_legal_name_and_acronym(self):
+        result, queries = self.run_lookup(
+            registry_name='Regional Community Outreach Foundation, Inc. dba RCOF',
+            detail_dba='RCOF', name='Regional Community Outreach Foundation \u2014 RCOF',
+            legal_query='Regional Community Outreach Foundation')
+        self.assertEqual(queries[1], 'Regional Community Outreach Foundation')
+        self.assertEqual(result.status, 'Upcoming Filing')
+        self.assertEqual(result.identity_evidence['detail_dba'], 'RCOF')
+
+    def test_same_legal_name_with_different_dba_requires_user_review(self):
+        result, _ = self.run_lookup(detail_dba='OTHER')
+        self.assertEqual(result.status, 'Needs Review')
+        self.assertEqual(result.reason_code, 'WV_LEGAL_DBA_IDENTITY_REVIEW')
+        self.assertFalse(result.matched_registry_identifier)
+        self.assertEqual(result._cc_identity_review['records'][0]['identifier'], '24035')
+
+    def test_safe_legal_name_does_not_skip_dba_check(self):
+        with patch.object(c, 'registry_name_is_safe_against_targets', return_value=True):
+            result, _ = self.run_lookup(detail_dba='OTHER')
+        self.assertEqual(result.status, 'Needs Review')
+        self.assertEqual(result.reason_code, 'WV_LEGAL_DBA_IDENTITY_REVIEW')
+
+    def test_user_review_accepts_identity_without_overriding_wv_status(self):
+        result, _ = self.run_lookup(detail_dba='OTHER')
+        data = {'state': 'WV', 'ein': '47-3974944',
+                'organization_name': 'The Fritsch Foundation \u2014 ACIR',
+                'status': result.status, 'comments': result.source_note,
+                'matched_registry_name': '', 'matched_registry_identifier': ''}
+        with patch.object(c, 'APP_VERSION', '29.2-test-staging'), \
+                patch.object(c, 'NY_CONNECTOR_SIGNING_KEY', 'a' * 64), \
+                patch.object(c, 'date', self.Today):
+            c.attach_identity_review(data, result._cc_identity_review)
+            self.assertEqual(data['identity_review']['candidates'][0]['identifier'], '24035')
+            payload = {'token': data['identity_review']['token'], 'ein': data['ein'],
+                       'state': 'WV', 'action': 'accept',
+                       'candidate_id': data['identity_review']['candidates'][0]['id']}
+            accepted = c.resolve_identity_review(payload, 'reviewer@example.org', 'test-device')
+            self.assertEqual(accepted['status'], 'Upcoming Filing')
+            self.assertEqual(accepted['matched_registry_identifier'], '24035')
+            rejected = c.resolve_identity_review({**payload, 'action': 'reject'},
+                                                  'reviewer@example.org', 'test-device')
+            self.assertEqual(rejected['status'], 'Unable to Confirm')
+            self.assertFalse(rejected['matched_registry_identifier'])
+
+    def test_location_or_branch_is_not_authorized_by_legal_probe(self):
+        result, _ = self.run_lookup(registry_name='Fritsch Foundation - Charleston')
+        self.assertFalse(result.matched_registry_identifier)
+        self.assertNotEqual(result.status, 'Upcoming Filing')
+
+    def test_ordinary_dashed_location_and_multiword_names_keep_existing_plan(self):
+        self.assertIsNone(c.explicit_legal_dba_acronym('Cure PSP - Charleston'))
+        self.assertIsNone(c.explicit_legal_dba_acronym('Service Year Exchange \u2014 Service Year Alliance'))
+        self.assertEqual(c.wv_preferred_query_variants('Cure PSP - Charleston', '')[0],
+                         'Cure PSP Charleston')
 
 
 if __name__ == '__main__':

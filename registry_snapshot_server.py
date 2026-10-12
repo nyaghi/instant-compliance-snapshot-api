@@ -30317,6 +30317,25 @@ def case_boundary_name_variant(name: str) -> str:
     return spaced if spaced != original else ""
 
 
+def explicit_legal_dba_acronym(name: str) -> tuple[str, str] | None:
+    """Recognize a descriptive legal name followed by an explicit acronym DBA.
+
+    This is a retrieval hint, not permission to accept a shorter registry name.
+    The selected WV detail must independently confirm the same DBA.
+    """
+    match = re.fullmatch(r"\s*(.+?)\s+[\u2010-\u2015-]\s+([A-Z][A-Z0-9&]{2,7})\s*", name or "")
+    if not match:
+        return None
+    legal = re.sub(r"\s+", " ", match.group(1)).strip(" ,;-")
+    legal = re.sub(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$",
+                   "", legal, flags=re.I).strip(" ,;-")
+    words = normalized_match_name(legal).split()
+    if len(words) < 2 or not any(len(word) >= 5 and word not in {"foundation", "corporation", "association", "institute"}
+                                      for word in words):
+        return None
+    return legal, match.group(2)
+
+
 def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list[str]:
     """Search suffix-light WV names first while keeping row acceptance strict."""
     name = canonical_name_punctuation(name)
@@ -30425,6 +30444,12 @@ def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list
     if len(forms) > 1:
         prefix = forms[-1]
         planned = [planned[0], prefix, *[query for query in planned[1:] if query.casefold() != prefix.casefold()]]
+    legal_dba = explicit_legal_dba_acronym(name)
+    if legal_dba:
+        # The WV form searches literal text. A combined display name can miss a
+        # row filed under its legal name with the DBA shown only in the detail.
+        legal_query = re.sub(r"^(?:the|a|an)\s+", "", legal_dba[0], flags=re.I)
+        planned = [planned[0], legal_query, *[query for query in planned[1:] if query.casefold() != legal_query.casefold()]]
     # reviewed_queries_first already bounds generated probes while preserving
     # every reviewed identity. Do not apply the generated-probe cap to aliases.
     return planned
@@ -30757,6 +30782,10 @@ def search_wv_precise(page, org, *, public_lookup=None):
     )
     try:
         safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(org.organization_name, org.ein)
+        legal_dba = explicit_legal_dba_acronym(org.organization_name)
+        legal_query = re.sub(r"^(?:the|a|an)\s+", "", legal_dba[0], flags=re.I) if legal_dba else ""
+        def exact_legal_side(registry_name):
+            return bool(legal_query and normalized_match_name(registry_name) == normalized_match_name(legal_query))
         spaced_name = case_boundary_name_variant(org.organization_name)
         if spaced_name:
             safe_targets = list(dict.fromkeys([*safe_targets, spaced_name]))
@@ -30786,6 +30815,8 @@ def search_wv_precise(page, org, *, public_lookup=None):
         saw_result_rows = bool(progress.get("saw_result_rows"))
         planned_queries = wv_preferred_query_variants(org.organization_name, org.ein, limit=WV_QUERY_LIMIT)
         required_queries = equivalent_name_queries(org.organization_name, org.ein) if known_names_for_ein(org.ein) else []
+        if legal_query:
+            required_queries = list(dict.fromkeys([*required_queries, legal_query]))
         if spaced_name:
             required_queries = list(dict.fromkeys([*required_queries, spaced_name]))
         # Reviewed identities add real queries; keep a bounded allowance for them
@@ -30860,10 +30891,10 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 if not registry_id or not registry_name:
                     continue
                 readable_record_rows += 1
-                if not location_identity_is_safe(registry_name):
+                if not location_identity_is_safe(registry_name) and not exact_legal_side(registry_name):
                     continue
                 score = target_name_score(registry_name, query_targets)
-                safe_candidate = score >= 450 and safe_identity(registry_name, safe_targets)
+                safe_candidate = score >= 450 and (safe_identity(registry_name, safe_targets) or exact_legal_side(registry_name))
                 # Status only breaks a tie after safety and name strength.
                 rank = (int(safe_candidate), score, registry_exact_active_tiebreak(registry_name, safe_targets, status_text))
                 if rank > best_rank:
@@ -30928,7 +30959,32 @@ def search_wv_precise(page, org, *, public_lookup=None):
             raise TimeoutError("West Virginia selected organization detail did not finish loading")
         completed_queries.append(query_name)
         matched_name = detail_name or registry_name
-        if matched_name and (not location_identity_is_safe(matched_name) or not safe_identity(matched_name, selected_targets)):
+        normal_identity = location_identity_is_safe(matched_name) and safe_identity(matched_name, selected_targets)
+        legal_side_identity = exact_legal_side(matched_name)
+        detail_dba = ""
+        if legal_side_identity:
+            # Match the labeled DBA block, not the earlier "dba" in the
+            # Organization Name field. The latter can include the whole page.
+            dba_field = re.search(r"(?im)^DBA\s*\r?\nName\s*\r?\n([^\r\n]+)", detail_text)
+            detail_dba = dba_field.group(1).strip() if dba_field else ""
+            if normalized_match_name(detail_dba) != normalized_match_name(legal_dba[1]):
+                status_text = text_between_labels(detail_text, "Status", ["Street Address", "County", "DBA", "Tax Information", "Restrictions"]) or row_status
+                expiration_text = text_between_labels(detail_text, "Expiration Date", ["Contact Name", "Status", "Street Address", "County"]) or ""
+                result.status = "Needs Review"
+                result.reason_code = "WV_LEGAL_DBA_IDENTITY_REVIEW"
+                result.raw_status_text = f"Possible legal-name match; registry DBA: {detail_dba or 'not shown'}"
+                result.source_note = "West Virginia returned a matching legal name, but its detail did not confirm the entered DBA. Review the record identity before applying its status."
+                result.queries_attempted = completed_queries
+                result._cc_identity_review = {"search_complete": False, "freshness": "", "records": [{
+                    "name": matched_name, "identifier": registry_id, "ein": "",
+                    "location": text_between_labels(detail_text, "Street Address", ["County", "Purpose", "Representative Information", "DBA"]),
+                    "url": WV_SEARCH_URL, "raw_status": status_text, "expiration": expiration_text,
+                    "license_category": "Charity", "_identity_outcome": "possible",
+                }]}
+                result.success = False
+                return result
+            result.identity_evidence = {"legal_name": legal_dba[0], "detail_dba": detail_dba}
+        elif matched_name and not normal_identity:
             result = wv_completed_no_match_result(
                 result,
                 completed_queries or searched_queries,
@@ -33721,6 +33777,10 @@ def identity_review_state_status(state, row):
             "Unable to Confirm", "Needs Review"} else "Unable to Confirm"
     if state == "WI":
         return identity_review_wi_status(row)
+    if state == "WV":
+        # User confirmation decides identity only; the established WV
+        # status/date rule still decides the classification.
+        return wv_status_from_fields(row.get("raw_status", ""), row.get("expiration", ""))
     if state == "MS":
         module = state_batch_modules(['MS'])[load_state_batch_bundle().STATE_TO_MODULE['MS']]
         return ms_status_from_filing_status(row.get("raw_status", ""),
