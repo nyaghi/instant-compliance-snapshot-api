@@ -27349,6 +27349,22 @@ def search_snapshot_or_embedded_state(org, state: str):
             include_leading_article_variants=True,
             max_queries=12,
         )
+        # Kansas reads a local snapshot, so give descriptive halves of an
+        # entered display-name pair a place inside the existing 12-query cap.
+        # A one-word brand/acronym is not sufficient to identify a registry row.
+        segments = (licensed_compound_retrieval_names(original_name)
+                    if re.search(r"\s+[-\u2013\u2014]+\s+", original_name) else [])
+        if len(segments) == 2:
+            preferred = [original_name, *(part for part in segments
+                                          if len(distinctive_match_tokens(part)) >= 2)]
+            ranked = []
+            seen = set()
+            for value in [*preferred, *variants]:
+                key = value.casefold()
+                if key not in seen:
+                    ranked.append(value)
+                    seen.add(key)
+            variants = ranked[:12]
     else:
         variants = organization_name_variants(
             original_name,
