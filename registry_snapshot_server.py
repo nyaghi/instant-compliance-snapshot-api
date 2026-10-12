@@ -30514,6 +30514,24 @@ def wv_core_search_completed(completed_queries: list[str], planned_queries: list
     return len(completed_queries) >= min(2, len(planned_queries))
 
 
+def wv_unreviewed_indefinite_article_conflict(entered_name: str, registry_name: str, ein: str = "") -> bool:
+    """Do not turn an added/removed A or An into a WV name-only identity match.
+
+    The shared normalized key omits articles for retrieval. A complete detail
+    name differing only by an indefinite article still needs a reviewed alias.
+    """
+    entered = complete_name_identity_key(entered_name)
+    registry = complete_name_identity_key(registry_name)
+    without_article = lambda value: re.sub(r"^(?:a|an)\s+", "", value)
+    entered_bare = without_article(entered)
+    registry_bare = without_article(registry)
+    if (entered_bare == entered) == (registry_bare == registry):
+        return False
+    if entered_bare.replace(" ", "") != registry_bare.replace(" ", ""):
+        return False
+    return not is_reviewed_alias(ein, registry_name)
+
+
 def wv_completed_no_match_result(result, completed_queries: list[str], reason_code: str, *, saw_candidates: bool = False):
     result.status = checker.STATUS_NOT_REGISTERED
     result.reason_code = reason_code
@@ -30829,11 +30847,14 @@ def search_wv_precise(page, org, *, public_lookup=None):
         if dotted_query:
             safe_targets = list(dict.fromkeys([*safe_targets, dotted_query]))
         def exact_legal_side(registry_name):
-            return bool(legal_query and normalized_match_name(registry_name) == normalized_match_name(legal_query))
+            return bool(legal_query and normalized_match_name(registry_name) == normalized_match_name(legal_query)
+                        and not wv_unreviewed_indefinite_article_conflict(legal_query, registry_name, org.ein))
         spaced_name = case_boundary_name_variant(org.organization_name)
         if spaced_name:
             safe_targets = list(dict.fromkeys([*safe_targets, spaced_name]))
         def safe_identity(registry_name, targets):
+            if wv_unreviewed_indefinite_article_conflict(org.organization_name, registry_name, org.ein):
+                return False
             if spaced_name:
                 spaced_key = complete_name_identity_key(spaced_name)
                 if complete_name_identity_key(registry_name) == spaced_key:

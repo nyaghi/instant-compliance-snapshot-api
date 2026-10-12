@@ -68,6 +68,22 @@ class SpacingTests(unittest.TestCase):
                     result, _ = fixture.wv([('999', candidate, 'Active')], name=original)
                 self.assertFalse(result.matched_registry_identifier)
 
+    def test_indefinite_article_requires_reviewed_identity(self):
+        fixture = selection.SelectionTests()
+        for entered, candidate in [
+            ('CurePSP, Inc.', 'A Cure PSP, Inc.'),
+            ('A Cure PSP, Inc.', 'Cure PSP, Inc.'),
+            ('Animal Relief Initiative, Inc.', 'An Animal Relief Initiative, Inc.'),
+        ]:
+            with self.subTest(entered=entered, candidate=candidate), patch.object(c, 'known_names_for_ein', return_value=[]):
+                result, _ = fixture.wv([('999', candidate, 'Active')], name=entered)
+                self.assertFalse(result.matched_registry_identifier)
+        with patch.object(c, 'known_names_for_ein', return_value=[]):
+            result, _ = fixture.wv([('3478', 'The Cure PSP, Inc.', 'Active')], name='CurePSP, Inc.')
+        self.assertEqual(result.matched_registry_identifier, '3478')
+        with patch.object(c, 'is_reviewed_alias', return_value=True):
+            self.assertFalse(c.wv_unreviewed_indefinite_article_conflict('CurePSP, Inc.', 'A Cure PSP, Inc.', '010885377'))
+
     def test_missing_spacing_probe_cannot_complete_a_negative(self):
         self.assertFalse(c.wv_core_search_completed(['CurePSP', 'CurePSP, Inc.'],
             ['CurePSP', 'Cure PSP, Inc.', 'CurePSP, Inc.'], ['Cure PSP, Inc.']))
