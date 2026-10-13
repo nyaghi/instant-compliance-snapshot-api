@@ -122,11 +122,11 @@
       // Connector registration checks run only when the user starts compliance.
 
       if (requestRevision !== revision || requestIdentity !== identity()) return;
-      rows = (data.names || []).slice(0, 32).map(row => ({...row, original: row.name, selected: !row.identity_conflict}));
+      rows = (data.names || []).slice(0, 7).map(row => ({...row, original: row.name, selected: !row.identity_conflict}));
       const limitations = (data.sources || []).filter(source => !source.complete).map(source => `${source.source}: ${source.limitation || "Some records were unavailable."}`);
-      if (data.names.length > 32) limitations.push("The first 32 confirmed names are shown. Review these names before continuing.");
       message.textContent = limitations.length ? `Some sources were unavailable. You can review the names found, add names, and continue. ${limitations.join(" ")}` :
         rows.length ? "Review the names below. Keep only names that belong to this organization." : "No additional names were confirmed. You can add names or continue with your entered name.";
+      if (data.names_omitted > 0 || data.names.length > 7) message.textContent += " Showing up to seven prioritized names. You can add another known name if needed.";
       reviewedIdentity = requestIdentity;
       discoveryCompleted = true;
     } catch (error) {

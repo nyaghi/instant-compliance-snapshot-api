@@ -31,7 +31,7 @@ class CapacityControls(unittest.TestCase):
                     results=list(pool.map(discover,range(15)))
                 for index,result in enumerate(results):
                     self.assertEqual({s['source'] for s in result['sources'] if s.get('complete')},direct)
-                    self.assertEqual(len(result['names']),len(direct))
+                    self.assertEqual(len(result['names']),min(len(direct),c.IDENTITY_DISCOVERED_NAME_LIMIT))
                     self.assertTrue(all(n['name'].endswith(f'12{index:07}') for n in result['names']))
                     self.assertTrue(result['partial'])
             finally:release.set()

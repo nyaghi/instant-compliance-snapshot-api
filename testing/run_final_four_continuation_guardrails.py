@@ -47,6 +47,29 @@ class ContinuationControls(unittest.TestCase):
             self.assertEqual(response.get('phase'), 'complete', (state, response))
             self.assertIn(response['result']['status'], ['Current', 'Upcoming Filing'], (state, response))
 
+    def test_nc_consultant_card_continues_the_signed_search_without_a_false_registration(self):
+        from testing.test_discovery_cap_nc_scope import CONSULTANT
+        name = 'USA Homeownership Foundation — VAREP'
+        self.orgs['NC'] = cc.checker.Organization(name, '45-2458485')
+        completed = []
+        with patch.object(cc, 'licensed_charity_names', return_value=([name, 'REAL ESTATE', 'Remaining Full Name'], [])):
+            code, response = self.start('NC')
+            for _ in range(20):
+                if response.get('phase') != 'search':
+                    break
+                query = response['query']
+                self.assertEqual(query['operation'], 'search')
+                completed.append(query['name'])
+                rows = [copy.deepcopy(CONSULTANT)] if query['name'] == 'REAL ESTATE' else []
+                evidence = {'state': 'NC', 'query': query, 'complete': True, 'verification_pending': False,
+                            'search_mode': query.get('search_mode', 'STARTS_WITH'), 'total': len(rows), 'rows': rows}
+                code, response = self.advance(response, evidence=evidence)
+        self.assertEqual(code, 200)
+        self.assertEqual(response['phase'], 'complete')
+        self.assertEqual(response['result']['status'], 'Not Registered')
+        self.assertIn('Remaining Full Name', completed)
+        self.assertTrue(any('excluded_non_charity_record' in item for item in response['result']['source_attempts']))
+
     def test_disabled_or_wrong_origin_never_enters_auth_or_source_lookup(self):
         for origin in ['https://staging.compliance-express.com', 'https://www.compliance-express.com', '', self.origin+'.evil.test']:
             with patch.object(cc, 'is_verified_internal_passcode', side_effect=AssertionError('No authentication on wrong origin')):

@@ -1922,6 +1922,7 @@ IDENTITY_BROWSER_SLOTS = threading.BoundedSemaphore(4)
 # partial, EIN-backed names until this deadline.
 IDENTITY_DEADLINE_SECONDS = 28.0
 IDENTITY_MAX_NAMES = 32
+IDENTITY_DISCOVERED_NAME_LIMIT = 7
 IDENTITY_REQUEST_TRACE = ContextVar("identity_request_trace", default=None)
 
 
@@ -3546,6 +3547,28 @@ def annotate_irs_based_state_period(result, evidence: dict):
     return result
 
 
+def prioritized_discovery_names(organization_name: str, names: list[dict]) -> list[dict]:
+    """Bound suggestions, preserving entered identity and the strongest names.
+
+    Small discoveries keep their existing order. Manual reviewed names and
+    generated search variants retain their separate limits and scope.
+    """
+    if len(names) <= IDENTITY_DISCOVERED_NAME_LIMIT:
+        return names
+    entered = identity_name_key(organization_name)
+    legal_types = {"Legal name", "Registered name", "Registered name — weekly data", "Earlier registered name",
+                   "IRS organization record", "Form 990 filer legal name", "Historical Form 990 filer legal name"}
+    def priority(item):
+        proofs = item.get("evidence", [])
+        legal = any(proof.get("type") in legal_types for proof in proofs)
+        current = not item.get("historical")
+        sources = {proof.get("source") for proof in proofs if proof.get("source")}
+        return (bool(item.get("identity_conflict")) or not item.get("verified"),
+                identity_name_key(item["name"]) != entered, not legal,
+                not current, -len(sources))
+    return sorted(names, key=priority)[:IDENTITY_DISCOVERED_NAME_LIMIT]
+
+
 def discover_organization_names(organization_name: str, ein: str) -> dict:
     start = time.monotonic(); deadline = start + IDENTITY_DEADLINE_SECONDS
     if not isinstance(ein, str) or not re.fullmatch(r"\d{2}-?\d{7}", ein.strip()):
@@ -3620,9 +3643,11 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
             item["verified"] = True
         if any(proof.get("type") == "Form 990 filer legal name" for proof in item["evidence"]):
             item["historical"] = False
+    selected_names = prioritized_discovery_names(organization_name, names)
     return {"organization_name": organization_name.strip(), "ein": format_ein(ein),
-            "names": names[:IDENTITY_MAX_NAMES], "sources": [{k: v for k, v in r.items() if k != "names"} for r in results],
-            "partial": any(not r.get("complete") for r in results) or len(names) > IDENTITY_MAX_NAMES,
+            "names": selected_names, "sources": [{k: v for k, v in r.items() if k != "names"} for r in results],
+            "names_omitted": len(names) - len(selected_names),
+            "partial": any(not r.get("complete") for r in results) or len(names) > IDENTITY_DISCOVERED_NAME_LIMIT,
             "seconds": round(time.monotonic() - start, 3), "app_version": APP_VERSION}
 
 
@@ -6205,9 +6230,10 @@ def nc_charity_record_evidence(fields):
         raw == "In-Process" or bool(re.search(r"\bwithdrawn\b", raw, re.I)) or expired_unnumbered)
     # NC retains historical SL/EX identifiers when the explicit record category
     # changes. Validate both source fields without deriving one from the other.
+    non_charity_scope = kind == "Fund-Raising Consultant" and bool(re.fullmatch(r"SL\d+", identifier))
     valid_kind = (re.fullmatch(r"(?:SL|EX)\d+", identifier)
                   and kind in {"Charitable Organization", "CSL Exempt Organization"})
-    if not name or (not valid_kind and not unissued):
+    if not name or (not valid_kind and not unissued and not non_charity_scope):
         raise ValueError("North Carolina result is not an identified charity license")
     url = urlparse(fields["profile_url"])
     if url.scheme != "https" or url.netloc != "www.sosnc.gov" or not re.fullmatch(r"/online_services/search/charities_profile/\d+", url.path) or url.query or url.fragment:
@@ -6235,6 +6261,14 @@ def nc_charity_record_evidence(fields):
                     initial=None, renewal=None, street="", location="")
     expiration = final_four_source_date(fields["Expiration Date"], "North Carolina expiration")
     extension = final_four_source_date(fields.get("Extension End Date"), "North Carolina extension")
+    if non_charity_scope:
+        # The public charity search also returns consultant licenses. Validate
+        # the full card before excluding its explicit category; a malformed or
+        # unknown row must still fail the whole result set conservatively.
+        if not raw or expiration is None:
+            raise ValueError("North Carolina consultant result is incomplete")
+        return dict(name=name, identifier=identifier, aliases=aliases, raw_status=raw,
+                    url=fields["profile_url"], license_category=kind, non_charity_scope=True)
     extended = bool(re.fullmatch(r"Current Active\s*[–-]\s*Filing Extension Granted", raw, re.I))
     if extended and extension is None:
         raise ValueError("North Carolina extension was granted but its end date is incomplete")
@@ -6696,7 +6730,9 @@ def final_four_search_evidence(payload, state, query):
             # return the resulting public detail URL with its displayed ID.
         if row["identifier"] in seen:
             raise ValueError(f"{state} result repeated a record across pages")
-        seen.add(row["identifier"]); rows.append(row)
+        seen.add(row["identifier"])
+        if state != "NC" or not row.get("non_charity_scope"):
+            rows.append(row)
     return rows
 
 
@@ -6837,6 +6873,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     unreviewed_scope = False
     missing_nv_business_id = False
     scope_reviews = []
+    excluded_nc_entities = []
     nv_scope_records = {}
     excluded_nv_entities = []
     def collect(query):
@@ -6927,6 +6964,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         if state == "NC" and nc_retrieval_coverage.get(name) and payload.get("search_mode") not in (None, "STARTS_WITH"):
             raise ValueError("North Carolina covering evidence must use Starting With")
         rows = final_four_search_evidence(payload, state, query)
+        if state == "NC":
+            for card in payload["rows"]:
+                if card.get("CSL Type", "").strip() == "Fund-Raising Consultant":
+                    exclusion = {"name": card.get("display_name", card["CSL Legal Name"]),
+                                 "identifier": card["License"], "category": card["CSL Type"],
+                                 "source_url": card["profile_url"]}
+                    if exclusion not in excluded_nc_entities:
+                        excluded_nc_entities.append(exclusion)
         if payload.get("search_mode") == "EXACT_MATCH":
             narrowed_searches.append(name)
         else:
@@ -7077,6 +7122,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         completed_searches=completed_searches):
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state])
+    if excluded_nc_entities:
+        result.source_attempts = list(getattr(result, "source_attempts", [])) + [
+            {"excluded_non_charity_record": item} for item in excluded_nc_entities[:20]]
     if covered_reviewed_names:
         result.source_attempts = list(getattr(result, "source_attempts", [])) + [
             {"reviewed_name_coverage": item} for item in covered_reviewed_names]
