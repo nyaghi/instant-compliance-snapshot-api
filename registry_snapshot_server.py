@@ -5910,7 +5910,7 @@ def single_token_typo_review_candidate(expected_name, registry_name):
 def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     """Master-owned discovery, matching, duplicate resolution and interpretation."""
     deadline = time.monotonic() + 40
-    required, generated = licensed_charity_names(org)
+    required, generated = licensed_charity_names(org, literal_name_priority=state == "GA")
     queries = ([{"state": state, "ein": canonical_ein_digits(org.ein)}] if state == "IL" else [])
     if purpose != "identity":
         names = il_browser_name_queries(required, generated) if state == "IL" else required + generated
@@ -8040,7 +8040,7 @@ def licensed_dash_retrieval_forms(name):
     return list(dict.fromkeys(forms))
 
 
-def licensed_charity_names(org, *, literal_suffix_priority=False):
+def licensed_charity_names(org, *, literal_suffix_priority=False, literal_name_priority=False):
     """Every reviewed name precedes bounded generated spelling/search variants."""
     primary = [org.organization_name, *known_names_for_ein(org.ein)]
     required, generated = [], []
@@ -8063,7 +8063,10 @@ def licensed_charity_names(org, *, literal_suffix_priority=False):
         # registry. Reuse the mature retrieval helper without widening match
         # acceptance or exceeding the existing three-probe bound.
         literal_forms = literal_name_retrieval_forms(name)
-        forms = (licensed_dash_retrieval_forms(name) + possessive_search_phrases(name)
+        # Only the full literal name with its legal suffix removed gets this
+        # priority; the helper's shorter prefix retains its previous position.
+        forms = ((literal_forms[:1] if literal_name_priority else [])
+                 + licensed_dash_retrieval_forms(name) + possessive_search_phrases(name)
                  + (literal_forms if literal_suffix_priority and reviewed_retrieval_key(name)[1] else [])
                  + high_signal_search_phrases(name) + literal_forms)
         for value in forms:
@@ -10015,6 +10018,30 @@ def sc_related_entity_requires_ein(original: str, candidate: str, ein: str = "")
                                 for target in organization_match_target_variants(original, ein)))
 
 
+def sc_unrelated_alias_prefix(original: str, candidate: str, ein: str = "") -> bool:
+    """Exclude a different leading brand sharing an explicitly supplied DBA.
+
+    A verified filing EIN still takes precedence at the call site. Exact legal
+    or reviewed names, generic prefixes and genuine related-name ambiguity
+    retain their existing identity checks.
+    """
+    targets = organization_match_target_variants(original, ein)
+    key = complete_name_identity_key(candidate)
+    if any(key == complete_name_identity_key(target) for target in targets):
+        return False
+    authorized_tokens = set().union(*(distinctive_match_tokens(target) for target in targets))
+    for alias in explicit_name_alias_segments(original):
+        alias_key = complete_name_identity_key(alias)
+        if not alias_key or not key.endswith(" " + alias_key):
+            continue
+        prefix = key[:-(len(alias_key) + 1)]
+        foreign_tokens = distinctive_match_tokens(prefix) - authorized_tokens
+        if any(len(token) >= 4 and token not in {"alumni", "auxiliary", "chapter", "affiliate"}
+               for token in foreign_tokens):
+            return True
+    return False
+
+
 def sc_official_detail_lookup(org) -> object | None:
     """Use the SC WebForms result list to choose the strongest safe candidate."""
     original_name = getattr(org, "organization_name", "") or ""
@@ -10080,6 +10107,7 @@ def sc_official_detail_lookup(org) -> object | None:
     )
     last_html = ""
     transport_errors = 0
+    lookup_incomplete = False
     rejected_ids = set()
     identity_unconfirmed = False
     for query in search_queries:
@@ -10096,9 +10124,14 @@ def sc_official_detail_lookup(org) -> object | None:
             result_html = fetch_post(fields)
             last_html = result_html
         except Exception:
+            lookup_incomplete = True
             transport_errors += 1
             if transport_errors >= 2:
                 break
+            continue
+        if not (re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(result_html), re.I)
+                or re.search(r'CharityInfo\(\d+\)[^>]*>\s*.+?\s*</a>', result_html, re.I | re.S)):
+            lookup_incomplete = True
             continue
         candidates: dict[str, dict[str, object]] = {}
         for match in re.finditer(r'CharityInfo\((?P<id>\d+)\)[^>]*>\s*(?P<name>.*?)\s*</a>', result_html, re.I | re.S):
@@ -10136,23 +10169,28 @@ def sc_official_detail_lookup(org) -> object | None:
             })
             detail_html = fetch_post(detail_fields)
         except Exception:
+            lookup_incomplete = True
             continue
         detail_text = sc_html_to_text(detail_html)
+        raw_status = sc_regex_value(
+            detail_text,
+            r"\bStatus\s*:?\s*(Registered|Exempt|Expired|Delinquent|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
+        )
+        if not raw_status:
+            lookup_incomplete = True
+            continue
         registry_name = str(best["name"])
         filing_ein = ""
         if sc_related_entity_requires_ein(original_name, registry_name, org.ein):
             filing_ein = sc_detail_filing_ein(detail_html, time.monotonic() + 10)
             if filing_ein != canonical_ein_digits(org.ein):
-                if not filing_ein: identity_unconfirmed = True
+                if not filing_ein and not sc_unrelated_alias_prefix(original_name, registry_name, org.ein):
+                    identity_unconfirmed = True
                 rejected_ids.add(str(best["id"]))
                 continue
         if not registry_name_is_safe_against_targets(registry_name, targets, original_name, getattr(org, "ein", "")):
             registry_name = str(best["name"])
         public_id = sc_regex_value(detail_text, r"\bPublic\s+Id\s*:?\s*(P\d+)\b") or f"P{best['id']}"
-        raw_status = sc_regex_value(
-            detail_text,
-            r"\bStatus\s*:?\s*(Registered|Exempt|Expired|Delinquent|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
-        )
         due_raw = sc_regex_value(detail_text, r"\bDue\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})")
         fiscal_year = sc_regex_value(
             detail_text,
@@ -10219,11 +10257,11 @@ def sc_official_detail_lookup(org) -> object | None:
             result.reason_code = "MATCH_SC_FILING_EIN"
             result.source_note += " The state-filed Form 990 confirms the requested EIN."
         return result
-    if identity_unconfirmed or rejected_ids:
+    if identity_unconfirmed:
         return checker.StateResult(original_name, org.ein, "SC", "Unable to Confirm", url,
             raw_status_text="Similar organization found; its filing EIN did not confirm the requested entity",
             source_note="South Carolina returned a similar or related name, but its state-filed return did not confirm the requested EIN. No status was assigned to that name-only candidate.", success=False)
-    if last_html and re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(last_html), re.I):
+    if not lookup_incomplete and last_html and re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(last_html), re.I):
         result = checker.StateResult(
             original_name,
             getattr(org, "ein", ""),
@@ -10233,7 +10271,7 @@ def sc_official_detail_lookup(org) -> object | None:
             raw_status_text="No results found",
             success=True,
         )
-        result.source_note = "South Carolina search completed and returned no registry candidates for the organization."
+        result.source_note = "South Carolina search completed without a qualifying registration record for the organization."
         return result
     return None
 
