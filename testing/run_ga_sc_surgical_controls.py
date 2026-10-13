@@ -101,6 +101,13 @@ class Controls(unittest.TestCase):
             actual = cc.search_sc_resilient(Mock(), org, official_checked=True, official_result=result)
         self.assertEqual(cc.public_status(actual), 'Not Registered')
 
+    def test_sc_master_returns_complete_collision_negative_without_browser_admission(self):
+        result, _ = self.sc('Shaduba Home for Life')
+        with patch.object(cc,'sc_official_detail_lookup',return_value=result):
+            actual = cc.run_state_lookup(result.organization_name,result.ein,'SC')
+        self.assertEqual(actual['status'],'Not Registered')
+        self.assertFalse(actual['matched_registry_identifier'])
+
     def fallback(self, official=None, filing_ein='', registry='Shaduba Home for Life'):
         org = cc.checker.Organization('Animal Sanctuary of St Croix Valley Inc. DBA Home for Life', '411867244')
         result = cc.checker.StateResult(org.organization_name, org.ein, 'SC', 'Delinquent', cc.NAME_SEARCH_PREFLIGHT_URLS['SC'],

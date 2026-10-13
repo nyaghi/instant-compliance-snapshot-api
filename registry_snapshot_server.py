@@ -32438,7 +32438,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             sc_official_result.source_note = "Public registry lookup could not be completed."
             sc_official_result.error = str(exc)
             sc_official_result.success = False
-    if sc_official_result and public_status(sc_official_result) != "Not Registered":
+    if sc_official_result and (public_status(sc_official_result) != "Not Registered"
+            or (sc_official_result.success and getattr(sc_official_result, "_sc_unrelated_alias_excluded", False))):
         return response_data_for_lookup(sc_official_result, "", org, organization_name, ein, state, lookup_started)
 
     if state == "LA" and not capture_source_snapshot and weekly_asset("LA", "downloadable-data/LA.xlsx") is not None:
