@@ -312,6 +312,82 @@ class Repairs(unittest.TestCase):
             changed={**row,**changes}
             self.assertEqual(cc.final_four_search_candidate_scores(name,'237110058',state,changed),
                              [cc.score_candidate(name,'237110058',{'name':changed['name'],'ein':changed.get('ein','')})])
+
+    def test_nv_full_name_prefix_accepts_separator_variants_for_detail_only(self):
+        name='The GOG Foundation, Inc.'
+        other='New Horizons Gynecologic Cancer Research Fund'
+        for separator in (', ', '; ', '. ', ': ', ' / ', ' | ', ' - ', ' – ', ' — ',
+                          ' & ', ' • ', ' _ '):
+            with self.subTest(separator=separator):
+                row={'name':name+separator+other, 'identifier':'NV20222449935',
+                     'entity_type':'Foreign Entities Not Required to Register In Nevada'}
+                scores=cc.final_four_search_candidate_scores(name,'030466352','NV',row)
+                self.assertEqual(scores[-1]['reason'],'REVIEW_NV_COMPOSITE_NAME')
+                self.assertEqual(scores[-1]['decision'],'possible')
+                self.assertFalse(any(score['decision']=='accepted' for score in scores))
+                evidence={'query':{'state':'NV','operation':'search','name':name},'rows':[row],'total':1}
+                record={'state':'NV','organization_name':name,'ein':'030466352','alternate_names':[]}
+                self.assertEqual(cc.final_four_compact_search_evidence(record,evidence)['rows'],[row])
+
+    def test_nv_composite_prefix_does_not_override_identity_guards(self):
+        name='The GOG Foundation, Inc.'
+        row={'name':name+'; New Horizons Gynecologic Cancer Research Fund'}
+        for changed in ({'ein':'123456789'}, {'name':'Another Organization; '+name},
+                        {'name':'GOG Foundation of Nevada; New Horizons'},
+                        {'name':'Foundation; New Horizons'}, {'name':name+';   '}):
+            with self.subTest(changed=changed):
+                candidate={**row,**changed}
+                scores=cc.final_four_search_candidate_scores(name,'030466352','NV',candidate)
+                self.assertNotIn('REVIEW_NV_COMPOSITE_NAME',[score['reason'] for score in scores])
+        self.assertNotIn('REVIEW_NV_COMPOSITE_NAME',
+                         [score['reason'] for score in cc.final_four_search_candidate_scores(name,'030466352','NC',row)])
+
+    def test_nv_reviewed_name_prefix_is_shortlisted_but_not_unreviewed_name(self):
+        row={'name':'New Horizons Gynecologic Cancer Research Fund; The GOG Foundation, Inc.'}
+        name='The GOG Foundation, Inc.'
+        baseline=cc.final_four_search_candidate_scores(name,'030466352','NV',row)
+        self.assertNotIn('REVIEW_NV_COMPOSITE_NAME',[score['reason'] for score in baseline])
+        token=cc.REVIEWED_NAME_CONTEXT.set({'030466352':('New Horizons Gynecologic Cancer Research Fund',)})
+        try:
+            reviewed=cc.final_four_search_candidate_scores(name,'030466352','NV',row)
+        finally:
+            cc.REVIEWED_NAME_CONTEXT.reset(token)
+        self.assertEqual(reviewed[-1]['decision'],'possible')
+        self.assertEqual(reviewed[-1]['reason'],'REVIEW_NV_COMPOSITE_NAME')
+
+    def test_nv_composite_prefix_opens_detail_and_requires_irs_identity(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/nv-public-gardens-20261001.json').read_text())
+        name='The GOG Foundation, Inc.'
+        fields={**fixture['fields'], 'Entity Name':name+', New Horizons Gynecologic Cancer Research Fund',
+                'IRS Registered Name':name, 'Entity Status':'Registered',
+                'Annual Renewal Due Date/Expiration Date':'04/30/2027'}
+        identifier=fields['NV Business ID']
+        org=cc.checker.Organization(name,'03-0466352')
+
+        def lookup(irs_name):
+            seen=[]
+            def source(query):
+                seen.append(query)
+                if query['operation']=='search':
+                    return {'state':'NV','query':query,'complete':True,'verification_pending':False,'total':1,
+                            'rows':[{'name':fields['Entity Name'],'identifier':identifier,'entity_type':fields['Entity Type']}]}
+                return {'query':query,'complete':True,'fields':{**fields,'IRS Registered Name':irs_name},
+                        'source_url':fixture['source_url']}
+            with patch.object(cc,'licensed_charity_names',return_value=([name],[])), \
+                    patch.object(cc,'trial_identity',return_value={'origin':'https://staging.example'}), \
+                    patch.object(cc,'reconciled_registry_address',return_value={'decision':'unavailable'}):
+                result=cc.final_four_browser_lookup(org,'NV',source)
+            return result,seen
+
+        confirmed,queries=lookup(name)
+        self.assertEqual([query['operation'] for query in queries],['search','detail'])
+        self.assertEqual(confirmed.matched_registry_identifier,identifier)
+        self.assertIn(confirmed.status,{'Current','Upcoming Filing'})
+
+        unrelated,queries=lookup('Unrelated Charity')
+        self.assertEqual([query['operation'] for query in queries],['search','detail'])
+        self.assertNotIn(unrelated.status,{'Current','Upcoming Filing'})
+
     def test_nv_observed_composite_record_requires_independent_detail_identity(self):
         fixture=json.loads((Path(__file__).parent/'fixtures/nv-public-gardens-20261001.json').read_text())
         org=cc.checker.Organization('American Public Gardens Association','23-7110058')

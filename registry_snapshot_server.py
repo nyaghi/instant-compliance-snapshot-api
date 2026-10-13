@@ -6727,15 +6727,20 @@ def final_four_search_candidate_scores(name, ein, state, row):
     names = [row["name"], *row.get("aliases", [])]
     candidates = [score_candidate(name, ein, {"name": n, "ein": row.get("ein", "")}) for n in names if n]
     if state == "NV" and candidates and all(c["decision"] == "rejected" for c in candidates):
-        # ORION can combine a legal name and former name in one Entity Name.
-        # A strong exact first component warrants reading the detail; it does
-        # not become an alias or establish identity. The unchanged selector
-        # still requires the detail FEIN or independently displayed IRS name.
-        first, separator, remainder = row["name"].partition(",")
-        if (separator and remainder.strip() and len(distinctive_match_tokens(first)) >= 2
-                and not row.get("ein")
-                and score_candidate(name, ein, {"name": first})["decision"] == "accepted"):
-            candidates.append({"score": 55, "decision": "possible", "reason": "REVIEW_NV_COMPOSITE_NAME"})
+        # ORION can join a legal name and another name with punctuation. Test
+        # complete leading names at separator boundaries, including suffix
+        # commas ("Inc., Other Name"). A full entered/reviewed-name match only
+        # warrants reading the detail; it never establishes identity itself.
+        if not row.get("ein"):
+            for boundary in re.finditer(r"[^\w\s]|_", row["name"]):
+                first = row["name"][:boundary.start()].strip()
+                remainder = row["name"][boundary.end():].strip()
+                if not first or not remainder or not distinctive_match_tokens(first):
+                    continue
+                prefix_score = score_candidate(name, ein, {"name": first})
+                if prefix_score["reason"] in {"MATCH_NAME_EXACT", "MATCH_REVIEWED_ALTERNATE_NAME"}:
+                    candidates.append({"score": 55, "decision": "possible", "reason": "REVIEW_NV_COMPOSITE_NAME"})
+                    break
     return candidates
 
 
