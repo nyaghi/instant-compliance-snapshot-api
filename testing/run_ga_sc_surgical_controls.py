@@ -2,7 +2,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as cc
@@ -92,6 +92,42 @@ class Controls(unittest.TestCase):
         self.assertEqual(cc.public_status(result), 'Not Registered')
         self.assertGreater(len(calls), 1)
         self.assertLessEqual(len(calls), 18)
+        self.assertTrue(result._sc_unrelated_alias_excluded)
+
+    def test_sc_completed_collision_negative_cannot_be_overridden_by_browser(self):
+        result, _ = self.sc('Shaduba Home for Life')
+        org = cc.checker.Organization('Animal Sanctuary of St Croix Valley Inc. DBA Home for Life', '411867244')
+        with patch.object(cc, 'search_with_name_variants', side_effect=AssertionError('weaker fallback must not run')):
+            actual = cc.search_sc_resilient(Mock(), org, official_checked=True, official_result=result)
+        self.assertEqual(cc.public_status(actual), 'Not Registered')
+
+    def fallback(self, official=None, filing_ein='', registry='Shaduba Home for Life'):
+        org = cc.checker.Organization('Animal Sanctuary of St Croix Valley Inc. DBA Home for Life', '411867244')
+        result = cc.checker.StateResult(org.organization_name, org.ein, 'SC', 'Delinquent', cc.NAME_SEARCH_PREFLIGHT_URLS['SC'],
+            raw_status_text='Expired', matched_registry_name=registry, matched_registry_identifier='P87071',success=True)
+        with patch.object(cc, 'preflight_name_search_registry',return_value=(True,'',None)), \
+             patch.object(cc,'search_with_name_variants',return_value=result), \
+             patch.object(cc,'sc_detail_filing_ein',return_value=filing_ein):
+            return cc.search_sc_resilient(Mock(),org,official_checked=True,official_result=official)
+
+    def test_sc_incomplete_official_search_never_assigns_unrelated_browser_status(self):
+        result = self.fallback()
+        self.assertEqual(cc.public_status(result),'Unable to Confirm')
+        self.assertFalse(result.success)
+        self.assertFalse(result.matched_registry_identifier)
+
+    def test_sc_completed_ordinary_negative_rejects_foreign_browser_override(self):
+        negative, _ = self.sc()
+        self.assertFalse(negative._sc_unrelated_alias_excluded)
+        self.assertEqual(cc.public_status(self.fallback(negative)), 'Not Registered')
+
+    def test_sc_browser_filing_ein_still_wins(self):
+        result = self.fallback(filing_ein='411867244')
+        self.assertEqual(cc.public_status(result),'Delinquent')
+        self.assertEqual(result.identity_anchor,'EIN')
+
+    def test_sc_browser_exact_alias_behavior_preserved(self):
+        self.assertEqual(cc.public_status(self.fallback(registry='Home for Life')),'Delinquent')
 
     def test_sc_independent_foreign_brand_collision(self):
         result, _ = self.sc('Meridian River Shelter', original='Oakland Animal Refuge Inc. DBA River Shelter')

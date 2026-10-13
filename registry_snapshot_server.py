@@ -10110,6 +10110,7 @@ def sc_official_detail_lookup(org) -> object | None:
     lookup_incomplete = False
     rejected_ids = set()
     identity_unconfirmed = False
+    unrelated_alias_excluded = False
     for query in search_queries:
         if not query:
             continue
@@ -10184,7 +10185,10 @@ def sc_official_detail_lookup(org) -> object | None:
         if sc_related_entity_requires_ein(original_name, registry_name, org.ein):
             filing_ein = sc_detail_filing_ein(detail_html, time.monotonic() + 10)
             if filing_ein != canonical_ein_digits(org.ein):
-                if not filing_ein and not sc_unrelated_alias_prefix(original_name, registry_name, org.ein):
+                unrelated_alias = sc_unrelated_alias_prefix(original_name, registry_name, org.ein)
+                if unrelated_alias:
+                    unrelated_alias_excluded = True
+                if not filing_ein and not unrelated_alias:
                     identity_unconfirmed = True
                 rejected_ids.add(str(best["id"]))
                 continue
@@ -10272,6 +10276,7 @@ def sc_official_detail_lookup(org) -> object | None:
             success=True,
         )
         result.source_note = "South Carolina search completed without a qualifying registration record for the organization."
+        result._sc_unrelated_alias_excluded = unrelated_alias_excluded
         return result
     return None
 
@@ -10285,6 +10290,11 @@ def search_sc_resilient(page, org, *, official_checked=False, official_result=No
     if not official_checked:
         official_result = sc_official_detail_lookup(org)
     if official_result and public_status(official_result) != "Not Registered":
+        return official_result
+    if (official_result and getattr(official_result, "success", False)
+            and getattr(official_result, "_sc_unrelated_alias_excluded", False)):
+        # The complete official search already excluded this alias collision.
+        # A weaker browser match must not re-admit the same unrelated record.
         return official_result
     reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
     if not reachable:
@@ -10311,6 +10321,25 @@ def search_sc_resilient(page, org, *, official_checked=False, official_result=No
     )
     if not reachable and public_status(result) in {"Site Not Reachable", "Unknown", ""}:
         return preflight_result
+    registry_name = getattr(result, "matched_registry_name", "") or ""
+    if result and sc_unrelated_alias_prefix(org.organization_name, registry_name, org.ein):
+        filing_ein = canonical_ein_digits(getattr(result, "verified_registry_ein", ""))
+        if not filing_ein:
+            try:
+                filing_ein = sc_detail_filing_ein(page.content(), time.monotonic() + 10)
+            except Exception:
+                filing_ein = ""
+        if filing_ein != canonical_ein_digits(org.ein):
+            if official_result and public_status(official_result) == "Not Registered" and official_result.success:
+                return official_result
+            return checker.StateResult(org.organization_name, org.ein, "SC", "Unable to Confirm",
+                NAME_SEARCH_PREFLIGHT_URLS["SC"],
+                raw_status_text="Unrelated alias collision excluded; complete search coverage was not confirmed",
+                source_note="The browser returned a different leading organization name sharing the supplied alias. Its filing EIN did not confirm the requested entity. The official search was incomplete, so non-registration was not established.",
+                success=False)
+        result.verified_registry_ein = filing_ein
+        result.identity_anchor = "EIN"
+        result.reason_code = "MATCH_SC_FILING_EIN"
     if result and distinctive_entity_extension_mismatch_against_targets(
         org.organization_name, getattr(result, "matched_registry_name", "") or "",
         organization_match_target_variants(org.organization_name, org.ein),
