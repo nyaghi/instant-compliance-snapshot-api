@@ -6798,6 +6798,13 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         raise ValueError("Unsupported final-four lookup")
     deadline = time.monotonic() + 60 if deadline is None else deadline
     required, generated = licensed_charity_names(org)
+    if state == "NV":
+        # Nevada's public form rejects typographic dashes before submitting.
+        # Reuse the master punctuation alternative for retrieval only; org,
+        # EIN and reviewed identity targets retain their original values.
+        required = list(dict.fromkeys(ascii_dash_search_name(name) for name in required))
+        generated = list(dict.fromkeys(ascii_dash_search_name(name) for name in generated
+            if ascii_dash_search_name(name) not in required))
     if not required:
         raise ValueError("A reviewed organization name is required for this registry")
     if state in {"NC", "NV"} and trial_identity():
