@@ -7499,6 +7499,7 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
         raise ValueError('No safe Mississippi name search')
     attempted = []
     possible = []
+    review_details = {}
     for name in planned:
         query = {'state': 'MS', 'operation': 'search', 'name': name}
         rows = ms_browser_clean_evidence(evidence(query), query)['rows']
@@ -7517,6 +7518,20 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
                   and len(distinctive_match_tokens(row['name'])) >= 2):
                 if not any(item['identifier'] == row['identifier'] for item in possible):
                     possible.append(row)
+                    if len(possible) <= 10:
+                        # The browser detail is bound to the current search's
+                        # grid. Later variants replace that grid, so retain
+                        # verified detail evidence before advancing the plan.
+                        detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
+                        fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
+                        if (normalized_match_name(fields['Name']) != normalized_match_name(row['name'])
+                                or not fields['Filing Status'].strip()):
+                            raise ValueError('Mississippi review detail identity or status changed')
+                        if (fields['Expiration Date']
+                                and not module.parse_mmddyyyy_date(fields['Expiration Date'])):
+                            raise ValueError('Mississippi review expiration date is malformed')
+                        review_details[row['identifier']] = fields
+                        attempted.append({'query': detail_query, 'completed': True})
         # Two plausible filing numbers need a user identity decision. Read each
         # detail now so later confirmation can apply only signed state evidence.
         if len(accepted) > 1:
@@ -7581,13 +7596,8 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
         return result
     candidates = []
     for row in possible[:10]:
-        detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
-        fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
-        if normalized_match_name(fields['Name']) != normalized_match_name(row['name']) or not fields['Filing Status'].strip():
-            raise ValueError('Mississippi review detail identity or status changed')
+        fields = review_details[row['identifier']]
         expiration = module.parse_mmddyyyy_date(fields['Expiration Date']) if fields['Expiration Date'] else None
-        if fields['Expiration Date'] and not expiration:
-            raise ValueError('Mississippi review expiration date is malformed')
         candidates.append(dict(name=row['name'], identifier=row['identifier'], ein='', location='',
                                url=MS_BROWSER_SOURCE, raw_status=fields['Filing Status'].strip(),
                                expiration=expiration.isoformat() if expiration else '', initial='',

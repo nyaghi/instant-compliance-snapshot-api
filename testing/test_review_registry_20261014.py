@@ -219,6 +219,62 @@ class ReviewRegistryControls(unittest.TestCase):
         self.assertEqual(self.decide(data, 'accept')['status'], 'Delinquent')
         self.assertEqual(self.decide(data, 'reject')['status'], 'Not Registered')
 
+    def test_ms_review_detail_is_read_before_later_search_replaces_its_grid(self):
+        current_rows = []
+        calls = []
+        row = dict(name='River Clinic Hospital', identifier='100001234', raw_status='Expired')
+        def evidence(query):
+            nonlocal current_rows
+            calls.append(dict(query))
+            if query['operation'] == 'search':
+                current_rows = [row] if query['name'] == 'River Clinic' else []
+                return dict(state='MS', query=query, complete=True, verification_pending=False,
+                            rows=current_rows, total=len(current_rows))
+            self.assertIn(row, current_rows, 'The public grid no longer contains this filing number')
+            return dict(query=query, complete=True, source_url=c.MS_BROWSER_SOURCE,
+                        fields={'Name': row['name'], 'Registered Name': row['name'],
+                                'Filing Number': row['identifier'], 'Filing Status': 'Expired',
+                                'Expiration Date': '1/1/2020'})
+        with patch.object(c, 'ms_name_search_plan', return_value=['River Clinic', 'River Clinic Inc']):
+            result = c.ms_browser_lookup(c.checker.Organization('River Clinic, Inc.', '123456789'), evidence)
+        self.assertEqual([q['operation'] for q in calls], ['search', 'detail', 'search'])
+        self.assertTrue(result._cc_identity_review['search_complete'])
+        self.assertEqual(result._cc_identity_review['records'][0]['identifier'], row['identifier'])
+        self.assertEqual([q['query']['operation'] for q in result.queries_attempted],
+                         ['search', 'detail', 'search'])
+
+    def test_ms_later_incomplete_search_cannot_become_a_completed_negative(self):
+        row = dict(name='River Clinic Hospital', identifier='100001234', raw_status='Expired')
+        def evidence(query):
+            if query['operation'] == 'search':
+                return dict(state='MS', query=query, complete=query['name'] == 'River Clinic',
+                            verification_pending=False, rows=[row], total=1)
+            return dict(query=query, complete=True, source_url=c.MS_BROWSER_SOURCE,
+                        fields={'Name': row['name'], 'Registered Name': row['name'],
+                                'Filing Number': row['identifier'], 'Filing Status': 'Expired',
+                                'Expiration Date': '1/1/2020'})
+        with patch.object(c, 'ms_name_search_plan', return_value=['River Clinic', 'River Clinic Inc']):
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
+                c.ms_browser_lookup(c.checker.Organization('River Clinic, Inc.', '123456789'), evidence)
+
+    def test_ms_review_detail_bound_and_identity_validation_are_preserved(self):
+        details = []
+        def evidence(query):
+            if query['operation'] == 'search':
+                return dict(state='MS', query=query, complete=True, verification_pending=False, total=11,
+                            rows=[dict(name='River Clinic Hospital', identifier=str(100001234+i),
+                                       raw_status='Expired') for i in range(11)])
+            details.append(query['identifier'])
+            return dict(query=query, complete=True, source_url=c.MS_BROWSER_SOURCE,
+                        fields={'Name': 'River Clinic Hospital', 'Registered Name': 'River Clinic Hospital',
+                                'Filing Number': query['identifier'], 'Filing Status': 'Expired',
+                                'Expiration Date': '1/1/2020'})
+        with patch.object(c, 'ms_name_search_plan', return_value=['River Clinic']):
+            result = c.ms_browser_lookup(c.checker.Organization('River Clinic, Inc.', '123456789'), evidence)
+        self.assertEqual(len(details), 10)
+        self.assertEqual(len(result._cc_identity_review['records']), 10)
+        self.assertFalse(result._cc_identity_review['search_complete'])
+
     def test_denied_application_is_not_pending_or_an_issued_license(self):
         row = self.nc('In-Process', 'Denied')
         self.assertTrue(row['non_charity_scope'])

@@ -57,6 +57,24 @@ different filing years, bundled returns, incomplete searches and identity choice
 
 ## Validation and release limits
 
+The first EX live Lahey pass and its targeted MS retry exposed a collection-order
+gap: a possible row was saved, later name variants replaced the browser's grid,
+and the eventual detail request failed the collector's current-grid safeguard.
+Read and validate the bounded candidate details while their originating grid is
+current, then retain those source fields while completing the remaining search
+plan. The existing ten-record bound, signed choices, incomplete-search guards,
+source-derived status and connector deadlines remain. No connector update beyond
+0.6.129 is needed. Independent multi-variant and overflow controls model this
+failure; a later incomplete search cannot become a negative.
+
+The supplemental MS/control suite passes 120 checks after excluding four
+independently reproduced prior-EX assertions: two obsolete public Needs Review
+expectations, a historical whole-file scope assertion, and an existing optional
+NV filing assertion. Their original failures are retained in the evidence logs.
+The full attempted suite was 124 checks with those four failures; do not describe
+it as fully passing. Prior live first passes remain saved when the revised
+backend is deployed; do not overwrite them or mix their timings.
+
 Commands (from this repository):
 
 ```text
