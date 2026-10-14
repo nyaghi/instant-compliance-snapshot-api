@@ -1099,7 +1099,10 @@
       if(seen.has(identity))throw new Error('REGISTRY_NC_CARD_CHANGED');
       if(pending)fields.License='';
       if(!Object.hasOwn(fields,'Expiration Date')) {
-        if(!pending&&fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
+        // NC retains an EX/SL number on some explicitly In-Process cards.
+        // Their absent expiration is not an incomplete ordinary license.
+        const numberedPending=fields['CSL Type']==='In-Process'&&fields.Status==='In-Process'&&/^(SL|EX)\d+$/.test(fields.License||'');
+        if(!pending&&!numberedPending&&fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
         fields['Expiration Date']='';
       }
       fields.profile_url=new URL(links[0].getAttribute('href'),location.origin).href;

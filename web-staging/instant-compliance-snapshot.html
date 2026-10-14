@@ -1054,6 +1054,13 @@
 
     async function retryStateResult(original) {
       const rejected = original.identity_review?.candidates?.find(c => c.decision === 'reject');
+      if (rejected && original.state === 'NC' && original.identity_review.search_complete === false) {
+        const result = await window.CCNYConnector.lookup({state:'NC', organization_name:original.organization_name,
+          ein:original.ein, email:email.value.trim(), admin_passcode:adminPasscode.value.trim(), device_id:getDeviceId(),
+          alternate_names:original.reviewed_alternate_names || [], identity_review_token:original.identity_review.token});
+        if (latestResults.includes(original)) renderResults(latestResults.map(r => r === original ? {...result, _request_id:original._request_id} : r), true);
+        return;
+      }
       if (rejected) return reviewIdentity(original, rejected.id, 'reject');
       const result = await requestSingleState(API_BASE, original.ein, email.value.trim(), original.state,
         original.organization_name, true, original.reviewed_alternate_names || []);

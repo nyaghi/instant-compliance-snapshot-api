@@ -101,7 +101,7 @@
     lookupTail = pending.catch(() => {});
     return pending;
   }
-  async function performLookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, purpose = "registration", state: registryState = "NY", signal }) {
+  async function performLookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, identity_review_token, purpose = "registration", state: registryState = "NY", signal }) {
     signal?.throwIfAborted();
     const label = {NY:"New York",IL:"Illinois",GA:"Georgia"}[registryState];
     if (!label) throw new Error("Unsupported browser registry");
@@ -143,7 +143,7 @@
       }
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
-      let state = await api({ action: "start", state: registryState, organization_name, ein, purpose, recovery_protocol: "il-fresh-page-v1", ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
+      let state = await api({ action: "start", state: registryState, organization_name, ein, purpose, ...(identity_review_token ? {identity_review_token} : {}), recovery_protocol: "il-fresh-page-v1", ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
       checkToken = state.check_token || "";
       if (!supported(connection) && state.phase === "search") {
         state = await api({ action: "fail", check_token: checkToken, reason: connection.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE" });

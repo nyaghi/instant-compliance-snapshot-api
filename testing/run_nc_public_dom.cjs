@@ -7,6 +7,14 @@ const origin='https://www.sosnc.gov',profile=origin+'/online_services/search/cha
 const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Organization',Status:'Current Active – Filing Extension Granted',License:'SL000448','Expiration Date':'5/15/2026','Extension End Date':'11/15/2026'};
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
 const withdrawnApplication={'CSL Legal Name':'Generic Literacy Organization','CSL Type':'In-Process',Status:'Withdrawn',License:''};
+test('NC numbered In-Process card retains its EX identity without inventing an expiration',async()=>{
+ const card={'CSL Legal Name':'Example Numbered Pending Charity','CSL Type':'In-Process',Status:'In-Process',License:'EX001234'};
+ const h=harness({cards:[card],query:card['CSL Legal Name']});
+ const row=(await h.api.ncRows({state:'NC',operation:'search',name:card['CSL Legal Name']})).evidence.rows[0];
+ assert.equal(row.License,'EX001234');assert.equal(row.Status,'In-Process');assert.equal(row['Expiration Date'],'');
+ for(const change of [{'CSL Type':'Charitable Organization'},{Status:'Current Active'}])
+  await assert.rejects(harness({cards:[{...card,...change}],query:card['CSL Legal Name']}).api.ncRows({state:'NC',operation:'search',name:card['CSL Legal Name']}),/CARD_INCOMPLETE/);
+});
 const txt=innerText=>({innerText,querySelector:()=>null});
 function labels(values){return Object.entries(values).map(([key,value])=>({innerText:key+':',parentElement:txt(key+': '+value)}));}
 function harness({cards=[active],total=cards.length,query="America's Charities",searchMode='Starting With',url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null,addressCount=1,profileIds=null}={}){

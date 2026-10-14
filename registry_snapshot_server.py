@@ -6232,7 +6232,8 @@ def nc_charity_record_evidence(fields):
     # changes. Validate both source fields without deriving one from the other.
     non_charity_scope = kind == "Fund-Raising Consultant" and bool(re.fullmatch(r"SL\d+", identifier))
     valid_kind = (re.fullmatch(r"(?:SL|EX)\d+", identifier)
-                  and kind in {"Charitable Organization", "CSL Exempt Organization"})
+                  and (kind in {"Charitable Organization", "CSL Exempt Organization"}
+                       or kind == "In-Process" and raw == "In-Process"))
     if not name or (not valid_kind and not unissued and not non_charity_scope):
         raise ValueError("North Carolina result is not an identified charity license")
     url = urlparse(fields["profile_url"])
@@ -6277,6 +6278,8 @@ def nc_charity_record_evidence(fields):
     # Adverse statuses still go through the unchanged shared status rules.
     effective_due = extension or expiration
     status = licensed_charity_status(raw, effective_due)
+    if kind == "In-Process" and raw == "In-Process":
+        status = "Pending"
     # A denied renewal of an already dated SL license is distinct from an
     # undated denied application. Apply the user-confirmed NC rule only to
     # the former, with its past controlling deadline still shown explicitly.
@@ -6986,6 +6989,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         for row in rows:
             if row["identifier"] in seen:
                 continue
+            if state == "NC" and user_rejected_credential(org.ein, state, row["identifier"]):
+                seen.add(row["identifier"])
+                continue
             candidates = final_four_search_candidate_scores(org.organization_name, org.ein, state, row)
             if not candidates or all(c["decision"] == "rejected" for c in candidates):
                 seen.add(row["identifier"])
@@ -7609,6 +7615,8 @@ def nc_completed_candidates_for_review(record):
                 final_four_clean_evidence(evidence, query)
                 if query.get("operation") == "search":
                     for card in final_four_search_evidence(evidence, "NC", query):
+                        if card["identifier"] in record.get("identity_context", {}).get("rejected", []):
+                            continue
                         candidates = final_four_search_candidate_scores(org.organization_name, org.ein, "NC", card)
                         if any(c["decision"] != "rejected" for c in candidates):
                             cards[card["identifier"]] = card
@@ -7686,6 +7694,20 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
             "pending_name": pending.get("name", ""),
             **({"elapsed_seconds": round(max(0, time.time() - record["issued"]), 2)} if state == "NC" else {}),
         }
+    return preserve_nc_identity_retry(data, record)
+
+
+def preserve_nc_identity_retry(data, record):
+    """Retain server-signed exclusions across a failed/repeated NC retry."""
+    prior = record.get("identity_retry_review")
+    if record.get("state") != "NC" or not prior:
+        return data
+    data["identity_review_history"] = list(record["identity_context"]["history"])
+    if not data.get("identity_review") and (not data.get("success") or data.get("status") == "Not Registered"):
+        prior = json.loads(json.dumps(prior))
+        prior["base"] = {k: v for k, v in data.items() if k not in {"identity_review", "debug_trace"}}
+        prior["search_complete"] = bool(data.get("success") and data.get("status") == "Not Registered")
+        data["identity_review"] = identity_review_view(prior)
     return data
 
 
@@ -7732,7 +7754,8 @@ def final_four_connector_advance(record):
             item for item in getattr(result, "queries_attempted", [])
             if item.get("query", {}).get("operation") != "search"]
     started = time.perf_counter() - max(0, time.time() - record["issued"])
-    return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started)}
+    return {"phase": "complete", "result": preserve_nc_identity_retry(
+        response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started), record)}
 
 
 _AL_VERIFICATION_OCR = None
@@ -7860,6 +7883,24 @@ def final_four_connector_request(payload, origin):
                   "issued": now, "expires": now + (cutoff if mode == "sales" else NY_CONNECTOR_TTL_SECONDS),
                   "version": APP_VERSION, "completed": [], "pending": None,
                   "alternate_names": alternate_names, "protocol": "final-four-public-v1"}
+        if payload.get("identity_review_token"):
+            try:
+                prior = identity_review_unpack(payload["identity_review_token"], email, device)
+                base = prior["base"]
+                if (state != "NC" or mode != "standard" or prior["search_complete"]
+                        or base["state"] != state or base["organization_name"] != name.strip()
+                        or canonical_ein_digits(base["ein"]) != canonical_ein_digits(ein)):
+                    raise ValueError("Wrong identity retry scope")
+                rejected = [row["identifier"] for row in prior["records"]
+                            if prior["decisions"].get(row["id"], {}).get("decision") == "reject"]
+                if not rejected:
+                    raise ValueError("No rejected identity to retain")
+                record["alternate_names"] = normalize_reviewed_names(base.get("reviewed_alternate_names", []))
+                record["identity_context"] = {"state": state, "ein": canonical_ein_digits(ein),
+                    "rejected": sorted(set(prior.get("rejected", []) + rejected)), "history": prior["history"]}
+                record["identity_retry_review"] = prior
+            except (ValueError, KeyError, TypeError):
+                return 400, {"error": "This identity retry changed or expired. Rerun the state check."}
         if payload.get("recovery_protocol") == "nc-fresh-search-v1":
             record["recovery_protocol"] = "nc-fresh-search-v1"
     else:
@@ -7928,10 +7969,12 @@ def final_four_connector_request(payload, origin):
         record["pending"] = None
     names = {canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
     context = REVIEWED_NAME_CONTEXT.set(names)
+    identity_context = USER_IDENTITY_CONTEXT.set(record.get("identity_context", {}))
     try:
         response = final_four_connector_advance(record)
     finally:
         REVIEWED_NAME_CONTEXT.reset(context)
+        USER_IDENTITY_CONTEXT.reset(identity_context)
     if response["phase"] == "search":
         try:
             response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"]-time.time())),
@@ -8322,6 +8365,9 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
 def licensed_charity_identity(org, row, state, deadline):
     """Shared master name/EIN and cross-state office checks; never address-only."""
     names = [row["name"], *row.get("aliases", [])]
+    if user_rejected_credential(org.ein, state, row.get("identifier", "")):
+        row["match"] = {"decision": "rejected", "score": 0, "reason": "USER_REJECTED_IDENTITY"}
+        return "rejected"
     decisions = [(score_candidate(org.organization_name, org.ein, {"name": name, "ein": row.get("ein", "")}), name)
                  for name in names if name]
     decision, matched_name = max(decisions, key=lambda item: item[0]["score"])
@@ -8426,6 +8472,15 @@ def licensed_charity_identity(org, row, state, deadline):
     if address.get("decision") == "conflict":
         address = licensed_charity_street_evidence(org, row, deadline) or address
     row["address_evidence"] = address
+    if decision.get("reason") == "REVIEW_SEPARATOR_ENTITY_SCOPE":
+        foreign = address if address.get("decision") == "different_ein" else licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+        if foreign:
+            row["address_evidence"] = foreign
+            row["match"] = {"decision": "rejected", "score": 0, "reason": "DIFFERENT_EIN_CORROBORATED"}
+            return "rejected"
+        if address.get("decision") == "conflict":
+            return "conflict"
+        return "possible"
     if address.get("decision") in {"different_ein", "conflict"}:
         return "conflict"
     if decision["decision"] == "possible" and address.get("decision") != "corroborated":
@@ -8897,6 +8952,8 @@ def supplied_separator_component_match(original_name: str, registry_name: str) -
     targets. The caller retains geographic, institution and candidate-EIN
     safeguards; licensed registries still apply their address corroboration.
     """
+    if separator_entity_scope_gap(original_name, registry_name):
+        return False
     parts = licensed_compound_retrieval_names(original_name)
     candidate = complete_name_identity_key(registry_name)
     return bool(candidate and any(
@@ -8913,6 +8970,8 @@ def supplied_complete_name_identity_match(original_name: str, registry_name: str
     A lone nickname remains a possible match; an explicit registry DBA must
     agree with the supplied legal name and the other supplied component.
     """
+    if separator_entity_scope_gap(original_name, registry_name):
+        return False
     parts = licensed_compound_retrieval_names(original_name)
     if len(parts) < 2:
         return False
@@ -8935,6 +8994,48 @@ def supplied_complete_name_identity_match(original_name: str, registry_name: str
                 and alias in {complete_name_identity_key(part) for part in parts})
 
 
+def separator_entity_scope_gap(original_name: str, registry_name: str, ein: str = "") -> bool:
+    """A separated parent brand cannot erase an explicit entity/chapter scope.
+
+    Retrieval still uses both components. Complete reviewed names and ordinary
+    alternative-name/acronym labels retain their existing matching rules.
+    """
+    parts = licensed_compound_retrieval_names(original_name)
+    if len(parts) != 2:
+        return False
+    key = complete_name_identity_key(registry_name)
+    if not key or key != complete_name_identity_key(parts[0]):
+        return False
+    if any(key == complete_name_identity_key(alias) for alias in known_names_for_ein(ein)):
+        return False
+    qualifier = parts[1]
+    scope_markers = r"\b(?:chapter|branch|affiliate|division)\b"
+    scope_declared = re.search(r"\b(?:llc|ltd\.?|limited|inc\.?|incorporated|corp\.?|corporation|chapter|branch|affiliate|division)\b", qualifier, re.I)
+    scope_in_reviewed_name = any(re.search(scope_markers, alias, re.I)
+        and complete_name_identity_key(re.sub(scope_markers, "", alias, flags=re.I)) == complete_name_identity_key(qualifier)
+        for alias in known_names_for_ein(ein))
+    return bool((scope_declared or scope_in_reviewed_name) and distinctive_match_tokens(qualifier))
+
+
+def scope_identity_review_result(org, state, rows, complete, source, *, freshness=""):
+    """Keep source-backed, specific separated-name candidates for signed review."""
+    rows = [row for row in rows if len(distinctive_match_tokens(row["name"])) >= 2]
+    if not rows:
+        return checker.StateResult(org.organization_name, org.ein, state,
+            "Not Registered" if complete else "Unable to Confirm", source, success=complete,
+            source_note="Generic shared words do not identify the requested organization. "
+                        + ("The search completed without a qualifying record." if complete else "The search remains incomplete."))
+    result = checker.StateResult(org.organization_name, org.ein, state, "Needs Review", source, success=False)
+    result.source_note = (f"{state} returned a specific related-name record, but it omits the requested entity's "
+                          "distinguishing qualifier. No registration status is assigned before identity is confirmed.")
+    if not complete:
+        result.source_note += " The search is incomplete; rejecting a record cannot establish non-registration."
+    result._cc_identity_review = {"records": rows, "search_complete": complete, "freshness": freshness}
+    if freshness:
+        result.source_note += " " + freshness
+    return result
+
+
 def score_candidate(expected_name: str, expected_ein: str | None, candidate: dict) -> dict:
     """Conservative identity score used for debug traces and shared gates."""
     raw_candidate_name = str(candidate.get("name") or candidate.get("matched_registry_name") or "")
@@ -8951,6 +9052,11 @@ def score_candidate(expected_name: str, expected_ein: str | None, candidate: dic
             reason = "MATCH_EIN_EXACT"
         else:
             return {"score": -100, "decision": "rejected", "reason": "REJECT_DIFFERENT_EIN"}
+    if (candidate_name and reason != "MATCH_EIN_EXACT"
+            and separator_entity_scope_gap(expected_name, candidate_name, expected_ein or "")):
+        if len(distinctive_match_tokens(candidate_name)) < 2:
+            return {"score": 0, "decision": "rejected", "reason": "REJECT_SCOPE_GENERIC_ONLY"}
+        return {"score": 55, "decision": "possible", "reason": "REVIEW_SEPARATOR_ENTITY_SCOPE"}
     if candidate_name:
         if normalized_match_name(candidate_name) == normalized_match_name(expected_name):
             score += 80
@@ -9076,6 +9182,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     registry_name = legal_name_without_corporate_description(clean_registry_name(registry_name or ""))
     original_name = legal_name_without_corporate_description(original_name)
     if not registry_name:
+        return False
+    if separator_entity_scope_gap(original_name, registry_name, ein):
         return False
     if institution_location_conflict(original_name, registry_name):
         return False
@@ -10111,6 +10219,7 @@ def sc_official_detail_lookup(org) -> object | None:
     rejected_ids = set()
     identity_unconfirmed = False
     unrelated_alias_excluded = False
+    scope_candidates = {}
     for query in search_queries:
         if not query:
             continue
@@ -10145,10 +10254,11 @@ def sc_official_detail_lookup(org) -> object | None:
                 registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", ""))
                 and not distinctive_entity_extension_mismatch_against_targets(original_name, candidate_name, targets)
             )
-            if not safe_candidate_name:
+            scope_review = separator_entity_scope_gap(original_name, candidate_name, org.ein)
+            if not safe_candidate_name and not scope_review:
                 continue
             score = target_name_score(candidate_name, targets)
-            if score < 450 and not safe_candidate_name:
+            if score < 450 and not safe_candidate_name and not scope_review:
                 continue
             exact_bonus = 500 if normalized_match_name(candidate_name) == normalized_match_name(original_name) else 0
             candidate_score = max(score, 450) + exact_bonus + len(normalized_match_name(candidate_name).split())
@@ -10182,16 +10292,18 @@ def sc_official_detail_lookup(org) -> object | None:
             continue
         registry_name = str(best["name"])
         filing_ein = ""
+        scope_review = separator_entity_scope_gap(original_name, registry_name, org.ein)
         if sc_related_entity_requires_ein(original_name, registry_name, org.ein):
             filing_ein = sc_detail_filing_ein(detail_html, time.monotonic() + 10)
             if filing_ein != canonical_ein_digits(org.ein):
                 unrelated_alias = sc_unrelated_alias_prefix(original_name, registry_name, org.ein)
                 if unrelated_alias:
                     unrelated_alias_excluded = True
-                if not filing_ein and not unrelated_alias:
+                if not filing_ein and not unrelated_alias and not scope_review:
                     identity_unconfirmed = True
                 rejected_ids.add(str(best["id"]))
-                continue
+                if filing_ein or not scope_review:
+                    continue
         if not registry_name_is_safe_against_targets(registry_name, targets, original_name, getattr(org, "ein", "")):
             registry_name = str(best["name"])
         public_id = sc_regex_value(detail_text, r"\bPublic\s+Id\s*:?\s*(P\d+)\b") or f"P{best['id']}"
@@ -10238,6 +10350,11 @@ def sc_official_detail_lookup(org) -> object | None:
             matched_registry_identifier=public_id,
             success=interpreted not in {"Site Not Reachable", "Unknown", ""},
         )
+        if scope_review and not filing_ein:
+            scope_candidates[public_id] = dict(name=registry_name, identifier=public_id, ein="", location="",
+                url=url, raw_status=raw_status, status=interpreted, expiration=due_date, initial=None,
+                _identity_outcome="possible")
+            continue
         if re.search(r"\bexempt\b", raw_status or "", re.I):
             result.source_note = (
                 f"South Carolina returned safe registry match {registry_name} ({public_id}). "
@@ -10261,6 +10378,8 @@ def sc_official_detail_lookup(org) -> object | None:
             result.reason_code = "MATCH_SC_FILING_EIN"
             result.source_note += " The state-filed Form 990 confirms the requested EIN."
         return result
+    if scope_candidates:
+        return scope_identity_review_result(org, "SC", list(scope_candidates.values()), not lookup_incomplete, url)
     if identity_unconfirmed:
         return checker.StateResult(original_name, org.ein, "SC", "Unable to Confirm", url,
             raw_status_text="Similar organization found; its filing EIN did not confirm the requested entity",
@@ -16370,6 +16489,7 @@ def search_nd_completed(page, org):
     deadline = time.perf_counter() + 35.0
     targets = organization_match_target_variants(org.organization_name, org.ein)
     queries = nd_search_queries(org)
+    scope_candidates = {}
     try:
         page.goto(base + "/search/charitable", wait_until="domcontentloaded", timeout=12000)
         search_input = page.locator('input[placeholder*="Search by name"], input[aria-label*="Search by name"], input[type="text"]').first
@@ -16406,9 +16526,10 @@ def search_nd_completed(page, org):
                     if not isinstance(row, dict) or not isinstance(row.get("TITLE"), list) or not row["TITLE"] or not row.get("ID"):
                         raise ValueError("North Dakota returned an incomplete search row")
                     name = str(row["TITLE"][0]).strip()
-                    if registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein):
+                    scope_review = separator_entity_scope_gap(org.organization_name, name, org.ein)
+                    if scope_review or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein):
                         rank = checker.candidate_selection_score_for_targets(name, targets, str(row.get("STATUS", "")))
-                        candidates.append((rank, row))
+                        candidates.append(((not scope_review, rank), dict(row, _scope_review=scope_review)))
                 if not candidates:
                     continue
                 candidates.sort(key=lambda item: item[0], reverse=True)
@@ -16444,6 +16565,8 @@ def search_nd_completed(page, org):
                         return result
                     raise ValueError("North Dakota returned equally ranked registration records")
                 selected = candidates[0][1]
+                if selected.get("_scope_review") and str(selected["ID"]) in scope_candidates:
+                    continue
                 detail = request("/api/FilingDetail/charitable/" + quote(str(selected["ID"]), safe="") + "/false")
                 if not isinstance(detail, dict) or not isinstance(detail.get("DRAWER_DETAIL_LIST"), list):
                     raise ValueError("North Dakota detail response incomplete")
@@ -16451,6 +16574,19 @@ def search_nd_completed(page, org):
                           for row in detail["DRAWER_DETAIL_LIST"] if isinstance(row, dict)}
                 if not fields.get("Status"):
                     raise ValueError("North Dakota detail did not contain a registration status")
+                if selected.get("_scope_review"):
+                    detail_body = "\n".join(f"{key}: {value}" for key, value in fields.items())
+                    source_result = checker.StateResult(org.organization_name, org.ein, "ND", fields["Status"], base,
+                        raw_status_text=fields["Status"], matched_registry_name=selected["TITLE"][0],
+                        matched_registry_identifier=str(selected.get("RECORD_NUM") or selected["ID"]))
+                    interpreted = true_status_from_body(source_result, detail_body)
+                    scope_candidates[str(selected["ID"])] = dict(name=selected["TITLE"][0],
+                        identifier=str(selected.get("RECORD_NUM") or selected["ID"]), ein="", aliases=[],
+                        location=fields.get("Principal Address", ""), url=base + "/search/charitable",
+                        raw_status=fields["Status"], status=interpreted,
+                        expiration=parse_due_date(getattr(source_result, "computed_due_date", "")),
+                        initial=None, _identity_outcome="possible")
+                    continue
                 result.matched_registry_name = selected["TITLE"][0]
                 result.matched_registry_identifier = str(selected.get("RECORD_NUM") or selected["ID"])
                 result.raw_status_text = fields["Status"]
@@ -16459,6 +16595,8 @@ def search_nd_completed(page, org):
                 result._cc_detail_body = "\n".join(f"{key}: {value}" for key, value in fields.items())
                 result.success = True
                 return result
+            if scope_candidates:
+                return scope_identity_review_result(org, "ND", list(scope_candidates.values()), True, base + "/search/charitable")
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No qualifying North Dakota registration record found"
             result.source_note = "North Dakota completed the bounded name searches without a safely matching registration record."
@@ -16468,6 +16606,8 @@ def search_nd_completed(page, org):
         result.status = "Site Not Reachable" if transport else "Unable to Confirm"
         result.raw_status_text = "North Dakota registry lookup incomplete"
         result.source_note = "North Dakota did not return a completed, confirmed registration result. " + str(exc)
+        if scope_candidates:
+            return scope_identity_review_result(org, "ND", list(scope_candidates.values()), False, base + "/search/charitable")
     return result
 
 
@@ -27634,6 +27774,25 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
             original_name = getattr(org, "original_organization_name", org.organization_name)
             targets = getattr(org, "match_target_names", None) or organization_match_target_variants(original_name, org.ein)
             matched_name = getattr(result, "matched_registry_name", "") or ""
+            if separator_entity_scope_gap(original_name, matched_name, org.ein):
+                records, _, _ = module.load_live_records()
+                selected_rows = [row for row in records if row.contact_number == getattr(external_result, "contact_number", "")
+                    and complete_name_identity_key(row.name) == complete_name_identity_key(matched_name)]
+                observed_eins = {canonical_ein_digits(row.ein) for row in selected_rows if len(canonical_ein_digits(row.ein)) == 9}
+                if observed_eins == {canonical_ein_digits(org.ein)}:
+                    result.verified_registry_ein = canonical_ein_digits(org.ein)
+                    result.identity_anchor = "EIN"
+                    return result
+                if observed_eins and canonical_ein_digits(org.ein) not in observed_eins:
+                    return checker.StateResult(org.organization_name, org.ein, "KS", "Not Registered",
+                        getattr(result, "source_url", ""), success=True,
+                        source_note="The validated Kansas snapshot's selected related-name record has a different EIN; it was excluded.")
+                return scope_identity_review_result(org, "KS", [dict(name=matched_name,
+                    identifier=getattr(result, "matched_registry_identifier", ""), ein="", location="",
+                    url=getattr(result, "source_url", ""), raw_status=getattr(result, "raw_status_text", ""),
+                    status=public_status(result), expiration=parse_due_date(getattr(external_result, "expiration_date", "")),
+                    initial=None, _identity_outcome="possible")],
+                    True, getattr(result, "source_url", ""), freshness=DOWNLOADABLE_DATA_COMMENT_FOOTERS["KS"])
             if not registry_name_is_safe_against_targets(matched_name, targets, original_name, org.ein):
                 rejected = checker.StateResult(org.organization_name, org.ein, "KS", checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
                 rejected.raw_status_text = "Kansas registry row did not safely match the requested organization"
@@ -29707,6 +29866,8 @@ def ar_candidate_identity(row: dict, original_name: str, targets: list[str], ein
     if len(candidate_ein) == 9 and len(expected_ein) == 9:
         return "accept" if candidate_ein == expected_ein else "reject"
     name = str(row.get("name") or "")
+    if separator_entity_scope_gap(original_name, name, ein):
+        return "unconfirmed_scope"
     if ar_registry_name_is_safe(name, original_name, targets, ein):
         return "accept"
     if ar_user_accepted_name_match(name, original_name, ein):
@@ -29868,6 +30029,7 @@ def search_ar_precise(page, org):
     best_score = None
     first_rejected_row = ""
     unconfirmed_name = ""
+    scope_candidates = {}
     reached = False
     rows_seen = 0
     explicit_no_results_seen = False
@@ -29982,6 +30144,11 @@ def search_ar_precise(page, org):
                 variant_targets = organization_match_target_variants(original_name, getattr(org, "ein", ""))
                 identity = ar_candidate_identity(row, original_name, variant_targets, getattr(org, "ein", ""))
                 if identity not in {"accept", "accept_with_ein_caution"}:
+                    if identity == "unconfirmed_scope":
+                        scope_candidates[row_name] = dict(name=row_name, identifier="", ein="", location="",
+                            url=str(page.url), raw_status=row.get("status", ""),
+                            status=ar_status_from_text(row.get("status", "")), initial=row.get("registration_date", ""),
+                            expiration=None, _identity_outcome="possible")
                     if identity == "unconfirmed":
                         unconfirmed_name = unconfirmed_name or row_name
                     if not first_rejected_row:
@@ -30009,6 +30176,11 @@ def search_ar_precise(page, org):
             continue
 
     if not best:
+        if scope_candidates:
+            complete = bool(reached and not result_shell_without_rows and not missing_retrieval_queries()
+                and reviewed_identity_queries_completed(completed_variants + ar_completed_empty_identities(
+                    empty_variants, empty_prefixes, planned_variants), required_identities))
+            return scope_identity_review_result(org, "AR", list(scope_candidates.values()), complete, AR_SEARCH_URL)
         result.queries_attempted = list(attempted_variants)
         result.source_attempts = [
             f"Arkansas attempted bounded high-signal name/alias queries: {', '.join(attempted_variants)}."
@@ -33950,7 +34122,7 @@ def attach_identity_review(data, context):
         clean = {key: row.get(key, "") for key in
                  ("name", "identifier", "ein", "location", "url", "raw_status", "expiration", "license_category", "initial")}
         clean["suggested"] = row.get("suggested") is True
-        if data["state"] in {"AL", "NC", "NV", "TN"}:
+        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC"}:
             # Keep the master interpretation of complete state evidence in the
             # signed snapshot. Identity acceptance cannot substitute a generic
             # Active label for a filing-history or charity-scope decision.
@@ -33997,7 +34169,7 @@ def identity_review_wi_status(row):
 
 
 def identity_review_state_status(state, row):
-    if state in {"AL", "NC", "NV", "TN"}:
+    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC"}:
         status = row.get("interpreted_status")
         return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
             "Pending", "Suspended", "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",

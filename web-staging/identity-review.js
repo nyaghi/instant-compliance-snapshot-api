@@ -50,7 +50,9 @@
         if (candidate.decision) action(controls, 'Undo match', () => decide(candidate.id, 'clear'));
       }
     }
-    if (inconclusive && !review?.candidates?.some(candidate => candidate.decision)) {
+    if (inconclusive && (!review?.candidates?.some(candidate => candidate.decision)
+        || result.state === 'NC' && review.search_complete === false
+          && review.candidates.some(candidate => candidate.decision === 'reject'))) {
       const controls = add(box, 'div', '', 'mt-3');
       action(controls, `Retry ${result.state}`, retry);
     }
