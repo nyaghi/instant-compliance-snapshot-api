@@ -43,7 +43,7 @@ class KentuckyReviewChoices(unittest.TestCase):
                 cc, "NY_CONNECTOR_SIGNING_KEY", "x" * 48), patch.object(cc, "APP_VERSION", "test-staging"):
             first = cc.run_state_lookup(self.name, self.ein, "KY")
             choice = first["identity_review"]["candidates"][0]
-            self.assertEqual(first["status"], "Needs Review")
+            self.assertEqual(first["status"], "Unable to Confirm")
             for action, expected in (("accept", "Current"), ("reject", "Not Registered")):
                 answer = cc.resolve_identity_review({"token": first["identity_review"]["token"],
                     "ein": first["ein"], "state": "KY", "action": action,

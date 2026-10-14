@@ -22,7 +22,7 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
  for(const [i,row] of cards.entries()){
   let expanded=false;
   const panel={getClientRects:()=>expanded?[{}]:[],querySelectorAll:s=>s==='.para-small > .boldSpan'?[...labels(row),...extraLabels.flatMap(labels)]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname.replace(/\d+$/,profileIds?.[i]||'5700751')}]:[]};
-  panels.set('a'+i,panel);buttons.push({querySelector:s=>s==='.searchHeader'?txt(row['CSL Type']==='In-Process'&&!row.License?(displayName||row['CSL Legal Name']):`${displayName||row['CSL Legal Name']} • (${row.License})`):null,getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
+  panels.set('a'+i,panel);buttons.push({querySelector:s=>s==='.searchHeader'?txt(!row.License&&(row['CSL Type']==='In-Process'||row['CSL Type']==='Charitable Organization'&&row.Status==='In-Process')?(displayName||row['CSL Legal Name']):`${displayName||row['CSL Legal Name']} • (${row.License})`):null,getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
  }
  const addressValues=['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'];
  const address={innerText:'Address',parentElement:{querySelectorAll:s=>(s===':scope > .para-small > span'?addressValues:s==='.para-small > span'?['Address',...addressValues]:[]).map(txt)}};
@@ -139,7 +139,7 @@ test('NC preserves an explicitly In-Process application without inventing an iss
  const r=(await h.api.ncRows({state:'NC',operation:'search',name:'Junior'})).evidence;
  assert.equal(r.total,1);assert.equal(r.rows[0].License,'');assert.equal(r.rows[0]['Expiration Date'],'');
  assert.equal(r.rows[0].profile_url,profile);assert.equal(r.rows[0].Status,'In-Process');
- for(const bad of [{...row,Status:'Active'},{...row,'CSL Type':'Charitable Organization'}])
+ for(const bad of [{...row,Status:'Active'},{...row,'CSL Type':'Unknown'}])
   await assert.rejects(harness({cards:[bad],query:'Junior'}).api.ncRows({state:'NC',operation:'search',name:'Junior'}),/CARD_CHANGED/);
 });
 
@@ -329,4 +329,19 @@ test('NC Achieving count groups a pending application with its exact existing le
  for(const change of [{total:2},{total:5},{cards:[...cards.slice(0,2),{...pending,'CSL Legal Name':'Different Name'},cards[3]]},
   {cards:[cards[0],licensed,{...licensed,License:'EX099999'},cards[3]]}])
   await assert.rejects(harness({...opts,...change}).api.ncRows(q));
+});
+
+// Observed numberless charity and denied-application source structures.
+test('NC numberless Charitable Organization In-Process remains a source-bound pending card',async()=>{
+ const card={'CSL Legal Name':'Lahey Clinic, Inc.','CSL Type':'Charitable Organization',Status:'In-Process'};
+ const q={state:'NC',operation:'search',name:'Lahey Clinic'};
+ const row=(await harness({cards:[card],query:q.name}).api.ncRows(q)).evidence.rows[0];
+ assert.equal(row.License,'');assert.equal(row.Status,'In-Process');assert.equal(row['CSL Type'],'Charitable Organization');
+ assert.equal(row.profile_url,profile);
+});
+test('NC denied numberless application is collected without inventing a license or approval',async()=>{
+ const card={'CSL Legal Name':'Mount Auburn Hospital','CSL Type':'In-Process',Status:'Denied'};
+ const q={state:'NC',operation:'search',name:card['CSL Legal Name']};
+ const row=(await harness({cards:[card],query:q.name}).api.ncRows(q)).evidence.rows[0];
+ assert.equal(row.License,'');assert.equal(row.Status,'Denied');assert.equal(row['Expiration Date'],'');
 });

@@ -28,7 +28,7 @@ class InactiveConsensusTests(unittest.TestCase):
             context.__enter__ = Mock(return_value=pending)
             context.__exit__ = Mock(return_value=False)
             return context
-        page.expect_response.side_effect = [response(data), response(detail)]
+        page.expect_response.side_effect = [response(data), *(response(detail) for _ in rows)]
         org = cc.checker.Organization(name, "123456789")
         with patch.object(cc, "nd_search_queries", return_value=[name]):
             result = cc.search_nd_completed(page, org)
@@ -83,8 +83,11 @@ class InactiveConsensusTests(unittest.TestCase):
 
     def test_two_active_records_are_not_assumed_current(self):
         result, page, _ = self.lookup([row(1, status="Active"), row(2, status="Active")])
-        self.assertEqual(result.status, "Unable to Confirm")
-        self.assertEqual(page.expect_response.call_count, 1)
+        self.assertEqual(result.status, "Needs Review")  # internal bucket; public API displays Confirm match
+        self.assertFalse(result.success)
+        self.assertEqual(page.expect_response.call_count, 3)
+        self.assertEqual(len(result._cc_identity_review['records']), 2)
+        self.assertTrue(result._cc_identity_review['search_complete'])
 
     def test_single_inactive_record_keeps_detail_path(self):
         result, page, _ = self.lookup([row(1)], detail_status="Inactive - Involuntary")
@@ -102,7 +105,9 @@ class InactiveConsensusTests(unittest.TestCase):
         with patch.object(cc, "registry_name_is_safe_against_targets", return_value=True), \
                 patch.object(cc.checker, "candidate_selection_score_for_targets", return_value=(700, 0)):
             result, _, _ = self.lookup([row(1, "Example Relief Foundation"), row(2, "Example Relief Society")])
-        self.assertEqual(result.status, "Unable to Confirm")
+        self.assertEqual(result.status, "Needs Review")
+        self.assertFalse(result.success)
+        self.assertEqual(len(result._cc_identity_review['records']), 2)
 
     def test_reviewed_full_alias_remains_eligible(self):
         token = cc.REVIEWED_NAME_CONTEXT.set({"123456789": ["Former Relief Network"]})

@@ -51,3 +51,14 @@ test('a capped backend response retains evidence and still permits adding a know
  assert.equal(window.CCIdentity.names().length,7);assert.match(ids.identityMessage.textContent,/seven prioritized names/);
  assert.equal(ids.addAlternateName.disabled,false);
 });
+test('address evidence is displayed safely and cleared when organization changes',async()=>{
+ const {ids,window}=await setup([],null,{addresses:[{street:'1 Main St',city:'Boston',state:'MA',postal_code:'02110',historical:true,
+  evidence:[{source:'IRS',source_date:'2024-12-31',checked_date:'2026-10-14',url:'https://irs.example/record'},
+  {source:'Untrusted',url:'javascript:alert(1)'}]}]});
+ const list=ids.identityAddressList;assert.equal(list.children[0].textContent,'EIN-verified organization addresses');
+ const item=list.children[1];assert.equal(item.children[0].textContent,'1 Main St, Boston, MA, 02110');
+ assert.equal(item.children[1].textContent,'Historical address');
+ assert.equal(item.children[2].href,'https://irs.example/record');assert.match(item.children[2].textContent,/source 2024-12-31.*checked 2026-10-14/);
+ assert.equal(item.children[3].href,undefined);assert.equal(window.CCIdentity.ready(),true);
+ ids.organizationName.value='Another Entity';ids.organizationName.events.input();assert.equal(list.children.length,0);
+});

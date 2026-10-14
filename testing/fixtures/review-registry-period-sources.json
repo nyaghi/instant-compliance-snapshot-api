@@ -1,0 +1,32 @@
+[
+  {
+    "file": "hi-group-return-2024.pdf",
+    "source_url": "https://charity.ehawaii.gov/charity/attachments/irs/833051191/2024/0/T/833051191.012926/8600762026029l730750/attachment/833051191a_704769_Attachment_IRSForm_1.pdf",
+    "reported_ein": "833051191",
+    "filing_ein": "320534221",
+    "included_subordinate_eins": [
+      "833051191",
+      "474444592"
+    ],
+    "membership_page": 29,
+    "period_assumed": true,
+    "irs_rule_reference": "https://www.irs.gov/pub/irs-prior/i990--2024.pdf",
+    "sha256": "a685d8e7b1d11a102ea3b6fce1068d28b35f6ce6025a55b0b89629faa83c8205",
+    "source_review_date": "2026-10-14"
+  },
+  {
+    "file": "ma-older-indexed-form-pc.tiff",
+    "source_url": "https://masscharities.my.site.com/FilingSearch/s/",
+    "registry_record_url": "https://masscharities.my.site.com/FilingSearch/s/detail/a095e000009Ho9oAAC",
+    "download_control": "Download Attachment FY2022 PC - Form PC/Annual RPT.tiff",
+    "reported_ein": "461723968",
+    "ago_account": "059129",
+    "source_year_label": 2022,
+    "actual_period_start": "2020-01-01",
+    "actual_period_end": "2020-12-31",
+    "newer_electronic_form_url": "https://masscharities.my.site.com/FilingSearch/s/detail/a0B4U00001Ee4DnUAJ",
+    "newer_electronic_form_year": 2022,
+    "sha256": "211d504a4189f25dca2594818f495b8d42da6a4d1dc625ce28b651d4f43b03cd",
+    "source_review_date": "2026-10-14"
+  }
+]

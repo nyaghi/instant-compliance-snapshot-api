@@ -12,6 +12,8 @@
   const review = document.getElementById("identityReview");
   const summary = document.getElementById("identitySummary");
   const elapsed = document.getElementById("identityElapsed");
+  const addressList = document.getElementById("identityAddressList");
+  let addresses = [];
   let revision = 0, reviewedIdentity = "", rows = [], busy = false, controller;
   let discoveryStartedAt = 0, discoveryInterval;
   const identity = () => `${einInput.value.replace(/\D/g, "")}|${nameInput.value.trim()}`;
@@ -28,7 +30,8 @@
     discoveryInterval = setInterval(() => { elapsed.textContent = `Finding names… ${discoveryTime()}`; }, 1000);
   }
   function invalidate() {
-    revision++; controller?.abort(); reviewedIdentity = ""; rows = [];
+    revision++; controller?.abort(); reviewedIdentity = ""; rows = []; addresses = [];
+    addressList?.replaceChildren();
     clearInterval(discoveryInterval);
     if (elapsed) { elapsed.hidden = true; elapsed.textContent = ""; }
     list.replaceChildren(); review.hidden = true; find.disabled = busy;
@@ -39,6 +42,21 @@
   [einInput, nameInput].forEach(input => input.addEventListener("input", invalidate));
   function render() {
     list.replaceChildren();
+    if (addressList) {
+      addressList.replaceChildren();
+      if (addresses.length) addressList.append(text('p', 'EIN-verified organization addresses', 'font-semibold text-slate-900'));
+      for (const address of addresses) {
+        const item = text('div', '', 'mt-2 text-xs text-slate-600');
+        item.append(text('p', [address.street, address.city, address.state, address.postal_code].filter(Boolean).join(', ')));
+        if (address.historical) item.append(text('p', 'Historical address'));
+        for (const evidence of address.evidence || []) {
+          const proof = text('a', [evidence.source, evidence.source_date ? `source ${evidence.source_date.slice(0,10)}` : '', evidence.checked_date ? `checked ${evidence.checked_date}` : ''].filter(Boolean).join(' · '), 'mr-2 underline');
+          if (/^https:\/\//.test(evidence.url || '')) { proof.href = evidence.url; proof.target = '_blank'; proof.rel = 'noopener noreferrer'; }
+          item.append(proof);
+        }
+        addressList.append(item);
+      }
+    }
     rows.forEach((row, index) => {
       const box = text("div", "", "rounded-lg border border-slate-200 bg-white p-3");
       const line = text("div", "", "flex items-start gap-2");
@@ -123,6 +141,7 @@
 
       if (requestRevision !== revision || requestIdentity !== identity()) return;
       rows = (data.names || []).slice(0, 7).map(row => ({...row, original: row.name, selected: !row.identity_conflict}));
+      addresses = Array.isArray(data.addresses) ? data.addresses : [];
       const limitations = (data.sources || []).filter(source => !source.complete).map(source => `${source.source}: ${source.limitation || "Some records were unavailable."}`);
       message.textContent = limitations.length ? `Some sources were unavailable. You can review the names found, add names, and continue. ${limitations.join(" ")}` :
         rows.length ? "Review the names below. Keep only names that belong to this organization." : "No additional names were confirmed. You can add names or continue with your entered name.";
@@ -131,7 +150,7 @@
       discoveryCompleted = true;
     } catch (error) {
       if (requestRevision !== revision || requestIdentity !== identity()) return;
-      rows = []; reviewedIdentity = requestIdentity;
+      rows = []; addresses = []; reviewedIdentity = requestIdentity;
       message.textContent = "Alternate-name discovery could not finish. You can enter names manually or continue with your entered name. Registration checks have not started.";
     } finally {
       clearTimeout(timeout);

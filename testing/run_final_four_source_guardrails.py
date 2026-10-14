@@ -288,7 +288,7 @@ class SourceControls(unittest.TestCase):
             withdrawn = cc.nc_charity_record_evidence({**fields, 'Status': raw})
             self.assertEqual(withdrawn['status'], 'Closed / Withdrawn / Canceled')
             self.assertEqual(withdrawn['raw_status'], raw)
-        for bad in [{'Status': 'Active'}, {'CSL Type': 'Charitable Organization'},
+        for bad in [{'Status': 'Active'}, {'CSL Type': 'Unknown'},
                     {'Expiration Date': '12/31/2027'}, {'profile_url': 'https://example.com/profile/1'}]:
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 cc.nc_charity_record_evidence({**fields, **bad})

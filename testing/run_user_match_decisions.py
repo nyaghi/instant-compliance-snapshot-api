@@ -45,14 +45,14 @@ class DecisionTests(unittest.TestCase):
         accepted=self.decide(initial,'accept',status='Exempt')
         self.assertEqual(accepted['status'],'Current')
         self.assertEqual(accepted['matched_registry_identifier'],'NV123456789')
-        self.assertEqual(self.decide(accepted,'clear')['status'],'Needs Review')
+        self.assertEqual(self.decide(accepted,'clear')['status'],'Unable to Confirm')
         self.assertEqual(self.decide(initial,'reject')['status'],'Not Registered')
         self.assertEqual(self.decide(self.result('NV',complete=False,rows=[row]),'reject')['status'],'Unable to Confirm')
     def test_other_unresolved_candidate_prevents_negative(self):
         r=self.result();token=c.identity_review_unpack(r['identity_review']['token'],self.email,self.device)
         second={**token['records'][0],'id':'second','identifier':'REG456'};token['records'].append(second)
         r['identity_review']=c.identity_review_view(token)
-        r=self.decide(r,'reject');self.assertEqual(r['status'],'Needs Review')
+        r=self.decide(r,'reject');self.assertEqual(r['status'],'Unable to Confirm')
         r=self.decide(r,'accept',1);self.assertEqual(r['status'],'Current');self.assertEqual(r['matched_registry_identifier'],'REG456')
     def test_final_four_acceptance_preserves_signed_master_interpretation(self):
         for state,status in [('TN','Delinquent'),('NC','Exempt'),('NC','Pending'),
@@ -84,7 +84,7 @@ class DecisionTests(unittest.TestCase):
             self.assertNotIn('identity_review',r)
     def test_undo_restores_unresolved_match(self):
         r=self.decide(self.decide(self.result()),'clear')
-        self.assertEqual(r['status'],'Needs Review');self.assertEqual(r['identity_review']['candidates'][0]['decision'],'')
+        self.assertEqual(r['status'],'Unable to Confirm');self.assertEqual(r['identity_review']['candidates'][0]['decision'],'')
     def test_wrong_ein_state_candidate_or_action_rejected(self):
         for values in [dict(ein='98-7654321'),dict(state='GA'),dict(candidate_id='unknown'),dict(action='current')]:
             with self.subTest(values=values),self.assertRaises(ValueError):self.decide(self.result(),**values)

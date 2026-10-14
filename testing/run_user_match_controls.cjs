@@ -37,3 +37,13 @@ test('undo stays available after a completed identity decision',()=>{
 test('script URLs are not rendered as source links',()=>{
  assert.ok(!setup({...result,identity_review:{candidates:[{...candidate,source_url:'javascript:alert(1)'}]}}).some(e=>e.tag==='a'));
 });
+test('unresolved signed candidates display Confirm match; failed access stays Unable to Confirm',()=>{
+ const window={};vm.runInNewContext(fs.readFileSync(__dirname+'/../web-staging/identity-review.js','utf8'),{window,URL});
+ const label=window.CCIdentityReview.statusLabel;
+ assert.equal(label(result),'Confirm match');
+ assert.equal(label({status:'Unable to Confirm',identity_review:result.identity_review}),'Confirm match');
+ assert.equal(label({status:'Needs Review'}),'Unable to Confirm');
+ assert.equal(label({status:'Unable to Confirm'}),'Unable to Confirm');
+ assert.equal(label({status:'Current',identity_review:{candidates:[{...candidate,decision:'accept'}]}}),'Current');
+ assert.equal(label({status:'Not Registered',identity_review:{candidates:[{...candidate,decision:'reject'}]}}),'Not Registered');
+});

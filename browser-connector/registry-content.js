@@ -1084,9 +1084,11 @@
       const headerText=text(button.querySelector('.searchHeader'));
       // NC can retain an explicit adverse status and dates on a card
       // categorized In-Process even though it displays no issued number.
-      const pending=fields['CSL Type']==='In-Process'&&!fields.License&&
-        (fields.Status==='In-Process'||/\bWithdrawn\b/i.test(fields.Status||'')||
-          (fields.Status||'').trim().toLowerCase()==='expired license');
+      const pending=!fields.License&&(
+        fields['CSL Type']==='In-Process'&&
+          (fields.Status==='In-Process'||/\bWithdrawn\b/i.test(fields.Status||'')||
+           /^(?:expired license|denied)$/i.test((fields.Status||'').trim()))||
+        fields['CSL Type']==='Charitable Organization'&&fields.Status==='In-Process');
       const header=headerText.match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
       const displayName=pending?headerText:header?.[1].trim();
       const names=[...new Set([...legal,...other])];

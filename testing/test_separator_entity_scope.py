@@ -64,7 +64,7 @@ class ScopeControls(unittest.TestCase):
    with self.subTest(state=state):
     data=self.review(state,True,status);self.assertEqual(self.decide(data,'accept')['status'],status)
     rejected=self.decide(data,'reject');self.assertEqual(rejected['status'],'Not Registered');self.assertIn('Source freshness retained',rejected['comments'])
-    self.assertEqual(self.decide(rejected,'clear')['status'],'Needs Review')
+    self.assertEqual(self.decide(rejected,'clear')['status'],'Unable to Confirm')
  def retry(self,data,**extra):
   payload=dict(action='start',state='NC',mode='standard',organization_name=self.name,ein=self.ein,email=self.email,admin_passcode='test',device_id=self.device,identity_review_token=data['identity_review']['token']);payload.update(extra)
   with patch.object(c,'trial_identity',return_value={'origin':self.origin,'permanent_staging':True}),patch.object(c,'is_verified_internal_passcode',return_value=True),patch.object(c,'final_four_connector_advance',side_effect=lambda r:{'phase':'search','query':{'state':'NC','operation':'search','name':'Pending Search'},'query_id':'qid','observed_context':c.USER_IDENTITY_CONTEXT.get(),'observed_names':c.known_names_for_ein(self.ein)}):

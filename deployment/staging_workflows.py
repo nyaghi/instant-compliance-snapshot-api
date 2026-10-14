@@ -129,6 +129,8 @@ def public_result(master, job, record):
     context = result.get('_worker_identity_review')
     if context:
         master.attach_identity_review(data, context)
+    if hasattr(master, 'confirmation_result_for_public'):
+        master.confirmation_result_for_public(data)
     return data
 
 

@@ -3450,6 +3450,69 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
     return irs_scanned_header_period(scanned_images, ein, label, url, deadline, require_complete=require_complete)
 
 
+def hi_group_return_period(body: bytes, ein: str, label: int, url: str, deadline: float) -> dict:
+    """Bind a state-hosted group return to its explicitly included subordinate.
+
+    A shared group name or an EIN elsewhere in a return is insufficient. IRS
+    Form 990 Item H's included-subordinate list must identify the requested EIN
+    and the same group-return EIN printed on the return header. See IRS Form
+    990 instructions, Item H; this never adds the group's name as an alias.
+    """
+    digits = canonical_ein_digits(ein)
+    source = urlparse(url)
+    if (source.hostname != "charity.ehawaii.gov" or not re.fullmatch(r"\d{9}", digits)
+            or not source.path.startswith(f"/charity/attachments/irs/{digits}/{label}/")
+            or time.monotonic() >= deadline or not body.startswith(b"%PDF") or not PdfReader):
+        return {}
+    reader = PdfReader(io.BytesIO(body))
+    if not reader.pages or len(reader.pages) > 80:
+        return {}
+    header = reader.pages[0].extract_text() or ""
+    if not re.search(r"Return\s+of\s+Organization\s+Exempt\s+From\s+Income\s+Tax", header, re.I):
+        return {}
+    eins = lambda text: {canonical_ein_digits(value) for value in re.findall(r"\b\d{2}-\d{7}\b", text)}
+    header_eins = eins(header) - {digits}
+    if not header_eins:
+        return {}
+    # Use text already in the downloaded file, not supplemental discovery or
+    # another registry request. Missing/truncated proof stays inconclusive.
+    matches = []
+    for index, page in enumerate(reader.pages[1:], 1):
+        if time.monotonic() >= deadline:
+            raise FilingPeriodReadIncomplete("Group-return membership scan deadline reached")
+        text = page.extract_text() or ""
+        if re.search(r"Return\s+of\s+Organization\s+Exempt\s+From\s+Income\s+Tax", text, re.I):
+            return {}  # A bundled second return cannot inherit the first return's membership/period.
+        if not (re.search(r"\bForm\s+990\b", text, re.I)
+                and re.search(r"\bItem\s*H\b", text, re.I)
+                and re.search(r"\bSubordinates\s+(?:included\s+)?for\s+(?:the\s+)?Group\s+Return\b", text, re.I)):
+            continue
+        if re.search(r"\bnot\s+included\b|\bexcluded\b|\bnonparticipating\b", text, re.I):
+            continue
+        if digits not in eins(text):
+            continue
+        groups = header_eins & eins(text)
+        if len(groups) == 1:
+            matches.append((next(iter(groups)), index + 1))
+    if not matches or len({group for group, _ in matches}) != 1:
+        return {}
+    group_ein, membership_page = matches[0]
+    # The ordinary reader must fully read this same document's filing header.
+    # If its fiscal dates are absent, preserve the existing disclosed calendar
+    # assumption instead of describing an assumed period as an actual period.
+    period = form990_pdf_period(body, group_ein, label, url, deadline, require_complete=True)
+    if period:
+        period = dict(period, ein=digits)
+    else:
+        period = assumed_calendar_period(digits, label, url)
+    period.update(filing_ein=group_ein, group_return_member_ein=digits,
+                  membership_pdf_page=membership_page,
+                  identity_basis="The state-hosted Form 990 Item H included-subordinate list names this exact EIN and its group-return EIN.")
+    period["period_basis"] = ("Hawaii's filing attachment explicitly includes this EIN in the group return. "
+                              + (period.get("period_basis") or "The fiscal period was read from that same group-return header."))
+    return period
+
+
 def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> dict:
     digits = canonical_ein_digits(ein)
     pattern = r'<a\b[^>]*\brel="(/charity/attachments/irs/' + digits + '/' + str(label) + r'/[^"<>]+\.pdf)"[^>]*>([^<]+)'
@@ -3464,7 +3527,14 @@ def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> 
             with TAX_PERIOD_EVIDENCE_LOCK:
                 cached = HI_DOCUMENT_PERIOD_CACHE.get(key)
             if cached and cached[0] > time.time(): return dict(cached[1])
-            evidence = form990_pdf_period(body, ein, label, url, deadline, require_complete=True)
+            try:
+                evidence = form990_pdf_period(body, ein, label, url, deadline, require_complete=True)
+            except FilingPeriodReadIncomplete as exc:
+                if str(exc) != "The same-EIN filing header was not found":
+                    raise
+                evidence = hi_group_return_period(body, ein, label, url, deadline)
+                if not evidence:
+                    raise
             if evidence:
                 with TAX_PERIOD_EVIDENCE_LOCK:
                     if len(HI_DOCUMENT_PERIOD_CACHE) >= 256:
@@ -3487,7 +3557,8 @@ def hi_public_filing_period(page, ein: str) -> dict:
     except FilingPeriodReadIncomplete as exc:
         evidence = {}; read_failure = str(exc)
     if evidence:
-        return {**evidence, "state_source_url": page.url, "period_basis": "Hawaii filing attachment"}
+        return {**evidence, "state_source_url": page.url,
+                "period_basis": evidence.get("period_basis") or "Hawaii filing attachment"}
     # The exact state label remains the anchor if its attachment is scanned.
     evidence = irs_period_for_label(ein, label, deadline)
     if evidence:
@@ -3569,6 +3640,43 @@ def prioritized_discovery_names(organization_name: str, names: list[dict]) -> li
     return sorted(names, key=priority)[:IDENTITY_DISCOVERED_NAME_LIMIT]
 
 
+def discovered_organization_addresses(ein: str, sources: list[dict]) -> list[dict]:
+    """Expose already retrieved, EIN-bound organization offices without new I/O."""
+    requested, merged = canonical_ein_digits(ein), {}
+    if not re.fullmatch(r"\d{9}", requested):
+        return []
+    for source in sources:
+        source_name = str(source.get("source") or "")
+        records = list(source.get("organization_records") or [])
+        for field in ("address", "filer_address"):
+            address = source.get(field)
+            if isinstance(address, dict):
+                records.append({**address, "address_role": address.get("address_role", "organization")})
+        for record in records:
+            if (not isinstance(record, dict) or record.get("address_role") != "organization"
+                    or canonical_ein_digits(str(record.get("ein") or "")) != requested):
+                continue
+            street = str(record.get("street") or "").strip()
+            city = str(record.get("city") or "").strip()
+            region = str(record.get("state") or "").strip()
+            postal = str(record.get("postal_code") or record.get("zipcode") or "").strip()
+            if not city or not region:
+                continue
+            key = tuple(re.sub(r"[^a-z0-9]", "", value.casefold()) for value in (street, city, region, postal))
+            evidence = {"source": source_name, "url": record.get("source_url") or source.get("source_url") or "",
+                        "source_date": record.get("source_date") or source.get("source_date") or "",
+                        "checked_date": str(record.get("retrieved_at") or source.get("retrieved_at") or "")[:10],
+                        "historical": record.get("historical") is True}
+            if key not in merged:
+                merged[key] = {"ein": format_ein(requested), "street": street, "city": city, "state": region,
+                               "postal_code": postal, "evidence": [], "historical": evidence["historical"]}
+            item = merged[key]
+            item["historical"] &= evidence["historical"]
+            if evidence not in item["evidence"]:
+                item["evidence"].append(evidence)
+    return list(merged.values())[:12]
+
+
 def discover_organization_names(organization_name: str, ein: str) -> dict:
     start = time.monotonic(); deadline = start + IDENTITY_DEADLINE_SECONDS
     if not isinstance(ein, str) or not re.fullmatch(r"\d{2}-?\d{7}", ein.strip()):
@@ -3645,7 +3753,8 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
             item["historical"] = False
     selected_names = prioritized_discovery_names(organization_name, names)
     return {"organization_name": organization_name.strip(), "ein": format_ein(ein),
-            "names": selected_names, "sources": [{k: v for k, v in r.items() if k != "names"} for r in results],
+            "names": selected_names, "addresses": discovered_organization_addresses(ein, results),
+            "sources": [{k: v for k, v in r.items() if k != "names"} for r in results],
             "names_omitted": len(names) - len(selected_names),
             "partial": any(not r.get("complete") for r in results) or len(names) > IDENTITY_DISCOVERED_NAME_LIMIT,
             "seconds": round(time.monotonic() - start, 3), "app_version": APP_VERSION}
@@ -6120,7 +6229,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6226,8 +6335,11 @@ def nc_charity_record_evidence(fields):
     kind = fields["CSL Type"].strip()
     raw = re.sub(r"\s+", " ", fields["Status"]).strip()
     expired_unnumbered = raw.casefold() == "expired license"
-    unissued = kind == "In-Process" and not identifier and (
-        raw == "In-Process" or bool(re.search(r"\bwithdrawn\b", raw, re.I)) or expired_unnumbered)
+    denied_application = kind == "In-Process" and not identifier and raw.casefold() == "denied"
+    unissued = not identifier and (
+        kind == "In-Process" and (raw == "In-Process" or bool(re.search(r"\bwithdrawn\b", raw, re.I))
+                                  or expired_unnumbered or denied_application)
+        or kind == "Charitable Organization" and raw == "In-Process")
     # NC retains historical SL/EX identifiers when the explicit record category
     # changes. Validate both source fields without deriving one from the other.
     non_charity_scope = kind == "Fund-Raising Consultant" and bool(re.fullmatch(r"SL\d+", identifier))
@@ -6250,12 +6362,13 @@ def nc_charity_record_evidence(fields):
             raise ValueError("North Carolina expired numberless record has no expiration date")
         return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1], ein="", aliases=aliases,
                     unissued_application=True, raw_status=raw,
+                    non_charity_scope=denied_application, license_category=kind,
                     # The source categorizes this numberless record as an
                     # unissued application. An "Expired License" label and
                     # historical dates do not establish an issued license.
                     # Withdrawn remains an explicit terminal application
                     # status; otherwise the application is pending.
-                    status=(licensed_charity_status(raw, extension or expiration)
+                    status=("Unable to Confirm" if denied_application else licensed_charity_status(raw, extension or expiration)
                             if re.search(r"\bwithdrawn\b", raw, re.I) else "Pending"),
                     url=fields["profile_url"],
                     expiration=extension or expiration, base_expiration=expiration, extension_end=extension,
@@ -7400,8 +7513,10 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
             if (best and best['decision'] == 'accepted'
                     and any(ms_registry_name_is_safe(row['name'], target, '') for target in reviewed)):
                 accepted.append(row)
-            elif best and best['decision'] in {'accepted', 'possible'}:
-                possible.append(row['name'])
+            elif (best and best['decision'] in {'accepted', 'possible'}
+                  and len(distinctive_match_tokens(row['name'])) >= 2):
+                if not any(item['identifier'] == row['identifier'] for item in possible):
+                    possible.append(row)
         # Two plausible filing numbers need a user identity decision. Read each
         # detail now so later confirmation can apply only signed state evidence.
         if len(accepted) > 1:
@@ -7464,6 +7579,19 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
         result.source_note = (result.source_note + ' ' if getattr(result, 'source_note', '') else '') + \
             'The public Mississippi search row and detail filing number matched; status uses the displayed Filing Status and Expiration Date.'
         return result
+    candidates = []
+    for row in possible[:10]:
+        detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
+        fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
+        if normalized_match_name(fields['Name']) != normalized_match_name(row['name']) or not fields['Filing Status'].strip():
+            raise ValueError('Mississippi review detail identity or status changed')
+        expiration = module.parse_mmddyyyy_date(fields['Expiration Date']) if fields['Expiration Date'] else None
+        if fields['Expiration Date'] and not expiration:
+            raise ValueError('Mississippi review expiration date is malformed')
+        candidates.append(dict(name=row['name'], identifier=row['identifier'], ein='', location='',
+                               url=MS_BROWSER_SOURCE, raw_status=fields['Filing Status'].strip(),
+                               expiration=expiration.isoformat() if expiration else '', initial='',
+                               _identity_outcome='possible'))
     result = checker.StateResult(org.organization_name, org.ein, 'MS',
                                   'Needs Review' if possible else 'Not Registered',
                                  MS_BROWSER_SOURCE)
@@ -7472,6 +7600,9 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
     result.source_note = ('Mississippi returned one or more possible identities, but none was confirmed safely.'
                           if not result.success else
                           'Mississippi completed all planned public name searches without a qualifying registration record.')
+    if candidates:
+        result._cc_identity_review = {'records': candidates, 'search_complete': len(possible) <= 10,
+                                     'exclusive': True, 'freshness': ''}
     return result
 
 
@@ -8479,7 +8610,7 @@ def licensed_charity_identity(org, row, state, deadline):
     if address.get("decision") == "conflict":
         address = licensed_charity_street_evidence(org, row, deadline) or address
     row["address_evidence"] = address
-    if decision.get("reason") == "REVIEW_SEPARATOR_ENTITY_SCOPE":
+    if decision.get("reason") in {"REVIEW_SEPARATOR_ENTITY_SCOPE", "REVIEW_INSTITUTIONAL_ENTITY"}:
         foreign = address if address.get("decision") == "different_ein" else licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
         if foreign:
             row["address_evidence"] = foreign
@@ -9033,14 +9164,31 @@ def scope_identity_review_result(org, state, rows, complete, source, *, freshnes
             source_note="Generic shared words do not identify the requested organization. "
                         + ("The search completed without a qualifying record." if complete else "The search remains incomplete."))
     result = checker.StateResult(org.organization_name, org.ein, state, "Needs Review", source, success=False)
-    result.source_note = (f"{state} returned a specific related-name record, but it omits the requested entity's "
-                          "distinguishing qualifier. No registration status is assigned before identity is confirmed.")
+    result.source_note = (f"{state} returned specific plausible organization records whose identities remain unconfirmed. "
+                          "Accept or reject each match before its registration status is applied.")
     if not complete:
         result.source_note += " The search is incomplete; rejecting a record cannot establish non-registration."
     result._cc_identity_review = {"records": rows, "search_complete": complete, "freshness": freshness}
     if freshness:
         result.source_note += " " + freshness
     return result
+
+
+def institutional_entity_extension_requires_review(original_name: str, registry_name: str, ein: str = "") -> bool:
+    """An added institutional entity is not established by a shared brand or office."""
+    original, registry = complete_name_identity_key(original_name), complete_name_identity_key(registry_name)
+    if not original or not registry or original == registry:
+        return False
+    if any(registry == complete_name_identity_key(name) for name in known_names_for_ein(ein)):
+        return False
+    shorter, longer = sorted((original.split(), registry.split()), key=len)
+    if len(shorter) < 2 or len(longer) == len(shorter):
+        return False
+    extra = (longer[len(shorter):] if longer[:len(shorter)] == shorter else
+             longer[:-len(shorter)] if longer[-len(shorter):] == shorter else [])
+    added = set(extra)
+    return bool(added & {"hospital", "hospitals", "clinic", "clinics", "health", "system"}
+                or "foundation" in added and set(shorter) & {"hospital", "hospitals", "clinic", "clinics", "university", "college", "medical", "health"})
 
 
 def score_candidate(expected_name: str, expected_ein: str | None, candidate: dict) -> dict:
@@ -9059,6 +9207,9 @@ def score_candidate(expected_name: str, expected_ein: str | None, candidate: dic
             reason = "MATCH_EIN_EXACT"
         else:
             return {"score": -100, "decision": "rejected", "reason": "REJECT_DIFFERENT_EIN"}
+    if (candidate_name and reason != "MATCH_EIN_EXACT"
+            and institutional_entity_extension_requires_review(expected_name, candidate_name, expected_ein or "")):
+        return {"score": 55, "decision": "possible", "reason": "REVIEW_INSTITUTIONAL_ENTITY"}
     if (candidate_name and reason != "MATCH_EIN_EXACT"
             and separator_entity_scope_gap(expected_name, candidate_name, expected_ein or "")):
         if len(distinctive_match_tokens(candidate_name)) < 2:
@@ -9122,6 +9273,8 @@ def result_registry_name_is_safe(result, original_name: str, ein: str = "") -> b
 
 
 def registry_name_is_safe_against_targets(registry_name: str, targets: list[str], original_name: str, ein: str = "") -> bool:
+    if institutional_entity_extension_requires_review(original_name, registry_name, ein):
+        return False
     registry_name = clean_registry_name(registry_name or "")
     if not registry_name:
         return False
@@ -16496,7 +16649,7 @@ def search_nd_completed(page, org):
     deadline = time.perf_counter() + 35.0
     targets = organization_match_target_variants(org.organization_name, org.ein)
     queries = nd_search_queries(org)
-    scope_candidates = {}
+    scope_candidates, review_truncated = {}, False
     try:
         page.goto(base + "/search/charitable", wait_until="domcontentloaded", timeout=12000)
         search_input = page.locator('input[placeholder*="Search by name"], input[aria-label*="Search by name"], input[type="text"]').first
@@ -16533,7 +16686,8 @@ def search_nd_completed(page, org):
                     if not isinstance(row, dict) or not isinstance(row.get("TITLE"), list) or not row["TITLE"] or not row.get("ID"):
                         raise ValueError("North Dakota returned an incomplete search row")
                     name = str(row["TITLE"][0]).strip()
-                    scope_review = separator_entity_scope_gap(org.organization_name, name, org.ein)
+                    scope_review = (separator_entity_scope_gap(org.organization_name, name, org.ein)
+                                    or institutional_entity_extension_requires_review(org.organization_name, name, org.ein))
                     if scope_review or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein):
                         rank = checker.candidate_selection_score_for_targets(name, targets, str(row.get("STATUS", "")))
                         candidates.append(((not scope_review, rank), dict(row, _scope_review=scope_review)))
@@ -16570,40 +16724,44 @@ def search_nd_completed(page, org):
                         result._cc_detail_body = ""  # No single record's filing dates are selected.
                         result.success = True
                         return result
-                    raise ValueError("North Dakota returned equally ranked registration records")
-                selected = candidates[0][1]
-                if selected.get("_scope_review") and str(selected["ID"]) in scope_candidates:
-                    continue
-                detail = request("/api/FilingDetail/charitable/" + quote(str(selected["ID"]), safe="") + "/false")
-                if not isinstance(detail, dict) or not isinstance(detail.get("DRAWER_DETAIL_LIST"), list):
-                    raise ValueError("North Dakota detail response incomplete")
-                fields = {str(row.get("LABEL", "")).strip(): str(row.get("VALUE") or "").strip()
-                          for row in detail["DRAWER_DETAIL_LIST"] if isinstance(row, dict)}
-                if not fields.get("Status"):
-                    raise ValueError("North Dakota detail did not contain a registration status")
-                if selected.get("_scope_review"):
-                    detail_body = "\n".join(f"{key}: {value}" for key, value in fields.items())
-                    source_result = checker.StateResult(org.organization_name, org.ein, "ND", fields["Status"], base,
-                        raw_status_text=fields["Status"], matched_registry_name=selected["TITLE"][0],
-                        matched_registry_identifier=str(selected.get("RECORD_NUM") or selected["ID"]))
-                    interpreted = true_status_from_body(source_result, detail_body)
-                    scope_candidates[str(selected["ID"])] = dict(name=selected["TITLE"][0],
-                        identifier=str(selected.get("RECORD_NUM") or selected["ID"]), ein="", aliases=[],
-                        location=fields.get("Principal Address", ""), url=base + "/search/charitable",
-                        raw_status=fields["Status"], status=interpreted,
-                        expiration=parse_due_date(getattr(source_result, "computed_due_date", "")),
-                        initial=None, _identity_outcome="possible")
-                    continue
-                result.matched_registry_name = selected["TITLE"][0]
-                result.matched_registry_identifier = str(selected.get("RECORD_NUM") or selected["ID"])
-                result.raw_status_text = fields["Status"]
-                result.status = fields["Status"]
-                result.source_note = "North Dakota's completed public search and selected registration detail supplied the status."
-                result._cc_detail_body = "\n".join(f"{key}: {value}" for key, value in fields.items())
-                result.success = True
-                return result
+                    for _, row in candidates:
+                        row["_scope_review"] = True
+                selected_rows = [row for _, row in candidates] if any(row.get("_scope_review") for _, row in candidates) else [candidates[0][1]]
+                review_truncated |= len(selected_rows) > 10
+                selected_rows = selected_rows[:10]
+                for selected in selected_rows:
+                    if selected.get("_scope_review") and str(selected["ID"]) in scope_candidates:
+                        continue
+                    detail = request("/api/FilingDetail/charitable/" + quote(str(selected["ID"]), safe="") + "/false")
+                    if not isinstance(detail, dict) or not isinstance(detail.get("DRAWER_DETAIL_LIST"), list):
+                        raise ValueError("North Dakota detail response incomplete")
+                    fields = {str(row.get("LABEL", "")).strip(): str(row.get("VALUE") or "").strip()
+                              for row in detail["DRAWER_DETAIL_LIST"] if isinstance(row, dict)}
+                    if not fields.get("Status"):
+                        raise ValueError("North Dakota detail did not contain a registration status")
+                    if selected.get("_scope_review"):
+                        detail_body = "\n".join(f"{key}: {value}" for key, value in fields.items())
+                        source_result = checker.StateResult(org.organization_name, org.ein, "ND", fields["Status"], base,
+                            raw_status_text=fields["Status"], matched_registry_name=selected["TITLE"][0],
+                            matched_registry_identifier=str(selected.get("RECORD_NUM") or selected["ID"]))
+                        interpreted = true_status_from_body(source_result, detail_body)
+                        scope_candidates[str(selected["ID"])] = dict(name=selected["TITLE"][0],
+                            identifier=str(selected.get("RECORD_NUM") or selected["ID"]), ein="", aliases=[],
+                            location=fields.get("Principal Address", ""), url=base + "/search/charitable",
+                            raw_status=fields["Status"], status=interpreted,
+                            expiration=parse_due_date(getattr(source_result, "computed_due_date", "")),
+                            initial=None, _identity_outcome="possible")
+                        continue
+                    result.matched_registry_name = selected["TITLE"][0]
+                    result.matched_registry_identifier = str(selected.get("RECORD_NUM") or selected["ID"])
+                    result.raw_status_text = fields["Status"]
+                    result.status = fields["Status"]
+                    result.source_note = "North Dakota's completed public search and selected registration detail supplied the status."
+                    result._cc_detail_body = "\n".join(f"{key}: {value}" for key, value in fields.items())
+                    result.success = True
+                    return result
             if scope_candidates:
-                return scope_identity_review_result(org, "ND", list(scope_candidates.values()), True, base + "/search/charitable")
+                return scope_identity_review_result(org, "ND", list(scope_candidates.values()), not review_truncated, base + "/search/charitable")
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No qualifying North Dakota registration record found"
             result.source_note = "North Dakota completed the bounded name searches without a safely matching registration record."
@@ -18502,7 +18660,7 @@ def ma_scanned_registry_identity(text: str, account: str, ein: str, record: dict
                                       for line in text.splitlines())
 
 
-def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein: str, period_text: str = "", *, registry_record=None, document_url: str = "") -> dict:
+def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein: str, period_text: str = "", *, registry_record=None, document_url: str = "", allow_older_period: bool = False) -> dict:
     """Require the actual Form PC, corroborated identity and its labeled period."""
     readable = re.sub(r"\s+", " ", text or "")
     if not re.search(r"\bForm\s+PC\b", readable, re.I):
@@ -18541,10 +18699,12 @@ def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein
     if len(dates) != 2 or not all(dates):
         return {}
     start, end = dates
-    if end.year != expected_year or end > date.today() or not 0 < (end-start).days <= 400:
+    older_indexed_period = (allow_older_period and end.year < expected_year and eins == {ein})
+    if (end.year != expected_year and not older_indexed_period) or end > date.today() or not 0 < (end-start).days <= 400:
         return {}
     return {"filing_year": expected_year, "period_start": format_date(start), "period_end": format_date(end),
             "filing_status": "Submitted", "ago_account": account, "legacy_scanned_form_pc": True,
+            **({"filing_year": end.year, "source_year_label": expected_year} if older_indexed_period else {}),
             **({"legacy_identity_from_registry": True} if registry_identity else {})}
 
 
@@ -18594,7 +18754,7 @@ def ma_scanned_urs_overdue_evidence(text: str, expected_year: int, account: str,
 
 
 @release_native_memory_after
-def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=None) -> dict:
+def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=None, *, allow_older_period: bool = False) -> dict:
     global _MA_LEGACY_OCR
     record = completed.get("record", {})
     if record.get("ago_account") != account or not record.get("ein"):
@@ -18638,7 +18798,8 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
                 document_eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", text)}
                 read_progress["complete"] = document_eins == {record["ein"]}
                 read_progress["identity_conflict"] = bool(document_eins - {record["ein"]})
-            evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], registry_record=record, document_url=row["url"])
+            evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], registry_record=record,
+                document_url=row["url"], allow_older_period=allow_older_period)
             if not evidence:
                 years = (completed.get("filings", {}).get(account, {}).get("document_years", [])
                          + completed.get("registration_documents", {}).get(account, {}).get("document_years", []))
@@ -18648,7 +18809,8 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
                 with _MA_LEGACY_OCR_LOCK:
                     period_text = ma_scanned_period_row_text(scanned, lines, _MA_LEGACY_OCR)
                 if period_text:
-                    evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], period_text, registry_record=record, document_url=row["url"])
+                    evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], period_text,
+                        registry_record=record, document_url=row["url"], allow_older_period=allow_older_period)
                     if evidence:
                         evidence["legacy_period_row_reread"] = True
         if evidence:
@@ -18757,11 +18919,22 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
                     detail.close()
         if any(int(r["year"]) == latest_year for r in completed.get("registration_documents", {}).get(account.group(1), {}).get("annual_scans", [])
                if re.fullmatch(r"20\d{2}", r.get("year", ""))):
-            legacy = ma_read_legacy_form_pc(page, completed, account.group(1))
+            # A source year label can index an older paper form. Only after
+            # reading the submitted electronic period, allow the same-EIN,
+            # AGO-bound scan's actual earlier period to enter reconciliation.
+            # A newer/conflicting/missing period still cannot be discarded.
+            legacy = ma_read_legacy_form_pc(page, completed, account.group(1), allow_older_period=True)
             if not legacy.get("period_end"):
                 return context
             forms.append(legacy)
-        return {**ma_latest_distinct_fiscal_period(forms), **context}
+        reconciled = ma_latest_distinct_fiscal_period(forms)
+        if reconciled:
+            older = [form for form in forms if form.get("source_year_label")]
+            if older:
+                reconciled["reconciled_legacy_documents"] = [
+                    {key: form.get(key) for key in ("source_year_label", "filing_year", "period_start", "period_end", "source_url")}
+                    for form in older]
+        return {**reconciled, **context}
     except Exception as exc:
         log_event(f"MA Form PC detail unavailable for AGO {account.group(1)}: {type(exc).__name__}")
         if isinstance(exc, OSError) or type(exc).__name__ == "TimeoutError":
@@ -22225,6 +22398,18 @@ def renewal_filing_metadata(result, dates: dict, final_status=None, body="") -> 
     return empty
 
 
+def confirmation_result_for_public(data: dict) -> dict:
+    """Keep legacy internal review buckets out of customer-facing results."""
+    if data.get("status") == "Needs Review":
+        data.update(status="Unable to Confirm", success=False)
+        for field in ("comments", "source_note"):
+            if isinstance(data.get(field), str):
+                data[field] = data[field].replace("Needs Review", "Unable to Confirm")
+    candidates = (data.get("identity_review") or {}).get("candidates", [])
+    data["confirmation_required"] = bool(not data.get("success") and any(not c.get("decision") for c in candidates))
+    return data
+
+
 def response_data_for_lookup(result, body: str, org, organization_name: str, ein: str, state: str, lookup_started: float) -> dict:
     if result is None:
         result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
@@ -22376,7 +22561,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     if getattr(result, "_cc_identity_review", None):
         attach_identity_review(data, result._cc_identity_review)
     log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
-    return data
+    return confirmation_result_for_public(data)
 
 
 def reason_code_for_result(result, status: str) -> str:
@@ -25251,7 +25436,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -25306,7 +25491,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -27017,10 +27202,12 @@ def search_ky_strict_snapshot(org):
         one_letter_gap = not exact_target and review_prefilter and any(
             ky_one_letter_review_candidate(target, registry_name) for target in original_targets)
         user_confirmed_row = (reviewed_row.get("identifier") == registry_id
-                              and reviewed_row.get("name") == registry_name and one_letter_gap)
+                              and reviewed_row.get("name") == registry_name)
+        if reviewed_row and not user_confirmed_row:
+            continue
         if one_letter_gap and not user_confirmed_row:
             near_rows.append((registry_id, registry_name, filed_year, record_text))
-        names = ky_registry_name_variants(registry_name)
+        names = [registry_name] if user_confirmed_row else ky_registry_name_variants(registry_name)
         # Some legal-name cells contain an explicit DBA marker themselves.
         # Keep both stated identities; every segment still needs the guard below.
         names = list(dict.fromkeys([
@@ -27036,7 +27223,7 @@ def search_ky_strict_snapshot(org):
                 continue
             if not confirmed_candidate and not ky_candidate_passes_fast_prefilter(registry_norm, target_first_words, target_norms):
                 continue
-            if len(names) > 1 and not ky_registry_column_name_is_safe(
+            if not confirmed_candidate and len(names) > 1 and not ky_registry_column_name_is_safe(
                     candidate_name, getattr(org, "original_organization_name", org.organization_name), org.ein):
                 continue
             score = 700 if confirmed_candidate else ky_strict_name_score(candidate_name, target_norms, org.organization_name)
@@ -27085,6 +27272,15 @@ def search_ky_strict_snapshot(org):
             "The list does not provide EINs, so CharityClarity cannot determine which record belongs "
             "to this organization. Review the candidate records before choosing one."
         )
+        identifiers = {identifier for identifier, _ in tied_records}
+        candidates = [dict(name=name, identifier=identifier, ein="", location="",
+                           url=downloadable_data_info("KY").get("source_url", ""),
+                           raw_status=f"Yr Last Filed: {year}" if year else "",
+                           status="Unable to Confirm", expiration="", initial="", _identity_outcome="possible")
+                      for identifier, name, year, _ in load_ky_snapshot_records() if identifier in identifiers]
+        result.success = False
+        result._cc_identity_review = {"records": candidates, "search_complete": True,
+                                     "exclusive": True, "freshness": ""}
         return result
     registry_id, registry_name, filed_year, record_text = best
     result.status = checker.STATUS_CURRENT
@@ -27108,7 +27304,7 @@ def search_ky_strict_snapshot(org):
     result.matched_registry_identifier = registry_id
     result.source_note = (
         "Kentucky downloadable public charity registration snapshot matched the organization name "
-        + ("after the user confirmed this one-letter identity difference."
+        + ("after the user confirmed this specific registry identity."
            if reviewed_row.get("identifier") == registry_id and reviewed_row.get("name") == registry_name
            else "under strict master-code validation.")
     )
@@ -29873,7 +30069,8 @@ def ar_candidate_identity(row: dict, original_name: str, targets: list[str], ein
     if len(candidate_ein) == 9 and len(expected_ein) == 9:
         return "accept" if candidate_ein == expected_ein else "reject"
     name = str(row.get("name") or "")
-    if separator_entity_scope_gap(original_name, name, ein):
+    if (separator_entity_scope_gap(original_name, name, ein)
+            or institutional_entity_extension_requires_review(original_name, name, ein)):
         return "unconfirmed_scope"
     if ar_registry_name_is_safe(name, original_name, targets, ein):
         return "accept"
@@ -30151,7 +30348,7 @@ def search_ar_precise(page, org):
                 variant_targets = organization_match_target_variants(original_name, getattr(org, "ein", ""))
                 identity = ar_candidate_identity(row, original_name, variant_targets, getattr(org, "ein", ""))
                 if identity not in {"accept", "accept_with_ein_caution"}:
-                    if identity == "unconfirmed_scope":
+                    if identity in {"unconfirmed_scope", "unconfirmed"}:
                         scope_candidates[row_name] = dict(name=row_name, identifier="", ein="", location="",
                             url=str(page.url), raw_status=row.get("status", ""),
                             status=ar_status_from_text(row.get("status", "")), initial=row.get("registration_date", ""),
@@ -34323,7 +34520,7 @@ def resolve_identity_review(payload, email, device):
     # Preserve a newly found candidate's token after continued Wisconsin search.
     if "identity_review" not in data: data["identity_review"] = identity_review_view(record)
     log_event(f"Identity review {base['state']} {base['ein']} {selected['identifier']}: {action} by {email}; result {data['status']}")
-    return data
+    return confirmation_result_for_public(data)
 
 
 def normalize_organization_requests(payload: dict, privileged: bool) -> list[dict]:

@@ -57,5 +57,10 @@
       action(controls, `Retry ${result.state}`, retry);
     }
   }
-  window.CCIdentityReview = Object.freeze({render});
+  function statusLabel(result) {
+    const inconclusive = ['Needs Review', 'Unable to Confirm', 'Site Not Reachable', 'No Confirmed Match'].includes(result.status);
+    if (inconclusive && result.identity_review?.candidates?.some(candidate => !candidate.decision)) return 'Confirm match';
+    return result.status === 'Needs Review' ? 'Unable to Confirm' : result.status || 'Unknown';
+  }
+  window.CCIdentityReview = Object.freeze({render, statusLabel});
 })();
