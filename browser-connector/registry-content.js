@@ -815,6 +815,15 @@
     return evidence;
   }
   const tnObserved = new Map();
+  let tnLastDiagnostics=[];
+  function tnTrace(phase, started, extra={}) {
+    // Public lifecycle facts only: no names, contact fields, HTML or tokens.
+    if(tnLastDiagnostics.length>=16)return;
+    const dialog=document.querySelector('#KendoWindowLevel1');
+    tnLastDiagnostics.push({phase,elapsed_ms:Math.max(0,Date.now()-started),
+      visibility:['visible','hidden'].includes(document.visibilityState)?document.visibilityState:'unknown',
+      dialog_visible:visible(dialog),loading_visible:[...document.querySelectorAll('.k-loading-mask')].some(visible),...extra});
+  }
   function tnPage() {
     const grids = [...document.querySelectorAll('.k-grid')].filter(el => el.closest('[id^="SearchResults_"]'));
     if (grids.length !== 1) throw new Error('REGISTRY_TN_GRID_INCOMPLETE');
@@ -954,7 +963,10 @@
         ||Object.keys(query).sort().join(',')!=='identifier,operation,state')throw new Error('REGISTRY_COMMAND_INVALID');
     const selected=tnObserved.get(query.identifier);
     if(!selected)throw new Error('REGISTRY_TN_DETAIL_NOT_OBSERVED');
+    const started=Date.now();
+    tnTrace('detail-start',started);
     await tnCloseDetail(deadline);
+    tnTrace('prior-closed',started);
     let page=tnPage();
     while(page.page!==selected.page) {
       const direction=page.page>selected.page?'previous':'next';
@@ -974,8 +986,18 @@
       return tnFields(selected);
     };
     let fields;
+    const publicError=event=>{
+      // Report a bounded category, never the site's raw error or stack.
+      const message=typeof event.message==='string'?event.message:'';
+      const category=/dataItem|getEventGrid|getRowForEdit/.test(message)?'grid-binding'
+        :/Details_[a-f0-9]+.*(?:not a function|not defined)/i.test(message)?'details-handler'
+        :event.error?.name==='TypeError'?'type-error':'other';
+      tnTrace('public-error',started,{category});
+    };
+    window.addEventListener?.('error',publicError);
     try {
       fields=await wait(readDetail,Math.max(1,detailEnd-Date.now()),{action:()=>{
+        tnTrace('detail-click',started);
         buttons[0].click();
         // Kendo can hide the prior modal before binding the next Details
         // action. Repeat only an unstarted click against the unchanged,
@@ -995,15 +1017,17 @@
             const freshButtons=[...fresh.rows[matches[0].index].querySelectorAll('button')]
               .filter(el=>text(el)==='Details');
             if(freshButtons.length!==1)return;
-            retryUsed=true;freshButtons[0].click();
+            retryUsed=true;tnTrace('detail-retry',started);freshButtons[0].click();
           } catch { /* Changed or incomplete evidence cannot authorize a retry. */ }
         },750);
       }});
     } catch(error) {
+      tnTrace('detail-incomplete',started,{request_observed:detailStarted,retried:retryUsed});
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE' && !detailStarted)
         throw new Error(retryUsed?'REGISTRY_TN_DETAIL_RETRY_NOT_STARTED':'REGISTRY_TN_DETAIL_NOT_STARTED');
       throw error;
-    } finally {clearTimeout(retryTimer);}
+    } finally {clearTimeout(retryTimer);window.removeEventListener?.('error',publicError);}
+    tnTrace('detail-ready',started);
     try { Object.assign(fields,await wait(()=>{
       try {return tnFinancials(document.querySelector('#KendoWindowLevel1'));}
       catch(error) {if(error.message==='REGISTRY_TN_FINANCIALS_INCOMPLETE')return null;throw error;}
@@ -1726,7 +1750,9 @@
       return nvReturnSearch(Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000));
     if (TN && m.action === 'registry-tn') {
       const deadline=Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000);
-      return {ok:true,evidence:m.query?.operation==='search'?await tnSearch(m.query,deadline):await tnDetail(m.query,deadline)};
+      tnLastDiagnostics=[];
+      const evidence=m.query?.operation==='search'?await tnSearch(m.query,deadline):await tnDetail(m.query,deadline);
+      return {ok:true,evidence,tn_diagnostics:tnLastDiagnostics};
     }
     if (NV && m.action === 'registry-nv') {
       const maximum=m.query?.operation==='search'?150000:45000;
@@ -1806,6 +1832,7 @@
       reply({ok:false,reason:trialReason || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
         ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState}} : {}),
         ...(MS ? {ms_diagnostic:{...msLastDiagnostic,source_error:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'}} : {}),
+        ...(TN ? {tn_diagnostics:tnLastDiagnostics} : {}),
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;

@@ -14,6 +14,32 @@ NODE = Path.home() / '.cache/codex-runtimes/codex-primary-runtime/dependencies/n
 
 
 class TrialDiagnosticExport(unittest.TestCase):
+    def test_tennessee_completed_message_reaches_dom_trace_without_other_state_regression(self):
+        with patch.object(performance_lab, 'trial_identity', return_value={'origin': 'https://fixture-final-four.onrender.com'}):
+            page = performance_lab.final_four_asset('index.html', (ROOT / 'web-staging/index.html').read_text(encoding='utf-8'))
+            connector = performance_lab.final_four_asset('ny-connector.js', (ROOT / 'web-staging/ny-connector.js').read_text(encoding='utf-8'))
+        start = page.index('              if (detail && [')
+        end_marker = '                traceNode.textContent = JSON.stringify(events);\n              }'
+        capture = page[start:page.index(end_marker, start)+len(end_marker)]
+        expression = re.search(r'(\[[^\]]+\]\.includes\(registryState\) && Array\.isArray\(completed\.trial_diagnostics\) \? \{trial_diagnostics:completed\.trial_diagnostics\} : \{\})', connector)
+        self.assertIsNotNone(expression)
+        program = r'''const vm=require('node:vm'),assert=require('node:assert/strict');
+const nodes=new Map(),context={window:{},Date,JSON,document:{getElementById:id=>nodes.get(id),
+ createElement:()=>({}),body:{appendChild:n=>nodes.set(n.id,n)}}};
+vm.createContext(context);vm.runInContext('function capture(detail){'+CAPTURE+'}',context);
+for(const registryState of ['TN','MS','NC','GA']){
+ const completed={trial_diagnostics:[{type:'tn-dom',detail:'{"phase":"public-error","category":"grid-binding"}'}]};
+ const extra=new Function('registryState','completed','return ('+EXPRESSION+')')(registryState,completed);
+ context.capture({state:registryState,stage:'browser query returned',...extra});
+}
+const trace=JSON.parse(nodes.get('cc-lab-state-trace').textContent);
+assert.deepEqual(trace.map(e=>e.state),['TN','MS','NC','GA']);
+assert.equal(trace[0].trial_diagnostics[0].type,'tn-dom');
+assert.equal(JSON.parse(trace[0].trial_diagnostics[0].detail).category,'grid-binding');
+console.log('TN message-to-DOM trace and mature-state controls passed');'''.replace('CAPTURE',json.dumps(capture)).replace('EXPRESSION',json.dumps(expression[1]))
+        result = subprocess.run([str(NODE), '-e', program], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def test_excel_download_contains_trace_and_unchanged_results_table(self):
         with patch.object(performance_lab, 'trial_identity', return_value={'origin': 'https://fixture-final-four.onrender.com'}):
             page = performance_lab.final_four_asset('index.html', (ROOT / 'web-staging/index.html').read_text(encoding='utf-8'))

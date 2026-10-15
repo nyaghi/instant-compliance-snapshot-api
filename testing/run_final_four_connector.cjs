@@ -460,6 +460,26 @@ test('AL ordinary searches reuse only the trial-owned verified page, not another
  assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
 });
 
+test('TN lifecycle diagnostics are bounded, sanitized and kept out of evidence interpretation',async()=>{
+ const h=fixture(),send=h.chrome.tabs.sendMessage;await tick();
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  const result=await send(tab,m);
+  if(m.action==='registry-tn')result.tn_diagnostics=[
+   {phase:'public-error',elapsed_ms:1,visibility:'visible',category:'grid-binding',private:'SECRET'},
+   {phase:'private-contact',elapsed_ms:2,visibility:'visible',category:'SECRET'},
+   {phase:'detail-click',elapsed_ms:-1,visibility:'visible'},
+   ...Array.from({length:30},()=>({phase:'detail-ready',elapsed_ms:12,visibility:'hidden',dialog_visible:true,private:'SECRET'}))];
+  return result;
+ };
+ const p=connect(h,'TN');const result=await h.query(p,2,{state:'TN',operation:'search',name:'Example Charity'});
+ assert.equal(result.ok,true);assert.equal(result.evidence.complete,true);
+ assert.ok(result.trial_diagnostics.some(e=>e.type==='tn-dom'));
+ const saved=vm.runInContext("activeLanes.get('TN').trialDiagnostics",h.context);
+ const entries=saved.filter(e=>e.type==='tn-dom');
+ assert.equal(entries.length,14);assert.ok(!JSON.stringify(entries).includes('SECRET'));
+ assert.equal(JSON.parse(entries[0].detail).category,'grid-binding');
+ assert.ok(!JSON.stringify(result.evidence).includes('tn_diagnostics'));
+});
 test('TN consecutive workflows reuse an initialized owned page with fresh query evidence',async()=>{
  const h=fixture(),p=connect(h,'TN'),query={state:'TN',operation:'search',name:'First Charity'};
  assert.equal((await h.query(p,2,query)).ok,true);

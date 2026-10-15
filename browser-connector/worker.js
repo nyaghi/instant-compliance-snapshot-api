@@ -48,7 +48,7 @@ function diagnostic(type, job, detail = "") {
   const at=Date.now(), summary=String(detail).slice(0,180);
   diagnostics.push({ at, type, id: job?.lookupId || "", phase: job?.pending ? "search" : isActive(job) ? "active" : "queued", detail: summary });
   if (diagnostics.length > 80) diagnostics.shift();
-  if(P.TRIAL_ORIGIN && job && ["GA","MS"].includes(job.registryState)) {
+  if(P.TRIAL_ORIGIN && job && ["GA","MS","TN"].includes(job.registryState)) {
     job.trialDiagnostics ||= [];
     job.trialDiagnostics.push({at,type,detail:String(detail).slice(0,600)});
     if(job.trialDiagnostics.length>120)job.trialDiagnostics.shift();
@@ -171,7 +171,7 @@ function allowedSender(sender) {
   catch { return false; }
 }
 function post(job, message) {
-  if(P.TRIAL_ORIGIN && ["GA","MS"].includes(job.registryState)
+  if(P.TRIAL_ORIGIN && ["GA","MS","TN"].includes(job.registryState)
       && (message.action==="closed" || (typeof message.ok==="boolean" && !message.progress)))
     message={...message,trial_diagnostics:[...(job.trialDiagnostics||[])]};
   try { job.port.postMessage(message); } catch {}

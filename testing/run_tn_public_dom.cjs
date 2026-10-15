@@ -2,13 +2,13 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js'):path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
- .replace('  async function handle(m) {','  globalThis.testTN={tnPage,tnFields,tnFinancials,tnSearch,tnDetail};\n  async function handle(m) {');
+ .replace('  async function handle(m) {','  globalThis.testTN={tnPage,tnFields,tnFinancials,tnSearch,tnDetail,get diagnostics(){return tnLastDiagnostics;}};\n  async function handle(m) {');
 const columns=[null,'Id','Id','FileNumber','DisplayName','OtherNames','Status','City','StateName','StateCode','RegistrationDate'];
 const national=['Details','unused summary','2162','CO2559','YWCA USA, INC.',"YOUNG WOMEN'S CHRISTIAN ASSOCIATION OF THE UNITED STATES OF AMERICA, INC.\nYWCA OF THE U.S.A.",'Active','WASHINGTON','DC','DC','5/12/1995'];
 const local=['Details','unused summary','3596572','CO224','YWCA NASHVILLE & MIDDLE TENNESSEE','','Active','NASHVILLE','TN','TN','11/14/1985'];
-function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false}={}) {
+function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false,pageErrorOnClick=null}={}) {
  let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=!closedInitially,opened=[],detailClicks=0;
- const events=new Map(),observers=new Set(),root={};
+ const events=new Map(),observers=new Set(),root={},errorListeners=new Set();
  const later=(fn,ms)=>{let id=++serial;events.set(id,{fn,at:clock+ms});return id;};
  const target={nodeType:1,closest:()=>({}),matches:()=>false,querySelector:()=>null};
  const mask={nodeType:1,matches:s=>s==='.k-loading-mask',querySelector:()=>null,getClientRects:()=>loading?[{}]:[]};
@@ -25,7 +25,9 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
   querySelector:q=>q==='h2'?txt(detailName):q==='#DetailsTabStrip-1'?{querySelector:()=>financial}:null,
   querySelectorAll:q=>q==='h4'?h4s:q==='.col-md-6 > h4'?h4s.slice(0,4):q==='#DetailsTabStrip > li > a'?[...(financialTab?[financialLink]:[]),...(officersTab?[officersLink]:[])]:[]};
  const table={querySelectorAll:q=>q==='thead th'?columns.map(c=>({getAttribute:()=>c})):doneRows.map(cells=>({children:cells.map(txt),
-  querySelectorAll:q=>q==='button'?[{innerText:'Details',click:()=>{detailClicks++;if(detailClicks<=ignoredDetailClicks){
+  querySelectorAll:q=>q==='button'?[{innerText:'Details',click:()=>{detailClicks++;
+   if(pageErrorOnClick)for(const listener of errorListeners)listener({message:pageErrorOnClick,error:{name:'TypeError'}});
+   if(detailClicks<=ignoredDetailClicks){
    if(changedQueryOnClick)later(()=>{inputs.Name.value='DIFFERENT QUERY';mutate();},100);
    if(changedRowOnClick)later(()=>{doneRows=doneRows.map(r=>r[3]===targetId?r.map((v,i)=>i===6?'Changed':v):r);mutate();},100);
    return;}
@@ -39,7 +41,7 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
  }};
  const document={documentElement:root,readyState:'complete',querySelector:q=>q==='#KendoWindowLevel1'?dialog:q.startsWith('input[id^=')?inputs[q.match(/="([^_]+)_/)[1]]:null,
   querySelectorAll:q=>q==='.k-grid'?[grid]:q==='button[id^="Search_"]'?[search]:(q==='[id^="SearchResults_"] .k-loading-mask'||q==='.k-loading-mask')?[mask]:[]};
- const win={};win.top=win;
+ const win={addEventListener:(type,fn)=>{if(type==='error')errorListeners.add(fn);},removeEventListener:(type,fn)=>{if(type==='error')errorListeners.delete(fn);}};win.top=win;
  const context={window:win,document,location:{origin:'https://tncab.tnsos.gov'},Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},
   HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
   MutationObserver:class{constructor(fn){this.fn=fn;}observe(){observers.add(this);}disconnect(){observers.delete(this);}},
@@ -47,7 +49,7 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
  vm.createContext(context);vm.runInContext(source,context);
  async function drive(p) {let done=false,value,error;p.then(v=>{done=true;value=v;},e=>{done=true;error=e;});
   for(let n=0;!done&&n<1000;n++){for(let i=0;i<20;i++)await Promise.resolve();if(done)break;const next=[...events].sort((a,b)=>a[1].at-b[1].at)[0];assert.ok(next);events.delete(next[0]);clock=next[1].at;next[1].fn();}
-  assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
+  assert.ok(done);assert.equal(observers.size,0);assert.equal(errorListeners.size,0);if(error)throw error;return value;
  }
  return {api:context.testTN,drive,h4s,dialog,grid,table,opened,get clicks(){return detailClicks;},get time(){return clock;},
   search:()=>drive(context.testTN.tnSearch({state:'TN',operation:'search',name:queryName},clock+45000)),
@@ -106,4 +108,19 @@ test('Tennessee recovery repeats at most once and keeps the original 25-second d
  const f=fixture({ignoredDetailClicks:5});await f.search();const start=f.time;
  await assert.rejects(f.detail(),/DETAIL_RETRY_NOT_STARTED/);
  assert.equal(f.clicks,2);assert.equal(f.time-start,25000);assert.deepEqual(f.opened,[]);
+});
+test('Tennessee diagnostics retain only lifecycle facts and a sanitized public-error category',async()=>{
+ const f=fixture({ignoredDetailClicks:5,pageErrorOnClick:'Cannot read dataItem; private contact and token must not be retained'});
+ await f.search();await assert.rejects(f.detail(),/DETAIL_RETRY_NOT_STARTED/);
+ const entries=f.api.diagnostics;
+ assert.equal(entries.find(e=>e.phase==='public-error').category,'grid-binding');
+ assert.equal(entries.at(-1).elapsed_ms,25000);assert.ok(entries.length<=16);
+ const serialized=JSON.stringify(entries);
+ for(const value of ['private contact','token','ERIC ROSENBERG','CO2559','YWCA','1400 I STREET'])assert.ok(!serialized.includes(value));
+ assert.equal(f.clicks,2);
+});
+test('Tennessee diagnostic observation does not add clicks or delay a completed detail',async()=>{
+ const f=fixture();await f.search();const start=f.time;await f.detail();
+ assert.equal(f.clicks,1);assert.equal(f.time-start,50);
+ assert.deepEqual(Array.from(f.api.diagnostics,e=>e.phase),['detail-start','prior-closed','detail-click','detail-ready']);
 });

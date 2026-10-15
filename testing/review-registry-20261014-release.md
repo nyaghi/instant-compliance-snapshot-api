@@ -162,9 +162,10 @@ changes; it is not live collector regression or speed validation. Counts overlap
 29.2EY (0aeec46) is deployed to the staging API and all three workers. Connector
 130 is active. Loyola returns Exempt in 9s after 16s discovery. All 31 approved
 NV controls match the re-read current sheet, with complete separate exports.
-Thirty match archived EV statuses and identifiers; Solid Rock now resolves its
-exact record through the earlier EW dash-query repair, agreeing with the current
-sheet. Discovery: 10/15/28s min/median/max. NV execution: 7/15/32s. The gray area
+Thirty match archived EV statuses and identifiers. Solid Rock's EV search did not
+start; its current completed search confirms NV20253326287 and agrees with the
+sheet. The old trace does not establish which prior change resolved that failure.
+Discovery: 10/15/28s min/median/max. NV execution: 7/15/32s. The gray area
 is hidden after completion. There is no comparable full-31 EW NV-only timing
 baseline, and native popup borders remain unverified. These remain release gates.
 The final CO/TN smoke returns CO Suspended as expected and TN Unable to Confirm.
@@ -191,8 +192,57 @@ are byte-identical. Source collector/shared tests: 457 pass. Actual packaged
 TN/NV/NC/NY isolation: 158 pass. Focused TN tests: 22 pass. The new ignored-click
 controls fail on 130 as retained in the reproduction log. The 31-organization
 saved-result replay still has 198 comparisons and zero interpretation changes.
-Counts overlap. Full live TN controls and a positive Lahey result are pending;
-keep EY/130 available and do not call this hypothesis a verified fix yet.
+Counts overlap. After the user activated131 and unlocked staging on October15,
+the Lahey CO/TN target returned CO Suspended and TN Unable to Confirm in31s
+after13s discovery. DETAIL_RETRY_NOT_STARTED proves131 participated and made
+its bounded retry, which did not resolve the live target. One separate targeted
+retry also remained inconclusive; the hidden prior panel then contained Hospital
+rather than Foundation. Both exports and business-only observations are saved.
+A manual ordinary close/open on the retained source loaded exact Clinic.
+The root cause of successive modal failure remains unproven. No matching or
+status rule has been relaxed.130/131 share the staging message channel, so sole
+active trial confirmation is pending before further live checks; interference
+is a hypothesis, not an observed finding. The restricted Chrome Extensions page
+requires user action and must not be inspected through alternate automation.
+The user subsequently confirmed131 is the sole enabled trial, ruling out that
+setup hypothesis. A later diagnostic retry stopped before opening any TN page
+with connector unavailable; preserve it separately from the detail failures.
+Full31 live TN controls remain held until the reported target succeeds. Keep
+EY/130 available and do not call131 a verified fix.
+
+### Tennessee diagnostic1 — activated, staging trace support prepared
+
+The separate offline package `connector-0.6.131-tn-diagnostic1` retains semantic
+version131 for admission to the existing29.2EZ backend and identifies itself by
+manifest name/version_name as TN Diagnostic1. The package needs no new backend
+version admission. Integration review found two existing staging trace filters
+that omit TN, however;29.2FA adds TN to those filters so returned public facts
+survive the existing DOM trace and Excel export. No master interpretation change.
+It captures at most16 public lifecycle entries per command: elapsed time,
+visibility, modal/loading booleans, retry observation and sanitized public
+JavaScript error categories. It never collects raw errors, stacks, HTML,
+contacts, names, tokens or additional registry data. The error observer is
+removed after success or failure and does not cancel or alter page events.
+The worker accepts only bounded enumerated entries for the TN trial path and
+exports them through the existing bounded trial-diagnostics field. The offline
+builder preserves NC diagnostics already in the known working package.
+
+Source files changed for diagnosis: registry-content.js, registry-worker.js and
+worker.js; tests run_tn_public_dom.cjs and run_final_four_connector.cjs. No click,
+request, matching, classification, deadline, protocol, permission or geometry
+changes. Source shared suite460pass; actual packaged DOM/isolation160pass;
+actual packaged sanitized diagnostic-export test1pass. Counts overlap. Tests
+show one successful normal detail still takes50ms in the fixture with one click,
+and an unstarted detail still takes25000ms with at most two clicks; these are
+offline assertions, not live speed validation. The user activated Diagnostic1
+and unlocked the staging page. The trace-support change passed71 backend/UI
+tests, including TN message-to-DOM/export, existing-state controls and the shared
+identity/Sales checks. Saved-result replay remains198 comparisons with zero
+interpretation changes and11 inherited sheet differences; it does not replay
+collectors or validate speed. Paired staging deployment is prepared. The package
+has not completed live regression and is not a verified repair. Its originally
+recorded build metadata describes package admission only; the later trace-filter
+correction requires a staging frontend refresh after deployment.
 
 Production is untouched. Recommendation: do not promote while TN, identity,
 calendar-policy, comparable performance and native popup-placement gates remain.

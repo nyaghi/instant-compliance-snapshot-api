@@ -766,6 +766,18 @@ async function performRegistryQuery(job, query) {
     // deadline; never borrow another state's time or reset Sales' one minute.
     const allowance=query.state==='NV'&&query.operation==='search'?150000:45000;
     let response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
+    if(P.TRIAL_ORIGIN && query.state==='TN') {
+      const phases=['detail-start','prior-closed','detail-click','detail-retry','detail-incomplete','detail-ready','public-error'];
+      for(const entry of Array.isArray(response?.tn_diagnostics)?response.tn_diagnostics.slice(0,16):[]) {
+        if(!phases.includes(entry?.phase)||!Number.isFinite(entry.elapsed_ms)||entry.elapsed_ms<0)continue;
+        const sample={phase:entry.phase,ms:Math.round(entry.elapsed_ms),
+          visibility:['visible','hidden'].includes(entry.visibility)?entry.visibility:'unknown'};
+        for(const key of ['dialog_visible','loading_visible','request_observed','retried'])
+          if(typeof entry[key]==='boolean')sample[key]=entry[key];
+        if(['grid-binding','details-handler','type-error','other'].includes(entry.category))sample.category=entry.category;
+        diagnostic('tn-dom',job,JSON.stringify(sample));
+      }
+    }
     if (P.TRIAL_ORIGIN && query.state==='NV' && query.operation==='search'
         && ['NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED','NY_CONNECTOR_REGISTRY_NV_FORM_NOT_SETTLED'].includes(response?.reason)
         && !job.nvModeRecoveryUsed && job.activeExpiresAt-Date.now()>8000) {
