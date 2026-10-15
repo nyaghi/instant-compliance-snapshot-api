@@ -32,7 +32,7 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
    if(changedRowOnClick)later(()=>{doneRows=doneRows.map(r=>r[3]===targetId?r.map((v,i)=>i===6?'Changed':v):r);mutate();},100);
    return;}
    opened.push(cells[3]);if(watchId)phase('started');if(detailLoading){loading=true;mutate([mask]);}
-   later(()=>{loading=false;dialogVisible=true;mutate();if(watchId)phase('finished',{http_status:requestStatus});},detailDelay);}}]:[]}))};
+   later(()=>{loading=false;dialogVisible=true;mutate();if(watchId)phase('finished',{http_status:requestStatus,retry_after_ms:7000});},detailDelay);}}]:[]}))};
  const grid={closest:()=>({}),get innerText(){return doneRows.length?'Public search results':'No Records Available';},
   querySelector:q=>q==='table[role="grid"]'?table:q==='.k-pager-info'?txt(doneRows.length?`1 - ${doneRows.length} of ${doneRows.length} items`:'No items to display'):
    q==='[aria-current="page"]'?txt(doneRows.length?'1':'0'):null};
@@ -133,6 +133,13 @@ test('a slow real detail request without any loading mask is never clicked twice
 });
 test('a failed observed HTTP request cannot turn visible stale detail fields into evidence',async()=>{
  const f=fixture({requestStatus:500});await f.search();await assert.rejects(f.detail(),/RESPONSE_INCOMPLETE/);assert.equal(f.clicks,1);
+});
+
+test('HTTP429 stops detail collection immediately and retains only the public retry interval',async()=>{
+ const f=fixture({requestStatus:429});await f.search();const start=f.time;
+ await assert.rejects(f.detail(),error=>error.message==='REGISTRY_TN_RATE_LIMITED'&&error.retryAfterMs===7000);
+ assert.equal(f.clicks,1);assert.equal(f.time-start,50);
+ assert.equal(f.api.diagnostics.at(-1).phase,'detail-incomplete');
 });
 test('missing observer retains one ordinary detail action and never authorizes a blind retry',async()=>{
  const positive=fixture({watchAvailable:false});await positive.search();assert.equal((await positive.detail()).complete,true);assert.equal(positive.clicks,1);

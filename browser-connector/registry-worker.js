@@ -1,6 +1,37 @@
 /* Public-registry transport in the existing connector; no independent runtime. */
 const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov",MS:"https://charities.sos.ms.gov"})[state];
 const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/",MS:"/online/portal/ch/page/charities-search/Portal.aspx"})[state];
+const registryTnTraffic={nextAt:0,cooldownUntil:0};
+function registryTnTrafficRestore(value){
+  if(!P.TRIAL_ORIGIN||!value||typeof value!=='object')return;
+  for(const key of ['nextAt','cooldownUntil'])if(Number.isSafeInteger(value[key])&&value[key]>=0)registryTnTraffic[key]=value[key];
+}
+function registryTnTrafficSnapshot(){return {...registryTnTraffic};}
+async function registryTnBeforeCommand(job){
+  if(!P.TRIAL_ORIGIN)return null;
+  if(registryTnTraffic.cooldownUntil>Date.now()){
+    diagnostic('tn-cooldown',job,`remaining_ms=${registryTnTraffic.cooldownUntil-Date.now()}`);
+    return {ok:false,reason:'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED'};
+  }
+  const delay=Math.max(0,registryTnTraffic.nextAt-Date.now());
+  if(Date.now()+delay>=job.activeExpiresAt)return {ok:false,reason:'NY_CONNECTOR_TIMEOUT'};
+  if(delay){diagnostic('tn-pacing',job,`wait_ms=${delay}`);await new Promise(resolve=>setTimeout(resolve,delay));}
+  if(job.closed)return {ok:false,reason:'NY_CONNECTOR_INTERRUPTED'};
+  if(Date.now()>=job.activeExpiresAt)return {ok:false,reason:'NY_CONNECTOR_TIMEOUT'};
+  return null;
+}
+async function registryTnAfterCommand(response){
+  if(!P.TRIAL_ORIGIN)return;
+  registryTnTraffic.nextAt=Date.now()+PACE_MS;
+  if(response?.reason==='NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED'){
+    // Honor the state's Retry-After. Without one, five minutes is a
+    // conservative operational cooldown, not a claimed registry limit.
+    const delay=Number.isSafeInteger(response.tn_retry_after_ms)&&response.tn_retry_after_ms>=0
+      ?response.tn_retry_after_ms:300000;
+    registryTnTraffic.cooldownUntil=Math.max(registryTnTraffic.cooldownUntil,Date.now()+delay);
+  }
+  await saveRuntime();
+}
 function registryTrialLayout(origin) {
   const source=new URL(origin.url);
   if(!P.TRIAL_ORIGIN || source.origin!==P.TRIAL_ORIGIN
@@ -695,6 +726,8 @@ async function performRegistryQuery(job, query) {
   }
   if (query.state === "NC") return registryNorthCarolinaQuery(job,query);
   if (["NV", "TN"].includes(query.state)) {
+    if(query.state==='TN'&&P.TRIAL_ORIGIN&&registryTnTraffic.cooldownUntil>Date.now())
+      return registryTnBeforeCommand(job);
     if (P.TRIAL_ORIGIN && query.state==='TN' && query.operation==='search' && job.tab===null && trialTnIdle) {
       const saved=trialTnIdle;trialTnIdle=null;clearTimeout(trialTnIdleTimer);
       try {
@@ -765,7 +798,11 @@ async function performRegistryQuery(job, query) {
     // Give that complete paged search margin inside this job's existing
     // deadline; never borrow another state's time or reset Sales' one minute.
     const allowance=query.state==='NV'&&query.operation==='search'?150000:45000;
+    if(query.state==='TN'){
+      const blocked=await registryTnBeforeCommand(job);if(blocked)return blocked;
+    }
     let response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
+    if(query.state==='TN')await registryTnAfterCommand(response);
     if(P.TRIAL_ORIGIN && query.state==='TN') {
       const phases=['detail-start','prior-closed','detail-click','detail-retry','detail-incomplete','detail-ready','public-error','request-started','request-finished'];
       for(const entry of Array.isArray(response?.tn_diagnostics)?response.tn_diagnostics.slice(0,16):[]) {
@@ -776,6 +813,7 @@ async function performRegistryQuery(job, query) {
           if(typeof entry[key]==='boolean')sample[key]=entry[key];
         if(['grid-binding','details-handler','type-error','other'].includes(entry.category))sample.category=entry.category;
         if(Number.isInteger(entry.http_status)&&entry.http_status>=0&&entry.http_status<=599)sample.http_status=entry.http_status;
+        if(Number.isSafeInteger(entry.retry_after_ms)&&entry.retry_after_ms>=0)sample.retry_after_ms=entry.retry_after_ms;
         diagnostic('tn-dom',job,JSON.stringify(sample));
       }
     }

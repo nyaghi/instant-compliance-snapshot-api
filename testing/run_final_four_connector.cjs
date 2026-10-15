@@ -34,8 +34,84 @@ function fixture(enabled=true){
     if(m.query.operation==='detail'&&m.query.state==='NV')tab.url='https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=12345678-1234-1234-1234-123456789abc';
     return {ok:true,evidence:{query:m.query,complete:true}};
   };
+  // Drive only the new bounded TN pacing timer. Other-state timing fixtures
+  // keep the lifecycle harness's explicit fake-clock behavior.
+  const query=h.query;
+  h.query=async(port,n,q)=>{
+    let result=await query(port,n,q);
+    for(let i=0;!result&&q?.state==='TN'&&i<10;i++){
+      const now=vm.runInContext('Date.now()',h.context);
+      const timer=h.timers.filter(t=>!t.cleared&&t.due>=now&&t.due<=now+3000).sort((a,b)=>a.due-b.due)[0];
+      if(!timer)break;
+      await h.advance(timer.due-now);
+      result=port.messages.find(m=>m.id===id(n)&&!m.progress);
+    }
+    return result;
+  };
   return Object.assign(h,{calls,reloads});
 }
+
+test('TN commands wait three seconds after completion without extending the job deadline',async()=>{
+ const h=fixture();await tick();await h.context.registryTnAfterCommand({ok:true});
+ const job={activeExpiresAt:70000,closed:false,registryState:'TN'};let done=false;
+ const pending=h.context.registryTnBeforeCommand(job).then(value=>{done=true;return value;});
+ await tick();await h.advance(2999);assert.equal(done,false);await h.advance(1);
+ assert.equal(await pending,null);assert.equal(job.activeExpiresAt,70000);
+ assert.equal(h.calls.length,0);
+});
+
+test('TN pacing respects exhausted deadlines and cancellation',async()=>{
+ for(const cancel of [false,true]){
+  const h=fixture();await tick();await h.context.registryTnAfterCommand({ok:true});
+  const job={activeExpiresAt:cancel?70000:12000,closed:false,registryState:'TN'};
+  const pending=h.context.registryTnBeforeCommand(job);
+  if(cancel){job.closed=true;await h.advance(3000);}
+  assert.equal((await pending).reason,cancel?'NY_CONNECTOR_INTERRUPTED':'NY_CONNECTOR_TIMEOUT');
+  assert.equal(h.calls.length,0);
+ }
+});
+
+test('TN429 honors Retry-After or the operational cooldown and blocks new navigation',async()=>{
+ for(const interval of [7000,undefined]){
+  const h=fixture();await tick();
+  await h.context.registryTnAfterCommand({ok:false,reason:'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED',tn_retry_after_ms:interval});
+  assert.equal(h.data.session.ccnyRuntime.tnTraffic.cooldownUntil,10000+(interval??300000));
+  const job={sender:{url:TRIAL,tab:{id:1}},activeExpiresAt:310000,closed:false,registryState:'TN'};
+  const result=await h.context.performRegistryQuery(job,{state:'TN',operation:'search',name:'Independent Charity'});
+  assert.equal(result.reason,'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED');assert.equal(h.calls.length,0);assert.equal(h.created.length,0);
+  await h.advance(interval??300000);
+  assert.equal(await h.context.registryTnBeforeCommand({...job,activeExpiresAt:400000}),null);
+ }
+});
+
+test('TN timing cooldown survives worker restart without persisting organization data',async()=>{
+ const traffic={nextAt:13000,cooldownUntil:310000};
+ const h=harness({trialOrigin:TRIAL,session:{ccnyRuntime:{schema:2,ownedTabs:[],queue:[],tnTraffic:traffic}}});await tick();
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.registryTnTrafficSnapshot())),traffic);
+ const result=await h.context.registryTnBeforeCommand({activeExpiresAt:70000,closed:false});
+ assert.equal(result.reason,'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED');
+ assert.deepEqual(Object.keys(h.context.registryTnTrafficSnapshot()).sort(),['cooldownUntil','nextAt']);
+ const mature=fixture(false);await tick();await mature.context.registryTnAfterCommand({reason:'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED'});
+ assert.equal(await mature.context.registryTnBeforeCommand({activeExpiresAt:70000}),null);
+ assert.equal(mature.data.session.ccnyRuntime.tnTraffic,undefined);
+});
+
+test('TN detail429 establishes a cooldown while a separate NV lane still completes',async()=>{
+ const h=fixture(),p=connect(h,'TN'),send=h.chrome.tabs.sendMessage;
+ await h.query(p,2,{state:'TN',operation:'search',name:'Independent Charity'});
+ h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='registry-tn'&&m.query.operation==='detail'
+   ?{ok:false,reason:'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED',tn_retry_after_ms:9000}:send(tab,m);
+ const failure=await h.query(p,3,{state:'TN',operation:'detail',identifier:'CO1234'});
+ assert.equal(failure.reason,'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED');
+ assert.equal(h.data.session.ccnyRuntime.tnTraffic.cooldownUntil,22000);
+ const count=h.calls.length;
+ const next=connect(h,'TN',TRIAL,2);
+ await h.advance(3000); // Preserve the existing per-lane admission interval.
+ const blocked=await h.query(next,4,{state:'TN',operation:'search',name:'Another Charity'});
+ assert.equal(blocked.reason,'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED');assert.equal(h.calls.length,count);
+ const nv=connect(h,'NV',TRIAL,3);
+ assert.equal((await h.query(nv,5,{state:'NV',operation:'search',name:'Independent Charity'})).ok,true);
+});
 
 test('MS closes only its owned public search tab after collection',async()=>{
  const h=fixture();await tick();

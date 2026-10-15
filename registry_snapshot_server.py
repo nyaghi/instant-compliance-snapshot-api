@@ -7860,6 +7860,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "Alabama's verification image could not be read with sufficient confidence; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_IMAGE_UNCERTAIN" else
            "Alabama's verification reader was unavailable or ran out of time; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_READER_UNAVAILABLE" else
            "North Carolina limited this search (HTTP 429). CharityClarity retained completed records and did not restart the rejected search in another page." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
+           "Tennessee temporarily limited registry requests (HTTP 429). CharityClarity stopped further Tennessee requests during the source cooldown; retry after the registry permits requests again." if state == "TN" and reason == "NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED" else
            "New Mexico returned its public unexpected-error page for the submitted search." if state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR' else
            "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
            "The registry requires browser verification before its search can complete." if "VERIFICATION" in reason else

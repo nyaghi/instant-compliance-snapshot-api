@@ -5,6 +5,19 @@
   if(window!==window.top||location.origin!==origin||location.pathname!=='/portal/registered-charities-search')return;
   let active=null;
   const requests=new WeakMap();
+  function retryAfter(xhr){
+    try{
+      // This one public timing header is the only header observed.
+      const value=xhr.getResponseHeader('Retry-After');
+      if(typeof value!=='string'||value.length>100)return null;
+      if(/^\d+$/.test(value.trim())){
+        const ms=Number(value.trim())*1000;
+        return Number.isSafeInteger(ms)&&ms>=0?ms:null;
+      }
+      const date=Date.parse(value);
+      return Number.isFinite(date)?Math.max(0,date-Date.now()):null;
+    }catch{return null;}
+  }
   const emit=(job,phase,extra={})=>window.postMessage({channel,direction:'response',id:job.id,phase,...extra},origin);
   const text=el=>(el?.innerText||'').replace(/\s+/g,' ').trim();
   function observedId(identifier) {
@@ -50,7 +63,9 @@
       job.xhr=this;emit(job,'started');
       this.addEventListener('loadend',()=>{
         if(active!==job||Date.now()>job.expires)return;
-        emit(job,'finished',{http_status:Number.isInteger(this.status)&&this.status>=0&&this.status<=599?this.status:0});
+        const http_status=Number.isInteger(this.status)&&this.status>=0&&this.status<=599?this.status:0;
+        const retry_after_ms=http_status===429?retryAfter(this):null;
+        emit(job,'finished',{http_status,...(retry_after_ms!==null?{retry_after_ms}:{})});
       },{once:true});
     }
     return send.apply(this,args);

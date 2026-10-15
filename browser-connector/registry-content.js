@@ -817,7 +817,7 @@
   const tnObserved = new Map();
   let tnLastDiagnostics=[];
   async function tnRequestWatch(identifier,deadline,onPhase) {
-    const state={ready:false,started:false,finished:false,http_status:null,stop:()=>{}};
+    const state={ready:false,started:false,finished:false,http_status:null,retry_after_ms:null,stop:()=>{}};
     if(typeof window.postMessage!=='function')return state;
     const id=crypto.randomUUID(),channel='cc-final-four-tn-phase-v1';
     let timer,resolveReady;
@@ -829,7 +829,9 @@
       else if(m.phase==='unavailable'){clearTimeout(timer);resolveReady();}
       else if(state.ready&&m.phase==='started'){state.started=true;onPhase('request-started');}
       else if(state.ready&&state.started&&m.phase==='finished'&&Number.isInteger(m.http_status)&&m.http_status>=0&&m.http_status<=599){
-        state.finished=true;state.http_status=m.http_status;onPhase('request-finished',{http_status:m.http_status});
+        state.finished=true;state.http_status=m.http_status;
+        if(Number.isSafeInteger(m.retry_after_ms)&&m.retry_after_ms>=0)state.retry_after_ms=m.retry_after_ms;
+        onPhase('request-finished',{http_status:m.http_status,...(state.retry_after_ms!==null?{retry_after_ms:state.retry_after_ms}:{})});
       }
     };
     window.addEventListener('message',receive);
@@ -1011,6 +1013,9 @@
     const loading=()=>[...document.querySelectorAll('.k-loading-mask')].some(visible);
     const readDetail=()=>{
       detailStarted ||= request.started || visible(document.querySelector('#KendoWindowLevel1')) || loading();
+      if(request.finished&&request.http_status===429){
+        const error=new Error('REGISTRY_TN_RATE_LIMITED');error.retryAfterMs=request.retry_after_ms;throw error;
+      }
       if(request.ready&&(!request.finished||request.http_status!==200))return null;
       return tnFields(selected);
     };
@@ -1862,6 +1867,7 @@
         ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState}} : {}),
         ...(MS ? {ms_diagnostic:{...msLastDiagnostic,source_error:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'}} : {}),
         ...(TN ? {tn_diagnostics:tnLastDiagnostics} : {}),
+        ...(TN&&code==='REGISTRY_TN_RATE_LIMITED'&&Number.isSafeInteger(error.retryAfterMs)&&error.retryAfterMs>=0?{tn_retry_after_ms:error.retryAfterMs}:{}),
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;

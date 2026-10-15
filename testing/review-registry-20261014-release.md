@@ -303,6 +303,33 @@ pre-existing MS 300-second-versus-60-second historical assertion. Imported SC
 historical assertions also fail on unchanged EW; they are not passing tests.
 Do not adjust these runtime rules merely to satisfy obsolete whole-file assertions.
 
+### 29.2FB Tennessee source-rate protection
+
+The activated Request Guard established a specific new cause on Lahey's saved
+31-second CO/TN run: Foundation detail returned HTTP200 after485ms; Hospital
+detail returned HTTP429 after65ms. No second click occurred. This proves source
+throttling for that run, not every earlier timeout. The run and export are saved
+as candidate6-lahey-co-tn-first. TN probes stopped after that response.
+
+The separate TN Paced package adds the connector's existing three-second pacing
+interval between TN commands and persists timing-only cooldown across service
+worker restarts. It honors a numeric or HTTP-date Retry-After on429; otherwise
+five minutes is an operational starting cooldown, not a claimed registry limit.
+New TN workflows fail fast during cooldown without navigating or submitting.
+Other lanes remain independent; existing command/overall deadlines stay fixed.
+The bound detail observer now reads only that one public timing header on429,
+emitting only its parsed numeric interval. It still never reads response/body
+content, credentials, widgetConfig or other headers. The master adds an explicit
+source-cooldown explanation while retaining Unable to Confirm and no identity
+or negative conclusion. No matching/status interpretation function changed.
+
+Source shared479pass; actual package174pass and six worker controls pass;
+backend72pass. Counts overlap. Current-sheet saved-evidence replay covers31orgs
+and198comparisons: zero interpretation changes,11 inherited sheet differences.
+Replay does not exercise collectors or establish live speed. The original
+Request Guard package is untouched; TN Paced changes no permissions or layout.
+Activation, repeated Lahey checks, full31TN live controls and speed remain pending.
+
 Do not promote until affected-state live regression, comparable speed and actual
 popup outer-bound placement are validated. Staging requires a paired API/worker
 deployment and matching connector. Any deployment must name the actual target;
