@@ -402,18 +402,44 @@ verification fix. Lahey returned exact Clinic Delinquent in three smart runs
 (29/24/22 seconds); its exact Clinic modal was visibly first in both observed
 repeats. These were fresh TN documents in the same browser session.
 
-Colorado's Stand for the Silent result has an unresolved identity-label defect:
-the UI says Registry match SAVING MOSES, while the official exact-EIN dataset
-returns STAND FOR THE SILENT and supports the displayed dates. Do not count a
-status-only match as identity validation. This was discovered by the control,
-not established as a change caused by the Tennessee patch.
+Colorado's Stand for the Silent result initially looked like an identity-label
+defect. A subsequent fresh exact-EIN search in the state's public browser page
+itself displays Name SAVING MOSES with EIN 45-2317929, registration20213014216,
+Stand for the Silent's Perkins address/website and the same filing dates. The
+official exact-EIN dataset names that same registration STAND FOR THE SILENT.
+The earlier product-bug classification is superseded by a source-name
+inconsistency. The observation does not establish a wrong-entity selection or
+a regression. Both source records and a screenshot are retained in
+colorado-source-name-reconciliation.json and its referenced evidence. No source
+name was hard-coded or expectation changed to conceal the conflict.
 
 The separate `connector-0.6.132-tn-verification-trace` package adds bounded
 count/boolean-only challenge-frame observations and parent readiness transitions
 to distinguish absent frame-script evidence from no actionable ordinary checkbox.
 No token, cookie, challenge content, URL or response is read. Permission and
 one-click authorization rules, manifest access, geometry, state interpretation,
-pacing and deadlines are unchanged. It is not activated or live validated yet.
+pacing and deadlines are unchanged. The user has now enabled the trace package.
+CASAA returned Delinquent67s; three Lahey checks returned Delinquent23/21/33s.
+All four gates enabled Search automatically, with frame-observed controls0 and
+no actionable checkbox. This confirms frame-helper injection on those documents,
+not success on a required checkbox. Full31 live trace controls are now complete:
+62 CO/TN first passes,58 raw sheet-status matches,31 exports with matching UI
+workflow boundaries. The signed William & Mary rejection and two expiration-date
+differences are retained separately. Society for Scholarly Publishing47s stalled
+at verification; its helper loaded, reported controls0, and never observed form
+readiness. Its single targeted retry auto-recovered to Delinquent. No screenshot
+was captured from the failed document before it closed; do not claim a checkbox
+was visibly present there. Thirty other first passes auto-verified. No checkbox
+click occurred, so live checkbox completion is still unverified. The last ten
+versions contained no removed checkbox handler; an original breaking commit
+remains unproven. Current trace execution median16s vs prior Smart17s, with
+different cache/source conditions; original pre-pacing speed is not validated.
+Fresh62 sheet cells were re-read after controls: no expectation changes. Saved
+export statuses and workflow boundaries match31/31 original first-pass captures.
+Latest evidence: tn-verification-trace-validation-report.txt and
+candidate10-live-reconciliation.json. No new server deployment. Production
+untouched; do not promote. Keep the current trace build for a captured visible
+required-checkbox case; another installation is not needed.
 Source suite 558/558 and packaged suite 253/253 pass, including adversarial
 foreign-frame, no-control, ambiguity and exhausted-deadline controls. Test logs
 are saved; a terminal summary print had a Windows encoding error after both test
