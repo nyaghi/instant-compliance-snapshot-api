@@ -9,7 +9,7 @@ function frame(options={}){
   click:()=>{clicks++;box.checked=true;}};
  const box={checked:!!options.checked,disabled:!!options.disabled,closest:()=>target,getAttribute:()=>null};
  const document={documentElement:{},visibilityState:options.hidden?'hidden':'visible',querySelectorAll:selector=>{
-  assert.equal(selector,'input[type="checkbox"], [role="checkbox"]');return options.duplicate?[box,box]:[box];}};
+  assert.equal(selector,'input[type="checkbox"], [role="checkbox"]');return options.empty?[]:options.duplicate?[box,box]:[box];}};
  Object.defineProperty(box,'value',{get(){throw Error('Verification values must not be read');}});
  const window={top:options.top?null:{}};if(options.top)window.top=window;
  const location={origin:options.offsite?'https://example.org':CF,pathname:'/cdn-cgi/challenge-platform/test',ancestorOrigins:options.ancestors||[TN]};
@@ -24,14 +24,18 @@ function frame(options={}){
  return {messages,box,target,advance,mutate:()=>observer?.fn(),get clicks(){return clicks;},get stopped(){return disconnected;}};
 }
 test('TN helper makes one ordinary visible-checkbox click only after worker permission',async()=>{
- const f=frame();await tick();assert.equal(f.clicks,1);assert.equal(f.messages[0].action,'tn-checkbox-permission');
- assert.equal(f.messages[1].phase,'clicked');f.mutate();await f.advance(50000);assert.equal(f.clicks,1);assert.equal(f.stopped,true);
+ const f=frame();await tick();assert.equal(f.clicks,1);assert.equal(f.messages[0].action,'tn-checkbox-observation');
+ assert.equal(f.messages[1].action,'tn-checkbox-permission');assert.equal(f.messages[2].phase,'clicked');f.mutate();await f.advance(50000);assert.equal(f.clicks,1);assert.equal(f.stopped,true);
  assert.ok(!JSON.stringify(f.messages).includes('token'));
 });
 test('hidden, disabled, checked or ambiguous checkbox never receives a permission request or click',async()=>{
  for(const options of [{hidden:true},{disabled:true},{checked:true},{duplicate:true}]){
-  const f=frame(options);await f.advance(45000);assert.equal(f.clicks,0);assert.equal(f.messages.length,0);assert.equal(f.stopped,true);
+  const f=frame(options);await f.advance(45000);assert.equal(f.clicks,0);assert.equal(f.messages.filter(m=>m.action!=='tn-checkbox-observation').length,0);assert.equal(f.stopped,true);
  }
+});
+test('an inaccessible or absent checkbox emits one bounded count-only observation without clicking',async()=>{
+ const f=frame({empty:true});await f.advance(45000);assert.equal(f.clicks,0);
+ assert.deepEqual(JSON.parse(JSON.stringify(f.messages)),[{action:'tn-checkbox-observation',id:id(900),phase:'frame-observed',visible:true,controls:0,actionable:false}]);
 });
 test('other sites, top frames and unrelated ancestors never activate checkbox handling',async()=>{
  for(const options of [{offsite:true},{top:true},{ancestors:['https://example.org']},{ancestors:[CF,'https://example.org',TN]}]){
@@ -58,6 +62,17 @@ test('worker binds one checkbox permission to an active owned TN workflow and pe
  assert.equal(h.data.session.ccnyRuntime.queue.find(j=>j.registryState==='TN').tnCheckboxAttempted,true);
  const record=vm.runInContext('checkboxFixtureJob',h.context);record.tnVerificationExpiresAt=0;
  assert.equal((await h.context.registryTnCheckboxMessage({...request,id:id(901)},sender(h))).allowed,false);
+});
+test('frame observation is bounded, rejects foreign senders, and grants no checkbox permission',async()=>{
+ const h=await admitted(),job=vm.runInContext('checkboxFixtureJob',h.context);
+ const message={action:'tn-checkbox-observation',id:id(900),phase:'frame-observed',visible:true,controls:0,actionable:false};
+ for(const changed of [{...sender(h),id:'other'},{...sender(h),frameId:0},{...sender(h),url:'https://example.org/'}])
+  assert.equal((await h.context.registryTnCheckboxMessage(message,changed)).allowed,false);
+ assert.equal(job.tnCheckboxObservationCount,undefined);
+ job.tnVerificationExpiresAt=0;
+ for(let n=0;n<20;n++)assert.equal((await h.context.registryTnCheckboxMessage(message,sender(h))).allowed,false);
+ assert.equal(job.tnCheckboxObservationCount,8);assert.equal(job.tnCheckboxAttempted,undefined);
+ assert.equal((await h.context.registryTnCheckboxMessage(request,sender(h))).allowed,false);
 });
 test('worker rejects foreign extension/frame/origin/tab, expired verification and moved page',async()=>{
  for(const change of ['extension','top','origin','tab','expired','page','unowned']){

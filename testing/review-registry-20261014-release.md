@@ -387,3 +387,39 @@ popup outer-bound placement are validated. Staging requires a paired API/worker
 deployment and matching connector. Any deployment must name the actual target;
 the user-designated Performance Lab staging origin and old staging domain remain
 separate. Production still requires explicit user authorization.
+# October 15 TN Smart live controls and verification trace
+
+29.2FC/b9782de with manually enabled TN Smart 0.6.132 completed all 31 approved
+organizations, CO and TN, in the existing Compliance Express staging tab.
+All 62 first-pass checks and exports are preserved. Raw status comparison is
+58/62: William & Mary's signed Foundation choice was separately rejected,
+producing the expected completed-search negative; Rezilient Kidz and Stand for
+the Silent have source-supported expiration-date differences from the sheet;
+CASAA stopped at verification in both the first pass and one targeted retry.
+No expectation cells were edited. No checkbox permission/action was recorded
+for CASAA. Thus live checkbox success remains unproven; this is not a passed
+verification fix. Lahey returned exact Clinic Delinquent in three smart runs
+(29/24/22 seconds); its exact Clinic modal was visibly first in both observed
+repeats. These were fresh TN documents in the same browser session.
+
+Colorado's Stand for the Silent result has an unresolved identity-label defect:
+the UI says Registry match SAVING MOSES, while the official exact-EIN dataset
+returns STAND FOR THE SILENT and supports the displayed dates. Do not count a
+status-only match as identity validation. This was discovered by the control,
+not established as a change caused by the Tennessee patch.
+
+The separate `connector-0.6.132-tn-verification-trace` package adds bounded
+count/boolean-only challenge-frame observations and parent readiness transitions
+to distinguish absent frame-script evidence from no actionable ordinary checkbox.
+No token, cookie, challenge content, URL or response is read. Permission and
+one-click authorization rules, manifest access, geometry, state interpretation,
+pacing and deadlines are unchanged. It is not activated or live validated yet.
+Source suite 558/558 and packaged suite 253/253 pass, including adversarial
+foreign-frame, no-control, ambiguity and exhausted-deadline controls. Test logs
+are saved; a terminal summary print had a Windows encoding error after both test
+logs were written, and their zero-failure totals were then verified from disk.
+
+The final gray rail was display:none after results. Native outer window bounds,
+comparable baseline speed and live checkbox behavior remain release gates.
+Production untouched. Do not promote.
+

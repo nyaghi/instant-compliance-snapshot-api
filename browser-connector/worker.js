@@ -656,7 +656,7 @@ chrome.tabs.onRemoved.addListener(id => {
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if(['tn-checkbox-permission','tn-checkbox-outcome'].includes(message?.action)){
+  if(['tn-checkbox-permission','tn-checkbox-outcome','tn-checkbox-observation'].includes(message?.action)){
     boot.then(()=>registryTnCheckboxMessage(message,sender)).then(respond,()=>respond({allowed:false}));
     return true;
   }

@@ -11,9 +11,19 @@ async function registryTnCheckboxMessage(message,sender){
       || sender.frameId<=0 || !P.validId(message.id) || !registryTnCheckboxFrame(sender.url))return {allowed:false};
   const job=allJobs().find(j=>isActive(j)&&!j.closed&&j.registryState==='TN'
     && j.tab===sender.tab?.id && owned.has(j.tab));
-  if(!job || !job.pending || Date.now()>=Math.min(job.activeExpiresAt,job.tnVerificationExpiresAt||0))return {allowed:false};
+  if(!job || !job.pending || Date.now()>=job.activeExpiresAt)return {allowed:false};
   const tab=await chrome.tabs.get(job.tab);
   if(tab.url!==registryStart('TN') || !tab.active || job.closed)return {allowed:false};
+  if(message.action==='tn-checkbox-observation'){
+    if(job.tnCheckboxObservationCount>=8 || message.phase!=='frame-observed'
+        || typeof message.visible!=='boolean' || typeof message.actionable!=='boolean'
+        || !Number.isInteger(message.controls) || message.controls<0 || message.controls>9)return {allowed:false};
+    job.tnCheckboxObservationCount=(job.tnCheckboxObservationCount||0)+1;
+    diagnostic('tn-verification',job,JSON.stringify({phase:'frame-observed',visible:message.visible,
+      controls:message.controls,actionable:message.actionable}));
+    return {allowed:false};
+  }
+  if(Date.now()>=Math.min(job.activeExpiresAt,job.tnVerificationExpiresAt||0))return {allowed:false};
   if(message.action==='tn-checkbox-outcome'){
     if(job.tnCheckboxFrameId===sender.frameId && job.tnCheckboxRequestId===message.id
         && ['clicked','changed-before-click','click-unavailable'].includes(message.phase))
@@ -479,6 +489,16 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
         await registryNevadaMakeVisible(job,nvInitialVisible);
       }
       verificationPending=['NC','TN'].includes(job.registryState)&&value?.verification_pending===true;
+      if(P.TRIAL_ORIGIN && job.registryState==='TN'){
+        const observed={phase:'readiness-observed',ready:value?.ready===true,
+          verification_pending:verificationPending,visible:value?.page_visibility==='visible'};
+        const signature=JSON.stringify(observed);
+        if(signature!==job.tnCheckboxReadinessSignature && (job.tnCheckboxReadinessCount||0)<8){
+          job.tnCheckboxReadinessSignature=signature;
+          job.tnCheckboxReadinessCount=(job.tnCheckboxReadinessCount||0)+1;
+          diagnostic('tn-verification',job,signature);
+        }
+      }
       if(P.TRIAL_ORIGIN && job.registryState==='TN')job.tnVerificationExpiresAt=verificationPending?deadline:0;
       if(job.registryState==='TN'&&!value?.ready&&!visibilityAttempted&&Date.now()-started>=3000) {
         visibilityAttempted=true;previousVisible=await registryNorthCarolinaVisibility(job);

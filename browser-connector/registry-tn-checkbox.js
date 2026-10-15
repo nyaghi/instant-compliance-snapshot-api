@@ -7,7 +7,7 @@
   const ancestors=Array.from(location.ancestorOrigins||[]);
   if(!ancestors.length || ancestors.at(-1)!==tn || ancestors.some(x=>![origin,tn].includes(x)))return;
   const id=crypto.randomUUID(),deadline=Date.now()+45000;
-  let stopped=false,pending=false,timer;
+  let stopped=false,pending=false,timer,observations=0,lastObservation='';
   const visible=el=>{
     if(!el?.isConnected || document.visibilityState!=='visible')return false;
     const rect=el.getBoundingClientRect(),style=getComputedStyle(el);
@@ -22,10 +22,21 @@
         && !box.checked && box.getAttribute('aria-checked')!=='true' && visible(target));
     return choices.length===1?choices[0]:null;
   };
+  const observe=()=>{
+    const boxes=[...document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')];
+    const detail={phase:'frame-observed',visible:document.visibilityState==='visible',
+      controls:Math.min(boxes.length,9),actionable:candidate()!==null};
+    const signature=JSON.stringify(detail);
+    if(observations>=4 || signature===lastObservation)return;
+    observations++;lastObservation=signature;
+    // Counts and booleans only: never verification values, frame content or URLs.
+    chrome.runtime.sendMessage({action:'tn-checkbox-observation',id,...detail}).catch(()=>{});
+  };
   const stop=()=>{stopped=true;clearTimeout(timer);observer.disconnect();};
   const inspect=async()=>{
     if(stopped || pending)return;
     if(Date.now()>=deadline){stop();return;}
+    observe();
     const choice=candidate();
     if(choice){
       pending=true;
