@@ -565,3 +565,15 @@ for(const state of ['AL','NV','TN'])test(`${state} trial reconnect resumes its a
  assert.equal((await h.query(resumed,2,query)).ok,true);assert.equal(h.created.length,1);
  assert.equal(h.connect(99).disconnected,true);
 });
+
+test('NV entity-number trial detail collects history while existing Business ID detail keeps the approved scope',async()=>{
+ for(const [identifier,skipHistory] of [['E55451402026-5',false],['NV20121738342',true]]) {
+  const h=fixture(),p=connect(h,'NV');
+  assert.equal((await h.query(p,2,{state:'NV',operation:'search',name:'Example Foundation'})).ok,true);
+  assert.equal((await h.query(p,3,{state:'NV',operation:'detail',identifier})).ok,true);
+  const call=h.calls.find(c=>c.query?.operation==='detail');
+  assert.equal(call.skipHistory,skipHistory);
+ }
+ const mature=fixture(false);
+ assert.equal(vm.runInContext("P.validQuery({state:'NV',operation:'detail',identifier:'E55451402026-5'})",mature.context),false);
+});

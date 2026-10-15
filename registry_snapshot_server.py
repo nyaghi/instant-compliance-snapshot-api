@@ -6229,7 +6229,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6483,10 +6483,15 @@ def final_four_license_result(org, state, records, deadline, source):
         if selected.get("expiration"):
             result.source_note += ("The displayed Annual Renewal Due Date/Expiration Date is "
                                    f"{selected['expiration'].isoformat()}. ")
-        scope = ("charitable-solicitation registration with a source-confirmed filing history"
+        scope = ("charitable-solicitation exemption with a source-confirmed exemption filing"
+                 if selected.get("solicitation_exemption_filed") else
+                 "charitable-solicitation registration with a source-confirmed filing history"
                  if selected.get("solicitation_statement_filed") else "nonprofit corporation's Nevada record")
         result.source_note += (f"CharityClarity reports {result.status} based on the matched {scope}. "
                                "Registered-agent records and registered-agent addresses are excluded from organization identity evidence. ")
+        if selected.get("solicitation_exemption_filed"):
+            result.source_note += ("The complete same-entity history includes Exemption to Charitable Solicitation Statement, "
+                                   f"filed {selected['solicitation_exemption_filed'].isoformat()}. ")
         if selected.get("ein"):
             result.source_note += f"The detail FEIN {format_ein(selected['ein'])} matches the requested EIN. "
         else:
@@ -6495,12 +6500,23 @@ def final_four_license_result(org, state, records, deadline, source):
         if address.get("decision") == "corroborated":
             result.source_note += address.get("basis", "") + " "
         if selected.get("solicitation_declared") is False:
-            result.source_note += ('The separate "Solicits Charitable Contribution?" field displays No. The selected record nevertheless has an explicitly filed Charitable Solicitation Registration Statement; that filing history and the displayed registration status and renewal deadline are the evidence used here.'
+            result.source_note += ('The separate "Solicits Charitable Contribution?" field displays No. The exemption conclusion uses the explicitly filed Exemption to Charitable Solicitation Statement and the displayed standing and renewal deadline.'
+                                  if selected.get("solicitation_exemption_filed") else
+                                  'The separate "Solicits Charitable Contribution?" field displays No. The selected record nevertheless has an explicitly filed Charitable Solicitation Registration Statement; that filing history and the displayed registration status and renewal deadline are the evidence used here.'
                                   if selected.get("solicitation_statement_filed") else
                                   'The separate "Solicits Charitable Contribution?" field displays No; this result describes the nonprofit corporation record and does not establish a separate charitable-solicitation filing.')
     if selected.get("date_evidence_note"):
         result.source_note = result.source_note.rstrip() + " " + selected["date_evidence_note"]
     return result
+
+
+def nv_entity_number_detail_allowed(identifier, entity_type, business_id, entity_number):
+    """Only ORION's separately numbered foreign non-registration records."""
+    return (all(isinstance(v, str) for v in (identifier, entity_type, business_id, entity_number))
+            and re.fullmatch(r"E\d{7,14}-\d", identifier) is not None
+            and entity_number.strip() == identifier
+            and business_id.strip() in {"", "-"}
+            and entity_type.strip() == "Foreign Entities Not Required to Register In Nevada")
 
 
 def nv_charity_detail_evidence(fields, expected_business_id):
@@ -6514,7 +6530,10 @@ def nv_charity_detail_evidence(fields, expected_business_id):
                 "Formation Date in Nevada", "Annual Renewal Due Date/Expiration Date"}
     if not isinstance(fields, dict) or not required.issubset(fields) or not all(isinstance(fields[k], str) for k in required):
         raise ValueError("Nevada entity details are incomplete")
-    if not re.fullmatch(r"NV\d+", expected_business_id) or fields["NV Business ID"].strip() != expected_business_id:
+    entity_number_detail = nv_entity_number_detail_allowed(expected_business_id, fields["Entity Type"],
+        fields["NV Business ID"], fields.get("Entity Number", ""))
+    if not entity_number_detail and (not re.fullmatch(r"NV\d+", expected_business_id)
+                                    or fields["NV Business ID"].strip() != expected_business_id):
         raise ValueError("Nevada selected a different business record")
     name = fields["Entity Name"].strip()
     if not name or not fields["Entity Status"].strip():
@@ -6540,7 +6559,10 @@ def nv_charity_detail_evidence(fields, expected_business_id):
         status = "Delinquent"
     # 29.2 trial: user-approved Nevada scope is the matched nonprofit record
     # and its displayed annual renewal/expiration date, without a history scan.
-    requires_solicitation_history = not bool(trial_identity())
+    # Existing trial scope is unchanged. This new recovery path additionally
+    # needs the actual charity filing; the foreign entity category alone is
+    # not evidence of a charitable-solicitation exemption.
+    requires_solicitation_history = entity_number_detail or not bool(trial_identity())
     if not requires_solicitation_history:
         if raw_status.casefold() == "registered":
             status = licensed_charity_status("Active", expiration)
@@ -6550,6 +6572,8 @@ def nv_charity_detail_evidence(fields, expected_business_id):
         # Neither supported entity category establishes charity registration alone.
         # The matching public statement history must establish its charity scope.
         status = "Unable to Confirm"
+    if entity_number_detail:
+        status = "Unable to Confirm"  # No charity conclusion before its filing history.
     return dict(name=name, identifier=expected_business_id, ein=ein, aliases=list(dict.fromkeys(aliases)),
                 raw_status=raw_status, status=status, expiration=expiration,
                 initial=None, renewal=None, street="", location="",
@@ -6643,6 +6667,7 @@ def nv_charity_filings_evidence(record, payload):
             or payload["total"] < 0 or len(payload["rows"]) != payload["total"]):
         raise ValueError("Nevada filing history is incomplete or belongs to another entity")
     dates, qualifications, solicitation_dates, withdrawals, seen = [], [], [], [], set()
+    exemption_dates = []
     unlabelled_filings = 0
     for cells in payload["rows"]:
         if not isinstance(cells, list) or len(cells) != len(headers) or not all(isinstance(v, str) for v in cells):
@@ -6677,6 +6702,15 @@ def nv_charity_filings_evidence(record, payload):
             if filed is None or filed > date.today():
                 raise ValueError("Nevada charitable solicitation filing date is invalid")
             solicitation_dates.append(filed)
+        elif (nv_entity_number_detail_allowed(record["identifier"], record.get("entity_type", ""),
+                  "", record["identifier"]) and fields["Filing Type"] == "Exemption to Charitable Solicitation Statement"):
+            filed = final_four_source_date(fields["Filed Date"], "Nevada exemption filed")
+            effective = final_four_source_date(fields["Effective Date"], "Nevada exemption effective")
+            if (filed is None or effective is None or max(filed, effective) > date.today()
+                    or not fields["Source"] or not fields["No. of Pages"].isdigit()
+                    or int(fields["No. of Pages"]) < 1):
+                raise ValueError("Nevada exemption filing is incomplete")
+            exemption_dates.append(filed)
         elif (record.get("entity_type") == "Foreign Non-Profit Corporation (80)"
               and fields["Filing Type"] == "Withdrawal of Foreign Non-Profit Corporation (80)"):
             filed = final_four_source_date(fields["Filed Date"], "Nevada withdrawal filed")
@@ -6695,6 +6729,15 @@ def nv_charity_filings_evidence(record, payload):
         result.update(initial=qualifications[0], initial_label="Foreign Qualification — Filed Date",
                       initial_type="initial_registration_filing_date")
     if record.get("requires_solicitation_history"):
+        if exemption_dates:
+            # Limit the newly supported entity-number path to an unopposed,
+            # dated exemption in the complete same-entity history. A corporate
+            # category or an old exemption preceding a CSR is insufficient.
+            if (solicitation_dates or record.get("raw_status", "").casefold() != "registered"
+                    or not record.get("expiration") or record["expiration"] < date.today()):
+                raise ValueError("Nevada exemption standing is unconfirmed")
+            result.update(status="Exempt", solicitation_exemption_filed=max(exemption_dates))
+            return result
         # Corporate withdrawal is not withdrawal of a charity license. Only
         # this completed, non-soliciting corporate history with no CSR can
         # exclude the corporate record. Missing history, a solicitation flag,
@@ -7158,7 +7201,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                                                      'entity_type': 'Unlinked name reservation'})
                         seen.add(row['identifier'])
                         continue
-                if state == "NV" and (row.get("business_identifier_missing") is True or row["entity_type"] not in {
+                entity_number_detail = state == "NV" and row.get("business_identifier_missing") is True and nv_entity_number_detail_allowed(
+                    row["identifier"], row["entity_type"], "", row.get("entity_number", ""))
+                if state == "NV" and ((row.get("business_identifier_missing") is True and not entity_number_detail) or row["entity_type"] not in {
                         "Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
                         "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
                         "Domestic Non-Profit Cooperative Corporation Without Stock (81)",
@@ -7210,7 +7255,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         try:
                             record = nv_charity_filings_evidence(record, detail["filings"])
                         except ValueError:
-                            record["date_evidence_note"] = "Nevada's annual-list filing history was incomplete; the last-filed date remains blank."
+                            record["date_evidence_note"] = "Nevada's required charity filing history could not be verified; no filing date or charity status was inferred."
                     if record.get("non_charity_withdrawal_history"):
                         excluded_nv_entities.append({"name": record["name"], "identifier": record["identifier"],
                             "entity_type": record["entity_type"],
@@ -7218,7 +7263,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         seen.add(row["identifier"])
                         continue
                     if (record.get("requires_solicitation_history")
-                            and not record.get("solicitation_statement_filed")):
+                            and not (record.get("solicitation_statement_filed") or record.get("solicitation_exemption_filed"))):
                         unreviewed_scope = True
                         nv_scope_records[record["identifier"]] = record
                         scope_reviews.append({"name": record["name"], "identifier": record["identifier"],
@@ -7680,6 +7725,12 @@ def final_four_clean_evidence(payload, query):
                    {"Name", "CO Number", "Status", "Registration Date", "Expiration Date", "Address", "financial_periods", "financial_count", "financial_history_absent"})
         fields = payload.get("fields")
         identity_key = {"NC": "Registration #", "NV": "NV Business ID", "TN": "CO Number"}[state]
+        if state == "NV" and re.fullmatch(r"E\d{7,14}-\d", str(query.get("identifier", ""))):
+            allowed = allowed | {"Entity Number"}
+            identity_key = "Entity Number"
+            if not isinstance(fields, dict) or not nv_entity_number_detail_allowed(query["identifier"],
+                    fields.get("Entity Type"), fields.get("NV Business ID"), fields.get("Entity Number")):
+                raise ValueError("Unsupported Nevada entity-number detail")
         if not isinstance(fields, dict) or set(fields) - allowed or fields.get(identity_key) != query.get("identifier"):
             raise ValueError("Unexpected or mismatched detail identity fields")
         if state == "TN" and "financial_history_absent" in fields:
@@ -25446,7 +25497,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -25501,7 +25552,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

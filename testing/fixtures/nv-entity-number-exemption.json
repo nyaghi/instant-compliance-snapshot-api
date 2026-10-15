@@ -1,0 +1,29 @@
+{
+  "source_url": "https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=ea6b93f4-9da1-4816-929a-9b44aa720d88",
+  "captured_at": "2026-10-15T02:26:29.731Z",
+  "fields": {
+    "Annual Renewal Due Date/Expiration Date": "02/28/2027",
+    "Campaign Name": "-",
+    "Entity Name": "LOYOLA UNIVERSITY NEW ORLEANS",
+    "Entity Number": "E55451402026-5",
+    "Entity Status": "Registered",
+    "Entity Type": "Foreign Entities Not Required to Register In Nevada",
+    "FEIN": "-",
+    "Formation Date in Nevada": "02/20/2026",
+    "IRS Registered Name": "LOYOLA UNIVERSITY NEW ORLEANS",
+    "NV Business ID": "-",
+    "Solicits Charitable Contribution?": "Yes"
+  },
+  "filing_rows": [
+    [
+      "02/20/2026",
+      "02/20/2026",
+      "20265545139",
+      "Exemption to Charitable Solicitation Statement",
+      "Email",
+      "1"
+    ]
+  ],
+  "expected": "Exempt",
+  "note": "Public source fixture; organization-specific identifiers belong only in test evidence, never runtime exceptions."
+}

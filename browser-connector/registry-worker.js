@@ -282,7 +282,7 @@ async function registryMessage(job, message) {
   const send=async()=>{
     const tab = await chrome.tabs.get(job.tab);
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
-    return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,skipHistory:message.query?.operation==='detail'}:{})}, {frameId:0});
+    return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,skipHistory:message.query?.operation==='detail' && !/^E\d{7,14}-\d$/.test(message.query.identifier)}:{})}, {frameId:0});
   };
   if(P.TRIAL_ORIGIN && job.registryState==='MS' && message.action==='registry-ms'
       && message.query?.operation==='search' && Number.isFinite(message.budgetMs)) {

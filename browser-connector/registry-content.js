@@ -579,8 +579,10 @@
   }
   function nvFields(identifier) {
     const fields = Object.create(null);
+    const entityNumberDetail=/^E\d{7,14}-\d$/.test(identifier);
     const wanted = ['Entity Name','NV Business ID','Entity Status','Entity Type','FEIN','Solicits Charitable Contribution?',
-      'IRS Registered Name','Campaign Name','Formation Date in Nevada','Annual Renewal Due Date/Expiration Date'];
+      'IRS Registered Name','Campaign Name','Formation Date in Nevada','Annual Renewal Due Date/Expiration Date',
+      ...(entityNumberDetail?['Entity Number']:[])];
     const forms = [...document.querySelectorAll('[role="form"]')].filter(el => [...el.querySelectorAll('h4')].some(h => text(h) === 'Entity Information'));
     if (forms.length !== 1 || !location.hash.includes('screen=Manage-Business&')) return null;
     // Stop at Agent Information. Its duplicate NV Business ID/Status and Las
@@ -593,7 +595,11 @@
         fields[text(label)] = text(el.nextElementSibling);
       }
     }
-    if (!wanted.every(k => Object.hasOwn(fields,k)) || fields['NV Business ID'] !== identifier) return null;
+    if (!wanted.every(k => Object.hasOwn(fields,k))) return null;
+    if(entityNumberDetail) {
+      if(fields['Entity Number']!==identifier || !['','-'].includes(fields['NV Business ID'])
+          || fields['Entity Type']!=='Foreign Entities Not Required to Register In Nevada')return null;
+    } else if(fields['NV Business ID']!==identifier)return null;
     return fields;
   }
   function nvReservationFields(identifier) {
@@ -623,10 +629,15 @@
     return fields;
   }
   async function nvDetail(query, deadline, {skipHistory=false}={}) {
-    if (query?.state !== 'NV' || query.operation !== 'detail' || !/^(?:NV\d+|(?:NR|C)\d{8}-\d+)$/.test(query.identifier)
+    if (query?.state !== 'NV' || query.operation !== 'detail' || !/^(?:NV\d+|(?:NR|C)\d{8}-\d+|E\d{7,14}-\d)$/.test(query.identifier)
         || Object.keys(query).sort().join(',') !== 'identifier,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
     const target = nvObserved.get(query.identifier), sourceQuery = nvLastSearch;
     if (!target || !sourceQuery) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
+    const entityNumberDetail=/^E\d{7,14}-\d$/.test(query.identifier);
+    if(entityNumberDetail && (target.business_identifier_missing!==true || target.entity_number!==query.identifier
+        || target.entity_type!=='Foreign Entities Not Required to Register In Nevada'))throw new Error('REGISTRY_NV_DETAIL_NOT_OBSERVED');
+    const sameIdentifier=cells=>cells[1]===query.identifier || entityNumberDetail
+      && ['','-'].includes(cells[1]) && cells[2]===query.identifier;
     const onSearch=location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business');
     nvTrace('detail-started',{identifier:query.identifier,on_search:onSearch,page:target.page});
     // Pagination detaches earlier-page rows too. That does not mean we left
@@ -697,7 +708,7 @@
         return fresh.page===expectedPage && fresh.total===expectedTotal && fresh;
       },deadline,{previous:JSON.stringify(page.values),settle:0});
     }
-    const matches = page.values.map((cells,i)=>({cells,node:page.rows[i]})).filter(row=>row.cells[1]===query.identifier);
+    const matches = page.values.map((cells,i)=>({cells,node:page.rows[i]})).filter(row=>sameIdentifier(row.cells));
     if (matches.length !== 1 || JSON.stringify(matches[0].cells)!==target.signature)
       throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
     const link = matches[0].node.querySelector('[role="gridcell"] a');
@@ -732,7 +743,7 @@
                 || field('nvBusinessId')?.value!=='' || !nvSearchModeSelected(nvLastSearchMode))return;
             const fresh=nvPage('Search Results',nvSearchHeaders);
             const exact=fresh.values.map((cells,i)=>({cells,node:fresh.rows[i]}))
-              .filter(row=>row.cells[1]===query.identifier && JSON.stringify(row.cells)===target.signature);
+              .filter(row=>sameIdentifier(row.cells) && JSON.stringify(row.cells)===target.signature);
             if(fresh.page!==target.page || exact.length!==1)return;
             const retry=exact[0].node.querySelector('[role="gridcell"] a');
             if(!retry || text(retry)!==target.name)return;
@@ -752,7 +763,7 @@
     }
     const evidence = {query,complete:true,source_url:location.href,fields};
     // Trial scope uses the matched entity and displayed renewal date only.
-    if (skipHistory) return evidence;
+    if (skipHistory && !entityNumberDetail) return evidence;
     try {
       // ORION mounts the entity fields before its filing-history request has
       // rendered. Reading the table immediately can discard the solicitation

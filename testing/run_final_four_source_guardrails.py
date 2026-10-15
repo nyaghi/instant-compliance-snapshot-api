@@ -1514,12 +1514,12 @@ class LookupControls(unittest.TestCase):
         self.assertEqual(result.status, 'Not Registered')
         self.assertFalse(result.matched_registry_identifier)
 
-    def test_nv_blank_business_id_is_filtered_but_never_opened_or_classified(self):
+    def test_nv_unsupported_blank_business_id_is_never_opened_or_classified(self):
         for name, expected in [(self.nvrow['name'], 'Unable to Confirm'), ('Unrelated Regional Charity', 'Not Registered')]:
             def pending(q):
                 self.assertEqual(q['operation'], 'search')
                 row = {'name':name, 'identifier':'E38494562024-0', 'entity_number':'E38494562024-0',
-                       'business_identifier_missing':True, 'entity_type':'Foreign Entities Not Required to Register In Nevada',
+                       'business_identifier_missing':True, 'entity_type':'Foreign Non-Profit Corporation (80)',
                        'raw_status':'Expired'}
                 return cc.final_four_clean_evidence({'state':'NV', 'query':q, 'complete':True,
                     'verification_pending':False, 'total':1, 'rows':[row]}, q)

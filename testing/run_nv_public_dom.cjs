@@ -472,12 +472,12 @@ test('Nevada dated C rows without an entity type are retained only as unclassifi
   await assert.rejects(fixture({rows:[changed]}).search(),/RESULTS_INCOMPLETE/);
 });
 
-test('Nevada preserves a blank business ID with its observed entity number for master filtering',async()=>{
- const pending=['Ronald McDonald House Charities of Northeast Indiana','','E38494562024-0','Foreign Entities Not Required to Register In Nevada','','12/19/2023 12:00 AM','Expired'];
+test('Nevada preserves unsupported blank business ID records for conservative master filtering',async()=>{
+ const pending=['Ronald McDonald House Charities of Northeast Indiana','','E38494562024-0','Foreign Non-Profit Corporation (80)','','12/19/2023 12:00 AM','Expired'];
  const f=fixture({rows:[observed[1],pending]}),r=await f.search();
  assert.equal(r.total,2);assert.equal(r.rows[1].identifier,pending[2]);
  assert.equal(r.rows[1].entity_number,pending[2]);assert.equal(r.rows[1].business_identifier_missing,true);
- await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:pending[2]},45000)),/COMMAND_INVALID/);
+ await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:pending[2]},45000)),/DETAIL_NOT_OBSERVED/);
  assert.equal(f.opened.length,0);
  for(const changes of [{1:'UNKNOWN'},{2:''},{3:''},{6:''}]){
   const row=[...pending];for(const [i,v] of Object.entries(changes))row[i]=v;
@@ -798,4 +798,36 @@ test('NV trial history omission does not allow an unobserved business ID',async(
  const h=fixture({rows:observed.slice(0,2)});await h.search();
  await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV99999999999'},45000,{skipHistory:true})),/DETAIL_NOT_OBSERVED/);
  assert.equal(h.detailClicks,0);
+});
+
+const entityNumberFixture=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/nv-entity-number-exemption.json'),'utf8'));
+function entityNumberHarness(changes={}) {
+ const fields={...entityNumberFixture.fields,...changes};
+ const row=[fields['Entity Name'],'',entityNumberFixture.fields['Entity Number'],
+   entityNumberFixture.fields['Entity Type'],'','02/20/2026','Registered'];
+ const h=fixture({rows:[row]});Object.assign(h.fieldValues,fields);
+ return {h,row,fields};
+}
+test('NV opens the observed entity number with blank business ID and retains required history collection',async()=>{
+ const {h,row}=entityNumberHarness();await h.search();
+ const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[2]},h.time+5000,{skipHistory:true}));
+ assert.equal(result.complete,true);assert.equal(result.fields['Entity Number'],row[2]);
+ assert.equal(result.filings.complete,false,'missing history remains explicit despite trial skipHistory');
+ assert.equal(h.detailClicks,1);
+});
+test('NV entity-number detail refuses changed number, populated business ID and unrelated type',async()=>{
+ for(const changes of [{'Entity Number':'E76543212026-2'}, {'Entity Type':'Registered Agent'}]) {
+  const {h,row}=entityNumberHarness(changes);await h.search();
+  await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[2]},h.time+5000)),/DETAIL_FIELDS_INCOMPLETE/);
+ }
+ const {h,row}=entityNumberHarness();await h.search();
+ h.detail();h.fieldValues['NV Business ID']='NV20261234567';
+ assert.equal(h.api.nvFields(row[2]),null);
+});
+test('NV entity-number detail cannot open an unobserved number or an unsupported category',async()=>{
+ const {h,row}=entityNumberHarness();await h.search();
+ await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'E76543212026-2'},h.time+5000)),/DETAIL_NOT_OBSERVED/);
+ const adverse=fixture({rows:[[row[0],'',row[2],'Foreign Non-Profit Corporation (80)','','02/20/2026','Active']]});await adverse.search();
+ await assert.rejects(adverse.drive(adverse.api.nvDetail({state:'NV',operation:'detail',identifier:row[2]},adverse.time+5000)),/DETAIL_NOT_OBSERVED/);
+ assert.equal(adverse.detailClicks,0);
 });

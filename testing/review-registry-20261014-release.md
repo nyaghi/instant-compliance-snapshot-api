@@ -93,12 +93,76 @@ The saved-result replay covers all 31 approved organizations and 198 comparisons
 without baseline-to-candidate changes. It does not replay changed collectors or
 establish live speed. Eleven current-sheet differences also occur on EW.
 
-Fresh unchanged-EW baselines and candidate live checks must be retained separately,
+Fresh unchanged-EW baselines and candidate live checks are retained separately,
 including identity decisions, discovery/execution durations, source limitations,
-NC 429 cooldown and deferred recovery. At this candidate checkpoint the live
-31-organization work is still in progress. Nevada is deferred by user instruction
-until the other work is done. Its blank page and original missing-detail cause
-remain unresolved; no speculative Nevada or Tennessee rule was added.
+NC 429 cooldown and deferred recovery. Commit 03ac831 is deployed to the isolated
+staging API and all three worker instances. All 31 controls and four reported
+organizations completed the eleven-state non-Nevada pass: 381 first-pass checks,
+358 exact sheet matches, 23 differences, no missing exports. Four initial NC
+omissions were recovered separately after cooldown. Targeted retries and signed
+identity decisions retain their own evidence and durations.
+
+The final 03ac831 snapshot, including the separately deferred Loyola NV check,
+has 386 checks, 382 conclusive results and 375 exact current-sheet matches. The
+eleven remaining differences comprise two pending signed identities, two
+conditional MA extension cases, two source-backed TN sheet discrepancies, three
+pre-existing UTC/Eastern calendar-boundary differences, Lahey TN retrieval and
+Loyola NV retrieval. No expected cells changed. Current Fresh Test was re-read;
+seven older names had lossy punctuation in the saved JSON, with no changed status
+expectations. The new current-sheet capture preserves the original punctuation.
+
+Lahey TN remains a confirmed retrieval defect: the official completed search
+shows exact LAHEY CLINIC INC, CO50375, Expired, expiration 03/31/2025; the final
+candidate targeted retry remains Unable to Confirm. Its underlying collector
+failure has not been isolated. No speculative Tennessee patch was added.
+
+Only 22 approved controls have the same first-pass selected state set as EW.
+Cache conditions were not independently established; nine differed through NC
+cooldown omissions. Slow-state evidence is retained for RedRover and Better World;
+FL source timeouts for Service Year and SACRED recovered in separate checks.
+Performance is not validated. Popup outer bounds remain unverified because the
+available browser capture does not show the actual native window borders; the
+user will test after the agent session.
+
+## Nevada entity-number candidate — 29.2EY / connector 0.6.130
+
+Nevada was investigated last, as instructed. The live Loyola check still returned
+Unable to Confirm after the public source recovered. ORION supplies a blank NV
+Business ID but a valid Entity Number for its Foreign Entities Not Required to
+Register In Nevada category. The existing collector preserved that row but the
+master deliberately would not open it. The official clicked detail confirms the
+same entity number, Registered standing, renewal 02/28/2027 and a complete one-row
+history: Exemption to Charitable Solicitation Statement filed 02/20/2026.
+
+The isolated recovery binds the observed row, exact entity number, blank Business
+ID, supported category, official detail URL and completed same-entity filing
+history. Exempt requires an explicit dated exemption, Registered standing and an
+unexpired displayed deadline; missing, adverse, future or conflicting evidence
+remains inconclusive. No organization-specific runtime exception was added.
+Existing populated-Business-ID trial records retain their approved displayed-date
+rule and do not acquire a filing-history dependency. Existing deadlines, query
+scope, Sales inputs, window placement and unrelated collectors remain unchanged.
+
+The offline builder copies the known working 0.6.129 package and applies only the
+new NV deltas, including the private NY protocol copy. It preserves that package's
+coordination fixes, punctuation repairs and permissions. The installed extension
+is unchanged; 0.6.130 activation requires the user's manual Chrome action because
+browser security prohibits controlling chrome://extensions.
+
+Focused new backend tests: eight pass. Source NV DOM: 97 pass. Shared source
+connector/lifecycle/NC/identity/window tests: 338 pass. Packaged NV/NC/NY-isolation
+tests: 136 pass. Packaged worker suite: 286 pass, one unchanged historical MS
+300000-versus-60000 assertion fails. Backend source suite: 151 pass before the
+additional conflicting-EIN test, excluding two historical whole-file assertions;
+the attempted unfiltered 153 had one historical scope failure and one missing
+local psycopg dependency in that historical import. Identity/Sales controls: 51
+pass. The 31-organization interpretation replay remains 198 comparisons, zero
+changes; it is not live collector regression or speed validation. Counts overlap.
+
+29.2EY is a prepared local candidate at this checkpoint, not a completed staging
+validation. Full 31-organization live NV controls, comparable speed and actual
+popup placement are pending. Keep 03ac831 and connector 0.6.129 available for
+rollback. Production is untouched. Recommendation: do not promote.
 
 Retain six documented exclusions in the shared runner and the packaged connector's
 pre-existing MS 300-second-versus-60-second historical assertion. Imported SC
