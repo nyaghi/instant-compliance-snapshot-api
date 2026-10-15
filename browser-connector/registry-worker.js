@@ -767,14 +767,15 @@ async function performRegistryQuery(job, query) {
     const allowance=query.state==='NV'&&query.operation==='search'?150000:45000;
     let response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
     if(P.TRIAL_ORIGIN && query.state==='TN') {
-      const phases=['detail-start','prior-closed','detail-click','detail-retry','detail-incomplete','detail-ready','public-error'];
+      const phases=['detail-start','prior-closed','detail-click','detail-retry','detail-incomplete','detail-ready','public-error','request-started','request-finished'];
       for(const entry of Array.isArray(response?.tn_diagnostics)?response.tn_diagnostics.slice(0,16):[]) {
         if(!phases.includes(entry?.phase)||!Number.isFinite(entry.elapsed_ms)||entry.elapsed_ms<0)continue;
         const sample={phase:entry.phase,ms:Math.round(entry.elapsed_ms),
           visibility:['visible','hidden'].includes(entry.visibility)?entry.visibility:'unknown'};
-        for(const key of ['dialog_visible','loading_visible','request_observed','retried'])
+        for(const key of ['dialog_visible','loading_visible','request_observed','retried','watch_ready'])
           if(typeof entry[key]==='boolean')sample[key]=entry[key];
         if(['grid-binding','details-handler','type-error','other'].includes(entry.category))sample.category=entry.category;
+        if(Number.isInteger(entry.http_status)&&entry.http_status>=0&&entry.http_status<=599)sample.http_status=entry.http_status;
         diagnostic('tn-dom',job,JSON.stringify(sample));
       }
     }

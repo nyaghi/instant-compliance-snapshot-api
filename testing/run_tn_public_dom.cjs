@@ -6,9 +6,9 @@ const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env
 const columns=[null,'Id','Id','FileNumber','DisplayName','OtherNames','Status','City','StateName','StateCode','RegistrationDate'];
 const national=['Details','unused summary','2162','CO2559','YWCA USA, INC.',"YOUNG WOMEN'S CHRISTIAN ASSOCIATION OF THE UNITED STATES OF AMERICA, INC.\nYWCA OF THE U.S.A.",'Active','WASHINGTON','DC','DC','5/12/1995'];
 const local=['Details','unused summary','3596572','CO224','YWCA NASHVILLE & MIDDLE TENNESSEE','','Active','NASHVILLE','TN','TN','11/14/1985'];
-function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false,pageErrorOnClick=null}={}) {
+function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false,pageErrorOnClick=null,watchAvailable=true,requestStatus=200}={}) {
  let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=!closedInitially,opened=[],detailClicks=0;
- const events=new Map(),observers=new Set(),root={},errorListeners=new Set();
+ const events=new Map(),observers=new Set(),root={},errorListeners=new Set(),messageListeners=new Set();let watchId=null;
  const later=(fn,ms)=>{let id=++serial;events.set(id,{fn,at:clock+ms});return id;};
  const target={nodeType:1,closest:()=>({}),matches:()=>false,querySelector:()=>null};
  const mask={nodeType:1,matches:s=>s==='.k-loading-mask',querySelector:()=>null,getClientRects:()=>loading?[{}]:[]};
@@ -31,8 +31,8 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
    if(changedQueryOnClick)later(()=>{inputs.Name.value='DIFFERENT QUERY';mutate();},100);
    if(changedRowOnClick)later(()=>{doneRows=doneRows.map(r=>r[3]===targetId?r.map((v,i)=>i===6?'Changed':v):r);mutate();},100);
    return;}
-   opened.push(cells[3]);if(detailLoading){loading=true;mutate([mask]);}
-   later(()=>{loading=false;dialogVisible=true;mutate();},detailDelay);}}]:[]}))};
+   opened.push(cells[3]);if(watchId)phase('started');if(detailLoading){loading=true;mutate([mask]);}
+   later(()=>{loading=false;dialogVisible=true;mutate();if(watchId)phase('finished',{http_status:requestStatus});},detailDelay);}}]:[]}))};
  const grid={closest:()=>({}),get innerText(){return doneRows.length?'Public search results':'No Records Available';},
   querySelector:q=>q==='table[role="grid"]'?table:q==='.k-pager-info'?txt(doneRows.length?`1 - ${doneRows.length} of ${doneRows.length} items`:'No items to display'):
    q==='[aria-current="page"]'?txt(doneRows.length?'1':'0'):null};
@@ -41,7 +41,10 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
  }};
  const document={documentElement:root,readyState:'complete',querySelector:q=>q==='#KendoWindowLevel1'?dialog:q.startsWith('input[id^=')?inputs[q.match(/="([^_]+)_/)[1]]:null,
   querySelectorAll:q=>q==='.k-grid'?[grid]:q==='button[id^="Search_"]'?[search]:(q==='[id^="SearchResults_"] .k-loading-mask'||q==='.k-loading-mask')?[mask]:[]};
- const win={addEventListener:(type,fn)=>{if(type==='error')errorListeners.add(fn);},removeEventListener:(type,fn)=>{if(type==='error')errorListeners.delete(fn);}};win.top=win;
+ const phase=(name,extra={})=>{for(const fn of [...messageListeners])fn({source:win,origin:'https://tncab.tnsos.gov',data:{channel:'cc-final-four-tn-phase-v1',direction:'response',id:watchId,phase:name,...extra}});};
+ const win={addEventListener:(type,fn)=>{if(type==='error')errorListeners.add(fn);if(type==='message')messageListeners.add(fn);},
+  removeEventListener:(type,fn)=>{if(type==='error')errorListeners.delete(fn);if(type==='message')messageListeners.delete(fn);},
+  postMessage:m=>{if(m.direction!=='request')return;if(m.operation==='watch'&&watchAvailable){watchId=m.id;phase('ready');}if(m.operation==='stop')watchId=null;}};win.top=win;
  const context={window:win,document,location:{origin:'https://tncab.tnsos.gov'},Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},
   HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
   MutationObserver:class{constructor(fn){this.fn=fn;}observe(){observers.add(this);}disconnect(){observers.delete(this);}},
@@ -49,7 +52,7 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
  vm.createContext(context);vm.runInContext(source,context);
  async function drive(p) {let done=false,value,error;p.then(v=>{done=true;value=v;},e=>{done=true;error=e;});
   for(let n=0;!done&&n<1000;n++){for(let i=0;i<20;i++)await Promise.resolve();if(done)break;const next=[...events].sort((a,b)=>a[1].at-b[1].at)[0];assert.ok(next);events.delete(next[0]);clock=next[1].at;next[1].fn();}
-  assert.ok(done);assert.equal(observers.size,0);assert.equal(errorListeners.size,0);if(error)throw error;return value;
+  assert.ok(done);assert.equal(observers.size,0);assert.equal(errorListeners.size,0);assert.equal(messageListeners.size,0);if(error)throw error;return value;
  }
  return {api:context.testTN,drive,h4s,dialog,grid,table,opened,get clicks(){return detailClicks;},get time(){return clock;},
   search:()=>drive(context.testTN.tnSearch({state:'TN',operation:'search',name:queryName},clock+45000)),
@@ -122,5 +125,21 @@ test('Tennessee diagnostics retain only lifecycle facts and a sanitized public-e
 test('Tennessee diagnostic observation does not add clicks or delay a completed detail',async()=>{
  const f=fixture();await f.search();const start=f.time;await f.detail();
  assert.equal(f.clicks,1);assert.equal(f.time-start,50);
- assert.deepEqual(Array.from(f.api.diagnostics,e=>e.phase),['detail-start','prior-closed','detail-click','detail-ready']);
+ assert.deepEqual(Array.from(f.api.diagnostics,e=>e.phase),['detail-start','prior-closed','detail-click','request-started','request-finished','detail-ready']);
+});
+test('a slow real detail request without any loading mask is never clicked twice',async()=>{
+ const f=fixture({detailDelay:5000,detailLoading:false});await f.search();const start=f.time;
+ const result=await f.detail();assert.equal(result.complete,true);assert.equal(f.clicks,1);assert.equal(f.time-start,5000);
+});
+test('a failed observed HTTP request cannot turn visible stale detail fields into evidence',async()=>{
+ const f=fixture({requestStatus:500});await f.search();await assert.rejects(f.detail(),/RESPONSE_INCOMPLETE/);assert.equal(f.clicks,1);
+});
+test('missing observer retains one ordinary detail action and never authorizes a blind retry',async()=>{
+ const positive=fixture({watchAvailable:false});await positive.search();assert.equal((await positive.detail()).complete,true);assert.equal(positive.clicks,1);
+ const ignored=fixture({watchAvailable:false,ignoredDetailClicks:5});await ignored.search();await assert.rejects(ignored.detail(),/DETAIL_NOT_STARTED/);assert.equal(ignored.clicks,1);
+});
+test('observer readiness cannot start a detail after the existing command deadline',async()=>{
+ const f=fixture({watchAvailable:false});await f.search();
+ await assert.rejects(f.drive(f.api.tnDetail({state:'TN',operation:'detail',identifier:'CO2559'},f.time+100)),/RESPONSE_INCOMPLETE/);
+ assert.equal(f.clicks,0);
 });

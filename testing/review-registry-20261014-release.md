@@ -244,6 +244,57 @@ has not completed live regression and is not a verified repair. Its originally
 recorded build metadata describes package admission only; the later trace-filter
 correction requires a staging frontend refresh after deployment.
 
+### Live diagnostic findings and TN Request Guard candidate — October15
+
+29.2FA/31170e0 is live on API dep-db8b8bu89jmc73cti3l0 (1m46s) and worker
+dep-db8b8imq1p3s73a8lf20 (1m50s,3/3instances). The user unlocked the refreshed
+same staging tab. The first actual Lahey CO/TN run returned Suspended/Delinquent
+in15s after14s discovery, selecting exact ClinicCO50375 with expiration03/31/2025.
+Its first attempted submit had been blocked by an unchecked first-run diagnostic
+acknowledgement; an empty UI capture is retained but is not a completed run.
+The acknowledgement was completed and the same discovery reused. A retained
+session repeat returned TN UTC32s after cached0s discovery. A later TN-only run
+returned Delinquent14s, also with cached discovery. The repair is not repeatable.
+All completed first-pass/repeat exports are retained separately. The current
+Fresh Test was re-read: all31 approved TN names/EINs/expectations are unchanged.
+Only the first approved control was started before the failed repeat was read;
+National Parks Traveler returned Not Registered8s after14s discovery. The other
+30TN controls are held, not passed. Native window borders remain unverified.
+
+The active public source has no main_screen element. Its published Details
+handler calls kendo.ui.progress on that absent target, so a real request can
+have no observable loading mask. The750ms retry guard therefore cannot prove
+the initial request never started. An independent slow-request fixture without
+a mask makes Diagnostic1 click twice; the new guard clicks once. This establishes
+an unsafe retry mechanism, not proof that it caused every historical130 failure.
+
+The integrated registry-tn-main.js helper passively observes native public XHR
+for exactly the selected row's public numeric grid ID and the known Details
+endpoint. It reports ready/start/end/HTTPstatus only. No request is initiated,
+replayed, modified or read; no headers, body, response, widgetConfig, credentials
+or verification data are collected. This is a connector access component like
+the existing public MS observer, not a standalone state check or sidecar. The
+master continues to own identity, aliases, selection and classification. The
+technical reason for the MAIN-world helper is that the isolated DOM collector
+cannot observe the page's in-flight native XHR through a nonexistent DOM mask.
+
+An observed pending request forbids a second click. A successful bound response
+must finish before its exact detail fields can complete. If the observer is
+unavailable, the ordinary single-click path remains available and a speculative
+retry is disabled; it is not a new required helper dependency. The original
+25-second detail deadline and the overall Sales/Standard deadline remain.
+Tests also prevent a new click after observer readiness consumes the deadline.
+
+The separate connector-0.6.131-tn-request-guard package retains semantic version
+131 for existing admission, with explicit TN Request Guard name/version_name.
+It preserves permissions, prior scripts and window geometry and adds only the
+TN document-start MAIN observer. It does not overwrite any installed package.
+Source focused36pass; shared472pass; actual packaged172pass plus packaged
+diagnostic-export1pass. Counts overlap. The old Diagnostic1 slow-request control
+fails as expected with2clicks instead of1. No master/backend interpretation delta
+or new server deployment is required for this connector candidate. Activation,
+fresh target/repeat checks, full31TN controls, speed and popup gates remain pending.
+
 Production is untouched. Recommendation: do not promote while TN, identity,
 calendar-policy, comparable performance and native popup-placement gates remain.
 

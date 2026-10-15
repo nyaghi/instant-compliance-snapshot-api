@@ -816,6 +816,32 @@
   }
   const tnObserved = new Map();
   let tnLastDiagnostics=[];
+  async function tnRequestWatch(identifier,deadline,onPhase) {
+    const state={ready:false,started:false,finished:false,http_status:null,stop:()=>{}};
+    if(typeof window.postMessage!=='function')return state;
+    const id=crypto.randomUUID(),channel='cc-final-four-tn-phase-v1';
+    let timer,resolveReady;
+    const ready=new Promise(resolve=>{resolveReady=resolve;});
+    const receive=event=>{
+      const m=event.data;
+      if(event.source!==window||event.origin!==location.origin||m?.channel!==channel||m.direction!=='response'||m.id!==id)return;
+      if(m.phase==='ready'){state.ready=true;clearTimeout(timer);resolveReady();}
+      else if(m.phase==='unavailable'){clearTimeout(timer);resolveReady();}
+      else if(state.ready&&m.phase==='started'){state.started=true;onPhase('request-started');}
+      else if(state.ready&&state.started&&m.phase==='finished'&&Number.isInteger(m.http_status)&&m.http_status>=0&&m.http_status<=599){
+        state.finished=true;state.http_status=m.http_status;onPhase('request-finished',{http_status:m.http_status});
+      }
+    };
+    window.addEventListener('message',receive);
+    state.stop=()=>{clearTimeout(timer);window.removeEventListener('message',receive);
+      try{window.postMessage({channel,direction:'request',id,operation:'stop'},location.origin);}catch{}};
+    timer=setTimeout(resolveReady,Math.max(1,Math.min(1000,deadline-Date.now())));
+    try{window.postMessage({channel,direction:'request',id,operation:'watch',identifier,budget_ms:Math.max(1,deadline-Date.now())},location.origin);}
+    catch{state.stop();return state;}
+    await ready;
+    if(!state.ready)state.stop();
+    return state;
+  }
   function tnTrace(phase, started, extra={}) {
     // Public lifecycle facts only: no names, contact fields, HTML or tokens.
     if(tnLastDiagnostics.length>=16)return;
@@ -979,10 +1005,13 @@
     const buttons=[...page.rows[indexes[0].index].querySelectorAll('button')].filter(el=>text(el)==='Details');
     if(buttons.length!==1)throw new Error('REGISTRY_TN_DETAIL_NOT_OBSERVED');
     const detailEnd=Math.min(deadline,Date.now()+25000);
+    const request=await tnRequestWatch(selected.identifier,detailEnd,(phase,extra)=>tnTrace(phase,started,extra));
+    if(Date.now()>=detailEnd){request.stop();throw new Error('REGISTRY_RESPONSE_INCOMPLETE');}
     let retryTimer,detailStarted=false,retryUsed=false;
     const loading=()=>[...document.querySelectorAll('.k-loading-mask')].some(visible);
     const readDetail=()=>{
-      detailStarted ||= visible(document.querySelector('#KendoWindowLevel1')) || loading();
+      detailStarted ||= request.started || visible(document.querySelector('#KendoWindowLevel1')) || loading();
+      if(request.ready&&(!request.finished||request.http_status!==200))return null;
       return tnFields(selected);
     };
     let fields;
@@ -996,14 +1025,14 @@
     };
     window.addEventListener?.('error',publicError);
     try {
-      fields=await wait(readDetail,Math.max(1,detailEnd-Date.now()),{action:()=>{
-        tnTrace('detail-click',started);
+      fields=await wait(readDetail,Math.max(1,detailEnd-Date.now()),{signal:{target:window,type:'message'},action:()=>{
+        tnTrace('detail-click',started,{watch_ready:request.ready});
         buttons[0].click();
         // Kendo can hide the prior modal before binding the next Details
         // action. Repeat only an unstarted click against the unchanged,
         // fully observed public row, within this original detail deadline.
         if(detailEnd-Date.now()>1500)retryTimer=setTimeout(()=>{
-          if(Date.now()>=detailEnd || detailStarted || loading()
+          if(Date.now()>=detailEnd || !request.ready || request.started || detailStarted || loading()
               || visible(document.querySelector('#KendoWindowLevel1')))return;
           try {
             if(document.querySelector('input[id^="Name_"]')?.value!==selected.search_name
@@ -1026,7 +1055,7 @@
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE' && !detailStarted)
         throw new Error(retryUsed?'REGISTRY_TN_DETAIL_RETRY_NOT_STARTED':'REGISTRY_TN_DETAIL_NOT_STARTED');
       throw error;
-    } finally {clearTimeout(retryTimer);window.removeEventListener?.('error',publicError);}
+    } finally {clearTimeout(retryTimer);request.stop();window.removeEventListener?.('error',publicError);}
     tnTrace('detail-ready',started);
     try { Object.assign(fields,await wait(()=>{
       try {return tnFinancials(document.querySelector('#KendoWindowLevel1'));}
