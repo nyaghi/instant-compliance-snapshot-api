@@ -6486,7 +6486,10 @@ def final_four_license_result(org, state, records, deadline, source):
         scope = ("charitable-solicitation exemption with a source-confirmed exemption filing"
                  if selected.get("solicitation_exemption_filed") else
                  "charitable-solicitation registration with a source-confirmed filing history"
-                 if selected.get("solicitation_statement_filed") else "nonprofit corporation's Nevada record")
+                 if selected.get("solicitation_statement_filed") else
+                 "charitable-solicitation registration statement"
+                 if selected.get("entity_type") == "Charitable Solicitation Registration Statement" else
+                 "nonprofit corporation's Nevada record")
         result.source_note += (f"CharityClarity reports {result.status} based on the matched {scope}. "
                                "Registered-agent records and registered-agent addresses are excluded from organization identity evidence. ")
         if selected.get("solicitation_exemption_filed"):
@@ -6508,6 +6511,26 @@ def final_four_license_result(org, state, records, deadline, source):
     if selected.get("date_evidence_note"):
         result.source_note = result.source_note.rstrip() + " " + selected["date_evidence_note"]
     return result
+
+
+NV_CHARITY_ENTITY_TYPES = frozenset({
+    "Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
+    "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
+    "Domestic Non-Profit Cooperative Corporation Without Stock (81)",
+    "Foreign Entities Not Required to Register In Nevada",
+    "Charitable Solicitation Registration Statement",
+})
+
+
+def nv_untyped_search_row_can_read_detail(row):
+    """A loaded issued identity permits retrieval, never a type/status inference."""
+    return (isinstance(row, dict) and row.get("entity_type") == ""
+            and row.get("business_identifier_missing") is not True
+            and isinstance(row.get("identifier"), str)
+            and re.fullmatch(r"NV\d+", row["identifier"]) is not None
+            and isinstance(row.get("entity_number"), str)
+            and re.fullmatch(r"(?:E\d{7,14}-\d|C\d{1,10}-\d{4})", row["entity_number"]) is not None
+            and isinstance(row.get("raw_status"), str) and bool(row["raw_status"].strip()))
 
 
 def nv_entity_number_detail_allowed(identifier, entity_type, business_id, entity_number):
@@ -6539,11 +6562,8 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     if not name or not fields["Entity Status"].strip():
         raise ValueError("Nevada entity identity or status is missing")
     entity_type = re.sub(r"\s+", " ", fields["Entity Type"]).strip()
-    if entity_type not in {"Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
-                           "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
-                           "Domestic Non-Profit Cooperative Corporation Without Stock (81)",
-                           "Foreign Entities Not Required to Register In Nevada"}:
-        raise ValueError("Nevada record is not a supported nonprofit corporation type")
+    if entity_type not in NV_CHARITY_ENTITY_TYPES:
+        raise ValueError("Nevada record is not a supported nonprofit or charitable-registration type")
     ein_raw = fields["FEIN"].strip()
     ein = "" if ein_raw in {"", "-"} else canonical_ein_digits(ein_raw)
     if ein_raw not in {"", "-"} and (not re.fullmatch(r"\d{2}-?\d{7}", ein_raw) or len(ein) != 9):
@@ -6871,7 +6891,7 @@ def final_four_search_evidence(payload, state, query):
             row = dict(raw)
             identity_ok = re.fullmatch(r"CO\d+" if state == "TN" else r"NV\d+", row["identifier"])
             if state == "NV":
-                identity_ok = identity_ok and bool(row["entity_type"].strip())
+                identity_ok = identity_ok and (bool(row["entity_type"].strip()) or nv_untyped_search_row_can_read_detail(row))
             if state == "NV" and re.fullmatch(r"(?:NR|C)\d{8}-\d+", row["identifier"]):
                 identity_ok = row["entity_type"] == "" and bool(str(row.get("raw_status") or "").strip())
             if state == "NV" and row.get("business_identifier_missing") is True:
@@ -7189,9 +7209,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 # These explicitly labeled business categories are outside the
                 # approved nonprofit-corporation/charity-registration scope.
                 # A same-name business must not make a separate, confirmed
-                # nonprofit record ambiguous. Unknown/blank types and charity
-                # registrations with incomplete filing evidence still require
-                # review in the branch below.
+                # nonprofit record ambiguous. Unknown types and incomplete
+                # identities remain unconfirmed. A blank grid type with a loaded
+                # issued identity can be resolved only by its verified detail.
                 excluded_nv_entities.append({"name": row["name"], "identifier": row["identifier"],
                                              "entity_type": row["entity_type"]})
                 seen.add(row["identifier"])
@@ -7226,11 +7246,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         continue
                 entity_number_detail = state == "NV" and row.get("business_identifier_missing") is True and nv_entity_number_detail_allowed(
                     row["identifier"], row["entity_type"], "", row.get("entity_number", ""))
-                if state == "NV" and ((row.get("business_identifier_missing") is True and not entity_number_detail) or row["entity_type"] not in {
-                        "Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
-                        "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
-                        "Domestic Non-Profit Cooperative Corporation Without Stock (81)",
-                        "Foreign Entities Not Required to Register In Nevada"}):
+                missing_search_type = state == "NV" and nv_untyped_search_row_can_read_detail(row)
+                if state == "NV" and ((row.get("business_identifier_missing") is True and not entity_number_detail)
+                        or row["entity_type"] not in NV_CHARITY_ENTITY_TYPES and not missing_search_type):
                     # Unsupported filing categories need review, not a guess.
                     # Do not open a registered-agent/other entity detail.
                     missing_nv_business_id |= row.get("business_identifier_missing") is True
@@ -7262,7 +7280,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                             record["date_evidence_note"] = "Tennessee's financial history was incomplete; the last-filed period remains blank."
                 else:
                     record = nv_charity_detail_evidence(detail.get("fields"), row["identifier"])
-                    if record["entity_type"] != row["entity_type"] or normalized_match_name(record["name"]) != normalized_match_name(row["name"]):
+                    if ((not missing_search_type and record["entity_type"] != row["entity_type"])
+                            or normalized_match_name(record["name"]) != normalized_match_name(row["name"])):
                         raise ValueError("Nevada detail differs from the selected search identity")
                     url = urlparse(str(detail.get("source_url") or ""))
                     fragment_path, _, params = url.fragment.partition("?")

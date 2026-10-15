@@ -20,6 +20,28 @@ const observed=[
  ['MAKE-A-WISH FOUNDATION OF NORTHERN NEVADA, INC.','NV19821011791','C6552-1982','Domestic Non-Profit Corporation (82)','ALLISON MACKENZIE, LTD.','11/05/1982 12:00 AM','Dissolved'],
  ['MAKE-A-WISH NEVADA','NV19961252237','C26637-1996','Domestic Non-Profit Corporation (82)','Walls Law Firm','12/27/1996 12:00 AM','Active']
 ];
+
+test('NV current blank-type issued rows remain unclassified until their observed details are read',async()=>{
+ const cases=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/nv-public-type-gap-20261015.json'),'utf8')).cases;
+ for(const c of cases){
+  const h=fixture({rows:c.rows});Object.assign(h.fieldValues,c.fields);
+  const result=await h.drive(h.api.nvSearch({state:'NV',operation:'search',name:c.organization_name},h.time+45000));
+  assert.equal(result.complete,true);assert.equal(result.rows[0].entity_type,'');
+  assert.equal(result.rows[0].entity_number,c.rows[0][2]);
+  assert.ok(!('status' in result.rows[0]));
+  const detail=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:c.fields['NV Business ID']},h.time+45000,{skipHistory:true}));
+  assert.equal(detail.fields['Entity Type'],'Charitable Solicitation Registration Statement');
+  assert.deepEqual(h.opened,[c.fields['NV Business ID']]);
+ }
+});
+
+test('NV blank type still rejects missing status, entity number, issued ID and placeholder rows',async()=>{
+ const row=['Independent Charity','NV20261234567','E12345672026-3','','','10/01/2026','Registered'];
+ for(const [field,value] of [[0,''],[1,''],[1,'12345'],[2,''],[2,'not-an-entity'],[6,'']]){
+  const changed=[...row];changed[field]=value;
+  await assert.rejects(fixture({rows:[changed]}).search(),/RESULTS_INCOMPLETE/);
+ }
+});
 test('Nevada document readiness waits for the business form after the page shell loads',()=>{
  const h=fixture(),read=h.context.document.querySelector;
  h.context.document.querySelector=()=>null;assert.equal(h.api.registryDocumentReady(),false);

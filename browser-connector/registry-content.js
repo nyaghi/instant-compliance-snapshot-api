@@ -297,16 +297,21 @@
   function nvPublicRow(cells) {
     const [name,businessId,entity_number,entity_type,,,raw_status] = cells;
     const missingId = businessId === '' && /^E\d{7,14}-\d$/.test(entity_number) && !!entity_type;
+    // ORION's completed grid can omit the type of an issued charity record.
+    // Preserve it as unclassified search evidence only; the master must read
+    // the same observed detail and verify its type before interpreting status.
+    const missingType = entity_type === '' && /^NV\d+$/.test(businessId) && !!raw_status
+      && /^(?:E\d{7,14}-\d|C\d{1,10}-\d{4})$/.test(entity_number);
     const identifier = missingId ? entity_number : businessId;
     const identified = /^NV\d+$/.test(businessId) && !!entity_type
-      || /^(?:NR|C)\d{8}-\d+$/.test(businessId) && entity_number === businessId && entity_type === '' || missingId;
+      || /^(?:NR|C)\d{8}-\d+$/.test(businessId) && entity_number === businessId && entity_type === '' || missingId || missingType;
     // A completed ORION row can have an explicitly blank Status cell. An
     // issued NV identity and entity type still let the master reject an
     // unrelated company or inspect a matching detail; the blank is no status.
     if (!name || !identified || !raw_status && !(/^NV\d+$/.test(businessId) && !!entity_type))
       throw new Error('REGISTRY_NV_RESULTS_INCOMPLETE');
     return {name,identifier,entity_type,raw_status,
-      ...(missingId ? {entity_number,business_identifier_missing:true} : {})};
+      ...(missingId ? {entity_number,business_identifier_missing:true} : missingType ? {entity_number} : {})};
   }
   function nvTable(title, headers) {
     const tables = [...document.querySelectorAll('casex-data-table')].filter(el =>

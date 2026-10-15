@@ -1,0 +1,74 @@
+{
+  "captured_date": "2026-10-15",
+  "kind": "Observed official public grid and detail; not an expected-sheet edit",
+  "as_of": "2026-10-15",
+  "cases": [
+    {
+      "organization_name": "Partnership for Civil Justice Fund",
+      "ein": "262851211",
+      "rows": [
+        [
+          "PARTNERSHIP FOR CIVIL JUSTICE FUND",
+          "NV20171153762",
+          "E0565562016-0",
+          "",
+          ".NOT REQUIRED",
+          "06/23/2008 12:00 AM",
+          "Expired"
+        ]
+      ],
+      "fields": {
+        "Entity Name": "PARTNERSHIP FOR CIVIL JUSTICE FUND",
+        "NV Business ID": "NV20171153762",
+        "Entity Status": "Expired",
+        "Entity Type": "Charitable Solicitation Registration Statement",
+        "FEIN": "-",
+        "Solicits Charitable Contribution?": "Yes",
+        "IRS Registered Name": "PARTNERSHIP FOR CIVIL JUSTICE FUND",
+        "Campaign Name": "-",
+        "Formation Date in Nevada": "06/23/2008",
+        "Annual Renewal Due Date/Expiration Date": "06/30/2022"
+      },
+      "source_url": "https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=4bf26b55-d74c-428a-afbd-e9153eadf478",
+      "expected": "Delinquent"
+    },
+    {
+      "organization_name": "Opportunity at Work",
+      "ein": "813214432",
+      "rows": [
+        [
+          "Opportunity@Work, Inc.",
+          "NV20253440024",
+          "E51805422025-8",
+          "",
+          "",
+          "09/16/2025 12:00 AM",
+          "Registered"
+        ],
+        [
+          "Opportunity Works LLC",
+          "NV20232719895",
+          "E30270832023-5",
+          "Domestic Limited Liability Company (86)",
+          "Jeromy Slater",
+          "03/15/2023 12:00 AM",
+          "Revoked"
+        ]
+      ],
+      "fields": {
+        "Entity Name": "Opportunity@Work, Inc.",
+        "NV Business ID": "NV20253440024",
+        "Entity Status": "Registered",
+        "Entity Type": "Charitable Solicitation Registration Statement",
+        "FEIN": "-",
+        "Solicits Charitable Contribution?": "Yes",
+        "IRS Registered Name": "OPPORTUNITY@WORK, INC",
+        "Campaign Name": "-",
+        "Formation Date in Nevada": "09/16/2025",
+        "Annual Renewal Due Date/Expiration Date": "09/30/2027"
+      },
+      "source_url": "https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=cd615718-75c3-4a0e-bfa2-dc4bfa6ddff9",
+      "expected": "Current"
+    }
+  ]
+}
