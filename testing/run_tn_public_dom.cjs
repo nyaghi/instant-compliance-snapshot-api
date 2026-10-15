@@ -6,8 +6,8 @@ const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env
 const columns=[null,'Id','Id','FileNumber','DisplayName','OtherNames','Status','City','StateName','StateCode','RegistrationDate'];
 const national=['Details','unused summary','2162','CO2559','YWCA USA, INC.',"YOUNG WOMEN'S CHRISTIAN ASSOCIATION OF THE UNITED STATES OF AMERICA, INC.\nYWCA OF THE U.S.A.",'Active','WASHINGTON','DC','DC','5/12/1995'];
 const local=['Details','unused summary','3596572','CO224','YWCA NASHVILLE & MIDDLE TENNESSEE','','Active','NASHVILLE','TN','TN','11/14/1985'];
-function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true}={}) {
- let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=!closedInitially,opened=[];
+function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false}={}) {
+ let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=!closedInitially,opened=[],detailClicks=0;
  const events=new Map(),observers=new Set(),root={};
  const later=(fn,ms)=>{let id=++serial;events.set(id,{fn,at:clock+ms});return id;};
  const target={nodeType:1,closest:()=>({}),matches:()=>false,querySelector:()=>null};
@@ -25,7 +25,12 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
   querySelector:q=>q==='h2'?txt(detailName):q==='#DetailsTabStrip-1'?{querySelector:()=>financial}:null,
   querySelectorAll:q=>q==='h4'?h4s:q==='.col-md-6 > h4'?h4s.slice(0,4):q==='#DetailsTabStrip > li > a'?[...(financialTab?[financialLink]:[]),...(officersTab?[officersLink]:[])]:[]};
  const table={querySelectorAll:q=>q==='thead th'?columns.map(c=>({getAttribute:()=>c})):doneRows.map(cells=>({children:cells.map(txt),
-  querySelectorAll:q=>q==='button'?[{innerText:'Details',click:()=>{opened.push(cells[3]);later(()=>{dialogVisible=true;mutate();},50);}}]:[]}))};
+  querySelectorAll:q=>q==='button'?[{innerText:'Details',click:()=>{detailClicks++;if(detailClicks<=ignoredDetailClicks){
+   if(changedQueryOnClick)later(()=>{inputs.Name.value='DIFFERENT QUERY';mutate();},100);
+   if(changedRowOnClick)later(()=>{doneRows=doneRows.map(r=>r[3]===targetId?r.map((v,i)=>i===6?'Changed':v):r);mutate();},100);
+   return;}
+   opened.push(cells[3]);if(detailLoading){loading=true;mutate([mask]);}
+   later(()=>{loading=false;dialogVisible=true;mutate();},detailDelay);}}]:[]}))};
  const grid={closest:()=>({}),get innerText(){return doneRows.length?'Public search results':'No Records Available';},
   querySelector:q=>q==='table[role="grid"]'?table:q==='.k-pager-info'?txt(doneRows.length?`1 - ${doneRows.length} of ${doneRows.length} items`:'No items to display'):
    q==='[aria-current="page"]'?txt(doneRows.length?'1':'0'):null};
@@ -33,7 +38,7 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
   if(activity&&!dialogVisible){loading=true;mutate([mask]);later(()=>{doneRows=rows;loading=false;mutate();},responseDelay);}
  }};
  const document={documentElement:root,readyState:'complete',querySelector:q=>q==='#KendoWindowLevel1'?dialog:q.startsWith('input[id^=')?inputs[q.match(/="([^_]+)_/)[1]]:null,
-  querySelectorAll:q=>q==='.k-grid'?[grid]:q==='button[id^="Search_"]'?[search]:q==='[id^="SearchResults_"] .k-loading-mask'?[mask]:[]};
+  querySelectorAll:q=>q==='.k-grid'?[grid]:q==='button[id^="Search_"]'?[search]:(q==='[id^="SearchResults_"] .k-loading-mask'||q==='.k-loading-mask')?[mask]:[]};
  const win={};win.top=win;
  const context={window:win,document,location:{origin:'https://tncab.tnsos.gov'},Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},
   HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
@@ -44,7 +49,7 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
   for(let n=0;!done&&n<1000;n++){for(let i=0;i<20;i++)await Promise.resolve();if(done)break;const next=[...events].sort((a,b)=>a[1].at-b[1].at)[0];assert.ok(next);events.delete(next[0]);clock=next[1].at;next[1].fn();}
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
- return {api:context.testTN,drive,h4s,dialog,grid,table,opened,
+ return {api:context.testTN,drive,h4s,dialog,grid,table,opened,get clicks(){return detailClicks;},get time(){return clock;},
   search:()=>drive(context.testTN.tnSearch({state:'TN',operation:'search',name:queryName},clock+45000)),
   detail:()=>drive(context.testTN.tnDetail({state:'TN',operation:'detail',identifier:targetId},clock+45000))};
 }
@@ -76,3 +81,29 @@ test('a modal with no tab strip is incomplete, not an empty filing history',asyn
 });
 test('unobserved identifier cannot open any record',async()=>{const f=fixture();await assert.rejects(f.detail(),/DETAIL_NOT_OBSERVED/);assert.equal(f.opened.length,0);});
 test('candidate Tennessee access remains absent from approved installed manifest',()=>{const m=fs.readFileSync(path.join(__dirname,'../browser-connector/manifest.json'),'utf8');assert.ok(!m.includes('tncab.tnsos.gov'));});
+
+test('one ignored Tennessee Details click recovers on the same observed identity',async()=>{
+ const f=fixture({ignoredDetailClicks:1});await f.search();const r=await f.detail();
+ assert.equal(r.fields['CO Number'],'CO2559');assert.equal(f.clicks,2);
+ assert.deepEqual(f.opened,['CO2559']);
+});
+test('independent exact legal record recovers without accepting a similarly named affiliate',async()=>{
+ const row=['Details','','','CO50375','LAHEY CLINIC, INC.','','Expired','BURLINGTON','Massachusetts','MA','1/10/2023'];
+ const f=fixture({rows:[row],targetId:'CO50375',detailId:'CO50375',detailName:row[4],queryName:row[4],ignoredDetailClicks:1});
+ await f.search();const r=await f.detail();assert.equal(r.fields['CO Number'],'CO50375');assert.equal(f.clicks,2);
+});
+test('an observable pending detail or wrong visible identity is never clicked twice',async()=>{
+ const pending=fixture({detailDelay:5000,detailLoading:true});await pending.search();await pending.detail();assert.equal(pending.clicks,1);
+ const wrong=fixture({detailId:'CO999'});await wrong.search();await assert.rejects(wrong.detail(),/RESPONSE_INCOMPLETE/);assert.equal(wrong.clicks,1);
+});
+test('changed Tennessee search or row cancels the unstarted-click recovery',async()=>{
+ for(const change of [{changedQueryOnClick:true},{changedRowOnClick:true}]){
+  const f=fixture({ignoredDetailClicks:5,...change});await f.search();
+  await assert.rejects(f.detail(),/DETAIL_NOT_STARTED/);assert.equal(f.clicks,1);assert.deepEqual(f.opened,[]);
+ }
+});
+test('Tennessee recovery repeats at most once and keeps the original 25-second detail deadline',async()=>{
+ const f=fixture({ignoredDetailClicks:5});await f.search();const start=f.time;
+ await assert.rejects(f.detail(),/DETAIL_RETRY_NOT_STARTED/);
+ assert.equal(f.clicks,2);assert.equal(f.time-start,25000);assert.deepEqual(f.opened,[]);
+});

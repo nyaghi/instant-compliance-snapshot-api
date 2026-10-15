@@ -900,7 +900,7 @@
       for(let i=0;i<page.values.length;i++) {
         const row=page.values[i];
         if(tnObserved.has(row.identifier))throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
-        tnObserved.set(row.identifier,{...row,page:expected});rows.push(row);
+        tnObserved.set(row.identifier,{...row,page:expected,search_name:query.name,signature:JSON.stringify(row)});rows.push(row);
       }
       if(rows.length===total)return {query,state:'TN',complete:true,verification_pending:false,total,rows};
       const next=page.grid.querySelector('button[aria-label="Go to the next page"]');
@@ -966,7 +966,44 @@
     if(indexes.length!==1||indexes[0].row.name!==selected.name)throw new Error('REGISTRY_TN_DETAIL_CHANGED');
     const buttons=[...page.rows[indexes[0].index].querySelectorAll('button')].filter(el=>text(el)==='Details');
     if(buttons.length!==1)throw new Error('REGISTRY_TN_DETAIL_NOT_OBSERVED');
-    const fields=await wait(()=>tnFields(selected),Math.max(1,Math.min(25000,deadline-Date.now())),{action:()=>buttons[0].click()});
+    const detailEnd=Math.min(deadline,Date.now()+25000);
+    let retryTimer,detailStarted=false,retryUsed=false;
+    const loading=()=>[...document.querySelectorAll('.k-loading-mask')].some(visible);
+    const readDetail=()=>{
+      detailStarted ||= visible(document.querySelector('#KendoWindowLevel1')) || loading();
+      return tnFields(selected);
+    };
+    let fields;
+    try {
+      fields=await wait(readDetail,Math.max(1,detailEnd-Date.now()),{action:()=>{
+        buttons[0].click();
+        // Kendo can hide the prior modal before binding the next Details
+        // action. Repeat only an unstarted click against the unchanged,
+        // fully observed public row, within this original detail deadline.
+        if(detailEnd-Date.now()>1500)retryTimer=setTimeout(()=>{
+          if(Date.now()>=detailEnd || detailStarted || loading()
+              || visible(document.querySelector('#KendoWindowLevel1')))return;
+          try {
+            if(document.querySelector('input[id^="Name_"]')?.value!==selected.search_name
+                || document.querySelector('input[id^="Filenumber_"]')?.value!==''
+                || document.querySelector('input[id^="City_"]')?.value!=='')return;
+            const fresh=tnPage();
+            const matches=fresh.values.map((row,index)=>({row,index}))
+              .filter(({row})=>row.identifier===selected.identifier);
+            if(fresh.page!==selected.page || matches.length!==1
+                || JSON.stringify(matches[0].row)!==selected.signature)return;
+            const freshButtons=[...fresh.rows[matches[0].index].querySelectorAll('button')]
+              .filter(el=>text(el)==='Details');
+            if(freshButtons.length!==1)return;
+            retryUsed=true;freshButtons[0].click();
+          } catch { /* Changed or incomplete evidence cannot authorize a retry. */ }
+        },750);
+      }});
+    } catch(error) {
+      if(error.message==='REGISTRY_RESPONSE_INCOMPLETE' && !detailStarted)
+        throw new Error(retryUsed?'REGISTRY_TN_DETAIL_RETRY_NOT_STARTED':'REGISTRY_TN_DETAIL_NOT_STARTED');
+      throw error;
+    } finally {clearTimeout(retryTimer);}
     try { Object.assign(fields,await wait(()=>{
       try {return tnFinancials(document.querySelector('#KendoWindowLevel1'));}
       catch(error) {if(error.message==='REGISTRY_TN_FINANCIALS_INCOMPLETE')return null;throw error;}

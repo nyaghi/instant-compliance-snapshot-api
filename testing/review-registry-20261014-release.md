@@ -159,10 +159,43 @@ local psycopg dependency in that historical import. Identity/Sales controls: 51
 pass. The 31-organization interpretation replay remains 198 comparisons, zero
 changes; it is not live collector regression or speed validation. Counts overlap.
 
-29.2EY is a prepared local candidate at this checkpoint, not a completed staging
-validation. Full 31-organization live NV controls, comparable speed and actual
-popup placement are pending. Keep 03ac831 and connector 0.6.129 available for
-rollback. Production is untouched. Recommendation: do not promote.
+29.2EY (0aeec46) is deployed to the staging API and all three workers. Connector
+130 is active. Loyola returns Exempt in 9s after 16s discovery. All 31 approved
+NV controls match the re-read current sheet, with complete separate exports.
+Thirty match archived EV statuses and identifiers; Solid Rock now resolves its
+exact record through the earlier EW dash-query repair, agreeing with the current
+sheet. Discovery: 10/15/28s min/median/max. NV execution: 7/15/32s. The gray area
+is hidden after completion. There is no comparable full-31 EW NV-only timing
+baseline, and native popup borders remain unverified. These remain release gates.
+The final CO/TN smoke returns CO Suspended as expected and TN Unable to Confirm.
+
+## Tennessee detail-click candidate — 29.2EZ / connector 0.6.131
+
+The final EY Lahey observation shows the completed three-record public search
+while the previous foundation detail remains hidden; TN still times out in 31s.
+This narrows the problem to detail collection. A dropped click after Kendo closes
+the prior modal is a hypothesis, not a proven explanation of that live failure.
+The old connector reproduces a dropped-click failure in the DOM fixture.
+
+The candidate repeats the same observed Details action once after 750ms, only
+while no modal or public loading indicator has appeared and the complete row,
+page, requested name and empty filters remain unchanged. It preserves the
+original 25-second detail deadline, all identity/status safeguards and optional
+financial-history rules. It never retries a visible wrong record or an observable
+pending request. Failure remains inconclusive. New bounded failure codes identify
+an action that still did not start. No organization-specific runtime rule.
+
+Only registry-content.js and manifest metadata change in the 131 package, copied
+from 130. Worker, protocol, private NY adapter, permissions and window geometry
+are byte-identical. Source collector/shared tests: 457 pass. Actual packaged
+TN/NV/NC/NY isolation: 158 pass. Focused TN tests: 22 pass. The new ignored-click
+controls fail on 130 as retained in the reproduction log. The 31-organization
+saved-result replay still has 198 comparisons and zero interpretation changes.
+Counts overlap. Full live TN controls and a positive Lahey result are pending;
+keep EY/130 available and do not call this hypothesis a verified fix yet.
+
+Production is untouched. Recommendation: do not promote while TN, identity,
+calendar-policy, comparable performance and native popup-placement gates remain.
 
 Retain six documented exclusions in the shared runner and the packaged connector's
 pre-existing MS 300-second-versus-60-second historical assertion. Imported SC
