@@ -1,7 +1,7 @@
 /* Alabama's observed public grid; no live requests or CAPTCHA solver. */
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
+const source=fs.readFileSync(path.join(process.env.CC_TEST_TRIAL_DIR||path.join(__dirname,'../browser-connector'),'registry-content.js'),'utf8')
  .replace('  async function handle(m) {','  globalThis.testAL={alPage,alSearch};\n  async function handle(m) {');
 const headers=['Name','License/Registration#','Status','Registration Type','Issued Date','Expiration Date','Address','City','State','Zip','Print'];
 const row=['YWCA of the USA National Board','AL97-431','Active','Charitable Organization','08/29/2001','03/28/2027','1400 I Street NW','Washington','DC','20005','Print'];

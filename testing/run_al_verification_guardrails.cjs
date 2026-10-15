@@ -5,7 +5,8 @@ const root=path.join(__dirname,'..');
 const content=fs.readFileSync(path.join(process.env.CC_TEST_TRIAL_DIR||path.join(root,'browser-connector'),'registry-content.js'),'utf8')
  .replace('  async function handle(m) {','  globalThis.alTest={alImagePixels,alVerificationRequest,alApplyVerification,registryDocumentReady,handle};\n  async function handle(m) {');
 function harness(){
- let pixels='data:image/png;base64,fixture',clockOffset=0,draws=0;
+ let pixels='data:image/png;base64,fixture',clockOffset=0,draws=0,dialog=null,dialogVisible=false,okClicks=0,dismissAfter=0;
+ const observers=new Set();
  class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
  const input=new Input(),button={disabled:false,getClientRects:()=>[{}]};
  const image={tagName:'IMG',complete:true,naturalWidth:125,naturalHeight:80,
@@ -13,16 +14,24 @@ function harness(){
   getAttribute:n=>n==='alt'?'Verification Code image':n==='aria-label'?'Captcha':null};
  const win={};win.top=win;
  const context=vm.createContext({window:win,location:{origin:'https://ago.igovsolution.net',pathname:'/online/Lookups/Business.aspx',href:'https://ago.igovsolution.net/online/Lookups/Business.aspx'},
-  URL,Date:{now:()=>Date.now()+clockOffset},setTimeout,crypto:{randomUUID:()=> 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'},
+  URL,Date:{now:()=>Date.now()+clockOffset},setTimeout,clearTimeout,crypto:{randomUUID:()=> 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'},
+  MutationObserver:class{constructor(fn){this.fn=fn;}observe(){observers.add(this.fn);}disconnect(){observers.delete(this.fn);}},
   HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
-  document:{readyState:'complete',getElementById:id=>id==='imgcap'?image:id==='ctl00_cntbdy_btn_search'?button:
+  document:{documentElement:{},readyState:'complete',getElementById:id=>id==='imgcap'?image:id==='ctl00_cntbdy_btn_search'?button:
     ['ctl00_cntbdy_txt_verify','ctl00_cntbdy_txt_businessname'].includes(id)?input:null,
-   querySelector:()=>null,createElement:()=>({getContext:()=>({drawImage:()=>draws++}),toDataURL:()=>pixels})},
+   querySelector:s=>s==='#altdialog'?dialog:null,
+   querySelectorAll:s=>s==='.ui-dialog button'?[{innerText:'Ok',getClientRects:()=>dialogVisible?[{}]:[],click:()=>{
+    okClicks++;if(dismissAfter===null)return;
+    const close=()=>{dialogVisible=false;for(const fn of [...observers])fn([]);};
+    if(dismissAfter) setTimeout(close,dismissAfter);else close();}}]:[],
+   createElement:()=>({getContext:()=>({drawImage:()=>draws++}),toDataURL:()=>pixels})},
   chrome:{runtime:{id:'fixture',onMessage:{addListener(){}}}}});
  vm.runInContext(content,context);
  const api={...context.alTest,alVerificationRequest:(query,deadline=Date.now()+clockOffset+5000)=>
   context.alTest.alVerificationRequest(query,deadline)};
- return {api,input,image,document:context.document,setPixels:v=>pixels=v,advance:n=>clockOffset+=n,draws:()=>draws};
+ return {api,input,image,document:context.document,setPixels:v=>pixels=v,advance:n=>clockOffset+=n,draws:()=>draws,
+  okClicks:()=>okClicks,dialogVisible:()=>dialogVisible,showDialog:(message,delay)=>{
+   dialogVisible=true;dismissAfter=delay;dialog={innerText:message,getClientRects:()=>dialogVisible?[{}]:[]};}};
 }
 const q={state:'AL',operation:'search',name:'Fixture Charity'};
 test('verification request is explicitly incomplete and does not enter any code',async()=>{
@@ -72,6 +81,34 @@ test('AL waits for a delayed verification image within the same command deadline
  assert.equal(first.evidence.verification_pending,true);
  assert.equal(h.draws(),1);
 });
+test('AL rejected-code dialog may close asynchronously before the next image is prepared',async()=>{
+ const h=harness();h.showDialog('Verification code incorrect',60);
+ const r=await h.api.alVerificationRequest(q,Date.now()+500);
+ assert.equal(r.verification_pending,true);assert.equal(r.complete,false);
+ assert.equal(h.okClicks(),1);assert.equal(h.dialogVisible(),false);assert.equal(h.input.value,'');
+});
+test('AL actual handler recovers a rejected first code using a fresh bounded continuation',async()=>{
+ const h=harness(),first=await h.api.alVerificationRequest(q);
+ h.api.alApplyVerification({...q,verification:{id:first.verification_id,code:'WRONG1'}});
+ h.showDialog('Verification code incorrect',60);
+ const retry=await h.api.handle({action:'registry-al',query:q,automaticVerification:true,budgetMs:500});
+ assert.equal(retry.ok,true);assert.equal(retry.evidence.complete,false);
+ assert.equal(retry.evidence.verification_pending,true);assert.equal(h.okClicks(),1);
+ // Recovery prepares the currently displayed image; it does not submit again.
+ assert.equal(h.input.value,'WRONG1');assert.equal(h.dialogVisible(),false);
+});
+test('AL never reads another image while a rejected-code dialog remains open',async()=>{
+ const h=harness();h.showDialog('Verification code incorrect',null);
+ await assert.rejects(h.api.alVerificationRequest(q,Date.now()+70),/REGISTRY_RESPONSE_INCOMPLETE/);
+ assert.equal(h.okClicks(),1);assert.equal(h.draws(),0);assert.equal(h.input.value,'');
+});
+test('AL does not dismiss an unrelated source error or a dialog after the deadline',async()=>{
+ for(const [message,expired] of [['Source error',false],['Verification code incorrect',true]]){
+  const h=harness();h.showDialog(message,60);
+  await assert.rejects(h.api.alVerificationRequest(q,Date.now()+(expired?-1:500)),/REGISTRY_RESPONSE_INCOMPLETE/);
+  assert.equal(h.okClicks(),0);assert.equal(h.draws(),0);
+ }
+});
 test('AL readiness requires the completed form and image',()=>{
  const h=harness();
  h.document.readyState='loading';assert.equal(h.api.registryDocumentReady(),false);
@@ -104,10 +141,10 @@ test('production protocol refuses the added verification command; trial AL only 
  }
 });
 test('AL image and answer are omitted from saved worker command and result state',()=>{
- const worker=fs.readFileSync(path.join(root,'browser-connector/worker.js'),'utf8');
+ const worker=fs.readFileSync(path.join(process.env.CC_TEST_TRIAL_DIR||path.join(root,'browser-connector'),'worker.js'),'utf8');
  const expression=worker.match(/const runtimeState = \(\) => ([^\n]+);/)[1];
  const active={lookupId:'fixture',registryState:'AL',sender:{tab:{id:1}},command:{query:{verification:{code:'PRIVATE'}}},lastResponse:{verification_image:'PRIVATE'}};
- const result=vm.runInNewContext(expression,{P:{TRIAL_ORIGIN:'https://fixture.onrender.com',nyDiagnostics:()=>[]},nextStart:0,laneStarts:new Map(),owned:new Set(),diagnostics:[],allJobs:()=>[active],isActive:j=>j===active});
+ const result=vm.runInNewContext(expression,{P:{TRIAL_ORIGIN:'https://fixture.onrender.com',nyDiagnostics:()=>[]},registryTnTrafficSnapshot:()=>({}),nextStart:0,laneStarts:new Map(),owned:new Set(),diagnostics:[],allJobs:()=>[active],isActive:j=>j===active});
  assert.equal(result.queue[0].command,null);assert.equal(result.queue[0].lastResponse,null);
  assert.ok(!JSON.stringify(result).includes('PRIVATE'));
 });
