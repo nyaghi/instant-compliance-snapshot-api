@@ -6523,23 +6523,27 @@ NV_CHARITY_ENTITY_TYPES = frozenset({
 
 
 def nv_untyped_search_row_can_read_detail(row):
-    """A loaded issued identity permits retrieval, never a type/status inference."""
-    return (isinstance(row, dict) and row.get("entity_type") == ""
-            and row.get("business_identifier_missing") is not True
-            and isinstance(row.get("identifier"), str)
-            and re.fullmatch(r"NV\d+", row["identifier"]) is not None
-            and isinstance(row.get("entity_number"), str)
-            and re.fullmatch(r"(?:E\d{7,14}-\d|C\d{1,10}-\d{4})", row["entity_number"]) is not None
-            and isinstance(row.get("raw_status"), str) and bool(row["raw_status"].strip()))
+    """An observed issued identity permits detail retrieval, never classification."""
+    if (not isinstance(row, dict) or row.get("entity_type") != ""
+            or not isinstance(row.get("identifier"), str)
+            or not isinstance(row.get("entity_number"), str)
+            or not isinstance(row.get("raw_status"), str) or not row["raw_status"].strip()):
+        return False
+    if row.get("business_identifier_missing") is True:
+        return (re.fullmatch(r"E\d{7,14}-\d", row["identifier"]) is not None
+                and row["identifier"] == row["entity_number"])
+    return (re.fullmatch(r"NV\d+", row["identifier"]) is not None
+            and re.fullmatch(r"(?:E\d{7,14}-\d|C\d{1,10}-\d{4})", row["entity_number"]) is not None)
 
 
 def nv_entity_number_detail_allowed(identifier, entity_type, business_id, entity_number):
-    """Only ORION's separately numbered foreign non-registration records."""
+    """Separately numbered supported records; filing evidence remains mandatory."""
     return (all(isinstance(v, str) for v in (identifier, entity_type, business_id, entity_number))
             and re.fullmatch(r"E\d{7,14}-\d", identifier) is not None
             and entity_number.strip() == identifier
             and business_id.strip() in {"", "-"}
-            and entity_type.strip() == "Foreign Entities Not Required to Register In Nevada")
+            and entity_type.strip() in {"Foreign Entities Not Required to Register In Nevada",
+                                        "Charitable Solicitation Registration Statement"})
 
 
 def nv_charity_detail_evidence(fields, expected_business_id):
@@ -6898,7 +6902,7 @@ def final_four_search_evidence(payload, state, query):
                 identity_ok = (isinstance(row.get("entity_number"), str)
                                and re.fullmatch(r"E\d{7,14}-\d", row["entity_number"])
                                and row["identifier"] == row["entity_number"]
-                               and bool(row["entity_type"].strip())
+                               and (bool(row["entity_type"].strip()) or nv_untyped_search_row_can_read_detail(row))
                                and bool(str(row.get("raw_status") or "").strip()))
             if not row["name"].strip() or not identity_ok:
                 raise ValueError(f"{state} search identity is malformed")
@@ -7247,7 +7251,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 entity_number_detail = state == "NV" and row.get("business_identifier_missing") is True and nv_entity_number_detail_allowed(
                     row["identifier"], row["entity_type"], "", row.get("entity_number", ""))
                 missing_search_type = state == "NV" and nv_untyped_search_row_can_read_detail(row)
-                if state == "NV" and ((row.get("business_identifier_missing") is True and not entity_number_detail)
+                if state == "NV" and ((row.get("business_identifier_missing") is True and not entity_number_detail and not missing_search_type)
                         or row["entity_type"] not in NV_CHARITY_ENTITY_TYPES and not missing_search_type):
                     # Unsupported filing categories need review, not a guess.
                     # Do not open a registered-agent/other entity detail.

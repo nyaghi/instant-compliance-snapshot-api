@@ -296,7 +296,8 @@
   }
   function nvPublicRow(cells) {
     const [name,businessId,entity_number,entity_type,,,raw_status] = cells;
-    const missingId = businessId === '' && /^E\d{7,14}-\d$/.test(entity_number) && !!entity_type;
+    const missingId = businessId === '' && /^E\d{7,14}-\d$/.test(entity_number)
+      && (!!entity_type || !!raw_status);
     // ORION's completed grid can omit the type of an issued charity record.
     // Preserve it as unclassified search evidence only; the master must read
     // the same observed detail and verify its type before interpreting status.
@@ -603,7 +604,7 @@
     if (!wanted.every(k => Object.hasOwn(fields,k))) return null;
     if(entityNumberDetail) {
       if(fields['Entity Number']!==identifier || !['','-'].includes(fields['NV Business ID'])
-          || fields['Entity Type']!=='Foreign Entities Not Required to Register In Nevada')return null;
+          || !['Foreign Entities Not Required to Register In Nevada','Charitable Solicitation Registration Statement'].includes(fields['Entity Type']))return null;
     } else if(fields['NV Business ID']!==identifier)return null;
     return fields;
   }
@@ -640,7 +641,7 @@
     if (!target || !sourceQuery) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
     const entityNumberDetail=/^E\d{7,14}-\d$/.test(query.identifier);
     if(entityNumberDetail && (target.business_identifier_missing!==true || target.entity_number!==query.identifier
-        || target.entity_type!=='Foreign Entities Not Required to Register In Nevada'))throw new Error('REGISTRY_NV_DETAIL_NOT_OBSERVED');
+        || !['','Foreign Entities Not Required to Register In Nevada','Charitable Solicitation Registration Statement'].includes(target.entity_type)))throw new Error('REGISTRY_NV_DETAIL_NOT_OBSERVED');
     const sameIdentifier=cells=>cells[1]===query.identifier || entityNumberDetail
       && ['','-'].includes(cells[1]) && cells[2]===query.identifier;
     const onSearch=location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business');

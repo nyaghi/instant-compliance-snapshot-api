@@ -35,12 +35,13 @@ test('NV current blank-type issued rows remain unclassified until their observed
  }
 });
 
-test('NV blank type still rejects missing status, entity number, issued ID and placeholder rows',async()=>{
+test('NV blank type still rejects missing status, entity number and malformed or absent issued identity',async()=>{
  const row=['Independent Charity','NV20261234567','E12345672026-3','','','10/01/2026','Registered'];
- for(const [field,value] of [[0,''],[1,''],[1,'12345'],[2,''],[2,'not-an-entity'],[6,'']]){
+ for(const [field,value] of [[0,''],[1,'12345'],[2,''],[2,'not-an-entity'],[6,'']]){
   const changed=[...row];changed[field]=value;
   await assert.rejects(fixture({rows:[changed]}).search(),/RESULTS_INCOMPLETE/);
  }
+ const absent=[...row];absent[1]='';absent[2]='';await assert.rejects(fixture({rows:[absent]}).search(),/RESULTS_INCOMPLETE/);
 });
 test('Nevada document readiness waits for the business form after the page shell loads',()=>{
  const h=fixture(),read=h.context.document.querySelector;
@@ -501,7 +502,7 @@ test('Nevada preserves unsupported blank business ID records for conservative ma
  assert.equal(r.rows[1].entity_number,pending[2]);assert.equal(r.rows[1].business_identifier_missing,true);
  await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:pending[2]},45000)),/DETAIL_NOT_OBSERVED/);
  assert.equal(f.opened.length,0);
- for(const changes of [{1:'UNKNOWN'},{2:''},{3:''},{6:''}]){
+ for(const changes of [{1:'UNKNOWN'},{2:''},{6:''}]){
   const row=[...pending];for(const [i,v] of Object.entries(changes))row[i]=v;
   await assert.rejects(fixture({rows:[row]}).search(),/RESULTS_INCOMPLETE/);
  }
@@ -823,6 +824,26 @@ test('NV trial history omission does not allow an unobserved business ID',async(
 });
 
 const entityNumberFixture=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/nv-entity-number-exemption.json'),'utf8'));
+const untypedNumberFixture=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/nv-untyped-entity-number-20261015.json'),'utf8'));
+test('NV untyped entity-number row opens only its observed supported detail and still requires history',async()=>{
+ for(const name of [untypedNumberFixture.fields['Entity Name'],'Independent Community Education Foundation']){
+  const row=[...untypedNumberFixture.search_rows[0]];row[0]=name;
+  const h=fixture({rows:[row]});Object.assign(h.fieldValues,untypedNumberFixture.fields,{'Entity Name':name});
+  const search=await h.search();assert.equal(search.rows[0].identifier,row[2]);assert.equal(search.rows[0].entity_type,'');assert.equal(search.rows[0].business_identifier_missing,true);
+  const detail=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[2]},h.time+5000,{skipHistory:true}));
+  assert.equal(detail.fields['Entity Number'],row[2]);assert.equal(detail.fields['Entity Type'],'Charitable Solicitation Registration Statement');
+  assert.equal(detail.filings.complete,false,'trial skipHistory cannot waive entity-number filing evidence');assert.equal(h.detailClicks,1);
+ }
+});
+test('NV untyped entity-number detail refuses substituted number and corporate category',async()=>{
+ for(const changes of [{'Entity Number':'E76543212026-2'},{'Entity Type':'Registered Agent'},{'Entity Type':'Domestic Limited Liability Company (86)'},{'Entity Type':''}]){
+  const row=[...untypedNumberFixture.search_rows[0]],h=fixture({rows:[row]});Object.assign(h.fieldValues,untypedNumberFixture.fields,changes);await h.search();
+  await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[2]},h.time+5000)),/DETAIL_FIELDS_INCOMPLETE/);
+ }
+});
+test('NV untyped entity-number row without loaded status remains incomplete',async()=>{
+ const row=[...untypedNumberFixture.search_rows[0]];row[6]='';const h=fixture({rows:[row]});await assert.rejects(h.search(),/RESULTS_INCOMPLETE/);
+});
 function entityNumberHarness(changes={}) {
  const fields={...entityNumberFixture.fields,...changes};
  const row=[fields['Entity Name'],'',entityNumberFixture.fields['Entity Number'],

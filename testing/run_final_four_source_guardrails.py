@@ -1534,10 +1534,14 @@ class LookupControls(unittest.TestCase):
         row={'name':self.nvrow['name'],'identifier':'E38494562024-0','entity_number':'E38494562024-0',
              'business_identifier_missing':True,'entity_type':'Foreign Entities Not Required to Register In Nevada','raw_status':'Expired'}
         for changes in [{'business_identifier_missing':False},{'entity_number':'E00000002024-0'},
-                        {'identifier':'NV123'},{'raw_status':''},{'entity_type':''}]:
+                        {'identifier':'NV123'},{'raw_status':''},{'entity_type':'','raw_status':''}]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 cc.final_four_search_evidence({'state':'NV','query':q,'complete':True,'verification_pending':False,
                                               'total':1,'rows':[{**row,**changes}]},'NV',q)
+        # A loaded untyped E-number is now a detail candidate, never a status.
+        untyped=cc.final_four_search_evidence({'state':'NV','query':q,'complete':True,'verification_pending':False,
+                                             'total':1,'rows':[{**row,'entity_type':''}]},'NV',q)
+        self.assertEqual(untyped[0]['entity_type'],'');self.assertNotIn('status',untyped[0])
         with self.assertRaises(ValueError):
             cc.final_four_search_evidence({'state':'NV','query':q,'complete':True,'verification_pending':False,
                                           'total':2,'rows':[row,row]},'NV',q)
