@@ -412,6 +412,10 @@ inconsistency. The observation does not establish a wrong-entity selection or
 a regression. Both source records and a screenshot are retained in
 colorado-source-name-reconciliation.json and its referenced evidence. No source
 name was hard-coded or expectation changed to conceal the conflict.
+The user directed on October15 that this source observation is not an issue for
+CharityClarity to solve. Retain it as informational context only: no corrective
+work, defect count, or promotion blocker. This supersedes any earlier active
+issue label for the Colorado naming discrepancy.
 
 The separate `connector-0.6.132-tn-verification-trace` package adds bounded
 count/boolean-only challenge-frame observations and parent readiness transitions

@@ -82,3 +82,20 @@ Production touched: No.
 Recommendation: Do not promote or deploy under the current gate. Preserve the
 one prepared combined candidate and measured baselines; use a fixed10-case
 all38 matrix and approved affected-state controls for the authorized next test.
+
+
+### Authorized staging test release 29.2FD
+
+The user explicitly approved one staging-only paired AL/NV test release on
+October 15, 2026, to enable the candidate live ten-organization/all-38-state
+matrix. This is a narrow exception to the predeployment gate, not a declaration
+that candidate regression or speed passed. Production remains excluded, and
+no further deployment is authorized by this exception. The existing staging
+API and three worker instances retain their environment and capacity.
+The matching immutable connector is connector-0.6.132-al-nv-recovery.
+Current-release baselines now cover all ten planned organizations, including
+the user's clean GiGi export. All first-pass exports and displayed durations
+are preserved separately from later retries. Release labels change to 29.2FD;
+source, status, adverse-identity and packaged controls were completed locally
+before this test deployment. Native popup bounds and live candidate outcomes
+remain pending. Recommendation remains Do not promote.

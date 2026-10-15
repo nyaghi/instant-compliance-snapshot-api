@@ -1,5 +1,14 @@
 # GiGi's Playhouse connector timing and rail regression
 
+User correction, October 15: the user reran GiGi's Playhouse and reported normal
+speed and placement. The earlier run may have been contaminated by concurrent
+agent activity; that attribution is unproved. Historical observations and the
+synthetic mechanisms below are retained, but GiGi is not a confirmed reproducible
+defect and its earlier claimed failed gate is superseded. Current gates require
+at least ten organizations across all 38 states before any deployment, with
+exclusive timed testing. Alabama, Nevada and the Fee National/Summit Ministries
+speed reports remain the investigation priorities. No rollback was authorized.
+
 Summary: On October 15 the user reported GiGi's Playhouse took more than five
 minutes, connector states started late, and NY/NC windows appeared outside the
 gray rail. These are user-observed failures, not independently captured window
