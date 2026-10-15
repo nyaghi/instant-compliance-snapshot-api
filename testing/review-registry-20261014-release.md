@@ -330,6 +330,58 @@ Replay does not exercise collectors or establish live speed. The original
 Request Guard package is untouched; TN Paced changes no permissions or layout.
 Activation, repeated Lahey checks, full31TN live controls and speed remain pending.
 
+### 29.2FC exact-first retrieval and bounded checkbox attempt
+
+User requested three investigations: strongest-match-first detail order, an
+ordinary action on the verification checkbox, and a last-ten-version regression
+audit. Master prioritized_registry_candidates uses existing decision confidence,
+exact EIN, exact entered legal name and score, with stable source-order ties.
+Tennessee uses it after complete search validation. No candidate is accepted or
+omitted by ranking; all qualifying credentials still reach existing selection.
+No identity threshold, newer-credential rule, state status or deadline changes.
+
+The current public TN page embeds Cloudflare Turnstile despite legacy recaptcha
+container names. The separate132 connector adds one challenge-platform subframe
+content script. Effective script access expands to that Cloudflare path; the
+permissions/host_permissions arrays stay identical. Its ancestor must be TN and
+the worker must authorize the active, owned TN readiness window. Only one visible,
+enabled, unchecked, unambiguous checkbox may receive an ordinary click per job.
+The used attempt is persisted before granting it. A changed/hidden control is
+not clicked. No verification value, token, cookie, challenge callback or raw frame
+HTML is read or transmitted. Only actual registry form readiness counts as
+completion, within the existing deadline. A failed attempt remains inconclusive.
+This integrated access helper is not a state checker or sidecar; master ownership
+is unchanged. The approved connector manifest remains disabled for TN.
+
+History audit covers ten distinct releases ES,ET,EU,EV,EW,EX,EY,EZ,FA,FB and actual
+connector packages122through131. Sixteen common DOM contracts pass in each package
+(saved fixtures, not live runs). TN search/detail function bodies are identical
+through130. No automatic checkbox action existed in these versions. Same three
+Lahey rows qualify across all ten master versions; institutional safeguards
+changed their reason labels but did not add candidates. The original failure
+therefore has no established breaking commit from this comparison. Saved EW
+Lahey was Delinquent20s; later runs alternate success, detail failures,429 and
+verification. EZ's750ms unobserved retry was a separate introduced risk, corrected
+by Request Guard. It cannot explain failures that preceded EZ. Duo-mode closes
+TN pages on completion in all ten packages, so recent repeats were new registry
+documents, not proof of retained-session behavior. Earlier repeat labels mean
+repeated checks in the same CE Chrome session; the diagnostic trace shows no
+tn-session-reuse on those runs.
+
+FB live: Lahey CO/TN first23s and repeat23s returned exact ClinicCO50375 Delinquent;
+third46s returned TN verification pending. User directly observed its unchecked
+human-verification box. Separate targeted retry returned Delinquent without
+manual checkbox interaction. All first-pass and retry exports are preserved.
+The repeated23s is slower than successful FA15s/14s, consistent with added pacing;
+different source/session conditions prevent a comparable performance pass.
+
+FC source shared556pass; actual package251pass plus six focused worker controls;
+backend77pass. Counts overlap.31org/198saved-result replay: zero interpretation
+changes and11 inherited sheet differences. New ranking/checkbox paths require
+live target, full31TN controls, timing and actual native placement verification.
+Checkbox support is an attempted ordinary interaction, not a claim that
+Cloudflare has accepted it live. Recommendation remains do not promote.
+
 Do not promote until affected-state live regression, comparable speed and actual
 popup outer-bound placement are validated. Staging requires a paired API/worker
 deployment and matching connector. Any deployment must name the actual target;

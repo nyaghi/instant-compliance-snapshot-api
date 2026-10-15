@@ -2,6 +2,35 @@
 const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov",MS:"https://charities.sos.ms.gov"})[state];
 const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/",MS:"/online/portal/ch/page/charities-search/Portal.aspx"})[state];
 const registryTnTraffic={nextAt:0,cooldownUntil:0};
+function registryTnCheckboxFrame(url){
+  try{const u=new URL(url);return u.origin==='https://challenges.cloudflare.com'
+    && u.pathname.startsWith('/cdn-cgi/challenge-platform/');}catch{return false;}
+}
+async function registryTnCheckboxMessage(message,sender){
+  if(!P.TRIAL_ORIGIN || sender.id!==chrome.runtime.id || !Number.isInteger(sender.frameId)
+      || sender.frameId<=0 || !P.validId(message.id) || !registryTnCheckboxFrame(sender.url))return {allowed:false};
+  const job=allJobs().find(j=>isActive(j)&&!j.closed&&j.registryState==='TN'
+    && j.tab===sender.tab?.id && owned.has(j.tab));
+  if(!job || !job.pending || Date.now()>=Math.min(job.activeExpiresAt,job.tnVerificationExpiresAt||0))return {allowed:false};
+  const tab=await chrome.tabs.get(job.tab);
+  if(tab.url!==registryStart('TN') || !tab.active || job.closed)return {allowed:false};
+  if(message.action==='tn-checkbox-outcome'){
+    if(job.tnCheckboxFrameId===sender.frameId && job.tnCheckboxRequestId===message.id
+        && ['clicked','changed-before-click','click-unavailable'].includes(message.phase))
+      diagnostic('tn-verification',job,JSON.stringify({phase:message.phase}));
+    return {allowed:false};
+  }
+  if(message.action!=='tn-checkbox-permission' || job.tnCheckboxAttempted)return {allowed:false};
+  // One ordinary visible-checkbox attempt per admitted workflow. Persist the
+  // used attempt before replying so a worker restart cannot grant it twice.
+  job.tnCheckboxAttempted=true;job.tnCheckboxFrameId=sender.frameId;job.tnCheckboxRequestId=message.id;
+  await saveRuntime();
+  const current=await chrome.tabs.get(job.tab);
+  if(job.closed || !owned.has(job.tab) || current.url!==registryStart('TN') || !current.active
+      || Date.now()>=Math.min(job.activeExpiresAt,job.tnVerificationExpiresAt||0))return {allowed:false};
+  diagnostic('tn-verification',job,JSON.stringify({phase:'checkbox-authorized'}));
+  return {allowed:true};
+}
 function registryTnTrafficRestore(value){
   if(!P.TRIAL_ORIGIN||!value||typeof value!=='object')return;
   for(const key of ['nextAt','cooldownUntil'])if(Number.isSafeInteger(value[key])&&value[key]>=0)registryTnTraffic[key]=value[key];
@@ -450,12 +479,17 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
         await registryNevadaMakeVisible(job,nvInitialVisible);
       }
       verificationPending=['NC','TN'].includes(job.registryState)&&value?.verification_pending===true;
+      if(P.TRIAL_ORIGIN && job.registryState==='TN')job.tnVerificationExpiresAt=verificationPending?deadline:0;
       if(job.registryState==='TN'&&!value?.ready&&!visibilityAttempted&&Date.now()-started>=3000) {
         visibilityAttempted=true;previousVisible=await registryNorthCarolinaVisibility(job);
       }
         const observedRoute=nvRouteOnly&&typeof value?.documentId==='string'&&value.documentId.length>0;
         if ((value?.ready || observedRoute) && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)
-            && (job.registryState!=='NV' || new URL(value.url).hash===new URL(registryStart('NV')).hash)) return value;
+            && (job.registryState!=='NV' || new URL(value.url).hash===new URL(registryStart('NV')).hash)) {
+          if(P.TRIAL_ORIGIN && job.registryState==='TN' && job.tnCheckboxAttempted)
+            diagnostic('tn-verification',job,JSON.stringify({phase:'registry-form-ready'}));
+          return value;
+        }
       // An acknowledged NC Search can leave the same ordinary, enabled form
       // without navigating. Retry once only after observing that exact form;
       // disabled Processing and verification pages are never resubmitted.
@@ -503,6 +537,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   }
   throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : "NY_CONNECTOR_TAB_READY_TIMEOUT");
   } finally {
+    if(job.registryState==='TN')job.tnVerificationExpiresAt=0;
     if (previousVisible) try {
       const tab=await chrome.tabs.get(job.tab), prior=await chrome.tabs.get(previousVisible.id);
       if (owned.has(job.tab) && tab.active && tab.windowId===previousVisible.windowId && prior.windowId===tab.windowId
