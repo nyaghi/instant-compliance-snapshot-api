@@ -63,9 +63,17 @@ History audit: saved 0.6.122–0.6.131 plus 0.6.132 Smart/Trace packages all hav
 the identical immediate-stop AL recovery function. AL OCR and continuation
 functions also match across the inspected ten explicit historical releases and
 current HEAD. Shared failure wording changed, so no claim is made that all
-master functions were unchanged. Missing older Git parent history prevents
-identifying the original introducing commit. Available saved-package equality
-does not prove which version was installed in an earlier successful live run.
+master functions were unchanged. Available saved-package equality does not
+prove which version was installed in an earlier successful live run. An isolated
+read-only history repository recovered the missing upstream commits. The immediate
+`ok.click(); if(visible(alert)) throw` assumption was added in b33876a on
+September 30, 2026, release 29.2A, with the automatic verification reader. Its
+immediate predecessor c471bff had no alVerificationRequest. The original test
+fixture used querySelector returning null and therefore never exercised an
+actual rejected-code dialog. The October 7 image-readiness fix fc7dabd preserved
+that immediate visibility test. This identifies the defect's introduction and
+why the original automated controls missed it; it does not establish the cause
+of YWCA's unsaved live error. Evidence: al-recovery-introduction-history.json.
 
 Production touched: No.
 
