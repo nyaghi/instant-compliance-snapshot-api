@@ -81,34 +81,6 @@ test('AL waits for a delayed verification image within the same command deadline
  assert.equal(first.evidence.verification_pending,true);
  assert.equal(h.draws(),1);
 });
-test('AL rejected-code dialog may close asynchronously before the next image is prepared',async()=>{
- const h=harness();h.showDialog('Verification code incorrect',60);
- const r=await h.api.alVerificationRequest(q,Date.now()+500);
- assert.equal(r.verification_pending,true);assert.equal(r.complete,false);
- assert.equal(h.okClicks(),1);assert.equal(h.dialogVisible(),false);assert.equal(h.input.value,'');
-});
-test('AL actual handler recovers a rejected first code using a fresh bounded continuation',async()=>{
- const h=harness(),first=await h.api.alVerificationRequest(q);
- h.api.alApplyVerification({...q,verification:{id:first.verification_id,code:'WRONG1'}});
- h.showDialog('Verification code incorrect',60);
- const retry=await h.api.handle({action:'registry-al',query:q,automaticVerification:true,budgetMs:500});
- assert.equal(retry.ok,true);assert.equal(retry.evidence.complete,false);
- assert.equal(retry.evidence.verification_pending,true);assert.equal(h.okClicks(),1);
- // Recovery prepares the currently displayed image; it does not submit again.
- assert.equal(h.input.value,'WRONG1');assert.equal(h.dialogVisible(),false);
-});
-test('AL never reads another image while a rejected-code dialog remains open',async()=>{
- const h=harness();h.showDialog('Verification code incorrect',null);
- await assert.rejects(h.api.alVerificationRequest(q,Date.now()+70),/REGISTRY_RESPONSE_INCOMPLETE/);
- assert.equal(h.okClicks(),1);assert.equal(h.draws(),0);assert.equal(h.input.value,'');
-});
-test('AL does not dismiss an unrelated source error or a dialog after the deadline',async()=>{
- for(const [message,expired] of [['Source error',false],['Verification code incorrect',true]]){
-  const h=harness();h.showDialog(message,60);
-  await assert.rejects(h.api.alVerificationRequest(q,Date.now()+(expired?-1:500)),/REGISTRY_RESPONSE_INCOMPLETE/);
-  assert.equal(h.okClicks(),0);assert.equal(h.draws(),0);
- }
-});
 test('AL readiness requires the completed form and image',()=>{
  const h=harness();
  h.document.readyState='loading';assert.equal(h.api.registryDocumentReady(),false);

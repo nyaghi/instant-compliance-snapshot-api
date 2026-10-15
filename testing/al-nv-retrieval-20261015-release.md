@@ -99,3 +99,51 @@ are preserved separately from later retries. Release labels change to 29.2FD;
 source, status, adverse-identity and packaged controls were completed locally
 before this test deployment. Native popup bounds and live candidate outcomes
 remain pending. Recommendation remains Do not promote.
+
+
+### Focused live source-failure reconciliation — October 15, 2026
+
+The user stopped broad tests after the first two all38 candidate runs, directing
+problem-state checks before expansion. Both reported Nevada records now retrieve
+their verified charity-statement detail: Partnership Delinquent and Opportunity
+Current. Alabama remained Unable to Confirm. Focused YWCA/AL discovery was0:16,
+execution0:15, with zero new verification attempts and a public generic Error
+dialog. Clearing the leftover code and dismissing that dialog before one targeted
+retry triggered one fresh verification attempt, but the same generic Error
+returned; this intervened retry is not a clean candidate pass.
+
+The user independently reproduced the same Error through a manual Alabama
+search. Captured public source code distinguishes Invalid Captcha from the
+grid AJAX handlers that display Error. A separate public grid-configuration
+metadata probe returned HTTP202, empty body, after14.613 seconds while the page
+loaded HTTP200. No organization query, challenge token, or verification code was
+submitted in that metadata probe. The browser search HTTP response itself was
+not captured; the exact state infrastructure failure remains unknown. Classify
+this observed failure as a source retrieval/access limitation, not an established
+CharityClarity verification regression. The offline dialog-close race remains a
+separate latent defect, not the proved cause of this source error.
+
+Broad candidate matrix: stopped at2/10. Full affected-state controls, live speed
+and native popup bounds remain unvalidated. No additional runtime edits or
+deployment followed this finding. Production untouched. Do not promote.
+
+
+### User-directed Alabama rollback and37-state scope
+
+The user requested restoring the Alabama change and excluding Alabama until
+source recovery. The complete AL verification/search region is byte-identical
+to5ca7d17's parent in both source and the prepared connector. The Nevada repair,
+backend, permissions, scheduling and geometry are unchanged. No server deployment
+is needed. Prepared connector: connector-0.6.132-nv-recovery-al-restored.
+Four additive tests for the withdrawn dialog-wait behavior were reverted with
+the feature and archived intact in the evidence directory; no regression-sheet
+expectations changed. The remaining source controls pass585/585, actual package
+controls280/280, with no skipped tests. Commands and logs are in
+al-restored-test-summary.json. These are offline controls, not live AL validation.
+Activation and focused Nevada live controls remain pending. After those pass,
+continue at least ten organizations across the remaining37states, logging the
+explicit AL source exclusion. Original all38 first passes remain preserved and
+are not relabeled as37-state candidate passes. Production untouched; do not
+promote. Root AGENTS.md now requires source-first triage, demonstrated mechanism,
+surgical changes, multi-organization affected-state live validation before
+expansion, and explicit coverage/timing limits.

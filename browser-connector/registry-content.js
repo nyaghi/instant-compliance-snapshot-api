@@ -1359,16 +1359,8 @@
       if(!/verif|captcha|code/i.test(text(alert)))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
       const ok=[...document.querySelectorAll('.ui-dialog button')].find(b=>visible(b)&&text(b)==='Ok');
       if(!ok)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
-      const remaining=Math.min(4000,deadline-Date.now());
-      if(remaining<=0)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
-      // The public dialog may close asynchronously. Observe before dismissing
-      // it and prepare the next image only after it actually closes. Do not
-      // resubmit the rejected code or extend the original command deadline.
-      await wait(()=>{
-        const current=document.querySelector('#altdialog');
-        if(current!==alert && visible(current))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
-        return !visible(alert);
-      },remaining,{action:()=>ok.click()});
+      ok.click();
+      if(visible(alert))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
     }
     const pixels=await alImagePixelsWhenReady(deadline);
     alVerificationImage={id:crypto.randomUUID(),pixels,name:query.name,created:Date.now()};
