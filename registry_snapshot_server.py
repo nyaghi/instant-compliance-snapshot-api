@@ -27364,7 +27364,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
 
-    if (state == "WA" and status == "Unable to Confirm" and not result.success
+    if (state == "WA" and status == "Unable to Confirm"
             and getattr(result, "reason_code", "") == "WA_SOURCE_EIN_CONFLICT"):
         return note
     if (state == "OH" and status == "Delinquent" and result.success and matched
