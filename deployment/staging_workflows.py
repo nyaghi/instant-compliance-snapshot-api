@@ -154,7 +154,6 @@ def connector_identity(status, record):
 
 
 def handle(master, handler, *, trial_queue=None):
-    from deployment.durable_queue import OrganizationBusy
     from deployment.lab_identity import trial_identity
     trial = trial_identity() if trial_queue is not None else None
     if not enabled(master) and not trial:
@@ -223,8 +222,6 @@ def handle(master, handler, *, trial_queue=None):
                 data = {'ok': True}
             else: raise ValueError('Invalid workflow action')
         handler._send_json(200, data, {'Cache-Control': 'no-store'})
-    except OrganizationBusy:
-        handler._send_json(409, {'code':'ORGANIZATION_BUSY','error':'Another check for this organization is still running with different inputs. Wait for it to finish before starting this check.'}, {'Cache-Control':'no-store'})
     except (ValueError, TypeError, KeyError, UnicodeError):
         handler._send_json(400, {'error': 'Invalid or expired workflow. Start a new check.'})
     except urllib.error.HTTPError as exc:

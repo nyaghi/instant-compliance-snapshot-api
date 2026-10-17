@@ -6699,7 +6699,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -9227,8 +9227,12 @@ def licensed_charity_identity(org, row, state, deadline):
             legal = org.organization_name[:marker.start()].strip(" ,;-") if marker else ""
             if distinctive_match_tokens(legal):
                 legal_names = [legal]
+        # A single shared word does not independently bind a reviewed alias
+        # to the entered legal entity. Reuse office evidence already read.
+        legal_names = legal_names or licensed_compound_retrieval_names(org.organization_name) or [org.organization_name]
         if legal_names and not any(
-                distinctive_match_tokens(legal) & distinctive_match_tokens(matched_name)
+                complete_name_identity_key(legal) == complete_name_identity_key(matched_name)
+                or len(distinctive_match_tokens(legal) & distinctive_match_tokens(matched_name)) >= 2
                 for legal in legal_names):
             row["match"] = {"decision": "possible", "score": 55,
                             "reason": "ALIAS_IDENTITY_UNCONFIRMED"}
@@ -10946,11 +10950,56 @@ def sc_unrelated_alias_prefix(original: str, candidate: str, ein: str = "") -> b
     return False
 
 
+
+
+
+
+
+def sc_result_page_stream(body, post, deadline, expected_query):
+    current=1;seen=set();paged=False
+    for _ in range(20):
+        if time.monotonic() >= deadline:raise TimeoutError('SC source paging deadline expired')
+        decoded=html.unescape(body)
+        rows=list(re.finditer(r'CharityInfo\((\d+)\)[^>]*>\s*(.*?)\s*</a>',body,re.I|re.S))
+        empty=bool(re.search(r'\bNo\s+results\s+found\b',sc_html_to_text(body),re.I))
+        if empty and rows:raise ValueError('SC empty result contradicts rows')
+        if not empty and not rows:raise ValueError('SC result is uninitialized')
+        links=re.findall(r"__doPostBack\('([^']+)','Page\$(\d+)'\)",decoded)
+        if 'Page$' in decoded and not links:raise ValueError('SC pager control unsupported')
+        if any(target!='ctl00$MainContent$GridView_SearchResult' for target,_ in links):raise ValueError('SC pager target changed')
+        if links:
+            pager=re.search(r'<tr\s+align=["\']center["\']\s*>\s*<td\s+colspan=["\']2["\']\s*>\s*<table>(.*?)</table>',body,re.I|re.S)
+            selected=re.findall(r'<span>\s*(\d+)\s*</span>',pager[1] if pager else '',re.I)
+            if selected!=[str(current)]:raise ValueError('SC page acknowledgement is missing or stale')
+            query=re.search(r'<input\b(?=[^>]*\bid=["\']MainContent_txt_CharitySearchName["\'])[^>]*\bvalue=["\']([^"\']*)["\']',body,re.I)
+            if not query or html.unescape(query[1])!=expected_query:raise ValueError('SC search field binding changed')
+        # Repeated IDs with different aliases are ordinary source rows.
+        signature=tuple((m[1],sc_html_to_text(m[2])) for m in rows)
+        if signature and signature in seen:raise ValueError('SC repeated result page')
+        seen.add(signature)
+        following=sorted({int(number) for _,number in links if int(number)>current})
+        if following:paged=True
+        # The caller can confirm a positive from this page without fetching
+        # another page. Rejected candidates resume this same ordinary search.
+        yield body,paged
+        if not following:return
+        if empty or following[0]!=current+1:raise ValueError('SC next page is not consecutive')
+        fields=sc_extract_hidden_fields(body)
+        fields.update({'__EVENTTARGET':'ctl00$MainContent$GridView_SearchResult',
+            '__EVENTARGUMENT':'Page$'+str(current+1),
+            'ctl00$MainContent$dd_CharitySearchOperator':'Contains',
+            'ctl00$MainContent$txt_CharitySearchName':expected_query})
+        body=post(fields);current+=1
+    raise ValueError('SC result paging exceeds bounded allowance')
+
+
 def sc_official_detail_lookup(org) -> object | None:
     """Use the SC WebForms result list to choose the strongest safe candidate."""
     original_name = getattr(org, "organization_name", "") or ""
     targets = organization_match_target_variants(original_name, getattr(org, "ein", ""))
     url = NAME_SEARCH_PREFLIGHT_URLS["SC"]
+    deadline = time.monotonic() + SC_NAME_VARIANT_MAX_SECONDS
+    complete_paged_query_observed = False
     session = None
     opener = None
     if curl_requests is not None:
@@ -11015,14 +11064,16 @@ def sc_official_detail_lookup(org) -> object | None:
                 chunks.append(chunk)
 
     def fetch_get() -> str:
+        if time.monotonic() >= deadline: raise TimeoutError("SC source allowance expired")
         if session is not None:
-            response = session.get(url, timeout=8)
+            response = session.get(url, timeout=min(8, max(.05, deadline-time.monotonic())))
             response.raise_for_status()
             return response.text or ""
-        page_response = opener.open(url, timeout=8)
+        page_response = opener.open(url, timeout=min(8, max(.05, deadline-time.monotonic())))
         return page_response.read().decode(page_response.headers.get_content_charset() or "utf-8", "replace")
 
     def fetch_post(fields: dict[str, str]) -> str:
+        if time.monotonic() >= deadline: raise TimeoutError("SC source allowance expired")
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
             "Origin": "https://search.scsos.com",
@@ -11030,7 +11081,7 @@ def sc_official_detail_lookup(org) -> object | None:
             "User-Agent": BROWSER_USER_AGENT,
         }
         if session is not None:
-            response = session.post(url, data=fields, headers=headers, timeout=8)
+            response = session.post(url, data=fields, headers=headers, timeout=min(8, max(.05, deadline-time.monotonic())))
             response.raise_for_status()
             return response.text or ""
         request = urllib.request.Request(
@@ -11039,7 +11090,7 @@ def sc_official_detail_lookup(org) -> object | None:
             method="POST",
             headers=headers,
         )
-        response = opener.open(request, timeout=8)
+        response = opener.open(request, timeout=min(8, max(.05, deadline-time.monotonic())))
         return response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
     search_queries = build_search_queries(
         original_name,
@@ -11069,161 +11120,163 @@ def sc_official_detail_lookup(org) -> object | None:
                 "ctl00$MainContent$butt_Search": "Search",
             })
             result_html = fetch_post(fields)
-            last_html = result_html
+            for result_html, paged in sc_result_page_stream(result_html, fetch_post, deadline, query):
+                last_html = result_html
+                if not (re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(result_html), re.I)
+                        or re.search(r'CharityInfo\(\d+\)[^>]*>\s*.+?\s*</a>', result_html, re.I | re.S)):
+                    lookup_incomplete = True
+                    continue
+                candidates: dict[str, dict[str, object]] = {}
+                for match in re.finditer(r'CharityInfo\((?P<id>\d+)\)[^>]*>\s*(?P<name>.*?)\s*</a>', result_html, re.I | re.S):
+                    candidate_id = match.group("id")
+                    if candidate_id in rejected_ids: continue
+                    candidate_name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("name")))).strip()
+                    if not candidate_id or not candidate_name:
+                        continue
+                    safe_candidate_name = (
+                        registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", ""))
+                        and not distinctive_entity_extension_mismatch_against_targets(original_name, candidate_name, targets)
+                    )
+                    scope_review = separator_entity_scope_gap(original_name, candidate_name, org.ein)
+                    if not safe_candidate_name and not scope_review:
+                        continue
+                    score = target_name_score(candidate_name, targets)
+                    if score < 450 and not safe_candidate_name and not scope_review:
+                        continue
+                    exact_bonus = 500 if normalized_match_name(candidate_name) == normalized_match_name(original_name) else 0
+                    candidate_score = max(score, 450) + exact_bonus + len(normalized_match_name(candidate_name).split())
+                    existing = candidates.get(candidate_id)
+                    if not existing or candidate_score > int(existing.get("score", -1000)):
+                        candidates[candidate_id] = {"id": candidate_id, "name": candidate_name, "score": candidate_score, "status": registry_html_row_status(result_html, match.start())}
+                if not candidates:
+                    continue
+                for best in sorted(candidates.values(), key=lambda item: (
+                    complete_name_identity_key(str(item["name"])) == complete_name_identity_key(original_name),
+                    int(item.get("score", -1000)),
+                    registry_exact_active_tiebreak(str(item["name"]), targets, str(item.get("status", ""))),
+                ), reverse=True):
+                    try:
+                        detail_fields = sc_extract_hidden_fields(result_html)
+                        detail_fields.update({
+                            "ctl00$MainContent$Hidden_CharityID": str(best["id"]),
+                            "ctl00$MainContent$hButt_GetCharityDetail": "",
+                        })
+                        detail_html = fetch_post(detail_fields)
+                    except Exception:
+                        lookup_incomplete = True
+                        continue
+                    detail_text = sc_html_to_text(detail_html)
+                    raw_status = sc_regex_value(
+                        detail_text,
+                        r"\bStatus\s*:?\s*(Registered|Exempt|Expired|Delinquent|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
+                    )
+                    if not raw_status:
+                        lookup_incomplete = True
+                        continue
+                    registry_name = str(best["name"])
+                    filing_ein = ""
+                    scope_review = separator_entity_scope_gap(original_name, registry_name, org.ein)
+                    if sc_related_entity_requires_ein(original_name, registry_name, org.ein):
+                        filing_ein = sc_detail_filing_ein(detail_html, time.monotonic() + 10, fetch_bytes=fetch_filing_bytes)
+                        if filing_ein != canonical_ein_digits(org.ein):
+                            unrelated_alias = sc_unrelated_alias_prefix(original_name, registry_name, org.ein)
+                            if unrelated_alias:
+                                unrelated_alias_excluded = True
+                            if not filing_ein and not unrelated_alias and not scope_review:
+                                identity_unconfirmed = True
+                            if filing_ein and filing_ein != canonical_ein_digits(org.ein):
+                                filing_ein_conflict_excluded = True
+                            rejected_ids.add(str(best["id"]))
+                            if filing_ein or not scope_review:
+                                continue
+                    if not registry_name_is_safe_against_targets(registry_name, targets, original_name, getattr(org, "ein", "")):
+                        registry_name = str(best["name"])
+                    public_id = sc_regex_value(detail_text, r"\bPublic\s+Id\s*:?\s*(P\d+)\b") or f"P{best['id']}"
+                    due_raw = sc_regex_value(detail_text, r"\bDue\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})")
+                    fiscal_year = sc_regex_value(
+                        detail_text,
+                        r"\b(?:fiscal\s+year|Fiscal\s+Year)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*-\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+                    )
+                    next_report = sc_regex_value(
+                        detail_text,
+                        r"\bNext\s+Report\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*-\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+                    )
+                    due_date = parse_due_date(due_raw) if due_raw else None
+                    status_text = " ".join([raw_status, due_raw, fiscal_year, next_report])
+                    if re.search(r"\bexempt\b", status_text, re.I):
+                        interpreted = "Exempt"
+                    elif re.search(r"\b(withdrawn|closed|cancel(?:ed|led)|inactive|terminated)\b", status_text, re.I):
+                        interpreted = "Closed / Withdrawn / Canceled"
+                    elif re.search(r"\b(suspended|revoked|not\s+authorized|may\s+not\s+solicit)\b", status_text, re.I):
+                        interpreted = "Suspended"
+                    elif re.search(r"\b(expired|delinquent)\b", status_text, re.I):
+                        interpreted = checker.STATUS_DELINQUENT
+                    elif due_date:
+                        interpreted = status_from_calendar_date(due_date)
+                    elif re.search(r"\bRegistered\b", raw_status or "", re.I):
+                        interpreted = checker.STATUS_DELINQUENT
+                    else:
+                        interpreted = raw_status or "Unknown"
+                    raw_parts = [
+                        f"Status: {raw_status}" if raw_status else "",
+                        f"Due Date: {due_raw}" if due_raw else "",
+                        f"Fiscal Year: {fiscal_year}" if fiscal_year else "",
+                        f"Next Report: {next_report}" if next_report else "",
+                        f"SC ID: {public_id}" if public_id else "",
+                    ]
+                    result = checker.StateResult(
+                        original_name,
+                        getattr(org, "ein", ""),
+                        "SC",
+                        interpreted,
+                        url,
+                        raw_status_text=" | ".join(part for part in raw_parts if part),
+                        matched_registry_name=registry_name,
+                        matched_registry_identifier=public_id,
+                        success=interpreted not in {"Site Not Reachable", "Unknown", ""},
+                    )
+                    if scope_review and not filing_ein:
+                        scope_candidates[public_id] = dict(name=registry_name, identifier=public_id, ein="", location="",
+                            url=url, raw_status=raw_status, status=interpreted, expiration=due_date, initial=None,
+                            _identity_outcome="possible")
+                        continue
+                    if re.search(r"\bexempt\b", raw_status or "", re.I):
+                        result.source_note = (
+                            f"South Carolina returned safe registry match {registry_name} ({public_id}). "
+                            "The detail page lists the organization as Exempt, so CharityClarity returns Exempt."
+                        )
+                    elif due_date:
+                        result.source_note = (
+                            f"South Carolina returned safe registry match {registry_name} ({public_id}). "
+                            f"The detail page lists due date {format_date(due_date)}, so CharityClarity interprets the status as {interpreted}."
+                        )
+                    elif interpreted == checker.STATUS_DELINQUENT and re.search(r"\b(?:Registered|Expired|Delinquent)\b", raw_status or "", re.I):
+                        result.source_note = (
+                            f"South Carolina returned safe registry match {registry_name} ({public_id}) with raw status {raw_status}. "
+                            "CharityClarity treats SC Expired/Delinquent records, or Registered records with blank filing evidence, as Delinquent."
+                        )
+                    else:
+                        result.source_note = f"South Carolina returned safe registry match {registry_name} ({public_id}) from the official result list."
+                    if filing_ein:
+                        result.verified_registry_ein = filing_ein
+                        result.identity_anchor = "EIN"
+                        result.reason_code = "MATCH_SC_FILING_EIN"
+                        result.source_note += " The state-filed Form 990 confirms the requested EIN."
+                    return result
+            complete_paged_query_observed = complete_paged_query_observed or paged
         except Exception:
             lookup_incomplete = True
             transport_errors += 1
             if transport_errors >= 2:
                 break
             continue
-        if not (re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(result_html), re.I)
-                or re.search(r'CharityInfo\(\d+\)[^>]*>\s*.+?\s*</a>', result_html, re.I | re.S)):
-            lookup_incomplete = True
-            continue
-        candidates: dict[str, dict[str, object]] = {}
-        for match in re.finditer(r'CharityInfo\((?P<id>\d+)\)[^>]*>\s*(?P<name>.*?)\s*</a>', result_html, re.I | re.S):
-            candidate_id = match.group("id")
-            if candidate_id in rejected_ids: continue
-            candidate_name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("name")))).strip()
-            if not candidate_id or not candidate_name:
-                continue
-            safe_candidate_name = (
-                registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", ""))
-                and not distinctive_entity_extension_mismatch_against_targets(original_name, candidate_name, targets)
-            )
-            scope_review = separator_entity_scope_gap(original_name, candidate_name, org.ein)
-            if not safe_candidate_name and not scope_review:
-                continue
-            score = target_name_score(candidate_name, targets)
-            if score < 450 and not safe_candidate_name and not scope_review:
-                continue
-            exact_bonus = 500 if normalized_match_name(candidate_name) == normalized_match_name(original_name) else 0
-            candidate_score = max(score, 450) + exact_bonus + len(normalized_match_name(candidate_name).split())
-            existing = candidates.get(candidate_id)
-            if not existing or candidate_score > int(existing.get("score", -1000)):
-                candidates[candidate_id] = {"id": candidate_id, "name": candidate_name, "score": candidate_score, "status": registry_html_row_status(result_html, match.start())}
-        if not candidates:
-            continue
-        best = max(candidates.values(), key=lambda item: (
-            complete_name_identity_key(str(item["name"])) == complete_name_identity_key(original_name),
-            int(item.get("score", -1000)),
-            registry_exact_active_tiebreak(str(item["name"]), targets, str(item.get("status", ""))),
-        ))
-        try:
-            detail_fields = sc_extract_hidden_fields(result_html)
-            detail_fields.update({
-                "ctl00$MainContent$Hidden_CharityID": str(best["id"]),
-                "ctl00$MainContent$hButt_GetCharityDetail": "",
-            })
-            detail_html = fetch_post(detail_fields)
-        except Exception:
-            lookup_incomplete = True
-            continue
-        detail_text = sc_html_to_text(detail_html)
-        raw_status = sc_regex_value(
-            detail_text,
-            r"\bStatus\s*:?\s*(Registered|Exempt|Expired|Delinquent|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
-        )
-        if not raw_status:
-            lookup_incomplete = True
-            continue
-        registry_name = str(best["name"])
-        filing_ein = ""
-        scope_review = separator_entity_scope_gap(original_name, registry_name, org.ein)
-        if sc_related_entity_requires_ein(original_name, registry_name, org.ein):
-            filing_ein = sc_detail_filing_ein(detail_html, time.monotonic() + 10, fetch_bytes=fetch_filing_bytes)
-            if filing_ein != canonical_ein_digits(org.ein):
-                unrelated_alias = sc_unrelated_alias_prefix(original_name, registry_name, org.ein)
-                if unrelated_alias:
-                    unrelated_alias_excluded = True
-                if not filing_ein and not unrelated_alias and not scope_review:
-                    identity_unconfirmed = True
-                if filing_ein and filing_ein != canonical_ein_digits(org.ein):
-                    filing_ein_conflict_excluded = True
-                rejected_ids.add(str(best["id"]))
-                if filing_ein or not scope_review:
-                    continue
-        if not registry_name_is_safe_against_targets(registry_name, targets, original_name, getattr(org, "ein", "")):
-            registry_name = str(best["name"])
-        public_id = sc_regex_value(detail_text, r"\bPublic\s+Id\s*:?\s*(P\d+)\b") or f"P{best['id']}"
-        due_raw = sc_regex_value(detail_text, r"\bDue\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})")
-        fiscal_year = sc_regex_value(
-            detail_text,
-            r"\b(?:fiscal\s+year|Fiscal\s+Year)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*-\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
-        )
-        next_report = sc_regex_value(
-            detail_text,
-            r"\bNext\s+Report\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*-\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
-        )
-        due_date = parse_due_date(due_raw) if due_raw else None
-        status_text = " ".join([raw_status, due_raw, fiscal_year, next_report])
-        if re.search(r"\bexempt\b", status_text, re.I):
-            interpreted = "Exempt"
-        elif re.search(r"\b(withdrawn|closed|cancel(?:ed|led)|inactive|terminated)\b", status_text, re.I):
-            interpreted = "Closed / Withdrawn / Canceled"
-        elif re.search(r"\b(suspended|revoked|not\s+authorized|may\s+not\s+solicit)\b", status_text, re.I):
-            interpreted = "Suspended"
-        elif re.search(r"\b(expired|delinquent)\b", status_text, re.I):
-            interpreted = checker.STATUS_DELINQUENT
-        elif due_date:
-            interpreted = status_from_calendar_date(due_date)
-        elif re.search(r"\bRegistered\b", raw_status or "", re.I):
-            interpreted = checker.STATUS_DELINQUENT
-        else:
-            interpreted = raw_status or "Unknown"
-        raw_parts = [
-            f"Status: {raw_status}" if raw_status else "",
-            f"Due Date: {due_raw}" if due_raw else "",
-            f"Fiscal Year: {fiscal_year}" if fiscal_year else "",
-            f"Next Report: {next_report}" if next_report else "",
-            f"SC ID: {public_id}" if public_id else "",
-        ]
-        result = checker.StateResult(
-            original_name,
-            getattr(org, "ein", ""),
-            "SC",
-            interpreted,
-            url,
-            raw_status_text=" | ".join(part for part in raw_parts if part),
-            matched_registry_name=registry_name,
-            matched_registry_identifier=public_id,
-            success=interpreted not in {"Site Not Reachable", "Unknown", ""},
-        )
-        if scope_review and not filing_ein:
-            scope_candidates[public_id] = dict(name=registry_name, identifier=public_id, ein="", location="",
-                url=url, raw_status=raw_status, status=interpreted, expiration=due_date, initial=None,
-                _identity_outcome="possible")
-            continue
-        if re.search(r"\bexempt\b", raw_status or "", re.I):
-            result.source_note = (
-                f"South Carolina returned safe registry match {registry_name} ({public_id}). "
-                "The detail page lists the organization as Exempt, so CharityClarity returns Exempt."
-            )
-        elif due_date:
-            result.source_note = (
-                f"South Carolina returned safe registry match {registry_name} ({public_id}). "
-                f"The detail page lists due date {format_date(due_date)}, so CharityClarity interprets the status as {interpreted}."
-            )
-        elif interpreted == checker.STATUS_DELINQUENT and re.search(r"\b(?:Registered|Expired|Delinquent)\b", raw_status or "", re.I):
-            result.source_note = (
-                f"South Carolina returned safe registry match {registry_name} ({public_id}) with raw status {raw_status}. "
-                "CharityClarity treats SC Expired/Delinquent records, or Registered records with blank filing evidence, as Delinquent."
-            )
-        else:
-            result.source_note = f"South Carolina returned safe registry match {registry_name} ({public_id}) from the official result list."
-        if filing_ein:
-            result.verified_registry_ein = filing_ein
-            result.identity_anchor = "EIN"
-            result.reason_code = "MATCH_SC_FILING_EIN"
-            result.source_note += " The state-filed Form 990 confirms the requested EIN."
-        return result
     if scope_candidates:
         return scope_identity_review_result(org, "SC", list(scope_candidates.values()), not lookup_incomplete, url)
     if identity_unconfirmed:
         return checker.StateResult(original_name, org.ein, "SC", "Unable to Confirm", url,
             raw_status_text="Similar organization found; its filing EIN did not confirm the requested entity",
             source_note="South Carolina returned a similar or related name, but its state-filed return did not confirm the requested EIN. No status was assigned to that name-only candidate.", success=False)
-    if not lookup_incomplete and last_html and re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(last_html), re.I):
+    if not lookup_incomplete and last_html and (complete_paged_query_observed or re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(last_html), re.I)):
         result = checker.StateResult(
             original_name,
             getattr(org, "ein", ""),
@@ -11234,10 +11287,13 @@ def sc_official_detail_lookup(org) -> object | None:
             success=True,
         )
         result.source_note = "South Carolina search completed without a qualifying registration record for the organization."
+        result._sc_complete_pages_negative = complete_paged_query_observed
         result._sc_unrelated_alias_excluded = unrelated_alias_excluded
         result._sc_filing_ein_conflict_excluded = filing_ein_conflict_excluded
         return result
     return None
+
+
 
 
 def result_has_safe_matched_registry_name(result, original_name: str, ein: str = "") -> bool:
@@ -11252,7 +11308,8 @@ def search_sc_resilient(page, org, *, official_checked=False, official_result=No
         return official_result
     if (official_result and getattr(official_result, "success", False)
             and (getattr(official_result, "_sc_unrelated_alias_excluded", False)
-                 or getattr(official_result, "_sc_filing_ein_conflict_excluded", False))):
+                 or getattr(official_result, "_sc_filing_ein_conflict_excluded", False)
+                 or getattr(official_result, "_sc_complete_pages_negative", False))):
         # The complete official search already excluded this alias collision.
         # A weaker browser match must not re-admit the same unrelated record.
         return official_result
@@ -11282,7 +11339,10 @@ def search_sc_resilient(page, org, *, official_checked=False, official_result=No
     if not reachable and public_status(result) in {"Site Not Reachable", "Unknown", ""}:
         return preflight_result
     registry_name = getattr(result, "matched_registry_name", "") or ""
-    if result and sc_unrelated_alias_prefix(org.organization_name, registry_name, org.ein):
+    if result and registry_name and (
+        sc_unrelated_alias_prefix(org.organization_name, registry_name, org.ein)
+        or sc_related_entity_requires_ein(org.organization_name, registry_name, org.ein)
+    ):
         filing_ein = canonical_ein_digits(getattr(result, "verified_registry_ein", ""))
         if not filing_ein:
             try:
@@ -11294,8 +11354,8 @@ def search_sc_resilient(page, org, *, official_checked=False, official_result=No
                 return official_result
             return checker.StateResult(org.organization_name, org.ein, "SC", "Unable to Confirm",
                 NAME_SEARCH_PREFLIGHT_URLS["SC"],
-                raw_status_text="Unrelated alias collision excluded; complete search coverage was not confirmed",
-                source_note="The browser returned a different leading organization name sharing the supplied alias. Its filing EIN did not confirm the requested entity. The official search was incomplete, so non-registration was not established.",
+                raw_status_text="Unconfirmed related entity excluded; complete search coverage was not confirmed",
+                source_note="The browser returned a related organization whose identity was not confirmed from the complete reviewed names. Its filing EIN did not confirm the requested entity. The official search was incomplete, so non-registration was not established.",
                 success=False)
         result.verified_registry_ein = filing_ein
         result.identity_anchor = "EIN"
@@ -11334,6 +11394,7 @@ def search_sc_resilient(page, org, *, official_checked=False, official_result=No
         )
         result.success = True
     return result
+
 
 
 def result_is_retryable_name_miss(result) -> bool:
@@ -26010,7 +26071,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -26065,7 +26126,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -27109,6 +27170,15 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     source = "The state's downloadable charity list" if state in {"KS", "KY", "LA", "NH", "OR"} else "The state registry"
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
+
+    if (state == "WA" and status == "Unable to Confirm" and not result.success
+            and getattr(result, "reason_code", "") == "WA_SOURCE_EIN_CONFLICT"):
+        return note
+    if (state == "OH" and status == "Delinquent" and result.success and matched
+            and re.search(r"(?:^|[|])\s*In Compliance:\s*No(?:\s*[|]|\s*$)", raw, re.I)):
+        return ("The identity-confirmed Ohio record explicitly says No for compliance with registration and filing requirements. "
+                "That state-reported noncompliance overrides the ordinary filing-tier and deadline calculation, so CharityClarity reports Delinquent. "
+                "A later calculated filing date does not override this explicit No.")
 
     if state == "WI" and getattr(result, "reason_code", "") in {"WI_FOUNDATION_IDENTITY_REVIEW", "WI_IDENTITY_VERIFICATION_REQUIRED"}:
         return note
@@ -32360,6 +32430,8 @@ def wa_apply_detail_master(result, body: str):
     result.reason_code = ""
     if not requested or requested != observed:
         result.status = "Unable to Confirm"
+        if len(requested) == 9 and len(observed) == 9:
+            result.reason_code = "WA_SOURCE_EIN_CONFLICT"
         result.raw_status_text = ("Washington detail page returned a different EIN." if observed else
                                   "Washington detail page did not finish loading its FEIN field.")
         result.source_note = ("The completed detail identity conflicts with the requested EIN; the record was rejected." if observed else

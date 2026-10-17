@@ -122,7 +122,7 @@ def final_four_asset(name, text):
         text = text[:choices[0].start()] + '\n\n                  '.join(labels) + text[choices[-1].end():]
         replace('!["IL", "GA"].includes(state)', '!["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
         replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
-        replace('alternateNames = runAlternateNames, {signal,onOwnedLookup} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard",onOwnedLookup} = {}')
+        replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')
         replace('alternate_names: alternateNames, signal,', 'alternate_names: alternateNames, signal, mode,')
         # Trial-only, in-memory diagnostics for incomplete public browser
         # lookups. This does not change registry requests or results.
@@ -213,7 +213,7 @@ def final_four_asset(name, text):
         replace('const pending = lookupTail.then(() => performLookup(input));', 'return performLookup(input);')
         replace('    lookupTail = pending.catch(() => {});', '')
         replace('    return pending;', '')
-        replace('state: registryState = "NY", signal, onOwnedLookup })', 'state: registryState = "NY", signal, mode = "standard", sales_cutoff_seconds, onOwnedLookup })')
+        replace('state: registryState = "NY", signal })', 'state: registryState = "NY", signal, mode = "standard", sales_cutoff_seconds })')
         replace('...(Array.isArray(alternate_names) ? {alternate_names} : {})', '...(mode==="sales" ? {alternate_names:[]} : (Array.isArray(alternate_names) ? {alternate_names} : {}))')
         replace('{NY:"New York",IL:"Illinois",GA:"Georgia"}', '{NY:"New York",IL:"Illinois",GA:"Georgia",AL:"Alabama",NC:"North Carolina",NV:"Nevada",TN:"Tennessee",NM:"New Mexico",MS:"Mississippi"}')
         replace('    const supported = c =>', '    const finalFour = ["AL","NC","NV","TN","NM","MS"].includes(registryState);\n    const supported = c => (!finalFour || c.capabilities?.includes("final-four-public-v1")) &&')

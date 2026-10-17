@@ -243,7 +243,7 @@ async function registryCreateOwnedTab(job,url,origin) {
       diagnostic('nc-window-fallback',job,`slot=${job.duoSlot} placement=${placement.left},${placement.top},${placement.width},${placement.height} actual=${window.left},${window.top},${window.width},${window.height}`);
     }
   } else tab=await chrome.tabs.create({windowId:origin.windowId,url,active:false});
-  job.tab=tab.id;owned.add(tab.id);stopOwnership.remember(job);await saveRuntime();
+  job.tab=tab.id;owned.add(tab.id);await saveRuntime();
 }
 async function registryTennesseeOwnedWindow(tab,source) {
   if(!owned.has(tab.id) || tab.url!==registryStart('TN'))return false;
@@ -799,7 +799,7 @@ async function registryIllinoisVerification(job, collect) {
 function registryNvSequenceFailure(job, query, guard) {
   const response={ok:false,reason:'NY_CONNECTOR_INVALID_SEQUENCE'};
   if(P.TRIAL_ORIGIN && job?.registryState==='NV')response.nv_readiness={sequence:{
-    build:'enhancement-batch-ff-1',guard,active:isActive(job),pending:!!job.pending,
+    build:'functional-recovery-fh-1',guard,active:isActive(job),pending:!!job.pending,
     pending_matches_request:job.pending===job.command?.id,
     pending_operation:['search','detail'].includes(job.command?.query?.operation)?job.command.query.operation:'none',
     operation:['search','detail'].includes(query?.operation)?query.operation:'other',
@@ -880,9 +880,9 @@ async function performRegistryQuery(job, query) {
         // owned tab, source origin and expiry are the security boundaries;
         // moving the caller to a dedicated validation window must not discard
         // the already verified public session.
-        if (owned.has(saved.id) && tab.url===registryStart('AL') && new URL(source.url).origin===P.TRIAL_ORIGIN && saved.expiresAt>Date.now() && stopOwnership.canAdopt(job,saved.id)) {job.tab=saved.id;stopOwnership.remember(job);}
-        else if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);
-      } catch { if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id); }
+        if (owned.has(saved.id) && tab.url===registryStart('AL') && new URL(source.url).origin===P.TRIAL_ORIGIN && saved.expiresAt>Date.now()) job.tab=saved.id;
+        else await removeOwned(saved.id);
+      } catch { await removeOwned(saved.id); }
       await saveRuntime();
     }
     if (job.tab===null) await registryNavigate(job,registryStart('AL'));
@@ -903,14 +903,14 @@ async function performRegistryQuery(job, query) {
         if(owned.has(saved.id) && saved.expiresAt>Date.now() && tab.url===registryStart('TN')
             && tab.windowId===saved.windowId && source.windowId===(saved.sourceWindowId??saved.windowId)
             && new URL(source.url).origin===P.TRIAL_ORIGIN
-            && await registryTennesseeOwnedWindow(tab,source) && stopOwnership.canAdopt(job,saved.id)) {
-          job.tab=saved.id;job.finalFourReusableForm=true;stopOwnership.remember(job);
+            && await registryTennesseeOwnedWindow(tab,source)) {
+          job.tab=saved.id;job.finalFourReusableForm=true;
           await registryExposeReusedNyTab(job,source);
           // Reuse page initialization only. tnSearch closes any old dialog,
           // clears observed rows and submits every new query afresh.
           diagnostic('tn-session-reuse',job,'initialized owned page; fresh query required');
-        } else if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);
-      } catch {if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);}
+        } else await removeOwned(saved.id);
+      } catch {await removeOwned(saved.id);}
       await saveRuntime();
     }
     if (query.state==='NV' && job.nvReservationDetail) {

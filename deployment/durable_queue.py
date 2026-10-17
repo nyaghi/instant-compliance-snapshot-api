@@ -30,7 +30,6 @@ DISCOVERY_EXECUTION_SECONDS = 90
 
 
 class Conflict(ValueError): pass
-class OrganizationBusy(Conflict): pass
 class QueueFull(ValueError): pass
 class NotFound(ValueError): pass
 
@@ -461,7 +460,7 @@ class Queue:
             prior = c.execute('SELECT * FROM cc_lab_workflows WHERE scope=%s AND ein=%s AND finished IS NULL',
                               (scope, payload['ein'])).fetchone()
             if prior:
-                if prior['fingerprint'] != fingerprint: raise OrganizationBusy('This organization already has different work in progress')
+                if prior['fingerprint'] != fingerprint: raise Conflict('This organization already has different work in progress')
                 ident, created = prior['id'], False
             else:
                 count = c.execute('SELECT count(*) AS n FROM cc_lab_workflows WHERE finished IS NULL').fetchone()['n']

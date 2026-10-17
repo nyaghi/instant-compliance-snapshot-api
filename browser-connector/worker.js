@@ -1,13 +1,12 @@
-importScripts("protocol.js", "recovery.js", "registry-worker.js", "stop-owned.js");
+importScripts("protocol.js", "recovery.js", "registry-worker.js");
 const P = CCNYProtocol;
-const STOP_REVIEW_BUILD="enhancement-batch-ff-1";
 // Public diagnostic correlation only; never a credential or authorization key.
 const nvHandoffWorkerTag=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
 function nvHandoffDiagnostic(job,message) {
   if(!P.TRIAL_ORIGIN || job?.registryState!=='NV' || typeof message.ok!=='boolean' || message.progress)return message;
   const operation=job.command?.query?.operation;
   return {...message,nv_readiness:{...message.nv_readiness,handoff:{
-    build:'enhancement-batch-ff-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
+    build:'functional-recovery-fh-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
     active:isActive(job),pending:!!job.pending,search_complete:job.finalFourSearchComplete===true,
     pending_matches_reply:job.pending===message.id,
     command_matches_reply:job.command?.id===message.id,
@@ -88,7 +87,7 @@ function collectNyDiagnostics(job, response) {
   if(P.TRIAL_ORIGIN && job.registryState === "NY")
     job.nyDiagnostics=P.nyDiagnostics([...(job.nyDiagnostics||[]),...P.nyDiagnostics(response?.ny_diagnostics)]);
 }
-const runtimeState = () => ({ schema: 2, stopOwnership:stopOwnership.snapshot(), nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -126,33 +125,6 @@ async function removeOwned(tabId) {
   } catch { /* The tab has already closed or was taken over by the user. */ }
   await saveRuntime();
 }
-// Isolated Stop-only protocol. Ordinary finish remains unchanged.
-function stopForgetIdle(job,ids) {
-  for(const id of ids) {
-    if(trialAlIdle?.id===id){trialAlIdle=null;clearTimeout(trialAlIdleTimer);}
-    if(trialTnIdle?.id===id){trialTnIdle=null;clearTimeout(trialTnIdleTimer);}
-    if(trialNyIdle?.id===id){trialNyIdle=null;clearTimeout(trialNyIdleTimer);}
-  }
-}
-function stopSafeRegistryTab(job,tab) {
-  if(tab.id===job.sender.tab.id)return false;
-  try {
-    if(job.registryState==='NY')return nyRegistryPage(tab.url);
-    const u=new URL(tab.url),start=new URL(registryStart(job.registryState));
-    if(u.origin!==start.origin)return false;
-    if(job.registryState==='NC')return /^\/online_services\/search\/(?:by_title\/search_charities|Charities_Results|charities_(?:profile|filings)\/\d+)$/.test(u.pathname);
-    if(['AL','NV','TN','MS'].includes(job.registryState))return u.pathname===start.pathname;
-    if(job.registryState==='NM')return /^\/CharitySearch\/(?:CharityDetail\.aspx|GenericError\.htm)?$/i.test(u.pathname);
-    return ['IL','GA'].includes(job.registryState);
-  } catch {return false;}
-}
-const strictOwnedStop=CCStopReview.createStrictStop({close,owned,tabs:chrome.tabs,
-  allowedSender,safeRegistryTab:stopSafeRegistryTab,
-  isTransferred:(job,id)=>stopOwnership.transferred(job,id),
-  reserveResources:stopForgetIdle,
-  forgetResource:(job,id)=>{stopForgetIdle(job,[id]);stopOwnership.forget(job,id);owned.delete(id);}});
-const stopOwnership=CCStopReview.createOwnedStopRegistry({strictStop:strictOwnedStop,owned,allowedSender,validId:P.validId,persist:saveRuntime});
-
 const boot = (async () => {
   await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   // Older supported Chrome releases expose this method on session only. Local
@@ -182,7 +154,6 @@ const boot = (async () => {
     }
   }
   for (const id of previous?.ownedTabs || []) if (Number.isInteger(id)) owned.add(id);
-  stopOwnership.restore(previous?.stopOwnership || [],allJobs(),chrome.runtime.id);
   const idle=previous?.trialAlIdle;
   if (P.TRIAL_ORIGIN && Number.isInteger(idle?.id) && owned.has(idle.id) && Number.isFinite(idle.expiresAt)
       && Date.now()<idle.expiresAt && idle.expiresAt<=Date.now()+1800000 && !allJobs().some(j=>j?.tab===idle.id)) {
@@ -273,7 +244,6 @@ function pump() {
 }
 async function close(job, reason, finishId) {
   if (job.closed) return;
-  stopOwnership.remember(job);
   job.closed = true;
   clearTimeout(job.timer);
   clearTimeout(job.reconnectTimer);
@@ -335,12 +305,12 @@ async function lookupTab(job) {
     try {
       const tab=await chrome.tabs.get(saved.id),source=await chrome.tabs.get(job.sender.tab.id);
       if(!job.refreshOnly && !job.closed && owned.has(saved.id) && saved.expiresAt>Date.now()
-          && nyRegistryPage(tab.url) && new URL(source.url).origin===P.TRIAL_ORIGIN && stopOwnership.canAdopt(job,saved.id)) {
-        job.tab=saved.id;job.nySessionExpiresAt=saved.expiresAt;stopOwnership.remember(job);
+          && nyRegistryPage(tab.url) && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+        job.tab=saved.id;job.nySessionExpiresAt=saved.expiresAt;
         await registryExposeReusedNyTab(job,source);
         diagnostic('ny-session-reuse',job,'owned successful page; new query and evidence required');
-      } else if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);
-    } catch {if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);}
+      } else await removeOwned(saved.id);
+    } catch {await removeOwned(saved.id);}
     await saveRuntime();
     if(job.tab!==null || job.closed)return;
   }
@@ -735,18 +705,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return false;
   }
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, extension_id:chrome.runtime.id, stop_build:STOP_REVIEW_BUILD, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1", "owned-stop-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
-chrome.runtime.onMessage.addListener((message,sender,respond)=>{
-  if(message?.action!=='cc-strict-stop-v1')return;
-  if(!P.TRIAL_ORIGIN||!allowedSender(sender)||!P.validId(message.id)||!P.validId(message.lookup_id))return;
-  boot.then(()=>stopOwnership.stop({lookupId:message.lookup_id},sender)).then(async receipt=>{
-    await saveRuntime();respond({ok:true,id:message.id,lookup_id:message.lookup_id,capability:'owned-stop-v1',stop_build:STOP_REVIEW_BUILD,extension_id:chrome.runtime.id,receipt});
-  }).catch(error=>respond({ok:false,id:message.id,lookup_id:message.lookup_id,capability:'owned-stop-v1',stop_build:STOP_REVIEW_BUILD,extension_id:chrome.runtime.id,reason:error.code||'STOP_UNCONFIRMED'}));
-  return true;
-});
-
 chrome.runtime.onConnect.addListener(port => {
   const resume = port.name.startsWith("cc-ny-resume-v1:");
   const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : port.name.startsWith("cc-al-lookup-v1:") ? "AL" : port.name.startsWith("cc-nc-lookup-v1:") ? "NC" : port.name.startsWith("cc-nv-lookup-v1:") ? "NV" : port.name.startsWith("cc-tn-lookup-v1:") ? "TN" : port.name.startsWith("cc-nm-lookup-v1:") ? "NM" : port.name.startsWith("cc-ms-lookup-v1:") ? "MS" : "NY";
@@ -757,7 +718,6 @@ chrome.runtime.onConnect.addListener(port => {
   const bound = boot.then(async () => {
     if (disconnected) return null;
     const id = port.name.slice(prefix.length);
-    if(stopOwnership.requested(id,port.sender)){port.postMessage({action:"closed",reason:"NY_CONNECTOR_BROWSER_CLOSED"});port.disconnect();return null;}
     let job = allJobs().find(j => j && !j.closed && j.lookupId === id);
     if (resume) {
       if (!job || !P.registryAllowed(job.registryState,new URL(port.sender.url).origin)
@@ -777,7 +737,7 @@ chrome.runtime.onConnect.addListener(port => {
     } else {
       if (job) { port.postMessage({ action: "closed", reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); port.disconnect(); return null; }
       job = newJob(port.sender, id, prefix === "cc-ny-refresh-v1:", {registryState}); job.port = port;
-      stopOwnership.remember(job);arm(job); queue.push(job); await saveRuntime();
+      arm(job); queue.push(job); await saveRuntime();
     }
     notifyQueue(); pump(); return job;
   });

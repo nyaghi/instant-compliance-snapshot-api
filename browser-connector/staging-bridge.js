@@ -12,21 +12,6 @@
       viewportWidth:window.innerWidth,
       chromeInsetTop:Math.max(0,Math.min(200,window.outerHeight-window.innerHeight))});
   });
-  // A separate channel never uses ordinary finish's optimistic reconnect reply.
-  window.addEventListener('message',async event=>{
-    if(event.source!==window||event.origin!==ORIGIN)return;
-    const m=event.data;
-    if(m?.channel!=='cc-charity-stop-v1'||m.direction!=='request'||m.action!=='stop'
-        ||!P.validId(m.id)||!P.validId(m.lookup_id))return;
-    let response;
-    try {
-      response=await chrome.runtime.sendMessage({action:'cc-strict-stop-v1',id:m.id,lookup_id:m.lookup_id});
-      if(response?.id!==m.id||response?.lookup_id!==m.lookup_id||response?.capability!=='owned-stop-v1'
-          ||response?.extension_id!==chrome.runtime.id||response?.stop_build!=='enhancement-batch-ff-1')throw new Error('Unbound Stop response');
-      if(response.ok===true && (response.receipt?.confirmed!==true||response.receipt?.lookupId!==m.lookup_id))throw new Error('Missing Stop receipt');
-    } catch {response={ok:false,reason:'STOP_UNCONFIRMED'};}
-    window.postMessage({channel:'cc-charity-stop-v1',direction:'response',...response,id:m.id,lookup_id:m.lookup_id},ORIGIN);
-  });
   let singleActive = null;
   const trialJobs = new Map();
   const reply = (id, response) => window.postMessage({ channel: "cc-final-four-trial-v1", direction: "response", ...response, id }, ORIGIN);
@@ -75,7 +60,7 @@
         // the caller can start the next job before onDisconnect is delivered.
         if (message.id === job.finishId) dispose(job);
         const response=P.TRIAL_ORIGIN && job.registryState==='NV'
-          ? {...message,nv_readiness:{...message.nv_readiness,bridge:{build:'enhancement-batch-ff-1',extension_id:chrome.runtime.id}}}
+          ? {...message,nv_readiness:{...message.nv_readiness,bridge:{build:'functional-recovery-fh-1',extension_id:chrome.runtime.id}}}
           : message;
         reply(message.id, response);
       }

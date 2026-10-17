@@ -11,28 +11,6 @@
     const settledExternal=new Set();
     let progressiveRelease=false, releasedCount=0;
     const requestId=crypto.randomUUID();
-    let connector=Promise.resolve(),connectorStarted=false;
-    let resolveAdmission,rejectAdmission,submitted=false,payload;
-    const admission=new Promise((resolve,reject)=>{resolveAdmission=resolve;rejectAdmission=reject;});
-    admission.catch(()=>{});
-    const owned=actual=>{if(!token||actual!==token)throw new Error('Workflow ownership is unconfirmed.');};
-    const recoverAdmission=async actual=>{
-      if(actual!==requestId)throw new Error('Workflow request ownership is unconfirmed.');
-      if(!submitted)return {notSubmitted:true};
-      const recovered=await call('start',payload,true);
-      if(typeof recovered?.token!=='string'||!recovered.token)throw new Error('Workflow ownership is unconfirmed.');
-      token=recovered.token;return recovered;
-    };
-    options.onStopControl?.({requestId,admission,recoverAdmission,
-      backend:{cancel:async actual=>{owned(actual);return call('cancel',{},true);},
-               poll:async actual=>{owned(actual);return call('poll',{},true);}},
-      cleanup:async()=>{
-        await connector;
-        if(!external.length)return {confirmed:true};
-        // Resolving a collector promise does not prove its native window closed.
-        if(typeof options.confirmExternalCleanup!=='function')return {confirmed:false};
-        return options.confirmExternalCleanup();
-      }});
     const missing=state=>({state,ein,organization_name:name,status:'Unable to Confirm',success:false,
       comments:'The state check did not provide a complete response. Registration status remains unconfirmed.'});
     const record=result=>{
@@ -45,13 +23,6 @@
         headers:{'Content-Type':'application/json'},signal:!detached&&signal?AbortSignal.any([signal,timeout]):timeout,
         body:JSON.stringify({...credentials,action,token,...extra})});
       if(!response.ok) {
-        if(response.status===409){
-          const detail=await response.json().catch(()=>null);
-          if(detail?.code==='ORGANIZATION_BUSY'){
-            const error=new Error('Another check for this organization is still running with different inputs. Wait for it to finish before starting this check.');
-            error.code='ORGANIZATION_BUSY';throw error;
-          }
-        }
         if(response.status===503) {
           const detail=await response.json().catch(()=>null);
           if(detail?.code==='PERFORMANCE_LAB_EXPIRED') {
@@ -65,9 +36,8 @@
       return response.json();
     }
     const cancel=()=>{if(token) void call('cancel',{},true).catch(()=>{});};
-    if(signal?.aborted)resolveAdmission({notSubmitted:true});
     signal?.throwIfAborted();signal?.addEventListener('abort',cancel,{once:true});
-
+    let connector=Promise.resolve(),connectorStarted=false;
     const startConnector=(names,confirmed=true)=>{
       if(connectorStarted||signal?.aborted)return;
       connectorStarted=true;
@@ -85,14 +55,13 @@
     if(!needsIdentity)startConnector(aliases);
     try {
       if(states.length>external.length||needsIdentity) {
-        payload={organization_name:name,ein,alternate_names:aliases,states,mode,consent:true,request_id:requestId};
+        const payload={organization_name:name,ein,alternate_names:aliases,states,mode,consent:true,request_id:requestId};
         let accepted;
-        submitted=true;
         try{accepted=await call('start',payload);}catch(error){
-          if(['PERFORMANCE_LAB_EXPIRED','ORGANIZATION_BUSY'].includes(error.code))throw error;
+          if(error.code==='PERFORMANCE_LAB_EXPIRED')throw error;
           signal?.throwIfAborted();accepted=await call('start',payload); // same idempotency key
         }
-        token=accepted.token;resolveAdmission(accepted);
+        token=accepted.token;
         progressiveRelease=accepted.progressive_external_release===true;
         if(signal?.aborted){cancel();signal.throwIfAborted();}
         let failures=0;
@@ -119,18 +88,10 @@
           await new Promise(resolve=>setTimeout(resolve,500));
         }
       }
-      if(!submitted)resolveAdmission({notSubmitted:true});
       await connector;
       for(const state of states)if(!results.has(state))record(missing(state));
       return states.map(state=>results.get(state));
     } catch(error) {
-      if(error.code==='ORGANIZATION_BUSY'){
-        // Typed refusal proves this immutable request was not admitted. Never
-        // recover/cancel the earlier workflow, whose token this run does not own.
-        resolveAdmission({notSubmitted:true});options.onAdmissionRejected?.(error);
-        await connector;error.partialResults=[...results.values()];throw error;
-      }
-      rejectAdmission(error);
       cancel();
       if(signal?.aborted)throw error;
       if(error.code==='PERFORMANCE_LAB_EXPIRED')throw error;
