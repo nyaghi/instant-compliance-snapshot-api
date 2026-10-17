@@ -25815,7 +25815,7 @@ def ny_select_confirmed_duplicate(org, rows, read_detail):
             evidence = registry_address_evidence(org.ein, f"{detail['city']}, {detail['state']}")
             address_rank = {"corroborated": 1, "conflict": -1}.get(evidence["decision"], 0)
         raw_status = " ".join(str(detail.get(field) or "") for field in ("status", "registrationStatus", "orgStatus"))
-        active = 1 if re.fullmatch(r"\s*(?:active|current|registered|in good standing)\s*", raw_status, re.I) else 0
+        active = 1 if re.fullmatch(r"\s*(?:open|active|current|registered|in good standing)\s*", raw_status, re.I) else 0
         if re.search(r"\b(?:inactive|closed|withdrawn|canceled|cancelled|revoked)\b", raw_status, re.I): active = -1
         exact_name = normalized_match_name(detail["orgName"]) == normalized_match_name(org.organization_name)
         # Every detail already confirms the requested EIN. An organization may
@@ -25825,35 +25825,7 @@ def ny_select_confirmed_duplicate(org, rows, read_detail):
     best_rank = max(rank for rank, _ in ranked)
     best = [detail for rank, detail in ranked if rank == best_rank]
     if len(best) != 1:
-        # Filing recency can settle only a fully equivalent same-EIN tie.
-        # It never outranks the existing standing, original-name or office rank.
-        scope = {(str(d.get("regType") or "").strip().upper(),
-                  str(d.get("regStatute") or "").strip().upper()) for d in best}
-        offices = [address_key(d) for d in best]
-        standing = {re.sub(r"\s+", " ", " ".join(str(d.get(k) or "") for k in
-                    ("status", "registrationStatus", "orgStatus"))).strip().casefold() for d in best}
-        equivalent = (len(scope) == 1 and all(next(iter(scope)))
-                      and next(iter(scope))[1] in {"7A", "DUAL", "EPTL"}
-                      and len({normalized_match_name(d["orgName"]) for d in best}) == 1
-                      and all(all(k) for k in offices) and len(set(offices)) == 1
-                      and len(standing) == 1)
-        if equivalent:
-            dated = []
-            for detail in best:
-                documents = detail.get("documents")
-                if (not isinstance(documents, dict)
-                        or set(documents) - {"Annual Filing for Charitable Organizations", "Registration Documents", "Other Filed Documents"}
-                        or any(not isinstance(items, list) for items in documents.values())
-                        or not documents.get("Annual Filing for Charitable Organizations")):
-                    raise ValueError("New York equivalent registration filing history is incomplete")
-                dates, _ = ny_confirmed_annual_dates(documents["Annual Filing for Charitable Organizations"])
-                if not dates or any(fye > date.today() for fye in dates):
-                    raise ValueError("New York equivalent registration filing periods are unconfirmed")
-                dated.append((max(dates), detail))
-            latest = max(fye for fye, _ in dated)
-            best = [detail for fye, detail in dated if fye == latest]
-        if len(best) != 1:
-            raise ValueError("New York equivalent registration details remain ambiguous")
+        raise ValueError("New York equivalent registration details remain ambiguous")
     return best[0]
 
 
