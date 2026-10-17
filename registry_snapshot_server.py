@@ -7513,6 +7513,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             for name in required:
                 distinct_names.setdefault(name.casefold(), name)
             required = list(distinct_names.values())
+    nc_reviewed_identity_names = list(required) if state == "NC" and trial_identity() else []
     nc_retrieval_coverage = {}
     if state == "NC" and trial_identity():
         # Coalesce only equivalent spellings of the same reviewed name, and
@@ -7558,6 +7559,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         # single word (e.g. Education or Fitness) produces an unrelated grid;
         # it is not another reviewed identity that the master must search.
         generated = [name for name in generated if len(distinctive_match_tokens(name)) >= 2]
+    if state == "NC" and trial_identity():
+        required, covering_names, nc_all_words_probes = nc_covering_query_plan(
+            required, generated, nc_all_words_probes, org.organization_name)
+        for probe, names in list(covering_names.items()):
+            for name in list(names):
+                names.extend(nc_retrieval_coverage.get(name, []))
+        for probe, names in covering_names.items():
+            nc_retrieval_coverage.setdefault(probe, []).extend(names)
     records, seen = [], set()
     unreviewed_scope = False
     missing_nv_business_id = False
@@ -7621,7 +7630,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                     covered_reviewed_names.append({"name": name, "completed_starts_with": covering})
                 continue
         # Preserve the existing generated-name coverage and NV behavior.
-        if state in {"NC", "NV"} and (state == "NV" or index >= len(required)):
+        if (state == "NV" or state == "NC" and not trial_identity()) and (state == "NV" or index >= len(required)):
             covering = next((prior for prior in completed_searches if name.startswith(prior)), None)
             if covering is not None:
                 if state == "NV" and index < len(required):
@@ -7650,8 +7659,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             # This is a retrieval choice, not permission to accept an identity.
             query["exact_above"] = 20
         payload = collect(query)
-        if state == "NC" and nc_retrieval_coverage.get(name) and payload.get("search_mode") not in (None, "STARTS_WITH"):
-            raise ValueError("North Carolina covering evidence must use Starting With")
+        if state == "NC" and nc_retrieval_coverage.get(name):
+            expected_modes = {"ALL_WORDS"} if all_words_phrase else {"STARTS_WITH"}
+            if payload.get("search_mode") not in expected_modes:
+                raise ValueError("North Carolina covering evidence must use its requested public mode")
         rows = final_four_search_evidence(payload, state, query)
         if state == "TN":
             # TNCaB source order is unrelated to identity confidence. Read the
@@ -7675,7 +7686,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                     nc_completed_prefixes.append(name)
                 if payload.get("search_mode") == "ALL_WORDS":
                     nc_completed_all_words.append(all_words_phrase)
-                covered_reviewed_names.extend({"name": reviewed, "completed_starts_with": name}
+                covered_reviewed_names.extend({"name": reviewed,
+                    ("completed_all_words" if all_words_phrase else "completed_starts_with"):
+                        all_words_phrase or name}
                     for reviewed in nc_retrieval_coverage.get(name, []))
         for row in rows:
             if row["identifier"] in seen:
@@ -7798,6 +7811,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         seen.add(row["identifier"])
                         continue
             records.append(record); seen.add(row["identifier"])
+        if state == "NC" and trial_identity() and records:
+            selected, review = select_licensed_charity(org, records, state, deadline)
+            uncovered = [target for target in nc_reviewed_identity_names
+                if not any(target.casefold().startswith(probe.casefold()) for probe in nc_completed_prefixes)
+                and not any(nc_all_words_covers(phrase, target) for phrase in nc_completed_all_words)
+                and target.casefold() not in {probe.casefold() for probe in narrowed_searches}]
+            if nc_reliable_match_complete(org, selected, records, review, unreviewed_scope, uncovered):
+                break
         # Avoid re-running address reconciliation for each alias unless there
         # is a primary positive candidate that could safely finish this lookup.
         primary_positive = any(
@@ -8773,6 +8794,113 @@ def licensed_compound_retrieval_names(name):
     if len(parts) < 2 or len(parts) > 3 or any(not distinctive_match_tokens(part) for part in parts):
         return []
     return list(dict.fromkeys(parts))
+
+
+def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
+    """Order already-planned covering probes; never discard identity targets.
+
+    This is NC trial retrieval only. Coverage is still earned by a complete,
+    query-bound response in the requested public mode in the caller. Public
+    modes and literal common prefixes change retrieval, never identity.
+    """
+    planned = list(dict.fromkeys(required + generated))
+    all_words_probes = dict(all_words_probes)
+    shared_acronym_prefixes = set()
+    # A reviewed acronym can have both a full-name and suffixed spelling,
+    # e.g. ABCD Foundation / ABCDF. A literal shared prefix retrieves both.
+    # Do not invent acronym expansions or promote short ordinary words.
+    for left, right in itertools.combinations(required, 2):
+        prefix = ''
+        for a, b in zip(left, right):
+            if a.casefold() != b.casefold():
+                break
+            prefix += a
+        prefix = prefix.rstrip()
+        if (re.fullmatch(r'[A-Z0-9]{4,}', prefix)
+                and distinctive_match_tokens(prefix) and prefix not in planned):
+            planned.append(prefix)
+            shared_acronym_prefixes.add(prefix)
+
+    def mode(name):
+        if name in all_words_probes:
+            return "ALL_WORDS"
+        return ("EXACT_MATCH" if nc_short_compound_exact_probe(entered_name, name)
+                else "STARTS_WITH")
+
+    def covers(probe, target):
+        if mode(probe) == "ALL_WORDS":
+            return nc_all_words_covers(all_words_probes[probe], target)
+        return (mode(probe) == "STARTS_WITH"
+                and target.casefold().startswith(probe.casefold()))
+
+    def eligible(probe):
+        # A generated broad word must itself be distinctive and substantial;
+        # never promote a generic article or short acronym to a broad search.
+        words = re.findall(r"[A-Za-z0-9]+", probe)
+        return (probe in required or probe in shared_acronym_prefixes or mode(probe) == "ALL_WORDS"
+                or distinctive_match_tokens(probe)
+                and sum(target.casefold().startswith(probe.casefold()) for target in required) >= 2
+                or len(distinctive_match_tokens(probe)) >= 2
+                or len(words) == 1 and len(words[0]) >= 6
+                and words[0].casefold() in distinctive_match_tokens(probe))
+
+    def score(probe):
+        return (sum(covers(probe, target) for target in required),
+                sum(covers(probe, target) for target in planned))
+
+    for probe in planned:
+        if mode(probe) != 'STARTS_WITH':
+            continue
+        words = re.findall(r'[A-Za-z0-9]+', probe)
+        distinctive = distinctive_match_tokens(probe)
+        phrase = ' '.join(dict.fromkeys(word for word in words if word.casefold() in distinctive))
+        if len(phrase.split()) < 2:
+            continue
+        old_score = score(probe)
+        all_words_probes[probe] = phrase
+        if score(probe) <= old_score:
+            del all_words_probes[probe]
+
+    probes, coverage = [], {}
+    legal_parts = explicit_legal_name_before_alias_segments(entered_name)
+    primary_legal = legal_parts[0] if legal_parts else ''
+    for name in required:
+        candidates = [probe for probe in planned if eligible(probe) and covers(probe, name)]
+        if name == required[0] and primary_legal:
+            candidates = [probe for probe in candidates if covers(probe, primary_legal)]
+        # Stable ties retain the existing query, including its positive path.
+        best = max([name, *candidates], key=score)
+        if best not in probes:
+            probes.append(best)
+        if best != name:
+            coverage.setdefault(best, []).append(name)
+    return probes, coverage, all_words_probes
+
+
+def nc_reliable_match_complete(org, selected, records, review, unreviewed_scope,
+                               uncovered_reviewed_names=()):
+    """Stop NC name probing once complete source evidence confirms identity.
+
+    Every row/detail of this search has already passed the ordinary master.
+    Adverse/pending standing is final only after known aliases are covered:
+    an older credential must not hide a newer registration under another name.
+    A name alone, an unresolved candidate, or unknown standing cannot finish.
+    """
+    if (unreviewed_scope or review or not selected
+            or selected.get('_identity_outcome') != 'accepted'
+            or selected.get('status') not in {
+                'Current', 'Upcoming Filing', 'Exempt', 'Pending', 'Delinquent',
+                'Closed / Withdrawn / Canceled', 'Suspended', 'Revoked', 'Failed to Renew'}
+            or any(row.get('_identity_outcome') == 'possible' for row in records)):
+        return False
+    if (uncovered_reviewed_names
+            and selected.get('status') not in {'Current', 'Upcoming Filing', 'Exempt'}):
+        return False
+    observed_ein = canonical_ein_digits(selected.get('ein', ''))
+    if observed_ein:
+        return len(observed_ein) == 9 and observed_ein == canonical_ein_digits(org.ein)
+    return (selected.get('match', {}).get('decision') == 'accepted'
+            and selected.get('address_evidence', {}).get('decision') == 'corroborated')
 
 
 def nc_full_compound_probe(name):
