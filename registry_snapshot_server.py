@@ -6747,7 +6747,7 @@ def al_charity_search_evidence(payload):
             or type(payload.get("total")) is not int or payload["total"] < 0
             or len(payload["rows"]) != payload["total"]):
         raise ValueError("Alabama search did not provide a complete verified result set")
-    records, seen = [], set()
+    records, seen, credential_core = [], set(), {}
     for cells in payload["rows"]:
         if not isinstance(cells, list) or len(cells) != len(headers) or not all(isinstance(v, str) for v in cells):
             raise ValueError("Alabama result columns are incomplete")
@@ -6759,9 +6759,14 @@ def al_charity_search_evidence(payload):
         # the master must withhold classification if its name could match.
         if unnumbered:
             identifier = "ALROW-" + hashlib.sha256(json.dumps(cells, ensure_ascii=False).encode()).hexdigest()
-        if not name or not identifier or identifier in seen or not fields["Status"]:
+        if not name or not identifier or tuple(cells) in seen or not fields["Status"]:
             raise ValueError("Alabama result identity is missing or duplicated across pages")
-        seen.add(identifier)
+        seen.add(tuple(cells))
+        if not unnumbered:
+            core = tuple(fields[h] for h in headers[:6])
+            if identifier in credential_core and credential_core[identifier] != core:
+                raise ValueError("Alabama repeated credential has conflicting identity or standing")
+            credential_core[identifier] = core
         category = fields["Registration Type"]
         # The same lookup includes fundraisers, telephone sellers and health
         # studios. Those credentials do not establish charity registration.
@@ -6779,7 +6784,26 @@ def al_charity_search_evidence(payload):
                             street=fields["Address"], region=fields["State"], postal_code=fields["Zip"],
                             location=", ".join(v for v in [fields["City"], fields["State"]] if v),
                             url="https://ago.igovsolution.net/online/Lookups/Business.aspx"))
-    return records
+    grouped = {}
+    for row in records:
+        key = row["identifier"]
+        if key not in grouped:
+            grouped[key] = {**row, "_al_address_variants": []}
+        address = {k: row.get(k, "") for k in ("street", "location", "region", "postal_code")}
+        if address not in grouped[key]["_al_address_variants"]:
+            grouped[key]["_al_address_variants"].append(address)
+    for row in grouped.values():
+        variants = row["_al_address_variants"]
+        if len(variants) <= 1:
+            row.pop("_al_address_variants", None)
+            continue
+        variants.sort(key=lambda a: tuple(a[k] for k in ("street", "location", "region", "postal_code")))
+        labels = [", ".join(a[k] for k in ("street", "location", "postal_code") if a[k]) for a in variants]
+        combined = "State-listed addresses (roles not specified): " + " / ".join(labels)
+        if len(variants) > 8 or len(combined) > 2000:
+            raise ValueError("Alabama repeated credential address evidence exceeds its bound")
+        row.update(_al_multiple_addresses=True, street="", region="", postal_code="", location=combined)
+    return list(grouped.values())
 
 
 def nc_charity_record_evidence(fields):
@@ -9504,6 +9528,11 @@ def select_licensed_charity(org, rows, state, deadline):
         if time.monotonic() >= deadline:
             raise TimeoutError("Registry candidate evaluation did not finish within this lookup's budget")
         outcome = licensed_charity_identity(org, row, state, deadline)
+        if (state == "AL" and row.get("_al_multiple_addresses") is True
+                and outcome == "accepted" and row.get("_user_identity_decision") != "accept"):
+            # An agreeing credential core does not identify a main office.
+            # Preserve all source addresses and ask for an identity decision.
+            outcome = "possible"
         row["_identity_outcome"] = outcome
         if outcome == "accepted": accepted.append(row)
         elif outcome == "conflict": conflicts.append(row)
