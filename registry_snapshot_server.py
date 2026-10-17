@@ -8327,7 +8327,7 @@ def final_four_clean_evidence(payload, query):
         if state == "TN" and "financial_history_absent" in fields:
             if (fields["financial_history_absent"] is not True or type(fields.get("financial_count")) is not int
                     or fields["financial_count"] != 0
-                    or fields.get("financial_periods") != [] or fields.get("Expiration Date") != ""):
+                    or fields.get("financial_periods") != []):
                 raise ValueError("Invalid Tennessee absent financial section evidence")
         history = payload.get("filings")
         if history is not None:
