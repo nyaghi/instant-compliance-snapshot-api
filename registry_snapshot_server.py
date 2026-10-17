@@ -7604,6 +7604,16 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 covered_reviewed_names.append({"name": name, "completed_all_words": completed_all_words})
             continue
         if (state == "NC" and trial_identity() and index >= len(required)
+                and nc_completed_all_words and not unreviewed_scope
+                and all(any(nc_all_words_covers(phrase, target) for phrase in nc_completed_all_words)
+                        or any(target.casefold().startswith(probe.casefold()) for probe in nc_completed_prefixes)
+                        or target.casefold() in {probe.casefold() for probe in narrowed_searches}
+                        for target in nc_reviewed_identity_names)):
+            # Every reviewed legal/alternate name is covered by a completed
+            # public broad query. Generated fragments are optional retrieval
+            # alternatives, not additional reviewed identities or a quota.
+            break
+        if (state == "NC" and trial_identity() and index >= len(required)
                 and nc_redundant_broad_query(name, required, records)):
             continue
         if state in {"AL", "NC", "NV"} and trial_identity() and index >= len(required) and records and not unreviewed_scope:
@@ -7697,6 +7707,13 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 seen.add(row["identifier"])
                 continue
             candidates = final_four_search_candidate_scores(org.organization_name, org.ein, state, row)
+            if (state == "NC" and trial_identity() and not row.get("ein")
+                    and candidates and all(c["decision"] == "rejected" for c in candidates)
+                    and any(single_token_typo_review_candidate(target, row["name"])
+                            for target in nc_reviewed_identity_names)):
+                row["_review_minor_typo"] = True
+                candidates.append({"decision": "possible", "score": 55,
+                                   "reason": "MATCH_SINGLE_TOKEN_TYPO_REVIEW"})
             if not candidates or all(c["decision"] == "rejected" for c in candidates):
                 seen.add(row["identifier"])
                 continue
@@ -7767,6 +7784,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                             record = nc_charity_profile_evidence(row, detail["fields"], detail["filings"])
                         except ValueError:
                             record["date_evidence_note"] = "North Carolina's renewal filing history was incomplete; the last-renewal date remains blank."
+                    if row.get("_review_minor_typo"):
+                        record["_review_minor_typo"] = True
                 elif state == "TN":
                     fields = detail.get("fields")
                     base_fields = {k: v for k, v in fields.items() if k not in {"financial_periods", "financial_count"}} if isinstance(fields, dict) else fields
@@ -9283,10 +9302,13 @@ def licensed_charity_identity(org, row, state, deadline):
                 row["address_evidence"] = {"decision": "unavailable", "basis":
                     "The DC label begins with the complete organization name but includes additional text. Identity requires confirmation."}
                 return "possible"
-    if state == "GA" and decision["decision"] == "rejected" and row.get("_review_minor_typo") and not row.get("ein"):
+    if (state in {"GA", "NC"} and decision["decision"] == "rejected" and row.get("_review_minor_typo") and not row.get("ein")
+            and (state == "GA" or trial_identity() and any(single_token_typo_review_candidate(target, matched_name)
+                 for target in [org.organization_name, *known_names_for_ein(org.ein)]))):
         row["match"] = {"decision": "possible", "score": 55, "reason": "MATCH_SINGLE_TOKEN_TYPO_REVIEW"}
         row["address_evidence"] = {"decision": "unavailable", "basis":
-            "The Georgia name differs by one character; the public record has no EIN to confirm identity."}
+            ("The Georgia name differs by one character; the public record has no EIN to confirm identity." if state == "GA" else
+             "The North Carolina full name differs from an EIN-linked reviewed name by one character in one word; the public record has no EIN. Confirm or reject this identity.")}
         return "possible"
     if decision["decision"] == "rejected" and row.get("_review_name_only") and not row.get("ein"):
         # Georgia's legacy display names may append a parenthesized filing
