@@ -1,11 +1,28 @@
-importScripts("protocol.js", "recovery.js", "registry-worker.js");
+importScripts("protocol.js", "recovery.js", "registry-worker.js", "stop-owned.js");
 const P = CCNYProtocol;
+const STOP_REVIEW_BUILD="enhancement-batch-ff-1";
+// Public diagnostic correlation only; never a credential or authorization key.
+const nvHandoffWorkerTag=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+function nvHandoffDiagnostic(job,message) {
+  if(!P.TRIAL_ORIGIN || job?.registryState!=='NV' || typeof message.ok!=='boolean' || message.progress)return message;
+  const operation=job.command?.query?.operation;
+  return {...message,nv_readiness:{...message.nv_readiness,handoff:{
+    build:'enhancement-batch-ff-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
+    active:isActive(job),pending:!!job.pending,search_complete:job.finalFourSearchComplete===true,
+    pending_matches_reply:job.pending===message.id,
+    command_matches_reply:job.command?.id===message.id,
+    operation:['search','detail'].includes(operation)?operation:'none'
+  }}};
+}
 const QUEUE_TTL = 1200000, ACTIVE_TTL = 300000, PACE_MS = 3000;
 const REPAIR_INTERVAL = 1200000;
 let active = null, nextStart = 0, pumpTimer = null;
 // The approved connector retains its single lane. The isolated trial admits
 // one job per registry, so a slow registry cannot strand a different state.
 const activeLanes = new Map(), laneStarts = new Map();
+const duoStates = new Set(['NV','NY','IL','NC','TN','MS']);
+const isDuoJob = job => !!job && duoStates.has(job.registryState)
+  && registryTrialLayout({url:job.sender.url})==='duo';
 const allJobs = () => [...(P.TRIAL_ORIGIN ? activeLanes.values() : [active]), ...queue].filter(Boolean);
 const isActive = job => !!job && (P.TRIAL_ORIGIN ? activeLanes.get(job.registryState) === job : active === job);
 const queue = [];
@@ -48,7 +65,7 @@ function diagnostic(type, job, detail = "") {
   const at=Date.now(), summary=String(detail).slice(0,180);
   diagnostics.push({ at, type, id: job?.lookupId || "", phase: job?.pending ? "search" : isActive(job) ? "active" : "queued", detail: summary });
   if (diagnostics.length > 80) diagnostics.shift();
-  if(P.TRIAL_ORIGIN && job && ["GA","MS","TN"].includes(job.registryState)) {
+  if(P.TRIAL_ORIGIN && job && ["GA","MS","NC","TN"].includes(job.registryState)) {
     job.trialDiagnostics ||= [];
     job.trialDiagnostics.push({at,type,detail:String(detail).slice(0,600)});
     if(job.trialDiagnostics.length>120)job.trialDiagnostics.shift();
@@ -71,7 +88,7 @@ function collectNyDiagnostics(job, response) {
   if(P.TRIAL_ORIGIN && job.registryState === "NY")
     job.nyDiagnostics=P.nyDiagnostics([...(job.nyDiagnostics||[]),...P.nyDiagnostics(response?.ny_diagnostics)]);
 }
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, stopOwnership:stopOwnership.snapshot(), nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -109,6 +126,33 @@ async function removeOwned(tabId) {
   } catch { /* The tab has already closed or was taken over by the user. */ }
   await saveRuntime();
 }
+// Isolated Stop-only protocol. Ordinary finish remains unchanged.
+function stopForgetIdle(job,ids) {
+  for(const id of ids) {
+    if(trialAlIdle?.id===id){trialAlIdle=null;clearTimeout(trialAlIdleTimer);}
+    if(trialTnIdle?.id===id){trialTnIdle=null;clearTimeout(trialTnIdleTimer);}
+    if(trialNyIdle?.id===id){trialNyIdle=null;clearTimeout(trialNyIdleTimer);}
+  }
+}
+function stopSafeRegistryTab(job,tab) {
+  if(tab.id===job.sender.tab.id)return false;
+  try {
+    if(job.registryState==='NY')return nyRegistryPage(tab.url);
+    const u=new URL(tab.url),start=new URL(registryStart(job.registryState));
+    if(u.origin!==start.origin)return false;
+    if(job.registryState==='NC')return /^\/online_services\/search\/(?:by_title\/search_charities|Charities_Results|charities_(?:profile|filings)\/\d+)$/.test(u.pathname);
+    if(['AL','NV','TN','MS'].includes(job.registryState))return u.pathname===start.pathname;
+    if(job.registryState==='NM')return /^\/CharitySearch\/(?:CharityDetail\.aspx|GenericError\.htm)?$/i.test(u.pathname);
+    return ['IL','GA'].includes(job.registryState);
+  } catch {return false;}
+}
+const strictOwnedStop=CCStopReview.createStrictStop({close,owned,tabs:chrome.tabs,
+  allowedSender,safeRegistryTab:stopSafeRegistryTab,
+  isTransferred:(job,id)=>stopOwnership.transferred(job,id),
+  reserveResources:stopForgetIdle,
+  forgetResource:(job,id)=>{stopForgetIdle(job,[id]);stopOwnership.forget(job,id);owned.delete(id);}});
+const stopOwnership=CCStopReview.createOwnedStopRegistry({strictStop:strictOwnedStop,owned,allowedSender,validId:P.validId,persist:saveRuntime});
+
 const boot = (async () => {
   await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   // Older supported Chrome releases expose this method on session only. Local
@@ -138,6 +182,7 @@ const boot = (async () => {
     }
   }
   for (const id of previous?.ownedTabs || []) if (Number.isInteger(id)) owned.add(id);
+  stopOwnership.restore(previous?.stopOwnership || [],allJobs(),chrome.runtime.id);
   const idle=previous?.trialAlIdle;
   if (P.TRIAL_ORIGIN && Number.isInteger(idle?.id) && owned.has(idle.id) && Number.isFinite(idle.expiresAt)
       && Date.now()<idle.expiresAt && idle.expiresAt<=Date.now()+1800000 && !allJobs().some(j=>j?.tab===idle.id)) {
@@ -172,7 +217,8 @@ function allowedSender(sender) {
   catch { return false; }
 }
 function post(job, message) {
-  if(P.TRIAL_ORIGIN && ["GA","MS","TN"].includes(job.registryState)
+  message=nvHandoffDiagnostic(job,message);
+  if(P.TRIAL_ORIGIN && ["GA","MS","NC","TN"].includes(job.registryState)
       && (message.action==="closed" || (typeof message.ok==="boolean" && !message.progress)))
     message={...message,trial_diagnostics:[...(job.trialDiagnostics||[])]};
   try { job.port.postMessage(message); } catch {}
@@ -187,11 +233,13 @@ function pump() {
   const running=P.TRIAL_ORIGIN?activeLanes.size:Number(!!active);
   const cap=P.TRIAL_ORIGIN?8:1;
   if(running>=cap)return;
+  const usedDuoSlots=new Set([...activeLanes.values()].filter(isDuoJob).map(j=>j.duoSlot));
   let earliest=Infinity,index=-1;
   for(let i=0;i<queue.length;i++) {
     const job=queue[i];
     if(job.closed)continue;
     if(P.TRIAL_ORIGIN && activeLanes.has(job.registryState))continue;
+    if(isDuoJob(job) && usedDuoSlots.size>=2)continue;
     // Preserve FIFO within a registry, even while its old page reconnects.
     if(P.TRIAL_ORIGIN && queue.slice(0,i).some(j=>!j.closed&&j.registryState===job.registryState))continue;
     if(!job.port)continue;
@@ -213,10 +261,9 @@ function pump() {
     close(job,repair.reason||'NY_CONNECTOR_RECOVERY_REJECTED');return;
   }
   if(P.TRIAL_ORIGIN)activeLanes.set(job.registryState,job);else active=job;
+  if(isDuoJob(job))job.duoSlot=[0,1].find(slot=>!usedDuoSlots.has(slot));
   diagnostic('admitted',job,`${job.registryState} queue_ms=${Date.now()-job.enqueuedAt}`);
-  // The isolated MS public grid can stall after several negative name probes.
-  // Bound its complete collector lane; a partial search remains inconclusive.
-  job.activeExpiresAt ??= Date.now()+(P.TRIAL_ORIGIN && job.registryState==='MS' ? 60000 : ACTIVE_TTL);
+  job.activeExpiresAt ??= Date.now()+ACTIVE_TTL;
   arm(job);
   saveRuntime().then(()=>{
     if(job.closed)return;
@@ -226,6 +273,7 @@ function pump() {
 }
 async function close(job, reason, finishId) {
   if (job.closed) return;
+  stopOwnership.remember(job);
   job.closed = true;
   clearTimeout(job.timer);
   clearTimeout(job.reconnectTimer);
@@ -245,7 +293,7 @@ async function close(job, reason, finishId) {
           trialAlIdle={id:tabId,expiresAt:Date.now()+1800000};armTrialAlIdle();
         } else await removeOwned(tabId);
       } catch {await removeOwned(tabId);}
-    } else if (tabId !== null && P.TRIAL_ORIGIN && job.registryState==='TN' && finishId && !reason
+    } else if (tabId !== null && P.TRIAL_ORIGIN && job.registryState==='TN' && finishId && !reason && !isDuoJob(job)
         && job.lastResponse?.ok===true && job.finalFourReusableForm && owned.has(tabId)) {
       try {
         const tab=await chrome.tabs.get(tabId),source=await chrome.tabs.get(job.sender.tab.id);
@@ -253,7 +301,7 @@ async function close(job, reason, finishId) {
           trialTnIdle={id:tabId,sourceTabId:source.id,sourceWindowId:source.windowId,windowId:tab.windowId,expiresAt:Date.now()+300000};armTrialTnIdle();
         } else await removeOwned(tabId);
       } catch {await removeOwned(tabId);}
-    } else if(tabId!==null && P.TRIAL_ORIGIN && job.registryState==='NY' && finishId && !reason
+    } else if(tabId!==null && P.TRIAL_ORIGIN && job.registryState==='NY' && finishId && !reason && !isDuoJob(job)
         && job.lastResponse?.ok===true && !job.verificationRetryUsed && !job.queryRepaired
         && !job.nyFreshPageRecoveryOnly && owned.has(tabId)) {
       try {
@@ -287,12 +335,12 @@ async function lookupTab(job) {
     try {
       const tab=await chrome.tabs.get(saved.id),source=await chrome.tabs.get(job.sender.tab.id);
       if(!job.refreshOnly && !job.closed && owned.has(saved.id) && saved.expiresAt>Date.now()
-          && nyRegistryPage(tab.url) && new URL(source.url).origin===P.TRIAL_ORIGIN) {
-        job.tab=saved.id;job.nySessionExpiresAt=saved.expiresAt;
+          && nyRegistryPage(tab.url) && new URL(source.url).origin===P.TRIAL_ORIGIN && stopOwnership.canAdopt(job,saved.id)) {
+        job.tab=saved.id;job.nySessionExpiresAt=saved.expiresAt;stopOwnership.remember(job);
         await registryExposeReusedNyTab(job,source);
         diagnostic('ny-session-reuse',job,'owned successful page; new query and evidence required');
-      } else await removeOwned(saved.id);
-    } catch {await removeOwned(saved.id);}
+      } else if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);
+    } catch {if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);}
     await saveRuntime();
     if(job.tab!==null || job.closed)return;
   }
@@ -420,10 +468,10 @@ async function prepareNySearchForm(job, query) {
 }
 async function performSearch(job, query, id) {
   if (job.closed) return;
-  if (job.command?.id === id && !P.sameQuery(job.command.query, query)) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
+  if (job.command?.id === id && !P.sameQuery(job.command.query, query)) { post(job, { id, ...registryNvSequenceFailure(job,query,"worker-command-changed") }); return; }
   if (job.lastResponse?.id === id && P.sameQuery(job.command?.query, query)) { post(job, job.lastResponse); return; }
   if (job.pending === id && P.sameQuery(job.command?.query, query)) { post(job, { id, progress: true, reconnecting: true }); return; }
-  if (!isActive(job) || job.pending) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
+  if (!isActive(job) || job.pending) { post(job, { id, ...registryNvSequenceFailure(job,query,"worker-inactive-or-pending") }); return; }
   if (job.command?.id !== id) { job.queryRepaired = false; job.lastResponse = null; }
   job.command = { id, query };
   job.pending = id;
@@ -583,7 +631,7 @@ async function performSearch(job, query, id) {
   } catch (error) {
     diagnostic("lookup-error", job, /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : error.name);
     if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_FAILED" });
-    response = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : "NY_CONNECTOR_INCOMPLETE" };
+    response = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : "NY_CONNECTOR_INCOMPLETE", ...(error.nvSequence?{nv_readiness:error.nvSequence}:{}) };
   }
   if (job.closed) return;
   job.pending = null;
@@ -591,7 +639,7 @@ async function performSearch(job, query, id) {
     job.nyLastSearchQuery = {...query};
   }
   if(P.TRIAL_ORIGIN&&job.registryState==='NV'&&job.nvReadiness)response.nv_readiness={...job.nvReadiness,
-    visibility_recovery:job.nvVisibilityOutcome||'not_requested',visibility_attempted:job.nvVisibilityAttempted===true};
+    visibility_recovery:job.nvVisibilityOutcome||'not_requested',visibility_attempted:job.nvVisibilityAttempted===true,...response.nv_readiness};
   if(P.TRIAL_ORIGIN&&job.registryState==='NY')response.ny_diagnostics=P.nyDiagnostics(job.nyDiagnostics);
   if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&['visible','hidden'].includes(job.nyPageVisibility))response.page_visibility=job.nyPageVisibility;
   if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&!response.ok&&rejected(job.nyFailureCause)) {
@@ -687,9 +735,18 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return false;
   }
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, extension_id:chrome.runtime.id, stop_build:STOP_REVIEW_BUILD, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1", "owned-stop-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
+chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+  if(message?.action!=='cc-strict-stop-v1')return;
+  if(!P.TRIAL_ORIGIN||!allowedSender(sender)||!P.validId(message.id)||!P.validId(message.lookup_id))return;
+  boot.then(()=>stopOwnership.stop({lookupId:message.lookup_id},sender)).then(async receipt=>{
+    await saveRuntime();respond({ok:true,id:message.id,lookup_id:message.lookup_id,capability:'owned-stop-v1',stop_build:STOP_REVIEW_BUILD,extension_id:chrome.runtime.id,receipt});
+  }).catch(error=>respond({ok:false,id:message.id,lookup_id:message.lookup_id,capability:'owned-stop-v1',stop_build:STOP_REVIEW_BUILD,extension_id:chrome.runtime.id,reason:error.code||'STOP_UNCONFIRMED'}));
+  return true;
+});
+
 chrome.runtime.onConnect.addListener(port => {
   const resume = port.name.startsWith("cc-ny-resume-v1:");
   const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : port.name.startsWith("cc-al-lookup-v1:") ? "AL" : port.name.startsWith("cc-nc-lookup-v1:") ? "NC" : port.name.startsWith("cc-nv-lookup-v1:") ? "NV" : port.name.startsWith("cc-tn-lookup-v1:") ? "TN" : port.name.startsWith("cc-nm-lookup-v1:") ? "NM" : port.name.startsWith("cc-ms-lookup-v1:") ? "MS" : "NY";
@@ -700,6 +757,7 @@ chrome.runtime.onConnect.addListener(port => {
   const bound = boot.then(async () => {
     if (disconnected) return null;
     const id = port.name.slice(prefix.length);
+    if(stopOwnership.requested(id,port.sender)){port.postMessage({action:"closed",reason:"NY_CONNECTOR_BROWSER_CLOSED"});port.disconnect();return null;}
     let job = allJobs().find(j => j && !j.closed && j.lookupId === id);
     if (resume) {
       if (!job || !P.registryAllowed(job.registryState,new URL(port.sender.url).origin)
@@ -719,7 +777,7 @@ chrome.runtime.onConnect.addListener(port => {
     } else {
       if (job) { port.postMessage({ action: "closed", reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); port.disconnect(); return null; }
       job = newJob(port.sender, id, prefix === "cc-ny-refresh-v1:", {registryState}); job.port = port;
-      arm(job); queue.push(job); await saveRuntime();
+      stopOwnership.remember(job);arm(job); queue.push(job); await saveRuntime();
     }
     notifyQueue(); pump(); return job;
   });
@@ -742,6 +800,14 @@ chrome.runtime.onConnect.addListener(port => {
     if (message?.action === "finish" && P.validId(message.id)) { close(job, null, message.id); return; }
     if (message?.action === "acquire" && P.validId(message.id)) {
       job.acquireId = message.id;
+      if(P.TRIAL_ORIGIN && !job.trialDisplay && message.display
+          && [message.display.viewportWidth,message.display.outerWidth,message.display.outerHeight,
+              message.display.chromeInsetTop].every(Number.isFinite)
+          && message.display.viewportWidth>=320 && message.display.viewportWidth<=16384
+          && message.display.outerWidth>=320 && message.display.outerWidth<=16384
+          && message.display.outerHeight>=320 && message.display.outerHeight<=16384
+          && message.display.chromeInsetTop>=0 && message.display.chromeInsetTop<=200)
+        job.trialDisplay={...message.display};
       if (isActive(job)) saveRuntime().then(() => { if (!job.closed) post(job, { id: message.id, ok: true }); }).catch(() => close(job, "NY_CONNECTOR_INTERRUPTED")); else notifyQueue();
       return;
     }

@@ -34,20 +34,20 @@
     "NH": {
       "state": "NH",
       "status": "changed",
-      "record_count": 14079,
-      "updated_label": "October 09, 2026",
-      "checksum": "4ffa448e29e5f723d910cff9e838dc4ed8dcf56dff255c9a660e670d17b19ed6",
+      "record_count": 14087,
+      "updated_label": "October 15, 2026",
+      "checksum": "848143616372f2dc57646f6c33a2e8d661e22c48a1c04501a59259e0dd23d2da",
       "source_url": "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
-      "source_date": "October 09, 2026",
-      "downloaded_at": "2026-10-11T10:04:46.576829+00:00",
+      "source_date": "October 15, 2026",
+      "downloaded_at": "2026-10-16T18:37:48.352417+00:00",
       "assets": [
         {
           "path": "registered-charities.pdf",
-          "sha256": "4ffa448e29e5f723d910cff9e838dc4ed8dcf56dff255c9a660e670d17b19ed6"
+          "sha256": "848143616372f2dc57646f6c33a2e8d661e22c48a1c04501a59259e0dd23d2da"
         },
         {
           "path": "downloadable-data/NH-records.json",
-          "sha256": "7fc780e6e2e1c8583bee0ac949b18a6660c11740afa4a61c7c0512d0057f7a9f"
+          "sha256": "8c32685520c0330a53945ba899288dc1edceecca6b9db3953b753628bd17c091"
         }
       ]
     },

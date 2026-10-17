@@ -13,7 +13,7 @@
   const summary = document.getElementById("identitySummary");
   const elapsed = document.getElementById("identityElapsed");
   const addressList = document.getElementById("identityAddressList");
-  let addresses = [];
+  let addresses = [], officeEvidence = "";
   let revision = 0, reviewedIdentity = "", rows = [], busy = false, controller;
   let discoveryStartedAt = 0, discoveryInterval;
   const identity = () => `${einInput.value.replace(/\D/g, "")}|${nameInput.value.trim()}`;
@@ -30,7 +30,7 @@
     discoveryInterval = setInterval(() => { elapsed.textContent = `Finding names… ${discoveryTime()}`; }, 1000);
   }
   function invalidate() {
-    revision++; controller?.abort(); reviewedIdentity = ""; rows = []; addresses = [];
+    revision++; controller?.abort(); reviewedIdentity = ""; rows = []; addresses = []; officeEvidence = "";
     addressList?.replaceChildren();
     clearInterval(discoveryInterval);
     if (elapsed) { elapsed.hidden = true; elapsed.textContent = ""; }
@@ -119,7 +119,7 @@
     const requestIdentity = identity(), requestRevision = ++revision;
     let discoveryCompleted = false;
     startDiscoveryTimer();
-    reviewedIdentity = ""; find.disabled = true; find.textContent = "Finding alternate names…";
+    reviewedIdentity = ""; officeEvidence = ""; find.disabled = true; find.textContent = "Finding alternate names…";
     nameInput.disabled = true; einInput.disabled = true;
     message.textContent = "Checking EIN-linked records in 14 states and the IRS…"; changed();
     controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 70000);
@@ -142,6 +142,7 @@
       if (requestRevision !== revision || requestIdentity !== identity()) return;
       rows = (data.names || []).slice(0, 7).map(row => ({...row, original: row.name, selected: !row.identity_conflict}));
       addresses = Array.isArray(data.addresses) ? data.addresses : [];
+      officeEvidence = typeof data.ny_office_evidence === "string" && data.ny_office_evidence.length <= 16000 ? data.ny_office_evidence : "";
       const limitations = (data.sources || []).filter(source => !source.complete).map(source => `${source.source}: ${source.limitation || "Some records were unavailable."}`);
       message.textContent = limitations.length ? `Some sources were unavailable. You can review the names found, add names, and continue. ${limitations.join(" ")}` :
         rows.length ? "Review the names below. Keep only names that belong to this organization." : "No additional names were confirmed. You can add names or continue with your entered name.";
@@ -150,7 +151,7 @@
       discoveryCompleted = true;
     } catch (error) {
       if (requestRevision !== revision || requestIdentity !== identity()) return;
-      rows = []; addresses = []; reviewedIdentity = requestIdentity;
+      rows = []; addresses = []; officeEvidence = ""; reviewedIdentity = requestIdentity;
       message.textContent = "Alternate-name discovery could not finish. You can enter names manually or continue with your entered name. Registration checks have not started.";
     } finally {
       clearTimeout(timeout);
@@ -166,6 +167,7 @@
   });
   window.CCIdentity = Object.freeze({
     ready: () => !!reviewedIdentity && reviewedIdentity === identity(),
+    officeEvidence: () => reviewedIdentity && reviewedIdentity === identity() ? officeEvidence : "",
     names: () => rows.filter(row => row.selected && row.name.trim()).map(row => row.name.trim()),
     setBusy(value) {
       busy = value; find.disabled = value; nameInput.disabled = value; einInput.disabled = value;

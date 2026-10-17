@@ -74,7 +74,9 @@ async function registryTnAfterCommand(response){
 function registryTrialLayout(origin) {
   const source=new URL(origin.url);
   if(!P.TRIAL_ORIGIN || source.origin!==P.TRIAL_ORIGIN
-      || !['/','/connector/final-four-validation.html'].includes(source.pathname))return '';
+      || !['/','/instant-compliance-snapshot','/instant-compliance-snapshot/',
+        '/connector/final-four-validation.html'].includes(source.pathname))return '';
+  if(source.searchParams.get('collector_layout')==='duo')return 'duo';
   if(source.pathname==='/connector/final-four-validation.html') {
     const requested=source.searchParams.get('collector_layout');
     if(requested==='visible')return 'visible'; // Preserve the four-state comparison.
@@ -88,17 +90,21 @@ async function registryTrialWindowOptions(job, origin) {
   // Keep owned trial collectors disjoint; never move the user's source window.
   const layout=registryTrialLayout(origin);
   if(!layout)return options;
-  const slot=(layout==='visible'?['NV','NY','IL','NC']:['NV','NY','IL','NC','TN']).indexOf(job.registryState);
+  const slot=(layout==='visible'?['NV','NY','IL','NC']
+    : layout==='duo'?['NV','NY','IL','NC','TN','MS']
+      :['NV','NY','IL','NC','TN']).indexOf(job.registryState);
   if(slot<0)return options;
   let bounds;
   try { bounds=await chrome.windows.get(origin.windowId); }
   catch(error) { if(layout==='visible')throw error;return options; }
+  const originalBounds={left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,state:bounds.state};
+  let boundsSource='origin';
   // Existing full-size layouts stay unchanged. The ordinary trial may be
   // launched from a small or minimized window; use its actual display work area
   // rather than silently creating overlapping, unfocused collectors.
   const usable=b=>['left','top','width','height'].every(k=>Number.isFinite(b?.[k]))
     && b.width>=1080 && b.height>=700 && b.width<=16384 && b.height<=16384;
-  if(layout==='coordinated' && (bounds?.state==='minimized' || !usable(bounds))) {
+  if(['coordinated','duo'].includes(layout) && (bounds?.state==='minimized' || !usable(bounds))) {
     let timer;
     try {
       const display=await Promise.race([
@@ -106,8 +112,22 @@ async function registryTrialWindowOptions(job, origin) {
         new Promise(resolve=>{timer=setTimeout(()=>resolve(null),Math.max(1,Math.min(250,job.activeExpiresAt-Date.now())));})
       ]);
       if(usable(display) && Math.abs(display.left)<=65536 && Math.abs(display.top)<=65536)
-        bounds={...display,state:'normal'};
+        {bounds={...display,state:'normal'};boundsSource='display-work-area';}
     } catch {} finally {clearTimeout(timer);}
+  }
+  // The display work area can be wider than the source window. If Chrome
+  // reports the minimized source's last normal rectangle and that rectangle
+  // still matches the viewport captured at acquire, use the source rectangle
+  // for rail placement. Comparing that cache to the substituted work area
+  // incorrectly rejects it and tiles NC over the application.
+  if(layout==='duo' && boundsSource==='display-work-area' && usable(originalBounds)
+      && job.trialDisplay?.outerWidth===originalBounds.width
+      && job.trialDisplay?.outerHeight===originalBounds.height
+      && originalBounds.left>=bounds.left && originalBounds.top>=bounds.top
+      && originalBounds.left+originalBounds.width<=bounds.left+bounds.width
+      && originalBounds.top+originalBounds.height<=bounds.top+bounds.height) {
+    bounds={...originalBounds,state:'normal'};
+    boundsSource='cached-origin';
   }
   if(!['left','top','width','height'].every(k=>Number.isFinite(bounds?.[k]))
       || bounds.width<1080 || bounds.height<700 || bounds.state==='minimized') {
@@ -118,6 +138,65 @@ async function registryTrialWindowOptions(job, origin) {
   const current=await chrome.tabs.get(origin.id);
   if(current.windowId!==origin.windowId || current.url!==origin.url)
     throw new Error('NY_CONNECTOR_VISIBLE_LAYOUT_UNAVAILABLE');
+  if(layout==='duo') {
+    // Two visible registry workspaces aligned to the opt-in page's right rail.
+    // The worker admits only two browser-dependent jobs at once.
+    if(!Number.isInteger(job.duoSlot) || ![0,1].includes(job.duoSlot))
+      throw new Error('NY_CONNECTOR_DUO_LAYOUT_UNAVAILABLE');
+    let chromeInsetTop=96, viewportWidth, timer, displaySource='live';
+    let liveReply='not-requested',liveElapsedMs=null;
+    if(bounds.width>=1600 && bounds.height>=900) try {
+      const startedAt=Date.now();
+      const display=await Promise.race([
+        chrome.tabs.sendMessage(origin.id,{action:'trial-collector-display'},{frameId:0}),
+        // A busy Chrome process can delay this read-only reply beyond 250 ms.
+        // Normal replies return immediately; only a missing reply pays this wait.
+        new Promise(resolve=>{timer=setTimeout(()=>resolve(null),Math.max(1,Math.min(1000,job.activeExpiresAt-Date.now())));})
+      ]);
+      liveElapsedMs=Date.now()-startedAt;
+      liveReply=display?'received':'missing';
+      if(Number.isFinite(display?.chromeInsetTop))chromeInsetTop=display.chromeInsetTop;
+      if(Number.isFinite(display?.viewportWidth))viewportWidth=display.viewportWidth;
+    } catch(error) {liveReply=`error:${error?.name||'unknown'}`;} finally {clearTimeout(timer);}
+    if(job.registryState==='NC')diagnostic('nc-layout-inputs',job,JSON.stringify({
+      slot:job.duoSlot,origin:originalBounds,boundsSource,
+      chosen:{left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height},
+      liveReply,liveElapsedMs,liveViewportWidth:Number.isFinite(viewportWidth)?viewportWidth:null,
+      cached:job.trialDisplay?{outerWidth:job.trialDisplay.outerWidth,
+        outerHeight:job.trialDisplay.outerHeight,viewportWidth:job.trialDisplay.viewportWidth,
+        chromeInsetTop:job.trialDisplay.chromeInsetTop}:null
+    }));
+    // Acquire records the same viewport before concurrent registry work can
+    // delay the read-only response. Reuse only for the same outer window size.
+    if(!Number.isFinite(viewportWidth) && job.trialDisplay?.outerWidth===bounds.width
+        && job.trialDisplay?.outerHeight===bounds.height) {
+      viewportWidth=job.trialDisplay.viewportWidth;
+      chromeInsetTop=job.trialDisplay.chromeInsetTop;
+      displaySource='acquire';
+    }
+    // The rail is deliberately hidden below 1600 CSS pixels. At that size a
+    // popup cannot fit beside the app; retain the existing coordinated-window
+    // geometry instead of turning a valid registry lookup into an error.
+    if(Number.isFinite(viewportWidth) && viewportWidth>=1600
+        && bounds.width>=1600 && bounds.height>=900) {
+      const railLeft=820, inset=16, header=72, gap=12, footer=16;
+      const width=Math.min(bounds.width,viewportWidth)-railLeft-inset*2;
+      const height=Math.floor((bounds.height-chromeInsetTop-header-gap-footer)/2);
+    // The Compliance Express test profile docks its side panel on the left.
+    // Chrome's outer window includes that panel, while the page viewport and
+    // right rail begin after it. Account for the complete measured difference
+    // so the collector starts inside the rail. A right-docked panel can be
+    // tested explicitly without changing the ordinary connector layout.
+      const spareWidth=Math.max(0,bounds.width-viewportWidth);
+      const panelOnRight=new URL(origin.url).searchParams.get('collector_panel')==='right';
+      const viewportInset=panelOnRight?0:spareWidth;
+      diagnostic('duo-placement-source',job,displaySource);
+      return {...options,type:'popup',focused:true,state:'normal',width,height,
+        left:bounds.left+viewportInset+railLeft+inset,
+        top:bounds.top+chromeInsetTop+header+job.duoSlot*(height+gap)};
+    }
+    diagnostic('duo-layout-fallback',job,`viewport=${Number.isFinite(viewportWidth)?viewportWidth:'missing'} source=${bounds.width}x${bounds.height} slot=${job.duoSlot} cached=${Number.isFinite(job.trialDisplay?.viewportWidth)?job.trialDisplay.viewportWidth:'missing'}`);
+  }
   const columns=layout==='visible'?2:3;
   const width=Math.floor((bounds.width-8*(columns+1))/columns),height=Math.floor((bounds.height-24)/2);
   return {...options,focused:true,state:'normal',width,height,
@@ -129,15 +208,42 @@ async function registryCreateOwnedTab(job,url,origin) {
     try {job.nvSourceInitiallyMinimized=(await chrome.windows.get(origin.windowId)).state==='minimized';}
     catch {job.nvSourceInitiallyMinimized=false;}
   }
-  // Tennessee also needs its own visible document for Kendo modal transitions.
+  // Tennessee needs its own visible document for Kendo modal transitions.
+  // In the opt-in rail, Mississippi also needs a visible document: repeated
+  // no-match searches in a hidden source tab delay its Kendo grid watchdog.
   // The mature connector and unrelated trial states retain their existing path.
   if(P.TRIAL_ORIGIN && (['NV','NY','IL','NC'].includes(job.registryState)
-      || job.registryState==='TN'&&registryTrialLayout(origin)==='coordinated') && new URL(origin.url).origin===P.TRIAL_ORIGIN){
-    const window=await chrome.windows.create({url,...await registryTrialWindowOptions(job,origin)});
+      || job.registryState==='TN'&&['coordinated','duo'].includes(registryTrialLayout(origin))
+      || job.registryState==='MS'&&registryTrialLayout(origin)==='duo') && new URL(origin.url).origin===P.TRIAL_ORIGIN){
+    const placement=await registryTrialWindowOptions(job,origin);
+    const window=await chrome.windows.create({url,...placement});
     tab=window?.tabs?.[0];
     if(!Number.isInteger(tab?.id))throw new Error('NY_CONNECTOR_INCOMPLETE');
+    if(placement.type==='popup') {
+      // Chrome can enforce a minimum outer height and shift a lower popup.
+      // Recheck its actual rectangle and keep this owned window inside the
+      // measured rail without moving the source window or extending deadlines.
+      const right=placement.left+placement.width;
+      const bottom=placement.top+placement.height;
+      const left=Number.isFinite(window.width) && window.width<=placement.width
+        ? Math.min(Math.max(window.left,placement.left),right-window.width):window.left;
+      const top=Number.isFinite(window.height) && window.height<=placement.height+120
+        ? (job.duoSlot===1
+          ? Math.min(Math.max(window.top,placement.top-120),bottom-window.height)
+          : placement.top):window.top;
+      if((left!==window.left || top!==window.top) && !job.closed && Date.now()<job.activeExpiresAt)
+        try { await chrome.windows.update(window.id,{left,top}); }
+        catch { diagnostic('duo-placement-adjustment-refused',job,'browser kept the original owned window'); }
+      diagnostic('duo-window',job,`slot=${job.duoSlot} planned=${placement.left},${placement.top},${placement.width},${placement.height} actual=${window.left},${window.top},${window.width},${window.height} adjusted=${left},${top}`);
+      if(job.registryState==='NC')try {
+        const final=await chrome.windows.get(window.id);
+        diagnostic('nc-window-final',job,`slot=${job.duoSlot} source_window=${origin.windowId} planned=${placement.left},${placement.top},${placement.width},${placement.height} final=${final.left},${final.top},${final.width},${final.height}`);
+      }catch {diagnostic('nc-window-final',job,'owned window unavailable for final read');}
+    } else if(job.registryState==='NC') {
+      diagnostic('nc-window-fallback',job,`slot=${job.duoSlot} placement=${placement.left},${placement.top},${placement.width},${placement.height} actual=${window.left},${window.top},${window.width},${window.height}`);
+    }
   } else tab=await chrome.tabs.create({windowId:origin.windowId,url,active:false});
-  job.tab=tab.id;owned.add(tab.id);await saveRuntime();
+  job.tab=tab.id;owned.add(tab.id);stopOwnership.remember(job);await saveRuntime();
 }
 async function registryTennesseeOwnedWindow(tab,source) {
   if(!owned.has(tab.id) || tab.url!==registryStart('TN'))return false;
@@ -161,7 +267,7 @@ async function registryExposeReusedNyTab(job, origin) {
     if(siblings.length!==1 || siblings[0].id!==tab.id || !siblings[0].active
         || siblings[0].url!==tab.url || job.closed || Date.now()>=job.activeExpiresAt
         || job.tab!==tab.id || !owned.has(tab.id))return false;
-    const placement=layout==='coordinated'?await registryTrialWindowOptions(job,origin):{focused:true};
+    const placement=['coordinated','duo'].includes(layout)?await registryTrialWindowOptions(job,origin):{focused:true};
     if(!placement.focused)return false;
     const {type,...update}=placement;
     const latest=await chrome.tabs.get(tab.id);
@@ -177,7 +283,7 @@ async function registryNevadaVisibleSnapshot(job) {
   try {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
     let coordinatedPlacement=null;
-    if(tab.active && tab.windowId!==source.windowId && registryTrialLayout(source)==='coordinated') {
+    if(tab.active && tab.windowId!==source.windowId && ['coordinated','duo'].includes(registryTrialLayout(source))) {
       const planned=await registryTrialWindowOptions(job,source),actual=await chrome.windows.get(tab.windowId);
       // Chrome may clamp a small collector to its minimum window size. The
       // planned footprint is still valid for our isolated window; exact old
@@ -355,22 +461,19 @@ async function registryMessage(job, message) {
     return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,skipHistory:message.query?.operation==='detail' && !/^E\d{7,14}-\d$/.test(message.query.identifier)}:{})}, {frameId:0});
   };
   if(P.TRIAL_ORIGIN && job.registryState==='MS' && message.action==='registry-ms'
-      && message.query?.operation==='search' && Number.isFinite(message.budgetMs)) {
-    // A Kendo grid is evidence only after this signed search produces a new
-    // completed response. Under load both a fresh form and a reused form can
-    // leave the grid unchanged, while hidden-tab timers delay the page error.
-    // Bound that wait and use the same-query fresh-form recovery below.
-    const waitMs=Math.max(1,Math.min(message.requireFreshGrid?8000:12000,
-      message.budgetMs,job.activeExpiresAt-Date.now(),
-      (job.msDeadlineAt ?? job.activeExpiresAt)-Date.now()));
+      && message.requireFreshGrid===true && Number.isFinite(message.budgetMs)) {
+    // A reused Kendo grid is not evidence for a new query. Hidden-tab timers
+    // have taken 55s to report an absent response despite a 30s page budget.
+    // The worker can end this one wait early and use the existing same-query
+    // fresh-form recovery; neither old rows nor an extra name is accepted.
+    const waitMs=Math.max(1,Math.min(8000,message.budgetMs,job.activeExpiresAt-Date.now()));
     let timer;
     try {
       return await Promise.race([send(),new Promise(resolve=>{
         timer=setTimeout(()=>{
-          diagnostic('ms-grid-watchdog',job,`reuse=${message.requireFreshGrid===true} wait_ms=${waitMs}`);
+          diagnostic('ms-grid-watchdog',job,`reuse wait_ms=${waitMs}`);
           resolve({ok:false,reason:'NY_CONNECTOR_INCOMPLETE',
-            ms_diagnostic:{source_error:'REGISTRY_GRID_WATCHDOG',
-              reused_form:message.requireFreshGrid===true,wait_ms:waitMs}});
+            ms_diagnostic:{source_error:'REGISTRY_GRID_WATCHDOG',reused_form:true,wait_ms:waitMs}});
         },waitMs);
       })]);
     } finally {clearTimeout(timer);}
@@ -436,7 +539,7 @@ async function registryRestoreNevadaVisibility(job) {
 }
 async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null, nvRouteOnly = false) {
   if (nvRouteOnly && (job.registryState!=='NV' || oldDocument!==null
-      || path!==new URL(registryStart('NV')).pathname)) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+      || path!==new URL(registryStart('NV')).pathname)) throw registrySequenceError(job,null,'readiness-route-contract');
   const started = Date.now();
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
   let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false, resubmissionAcknowledged=false;
@@ -611,7 +714,7 @@ async function registryNorthCarolinaVisibility(job) {
 async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = false) {
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
   if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV')
-      || !(job.nvReturnRecoveryUsed || job.nvReservationDetail || job.nvModeRecoveryUsed))) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+      || !(job.nvReturnRecoveryUsed || job.nvReservationDetail || job.nvModeRecoveryUsed))) throw registrySequenceError(job,null,'navigation-recovery-contract');
     const navigationStarted=Date.now();
     const deadline=Math.min(job.activeExpiresAt,Date.now()+Math.max(1,Math.min(45000,budgetMs)));
     let previous;
@@ -660,11 +763,11 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
     if(P.TRIAL_ORIGIN && job.registryState==='MS')
       diagnostic('ms-tab-created',job,`ms=${Date.now()-navigationStarted}`);
   }
-    const ready=await registryReady(job,previous,new URL(url).pathname,
-      freshNvRecovery || job.registryState==='MS' ? Math.max(1,deadline-Date.now()) : budgetMs);
+    const ready=await registryReady(job,previous,new URL(url).pathname,freshNvRecovery?Math.max(1,deadline-Date.now()):budgetMs);
     if(P.TRIAL_ORIGIN && job.registryState==='MS')
       diagnostic('ms-page-ready',job,`ms=${Date.now()-navigationStarted} tab=${job.tab}`);
     return ready;
+
 }
 async function registryIllinoisVerification(job, collect) {
   // Preserve the verification document. Reloading here resets Illinois's
@@ -693,16 +796,27 @@ async function registryIllinoisVerification(job, collect) {
     } catch { /* A user may close or move either tab during collection. */ }
   }
 }
+function registryNvSequenceFailure(job, query, guard) {
+  const response={ok:false,reason:'NY_CONNECTOR_INVALID_SEQUENCE'};
+  if(P.TRIAL_ORIGIN && job?.registryState==='NV')response.nv_readiness={sequence:{
+    build:'enhancement-batch-ff-1',guard,active:isActive(job),pending:!!job.pending,
+    pending_matches_request:job.pending===job.command?.id,
+    pending_operation:['search','detail'].includes(job.command?.query?.operation)?job.command.query.operation:'none',
+    operation:['search','detail'].includes(query?.operation)?query.operation:'other',
+    valid_query:P.validQuery(query),state_matches:query?.state===job.registryState,
+    tab_present:Number.isInteger(job.tab),search_complete:job.finalFourSearchComplete===true,
+    identifier_kind:typeof query?.identifier!=='string'?'absent':/^NV\d+$/.test(query.identifier)?'business-id':/^E\d{7,14}-\d$/.test(query.identifier)?'entity-number':'other'
+  }};
+  return response;
+}
+function registrySequenceError(job, query, guard) {
+  const error=new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+  error.nvSequence=registryNvSequenceFailure(job,query,guard).nv_readiness;
+  return error;
+}
 async function performRegistryQuery(job, query) {
-  if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
+  if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw registrySequenceError(job,query,"registry-query-contract");
   if(query.state==='MS') {
-    // The public MS page can take nearly a minute to reload after a stalled
-    // Kendo query. Bound the complete state sequence, not each generated name
-    // separately; unfinished searches remain inconclusive.
-    job.msDeadlineAt ??= Math.min(job.activeExpiresAt,Date.now()+60000);
-    const remaining=()=>Math.min(job.activeExpiresAt,job.msDeadlineAt)-Date.now();
-    const allowance=max=>{if(remaining()<=0)throw new Error('NY_CONNECTOR_TIMEOUT');
-      return Math.max(1,Math.min(max,remaining()));};
     if(query.operation==='search') {
       // Reuse a completed search form within this owned trial job. The page
       // handler must see a new Kendo render after submission; its old grid is
@@ -712,30 +826,29 @@ async function performRegistryQuery(job, query) {
       const reuse=!!P.TRIAL_ORIGIN && job.msReusableForm===true && current?.url===registryStart('MS');
       const navigationStarted=Date.now();
       diagnostic('ms-navigation-start',job,reuse?'reuse ready form':'open fresh form');
-      if(reuse) await registryReady(job,null,new URL(registryStart('MS')).pathname,allowance(30000));
-      else await registryNavigate(job,registryStart('MS'),allowance(30000));
+      if(reuse) await registryReady(job,null,new URL(registryStart('MS')).pathname,
+        Math.min(30000,job.activeExpiresAt-Date.now()));
+      else await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
       diagnostic('ms-navigation-done',job,`reuse=${reuse} ms=${Date.now()-navigationStarted}`);
       job.msReusableForm=false;
       const started=Date.now();
       let result=await registryMessage(job,{action:'registry-ms',query,requireFreshGrid:reuse,
-        budgetMs:allowance(30000)});
+        budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
       diagnostic('ms-command',job,`reuse=${reuse} ms=${Date.now()-started} ${result?.ok?'complete':result?.reason||'incomplete'}`);
       if(P.TRIAL_ORIGIN && result?.ms_diagnostic)
         diagnostic('ms-page',job,JSON.stringify(result.ms_diagnostic));
-      if(!result?.ok && remaining()>20000 &&
-          (reuse || ['REGISTRY_GRID_WATCHDOG','REGISTRY_RESPONSE_INCOMPLETE']
-            .includes(result.ms_diagnostic?.source_error))) {
+      if(reuse && !result?.ok && job.activeExpiresAt-Date.now()>35000) {
         diagnostic('ms-fresh-recovery',job,'repeating identical signed query on new public form');
-        await registryNavigate(job,registryStart('MS'),allowance(10000));
+        await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
         result=await registryMessage(job,{action:'registry-ms',query,
-          budgetMs:allowance(10000)});
+          budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
       }
       job.msReusableForm=result?.ok===true;
       return result;
     }
     if(job.tab===null)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
     job.msReusableForm=false;
-    return registryMessage(job,{action:'registry-ms',query,budgetMs:allowance(20000)});
+    return registryMessage(job,{action:'registry-ms',query,budgetMs:Math.max(1,Math.min(20000,job.activeExpiresAt-Date.now()))});
   }
   if(query.state==='NM') {
     if(query.operation==='search') {
@@ -767,9 +880,9 @@ async function performRegistryQuery(job, query) {
         // owned tab, source origin and expiry are the security boundaries;
         // moving the caller to a dedicated validation window must not discard
         // the already verified public session.
-        if (owned.has(saved.id) && tab.url===registryStart('AL') && new URL(source.url).origin===P.TRIAL_ORIGIN && saved.expiresAt>Date.now()) job.tab=saved.id;
-        else await removeOwned(saved.id);
-      } catch { await removeOwned(saved.id); }
+        if (owned.has(saved.id) && tab.url===registryStart('AL') && new URL(source.url).origin===P.TRIAL_ORIGIN && saved.expiresAt>Date.now() && stopOwnership.canAdopt(job,saved.id)) {job.tab=saved.id;stopOwnership.remember(job);}
+        else if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);
+      } catch { if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id); }
       await saveRuntime();
     }
     if (job.tab===null) await registryNavigate(job,registryStart('AL'));
@@ -790,14 +903,14 @@ async function performRegistryQuery(job, query) {
         if(owned.has(saved.id) && saved.expiresAt>Date.now() && tab.url===registryStart('TN')
             && tab.windowId===saved.windowId && source.windowId===(saved.sourceWindowId??saved.windowId)
             && new URL(source.url).origin===P.TRIAL_ORIGIN
-            && await registryTennesseeOwnedWindow(tab,source)) {
-          job.tab=saved.id;job.finalFourReusableForm=true;
+            && await registryTennesseeOwnedWindow(tab,source) && stopOwnership.canAdopt(job,saved.id)) {
+          job.tab=saved.id;job.finalFourReusableForm=true;stopOwnership.remember(job);
           await registryExposeReusedNyTab(job,source);
           // Reuse page initialization only. tnSearch closes any old dialog,
           // clears observed rows and submits every new query afresh.
           diagnostic('tn-session-reuse',job,'initialized owned page; fresh query required');
-        } else await removeOwned(saved.id);
-      } catch {await removeOwned(saved.id);}
+        } else if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);
+      } catch {if(stopOwnership.canAdopt(job,saved.id))await removeOwned(saved.id);}
       await saveRuntime();
     }
     if (query.state==='NV' && job.nvReservationDetail) {
@@ -809,7 +922,7 @@ async function performRegistryQuery(job, query) {
       await registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true);
       job.nvReservationDetail=false;job.finalFourReusableForm=true;
       if (query.operation==='detail') {
-        if (!prior?.evidence?.complete) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+        if (!prior?.evidence?.complete) throw registrySequenceError(job,query,'reservation-prior-search');
         const restored=await registryMessage(job,{action:'registry-nv',query:prior.query,
           budgetMs:Math.max(1,Math.min(150000,job.activeExpiresAt-Date.now()))});
         if (!restored?.ok || restored.evidence?.complete!==true || !P.sameQuery(restored.evidence.query,prior.query)
@@ -846,7 +959,7 @@ async function performRegistryQuery(job, query) {
       } else if (job.tab === null || !job.finalFourReusableForm) await registryNavigate(job,registryStart(query.state));
       else await registryReady(job,null,new URL(registryStart(query.state)).pathname);
     } else if (job.tab === null || !job.finalFourSearchComplete) {
-      throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
+      throw registrySequenceError(job,query,"detail-without-search");
     }
     job.finalFourReusableForm = false;
     // A short reviewed alias can legitimately return thousands of entities.
@@ -956,13 +1069,20 @@ async function performRegistryQuery(job, query) {
   return registryGaSearch(job,query);
 }
 async function registryNorthCarolinaQuery(job,query) {
+  const started=Date.now();
+  const phase=stage=>diagnostic('nc-phase',job,`${query.operation}:${stage} total_ms=${Date.now()-started}`);
+  phase('start');
   if(query.operation==='search') {
     job.ncSubmissionObservations=[];job.ncSubmissionSignature=null;
     const prior=await registryNavigate(job,registryStart('NC'));
+    phase('navigate');
     const submitted=await registryMessage(job,{action:'registry-nc-form',query});
+    phase(`form-${submitted?.phase||submitted?.reason||'incomplete'}`);
     if(!submitted?.ok||submitted.phase!=='submitted')throw new Error('NY_CONNECTOR_INCOMPLETE');
     await registryReady(job,prior.documentId,'/online_services/search/Charities_Results',45000,query);
+    phase('results-ready');
     const result=await registryMessage(job,{action:'registry-nc-rows',query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
+    phase(`rows-${result?.ok?'complete':result?.reason||'incomplete'}`);
     if(result?.ok && result.evidence?.complete===true) {
       for(const entry of Array.isArray(result.diagnostics)?result.diagnostics.slice(0,1):[]) {
         if(entry?.phase==='pending-count' && [entry.displayed,entry.cards,entry.groups].every(n=>Number.isInteger(n)&&n>=0&&n<=100))
@@ -975,7 +1095,9 @@ async function registryNorthCarolinaQuery(job,query) {
   }
   if(job.ncProfiles?.[query.identifier]!==query.url)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
   await registryNavigate(job,query.url);
+  phase('profile-navigate');
   const profile=await registryMessage(job,{action:'registry-nc-profile',query});
+  phase(`profile-${profile?.ok?'complete':profile?.reason||'incomplete'}`);
   if(!profile?.ok)return profile;
   const expected=query.url.replace('/charities_profile/','/charities_filings/');
   if(profile.filings_url===expected) {
@@ -983,7 +1105,9 @@ async function registryNorthCarolinaQuery(job,query) {
     if(job.activeExpiresAt-Date.now()>5000) {
       try {
         await registryNavigate(job,expected,Math.min(8000,job.activeExpiresAt-Date.now()-1000));
+        phase('filings-navigate');
         const history=await registryMessage(job,{action:'registry-nc-filings',query});
+        phase(`filings-${history?.ok?'complete':history?.reason||'incomplete'}`);
         if(history?.ok)profile.evidence.filings=history.filings;
       } catch { /* Optional history cannot invalidate a complete profile. */ }
     }

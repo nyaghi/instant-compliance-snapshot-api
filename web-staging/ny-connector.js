@@ -31,7 +31,7 @@
     NY_CONNECTOR_INTERRUPTED: "The browser connection was interrupted. Retry the New York check when the connector is connected."
   }[reason] || "The New York connection could not be refreshed. Your other state results are unchanged.") +
     (Number.isFinite(retryAt) && retryAt > Date.now() ? ` You can refresh again at ${new Date(retryAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "");
-  function bridge(action, query, lookupId, onProgress, intent, signal) {
+  function bridge(action, query, lookupId, onProgress, intent, signal, onDispatch) {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
       const id = crypto.randomUUID().replaceAll("-", "");
@@ -42,7 +42,26 @@
       const timer = setTimeout(() => { waiting.delete(id); complete({ ok: false, reason: action === "ping" ? "NY_CONNECTOR_UNAVAILABLE" : action === "acquire" ? "NY_CONNECTOR_QUEUE_TIMEOUT" : "NY_CONNECTOR_TIMEOUT" }); }, duration);
       waiting.set(id, { resolve: complete, timer, onProgress });
       signal?.addEventListener('abort', abort, {once:true});
+      try{onDispatch?.();}catch(error){waiting.delete(id);clearTimeout(timer);signal?.removeEventListener('abort',abort);reject(error);return;}
       window.postMessage({ channel: "cc-ny-staging-v1", direction: "request", id, action, ...(query ? { query } : {}), ...(lookupId ? { lookup_id: lookupId } : {}), ...(intent ? { intent } : {}) }, ORIGIN);
+    });
+  }
+  const stopWaiting=new Map();
+  window.addEventListener('message',event=>{
+    const m=event.data;
+    if(event.source!==window||event.origin!==ORIGIN||m?.channel!=='cc-charity-stop-v1'||m.direction!=='response')return;
+    const task=stopWaiting.get(m.id);if(!task||task.lookupId!==m.lookup_id)return;
+    stopWaiting.delete(m.id);clearTimeout(task.timer);
+    if(m.ok!==true||m.capability!=='owned-stop-v1'||m.stop_build!==task.build||m.extension_id!==task.extensionId||m.receipt?.confirmed!==true||m.receipt.lookupId!==task.lookupId)
+      task.reject(new Error('Owned browser cleanup is unconfirmed.'));
+    else task.resolve(m.receipt);
+  });
+  function stopOwnedLookup(lookupId,extensionId,build) {
+    return new Promise((resolve,reject)=>{
+      const id=crypto.randomUUID().replaceAll('-','');
+      const timer=setTimeout(()=>{stopWaiting.delete(id);reject(new Error('Owned browser cleanup is unconfirmed.'));},30000);
+      stopWaiting.set(id,{lookupId,extensionId,build,resolve,reject,timer});
+      window.postMessage({channel:'cc-charity-stop-v1',direction:'request',action:'stop',id,lookup_id:lookupId},ORIGIN);
     });
   }
   async function setup() {
@@ -101,9 +120,10 @@
     lookupTail = pending.catch(() => {});
     return pending;
   }
-  async function performLookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, identity_review_token, purpose = "registration", state: registryState = "NY", signal }) {
+  async function performLookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, identity_review_token, purpose = "registration", state: registryState = "NY", signal, onOwnedLookup }) {
     signal?.throwIfAborted();
     const label = {NY:"New York",IL:"Illinois",GA:"Georgia"}[registryState];
+    const officeEvidence = registryState === "NY" && purpose === "registration" && arguments[0]?.mode !== "sales" ? window.CCIdentity?.officeEvidence?.() : "";
     if (!label) throw new Error("Unsupported browser registry");
     const supported = c => compatible(c) && (registryState === "NY" || c.capabilities?.includes("il-ga-public-dom-v1") && c.capabilities?.includes("il-ga-complete-search-v2") && c.capabilities?.includes("il-session-reuse-v1") && c.capabilities?.includes("il-large-pages-v1")) && (registryState !== "GA" || c.capabilities?.includes("ga-exempt-record-v1") && c.capabilities?.includes("ga-legacy-rows-v1")) && (registryState !== "IL" || c.capabilities?.includes("il-dom-events-v1"));
     if (refreshing) {
@@ -117,7 +137,7 @@
     const credentials = { email, admin_passcode, device_id };
     let checkToken = "";
     let lookupId = crypto.randomUUID().replaceAll("-", "");
-    let connected = false, recoveryUsed = false;
+    let connected = false, recoveryUsed = false, stopCleanup=null;
     async function api(fields, cleanup = false) {
       const timeout = AbortSignal.timeout(45000);
       const response = await fetch(API + "/api/ny-connector", {
@@ -135,15 +155,24 @@
       if (!connection.ok && connection.reason === "NY_CONNECTOR_UNAVAILABLE") {
         connection = await bridge("ping", null, null, null, null, signal);
       }
+      const exposeOwnedLookup=()=>{
+        if(typeof onOwnedLookup!=='function')return;
+        const id=lookupId,extensionId=connection.extension_id,build=connection.stop_build;
+        const stop=()=>{
+          if(!connection.capabilities?.includes('owned-stop-v1')||build!=='enhancement-batch-ff-1'||typeof extensionId!=='string'||!extensionId)throw new Error('Connector Stop capability is unavailable.');
+          return stopOwnedLookup(id,extensionId,build);
+        };
+        stopCleanup=stop;onOwnedLookup({lookupId:id,state:registryState,stop});
+      };
       let acquired = connection;
       if (supported(connection)) {
         connected = true;
         onProgress?.(`${label}: waiting for the browser connector. Other states can continue.`);
-        acquired = await bridge("acquire", null, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and keeping your place in the queue. Other states can continue.` : `${label}: waiting in the browser queue (position ${progress.position}). Other states can continue.`), registryState === "NY" ? null : registryState, signal);
+        acquired = await bridge("acquire", null, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and keeping your place in the queue. Other states can continue.` : `${label}: waiting in the browser queue (position ${progress.position}). Other states can continue.`), registryState === "NY" ? null : registryState, signal, exposeOwnedLookup);
       }
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
-      let state = await api({ action: "start", state: registryState, organization_name, ein, purpose, ...(identity_review_token ? {identity_review_token} : {}), recovery_protocol: "il-fresh-page-v1", ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
+      let state = await api({ action: "start", state: registryState, organization_name, ein, purpose, ...(officeEvidence ? {office_evidence:officeEvidence} : {}), ...(identity_review_token ? {identity_review_token} : {}), recovery_protocol: "il-fresh-page-v1", ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
       checkToken = state.check_token || "";
       if (!supported(connection) && state.phase === "search") {
         state = await api({ action: "fail", check_token: checkToken, reason: connection.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE" });
@@ -190,7 +219,7 @@
           // Queue admission for recovery also consumes the original budget.
           const recoverySignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(Math.max(1, lookupDeadline-Date.now()))]);
           try {
-            acquired = await bridge("acquire", null, lookupId, () => onProgress?.("Illinois: waiting to resume after verification recovery."), "IL", recoverySignal);
+            acquired = await bridge("acquire", null, lookupId, () => onProgress?.("Illinois: waiting to resume after verification recovery."), "IL", recoverySignal, exposeOwnedLookup);
           } catch (error) {
             signal?.throwIfAborted();
             state = await api({action:"fail",check_token:checkToken,reason:"NY_CONNECTOR_TIMEOUT"});
@@ -218,7 +247,13 @@
       if (state.phase !== "complete" || !state.result || state.result.state !== registryState) throw new Error(`${label} did not return a complete result.`);
       return state.result;
     } finally {
-      if (connected) await bridge("finish", null, lookupId);
+      if (connected) {
+        if(signal?.aborted&&stopCleanup) {
+          // Explicit owned cancellation must not first pass through ordinary
+          // finish, which can reuse a tab or optimistically acknowledge cleanup.
+          try {await stopCleanup();} catch {} // The coordinator retries and verifies.
+        } else await bridge("finish", null, lookupId);
+      }
       if (checkToken) api({ action: "cancel", check_token: checkToken }, true).catch(() => {});
       onProgress?.("");
       activeLookups--; if (refreshButton) refreshButton.disabled = !!refreshing || activeLookups > 0;

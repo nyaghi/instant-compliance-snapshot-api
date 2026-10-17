@@ -175,6 +175,22 @@
       }});
     }
     await changed(() => button.click());
+    // A new public Search retains the preceding query's page index.
+    // Restore page1 through its visible numbered control before collecting.
+    const beforeReset = text(grid.querySelector('.k-pager-info'));
+    const resetRange = beforeReset.match(/^(\d+)\s*-\s*\d+\s+of\s+([\d,]+)\s+items$/i);
+    if (resetRange && Number(resetRange[1]) > 1) {
+      const countBefore = Number(resetRange[2].replaceAll(',', ''));
+      if (countBefore > 1000) throw new Error('REGISTRY_RESULT_LIMIT');
+      const first = [...grid.querySelectorAll('.k-pager-numbers button')]
+        .find(el => visible(el) && text(el) === '1' && !el.disabled && el.getAttribute('aria-disabled') !== 'true');
+      if (!first) throw new Error('REGISTRY_PAGINATION_INCOMPLETE');
+      await changed(() => first.click());
+      const restored = text(grid.querySelector('.k-pager-info')).match(/^1\s*-\s*\d+\s+of\s+([\d,]+)\s+items$/i);
+      if (!restored) throw new Error('REGISTRY_PAGINATION_INCOMPLETE');
+      if (Number(restored[1].replaceAll(',', '')) !== countBefore) throw new Error('REGISTRY_TOTAL_CHANGED');
+    }
+
     // Use the registry's visible page-size menu to reduce long fallback scans.
     // This is the same public control a reviewer uses, not Kendo's data API.
     const initialInfo = text(grid.querySelector('.k-pager-info'));
@@ -990,7 +1006,10 @@
     // detail after the normal financial-table wait before calling it empty.
     if (!visible(dialog) || tnFields(selected)?.['CO Number']!==selected.identifier) return false;
     const tabs=[...dialog.querySelectorAll('#DetailsTabStrip > li > a')].map(text);
-    return tabs.length>0 && tabs.every(label=>/^Officers \(\d+\)$/.test(label));
+    if(tabs.length) return tabs.every(label=>/^Officers \(\d+\)$/.test(label));
+    const strip=dialog.querySelector('ul#DetailsTabStrip.k-panelbar[data-role="panelbar"][role="tree"]');
+    return !!strip && strip.children.length===0 && !text(strip)
+      && !dialog.querySelector('[aria-busy="true"],.k-loading-mask,.k-loading-image');
   }
   async function tnDetail(query,deadline) {
     if(query?.state!=='TN'||query.operation!=='detail'||!/^CO\d+$/.test(query.identifier)
@@ -1168,12 +1187,23 @@
     const count=/Records Found:\s*(\d+)\b/.exec(body),searched=/Words:\s*(Starting With|All Words|Exact)\s+Organization Name\s+(.+?)\s+Search Time\s/.exec(body);
     const expectedMode=query.search_mode==='ALL_WORDS'?'All Words':query.search_mode==='EXACT_MATCH'?'Exact':'Starting With';
     if(!count||!searched||searched[1]!==expectedMode||searched[2].toLocaleLowerCase()!==query.name.replace(/\s+/g,' ').trim().toLocaleLowerCase())throw new Error('REGISTRY_NC_QUERY_CHANGED');
-    const total=Number(count[1]),buttons=[...main.querySelectorAll('#resultsSection .usa-accordion__button')];
+    const total=Number(count[1]);
+    let buttons=[...main.querySelectorAll('#resultsSection .usa-accordion__button')];
     // A larger paginated result is incomplete until every displayed record can
     // be collected. Never infer zero from an absent or partially loaded card.
     if(total>100||buttons.length>100)throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
-    if(buttons.length<total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
-    const rows=[],seen=new Set();
+    const rows=[],seen=new Set(),visited=new Set();
+    const pageNumber=()=>{
+      const links=[...document.querySelectorAll('main .usa-pagination__button.usa-current')];
+      if(!links.length)return 1;
+      if(links.length!==1||!/^\d+$/.test(text(links[0])))throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+      return Number(text(links[0]));
+    };
+    let page=1;
+    for(let pass=0;pass<3;pass++) {
+      if(pageNumber()!==page||visited.has(page))throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+      visited.add(page);
+      const oldSignature=JSON.stringify(buttons.map(b=>text(b.querySelector('.searchHeader'))));
     for(const button of buttons) {
       if(Date.now()>=deadline)throw new Error('REGISTRY_NC_RESPONSE_TIMEOUT');
       const panel=document.getElementById(button.getAttribute('aria-controls'));
@@ -1222,6 +1252,23 @@
       fields.profile_url=new URL(links[0].getAttribute('href'),location.origin).href;
       seen.add(identity);rows.push(fields);
     }
+      if(rows.length>100)throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+      const next=document.querySelector('main #Page_a_'+(page+1));
+      if(!next)break;
+      if(pass===2||!visible(next)||next.getAttribute('href')!=='#'||next.getAttribute('aria-disabled')==='true')
+        throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+      buttons=await wait(()=>{
+        const current=document.querySelector('main'),value=text(current);
+        const newCount=/Records Found:\s*(\d+)\b/.exec(value),newSearch=/Words:\s*(Starting With|All Words|Exact)\s+Organization Name\s+(.+?)\s+Search Time\s/.exec(value);
+        if(!newCount||Number(newCount[1])!==total||!newSearch||newSearch[1]!==expectedMode
+          ||newSearch[2].toLocaleLowerCase()!==query.name.replace(/\s+/g,' ').trim().toLocaleLowerCase())throw new Error('REGISTRY_NC_QUERY_CHANGED');
+        const fresh=[...current.querySelectorAll('#resultsSection .usa-accordion__button')];
+        if(pageNumber()!==page+1||JSON.stringify(fresh.map(b=>text(b.querySelector('.searchHeader'))))===oldSignature)return null;
+        if(!fresh.length||fresh.length>100)throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+        return fresh;
+      },Math.max(1,deadline-Date.now()),{action:()=>next.click()});
+      page++;
+    }
     // NC's displayed count can group repeated pending applications by legal
     // name while rendering their distinct profile IDs as separate cards.
     // Retain every fully read card. Accept only this exact grouped-count
@@ -1252,7 +1299,7 @@
     // A completed EX profile explicitly labeled CSL Exempt can omit its
     // entire address block (observed EX009484). Preserve the absence; the
     // master still checks identity and may require a user match decision.
-    if(addresses.length===0&&/^EX\d+$/.test(query.identifier)&&fields.Status==='CSL Exempt') {
+    if(addresses.length===0&&(/^EX\d+$/.test(query.identifier)&&fields.Status==='CSL Exempt'||/^SL\d+$/.test(query.identifier)&&fields.Status==='Withdrawn')) {
       fields.Street=fields.City=fields.State=fields.Zip='';
     } else {
       if(addresses.length!==1)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
