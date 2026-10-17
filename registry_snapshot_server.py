@@ -7560,7 +7560,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         # it is not another reviewed identity that the master must search.
         generated = [name for name in generated if len(distinctive_match_tokens(name)) >= 2]
     if state == "NC" and trial_identity():
-        required, covering_names, nc_all_words_probes = nc_covering_query_plan(
+        required, covering_names, nc_all_words_probes, generated = nc_covering_query_plan(
             required, generated, nc_all_words_probes, org.organization_name)
         for probe, names in list(covering_names.items()):
             for name in list(names):
@@ -8797,12 +8797,19 @@ def licensed_compound_retrieval_names(name):
 
 
 def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
-    """Order already-planned covering probes; never discard identity targets.
+    """Plan precise covering probes; never discard reviewed identity targets.
 
     This is NC trial retrieval only. Coverage is still earned by a complete,
     query-bound response in the requested public mode in the caller. Public
     modes and literal common prefixes change retrieval, never identity.
     """
+    # A short reviewed brand must not accidentally permit a different alias's
+    # weak generated one-word fragment. Keep one-word probes only when that
+    # word represents the entire distinctive core of a reviewed identity.
+    generated = [probe for probe in generated
+        if len(re.findall(r'[A-Za-z0-9]+', probe)) != 1
+        or any(distinctive_match_tokens(probe) == distinctive_match_tokens(target)
+               for target in required)]
     planned = list(dict.fromkeys(required + generated))
     all_words_probes = dict(all_words_probes)
     shared_acronym_prefixes = set()
@@ -8837,6 +8844,13 @@ def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
         # A generated broad word must itself be distinctive and substantial;
         # never promote a generic article or short acronym to a broad search.
         words = re.findall(r"[A-Za-z0-9]+", probe)
+        if (probe not in required and mode(probe) == 'STARTS_WITH' and len(words) == 1
+                and any(target.casefold().startswith(probe.casefold())
+                        and len(distinctive_match_tokens(target)) > 1 for target in required)):
+            # Retain every distinctive word of a multiword reviewed identity.
+            # Removing only a generic entity suffix is different from reducing
+            # a specific two-word name to an unrelated one-word result grid.
+            return False
         return (probe in required or probe in shared_acronym_prefixes or mode(probe) == "ALL_WORDS"
                 or distinctive_match_tokens(probe)
                 and sum(target.casefold().startswith(probe.casefold()) for target in required) >= 2
@@ -8874,7 +8888,7 @@ def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
             probes.append(best)
         if best != name:
             coverage.setdefault(best, []).append(name)
-    return probes, coverage, all_words_probes
+    return probes, coverage, all_words_probes, generated
 
 
 def nc_reliable_match_complete(org, selected, records, review, unreviewed_scope,
