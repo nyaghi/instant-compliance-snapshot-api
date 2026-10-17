@@ -11055,6 +11055,7 @@ def sc_official_detail_lookup(org) -> object | None:
     rejected_ids = set()
     identity_unconfirmed = False
     unrelated_alias_excluded = False
+    filing_ein_conflict_excluded = False
     scope_candidates = {}
     for query in search_queries:
         if not query:
@@ -11137,6 +11138,8 @@ def sc_official_detail_lookup(org) -> object | None:
                     unrelated_alias_excluded = True
                 if not filing_ein and not unrelated_alias and not scope_review:
                     identity_unconfirmed = True
+                if filing_ein and filing_ein != canonical_ein_digits(org.ein):
+                    filing_ein_conflict_excluded = True
                 rejected_ids.add(str(best["id"]))
                 if filing_ein or not scope_review:
                     continue
@@ -11232,6 +11235,7 @@ def sc_official_detail_lookup(org) -> object | None:
         )
         result.source_note = "South Carolina search completed without a qualifying registration record for the organization."
         result._sc_unrelated_alias_excluded = unrelated_alias_excluded
+        result._sc_filing_ein_conflict_excluded = filing_ein_conflict_excluded
         return result
     return None
 
@@ -11247,7 +11251,8 @@ def search_sc_resilient(page, org, *, official_checked=False, official_result=No
     if official_result and public_status(official_result) != "Not Registered":
         return official_result
     if (official_result and getattr(official_result, "success", False)
-            and getattr(official_result, "_sc_unrelated_alias_excluded", False)):
+            and (getattr(official_result, "_sc_unrelated_alias_excluded", False)
+                 or getattr(official_result, "_sc_filing_ein_conflict_excluded", False))):
         # The complete official search already excluded this alias collision.
         # A weaker browser match must not re-admit the same unrelated record.
         return official_result
@@ -33411,7 +33416,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             sc_official_result.error = str(exc)
             sc_official_result.success = False
     if sc_official_result and (public_status(sc_official_result) != "Not Registered"
-            or (sc_official_result.success and getattr(sc_official_result, "_sc_unrelated_alias_excluded", False))):
+            or (sc_official_result.success and (getattr(sc_official_result, "_sc_unrelated_alias_excluded", False)
+                 or getattr(sc_official_result, "_sc_filing_ein_conflict_excluded", False)))):
         return response_data_for_lookup(sc_official_result, "", org, organization_name, ein, state, lookup_started)
 
     if state == "LA" and not capture_source_snapshot and weekly_asset("LA", "downloadable-data/LA.xlsx") is not None:
