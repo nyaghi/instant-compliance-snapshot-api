@@ -24871,12 +24871,13 @@ def lab_pa_completed_no_match(result, org) -> bool:
 
     The original delayed confirmation predates the completed-request guard.
     Only that guard can set this private proof; stale/failed/partial searches
-    and all Standard lookups retain their existing confirmation behavior.
+    retain their existing confirmation behavior. Standard reuses only this same request-bound proof.
     """
     return (APP_VERSION.endswith("-performance-lab")
             and performance_origin_enabled()
-            and os.environ.get("CE_LAB_PA_COMPLETED_ZERO_REUSE") == "1"
-            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+            and (LAB_LOOKUP_MODE_CONTEXT.get() == "standard"
+                 or (os.environ.get("CE_LAB_PA_COMPLETED_ZERO_REUSE") == "1"
+                     and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"))
             and bool(getattr(result, "success", False))
             and public_status(result) == "Not Registered"
             and getattr(result, "_cc_pa_completed_negative", None)
