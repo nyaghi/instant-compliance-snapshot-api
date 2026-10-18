@@ -25177,7 +25177,7 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
             count = counts[0].get("RESULTCOUNT") if isinstance(counts, list) and counts and isinstance(counts[0], dict) else None
             entry.update(row_count=len(rows) if isinstance(rows, list) else None, result_count=count)
             if (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
-                    or count is None or int(count) != len(rows) or len(rows) > 500):
+                    or count is None or int(count) != len(rows)):
                 raise ValueError("Pennsylvania returned an incomplete or truncated name response")
             entry.update(complete=True, row_count=len(rows), row_eins=[canonical_ein_digits(str(row.get("EIN") or "")) for row in rows])
             collected.extend(rows)

@@ -182,7 +182,7 @@ def final_four_asset(name, text):
       trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||""});
       onResult(result);''')
         replace('      connectorStarted=true;', '''      connectorStarted=true;
-      const tnFirst=mode==='standard'&&new URLSearchParams(location.search).get('collector_order')==='tn-first';
+      const tnFirst=mode==='standard';
       const dispatchOrder=tnFirst?[...external.filter(state=>state==='TN'),...external.filter(state=>state!=='TN')]:external;
       trace("browser collectors dispatched",{states:[...dispatchOrder],collector_order:tnFirst?'tn-first':'default'});''')
         replace('connector=Promise.all(external.map(async state=>{', 'connector=Promise.all(dispatchOrder.map(async state=>{')
