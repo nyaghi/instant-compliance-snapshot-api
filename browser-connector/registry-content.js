@@ -1231,22 +1231,26 @@
           (fields.Status==='In-Process'||/\bWithdrawn\b/i.test(fields.Status||'')||
            /^(?:expired license|denied)$/i.test((fields.Status||'').trim()))||
         fields['CSL Type']==='Charitable Organization'&&fields.Status==='In-Process');
+      const unsupportedDenied=!fields.License&&fields['CSL Type']==='Not Determined'&&fields.Status==='Denied';
+      const numberless=pending||unsupportedDenied;
+      if(unsupportedDenied&&(fields['Expiration Date']||fields['Extension End Date']))
+        throw new Error('REGISTRY_NC_CARD_CHANGED');
       const header=headerText.match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
-      const displayName=pending?headerText:header?.[1].trim();
+      const displayName=numberless?headerText:header?.[1].trim();
       const names=[...new Set([...legal,...other])];
-      if(!legal.length||names.length>32||(!pending&&(!header||header[2]!==fields.License))||!names.includes(displayName))
+      if(!legal.length||names.length>32||(!numberless&&(!header||header[2]!==fields.License))||!names.includes(displayName))
         throw new Error('REGISTRY_NC_CARD_CHANGED');
       fields['CSL Legal Name']=legal[0];fields.display_name=displayName;fields.aliases=names.filter(n=>n!==fields.display_name);
       const links=[...panel.querySelectorAll('a[href]')].filter(a=>/^\/online_services\/search\/charities_profile\/\d+$/.test(a.getAttribute('href')));
-      if(links.length!==1||!fields['CSL Legal Name']||!fields['CSL Type']||!fields.Status||(!pending&&!fields.License))throw new Error('REGISTRY_NC_CARD_CHANGED');
-      const identity=pending?links[0].getAttribute('href'):fields.License;
+      if(links.length!==1||!fields['CSL Legal Name']||!fields['CSL Type']||!fields.Status||(!numberless&&!fields.License))throw new Error('REGISTRY_NC_CARD_CHANGED');
+      const identity=numberless?links[0].getAttribute('href'):fields.License;
       if(seen.has(identity))throw new Error('REGISTRY_NC_CARD_CHANGED');
-      if(pending)fields.License='';
+      if(numberless)fields.License='';
       if(!Object.hasOwn(fields,'Expiration Date')) {
         // NC retains an EX/SL number on some explicitly In-Process cards.
         // Their absent expiration is not an incomplete ordinary license.
         const numberedPending=fields['CSL Type']==='In-Process'&&fields.Status==='In-Process'&&/^(SL|EX)\d+$/.test(fields.License||'');
-        if(!pending&&!numberedPending&&fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
+        if(!numberless&&!numberedPending&&fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
         fields['Expiration Date']='';
       }
       fields.profile_url=new URL(links[0].getAttribute('href'),location.origin).href;
@@ -1274,6 +1278,10 @@
     // Retain every fully read card. Accept only this exact grouped-count
     // reconciliation; missing cards, repeated licenses/profiles and arbitrary
     // count changes still fail. No pending application is silently discarded.
+    // This newly retained category has no observed pending-name grouping.
+    // Require the full displayed count; never earn coverage from a dropped row.
+    if(rows.some(row=>row['CSL Type']==='Not Determined')&&rows.length!==total)
+      throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
     const grouped=new Set(rows.map(row=>row.License||'pending:'+row['CSL Legal Name']));
     // The live Achieving search also groups a pending application with an
     // existing licensed card bearing the exact legal name. Reconcile only

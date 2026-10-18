@@ -6845,11 +6845,21 @@ def nc_charity_record_evidence(fields):
                   and (kind in {"Charitable Organization", "CSL Exempt Organization"}
                        or kind == "In-Process" and raw == "In-Process"))
     unsupported_scope = kind == "Sponsor Organization" and bool(re.fullmatch(r"SL\d+", identifier))
-    if not name or (not valid_kind and not unissued and not non_charity_scope and not unsupported_scope):
+    unsupported_denied = kind == "Not Determined" and raw == "Denied" and not identifier
+    if not name or (not valid_kind and not unissued and not non_charity_scope and not unsupported_scope and not unsupported_denied):
         raise ValueError("North Carolina result is not an identified charity license")
     url = urlparse(fields["profile_url"])
     if url.scheme != "https" or url.netloc != "www.sosnc.gov" or not re.fullmatch(r"/online_services/search/charities_profile/\d+", url.path) or url.query or url.fragment:
         raise ValueError("North Carolina profile link is not an official charity record")
+    if unsupported_denied:
+        # Preserve this complete source row for identity filtering only. A
+        # possibly matching unknown category retains the existing scope hold.
+        if fields["Expiration Date"].strip() or str(fields.get("Extension End Date") or "").strip():
+            raise ValueError("North Carolina unclassified denied row has conflicting license dates")
+        return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1],
+                    ein="", aliases=aliases, raw_status=raw, status="Unable to Confirm",
+                    url=fields["profile_url"], license_category=kind,
+                    unsupported_registration_scope=True)
     if unissued:
         # The public profile ID is an identity/deduplication key, never an
         # invented issued license number. Master matching still applies.
@@ -7786,7 +7796,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 # Full identity rejection above may discard an unrelated public
                 # sponsor row. A possible/exact sponsor cannot prove registration
                 # or non-registration and must retain the conservative hold.
-                raise ValueError("North Carolina matching sponsor category needs scope confirmation")
+                raise ValueError("North Carolina matching unsupported category needs scope confirmation")
             if (state == "NC" and row.get("unissued_application")
                     and (not trial_identity() or row.get("raw_status") != "In-Process")):
                 # Terminal applications retain their existing coverage rules.
