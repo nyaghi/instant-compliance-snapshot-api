@@ -28056,6 +28056,7 @@ def search_ky_strict_snapshot(org):
     best_score = (-1000, -1000, 0)
     tied_records = []
     near_rows = []
+    abbreviated_dba_rows = set()
     for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
         registry_norm = normalized_match_name(registry_name)
         registry_words = registry_norm.split()
@@ -28069,8 +28070,12 @@ def search_ky_strict_snapshot(org):
                               and reviewed_row.get("name") == registry_name)
         if reviewed_row and not user_confirmed_row:
             continue
-        if one_letter_gap and not user_confirmed_row:
+        abbreviated_dba_gap = (org.organization_name == original_name
+                               and ky_abbreviated_dba_review_candidate(org, registry_name))
+        if (one_letter_gap or abbreviated_dba_gap) and not user_confirmed_row:
             near_rows.append((registry_id, registry_name, filed_year, record_text))
+            if abbreviated_dba_gap:
+                abbreviated_dba_rows.add(registry_id)
         names = [registry_name] if user_confirmed_row else ky_registry_name_variants(registry_name)
         # Some legal-name cells contain an explicit DBA marker themselves.
         # Keep both stated identities; every segment still needs the guard below.
@@ -28109,7 +28114,8 @@ def search_ky_strict_snapshot(org):
         if near_rows and org.organization_name == original_name:
             result.status = "Needs Review"
             result.success = False
-            result.status_reason = "KY_SINGLE_LETTER_IDENTITY_REVIEW"
+            result.status_reason = ("KY_ABBREVIATED_DBA_IDENTITY_REVIEW" if abbreviated_dba_rows
+                                    else "KY_SINGLE_LETTER_IDENTITY_REVIEW")
             result.raw_status_text = "Kentucky returned a complete-name candidate differing by one letter."
             result.source_note = (
                 "Kentucky's downloadable list does not include an EIN for this row. "
@@ -28117,6 +28123,12 @@ def search_ky_strict_snapshot(org):
                 "and select Accept or Reject; CharityClarity will calculate status from the "
                 "same Kentucky filing row only after acceptance."
             )
+            if abbreviated_dba_rows:
+                result.raw_status_text = "Kentucky returned an acronym and abbreviated DBA candidate."
+                result.source_note = ("Kentucky lists a legal-name acronym matching an EIN-linked reviewed name "
+                    "and an abbreviated DBA matching the entered brand prefix. The source row has no EIN; "
+                    "these clues do not confirm identity. Review the record and select Accept or Reject. "
+                    "CharityClarity will calculate standing from the same source filing row only after acceptance.")
             result._cc_identity_review = {
                 "records": [{"name": name, "identifier": identifier, "ein": "",
                              "url": downloadable_data_info("KY").get("source_url", ""),
@@ -28740,7 +28752,8 @@ def search_snapshot_or_embedded_state(org, state: str):
                     review_context.get("ein") == canonical_ein_digits(getattr(org, "ein", ""))) else {}
                 user_confirmed_match = (accepted_row.get("name") == matched_name and
                     accepted_row.get("identifier") == getattr(result, "matched_registry_identifier", "") and
-                    any(ky_one_letter_review_candidate(target, matched_name) for target in original_targets))
+                    (any(ky_one_letter_review_candidate(target, matched_name) for target in original_targets)
+                     or ky_abbreviated_dba_review_candidate(org_with_name(org, original_name), matched_name)))
                 if matched_name and not user_confirmed_match and not ky_snapshot_registry_name_is_safe(matched_name, original_targets, original_name, getattr(org, "ein", "")):
                     best_result = checker.StateResult(original_name, getattr(org, "ein", ""), state, checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
                     best_result.raw_status_text = "Kentucky registry row matched a generated variant but not the requested organization"
@@ -35405,7 +35418,7 @@ def resolve_identity_review(payload, email, device):
             finally:
                 REVIEWED_NAME_CONTEXT.reset(names_token); USER_IDENTITY_CONTEXT.reset(token)
             if (data.get("matched_registry_identifier") != source_row["identifier"] or
-                    data.get("matched_registry_name") != source_row["name"]):
+                    data.get("matched_registry_name") not in {source_row["name"], useful_registry_name(source_row["name"])}):
                 data.update(status="Unable to Confirm", success=False,
                             matched_registry_name="", matched_registry_identifier="",
                             comments="The reviewed Kentucky row is no longer confirmed in the current snapshot. Rerun the state check.")
@@ -36037,3 +36050,36 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def ky_abbreviated_dba_review_candidate(org, registry_name):
+    """A source acronym plus a short stated DBA can warrant a choice only.
+
+    Require a long acronym of an EIN-linked reviewed legal name, and a literal
+    two-word brand prefix missing only common entity/charity suffixes. These
+    clues never establish identity or authorize a status without acceptance.
+    """
+    source = re.fullmatch(r"([A-Z][A-Z0-9]{4,11})\s+DBA\s+(.+)", registry_name.strip())
+    if not source:
+        return False
+    acronym, brand = source.groups()
+    brand_words = normalized_match_name(brand).split()
+    if len(brand_words) < 2 or len(set(brand_words)) < 2:
+        return False
+    target_words = normalized_match_name(org.organization_name).split()
+    tail = target_words[len(brand_words):]
+    if (target_words[:len(brand_words)] != brand_words or not 1 <= len(tail) <= 2
+            or not set(tail).issubset({"foundation", "fund", "childrens", "children", "inc", "incorporated"})):
+        return False
+    for legal in known_names_for_ein(org.ein):
+        if re.search(r"\bd\s*/?\s*b\s*/?\s*a\b", legal, re.I):
+            continue
+        words = re.findall(r"[A-Za-z0-9]+", legal.replace("'s", "s").replace("’s", "s"))
+        words = [w for w in words if w.casefold() not in {"the", "inc", "incorporated"}]
+        if len(words) < 5:
+            continue
+        initials = {"".join(w[0] for w in words).upper(),
+                    "".join(w[0] for w in words if w.casefold() != "and").upper()}
+        if acronym in initials:
+            return True
+    return False
