@@ -1728,8 +1728,17 @@
       }
       if (location.pathname === '/online_services/search/Charities_Results')
         return /Records Found:\s*\d+\b/.test(text(document.querySelector('main')));
-      if (/\/charities_profile\/\d+$/.test(location.pathname))
-        return /Registration\s*#\s*:\s*(SL|EX)\d+/.test(text(document.querySelector('main')));
+      if (/\/charities_profile\/\d+$/.test(location.pathname)) {
+        if (/Registration\s*#\s*:\s*(SL|EX)\d+/.test(text(document.querySelector('main')))) return true;
+        // An unissued In-Process application has no SL/EX number. Require
+        // the same complete public profile schema as collection; the master
+        // still binds the observed application to the requested identity.
+        if (document.readyState !== 'complete') return false;
+        try {
+          return ncProfile({state:'NC',operation:'detail',url:location.href,
+            identifier:'NCAPP-'+location.pathname.split('/').pop()}).ok===true;
+        } catch { return false; }
+      }
       if (/\/charities_filings\/\d+$/.test(location.pathname))
         return document.querySelectorAll('main article section.usa-section--singleEntry > ul').length===1;
       return false;
