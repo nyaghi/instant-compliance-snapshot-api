@@ -6840,7 +6840,8 @@ def nc_charity_record_evidence(fields):
     valid_kind = (re.fullmatch(r"(?:SL|EX)\d+", identifier)
                   and (kind in {"Charitable Organization", "CSL Exempt Organization"}
                        or kind == "In-Process" and raw == "In-Process"))
-    if not name or (not valid_kind and not unissued and not non_charity_scope):
+    unsupported_scope = kind == "Sponsor Organization" and bool(re.fullmatch(r"SL\d+", identifier))
+    if not name or (not valid_kind and not unissued and not non_charity_scope and not unsupported_scope):
         raise ValueError("North Carolina result is not an identified charity license")
     url = urlparse(fields["profile_url"])
     if url.scheme != "https" or url.netloc != "www.sosnc.gov" or not re.fullmatch(r"/online_services/search/charities_profile/\d+", url.path) or url.query or url.fragment:
@@ -6869,6 +6870,15 @@ def nc_charity_record_evidence(fields):
                     initial=None, renewal=None, street="", location="")
     expiration = final_four_source_date(fields["Expiration Date"], "North Carolina expiration")
     extension = final_four_source_date(fields.get("Extension End Date"), "North Carolina extension")
+    if unsupported_scope:
+        # Keep a well-formed public card for identity filtering only. This does
+        # not interpret a sponsor license as a 501(c)(3) charity registration.
+        # A potentially matching sponsor remains an incomplete lookup below.
+        if not raw or expiration is None:
+            raise ValueError("North Carolina sponsor result is incomplete")
+        return dict(name=name, identifier=identifier, ein="", aliases=aliases,
+                    raw_status=raw, status="Unable to Confirm", url=fields["profile_url"],
+                    license_category=kind, unsupported_registration_scope=True)
     if non_charity_scope:
         # The public charity search also returns consultant licenses. Validate
         # the full card before excluding its explicit category; a malformed or
@@ -7761,6 +7771,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                                              "entity_type": row["entity_type"]})
                 seen.add(row["identifier"])
                 continue
+            if state == "NC" and row.get("unsupported_registration_scope"):
+                # Full identity rejection above may discard an unrelated public
+                # sponsor row. A possible/exact sponsor cannot prove registration
+                # or non-registration and must retain the conservative hold.
+                raise ValueError("North Carolina matching sponsor category needs scope confirmation")
             if state == "NC" and row.get("unissued_application"):
                 # The master still confirms identity; Pending is an application,
                 # never an issued license and never a name-only first-row guess.
