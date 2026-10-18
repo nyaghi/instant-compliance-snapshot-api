@@ -31066,7 +31066,7 @@ def ar_completed_empty_identities(empty_queries, prefixes, planned_queries=()):
     return completed
 
 
-def search_ar_precise(page, org):
+def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observations=None):
     result = checker.StateResult(org.organization_name, org.ein, "AR", checker.STATUS_UNKNOWN, AR_SEARCH_URL)
     original_name = getattr(org, "organization_name", "") or ""
     variants = ar_preferred_name_variants(org)
@@ -31088,15 +31088,17 @@ def search_ar_precise(page, org):
     first_rejected_row = ""
     unconfirmed_name = ""
     scope_candidates = {}
-    reached = False
+    reached = bool(_completed_empty_queries)
     rows_seen = 0
-    explicit_no_results_seen = False
+    explicit_no_results_seen = bool(_completed_empty_queries)
     result_shell_without_rows = False
     deadline = time.perf_counter() + AR_NAME_SEARCH_MAX_SECONDS
     attempted_variants: list[str] = []
     planned_variants, empty_prefixes = ar_reviewed_search_plan(org, variants)
-    completed_variants = []
-    empty_variants = []
+    # Receipts are created only by this wrapper during the same organization check.
+    # Reuse only a complete, explicitly empty, exact-query-bound source response.
+    completed_variants = list(_completed_empty_queries or ())
+    empty_variants = list(_completed_empty_queries or ())
     required_identities = equivalent_name_queries(original_name, org.ein)
 
     # Arkansas searches literal text. Completing "Name, Inc." does not prove
@@ -31123,6 +31125,8 @@ def search_ar_precise(page, org):
             f"Arkansas completed name queries: {', '.join(completed_variants) or 'none'}."
         ]
 
+    if _completed_empty_queries:
+        record_progress()
     for variant in planned_variants:
         # Empty retrieval evidence is literal, not the more permissive name
         # identity normalization. "Institute Inc." cannot cover "Institute"
@@ -31141,8 +31145,13 @@ def search_ar_precise(page, org):
         record_progress()
         nav_timeout_ms = max(3000, min(12000, int(remaining * 1000)))
         settle_timeout_ms = max(1000, min(2500, int(remaining * 500)))
+        observed = {"query": variant}
+        observation_started = time.perf_counter()
+        if _query_observations is not None:
+            _query_observations.append(observed)
         try:
             page.goto(AR_SEARCH_URL, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+            observed["form_navigation_seconds"] = round(time.perf_counter() - observation_started, 6)
             if not ar_wait_for_search_form(page, nav_timeout_ms):
                 body = registry_page_body(page)
                 if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
@@ -31163,10 +31172,16 @@ def search_ar_precise(page, org):
                 return result
             page.locator('input[name="name"]').fill("")
             page.locator('input[name="name"]').fill(variant)
+            phase_started = time.perf_counter()
             page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=min(5000, nav_timeout_ms))
             page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
+            observed["submit_and_load_seconds"] = round(time.perf_counter() - phase_started, 6)
+            phase_started = time.perf_counter()
             safe_wait_for_network_idle(page, timeout=settle_timeout_ms)
+            observed["network_idle_wait_seconds"] = round(time.perf_counter() - phase_started, 6)
+            phase_started = time.perf_counter()
             page.wait_for_timeout(600)
+            observed["settle_wait_seconds"] = round(time.perf_counter() - phase_started, 6)
             body = registry_page_body(page)
             if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
                 result.status = "Site Not Reachable"
@@ -31190,6 +31205,9 @@ def search_ar_precise(page, org):
                 submitted = parse_qs(urlparse(str(page.url)).query).get("name", [])
                 if submitted == [variant]:
                     empty_variants.append(variant)
+                    if (_completed_empty_queries is not None
+                            and variant.casefold() not in {q.casefold() for q in _completed_empty_queries}):
+                        _completed_empty_queries.append(variant)
             record_progress()
             if parsed_rows:
                 rows_seen += len(parsed_rows)
@@ -31232,6 +31250,8 @@ def search_ar_precise(page, org):
         except Exception as exc:
             result.error = f"AR error: {exc}"
             continue
+        finally:
+            observed["total_seconds"] = round(time.perf_counter() - observation_started, 6)
 
     if not best:
         if scope_candidates:
@@ -31530,13 +31550,28 @@ def ar_high_signal_alias_retry_names(org) -> list[str]:
 
 
 def search_ar_name_variants_once(page, org):
-    result = search_ar_precise(page, org)
+    # This list never leaves this same-EIN invocation or survives another run.
+    completed_empty_queries = []
+    query_observations = []
+    def finish(value):
+        if APP_VERSION.endswith("-performance-lab"):
+            diagnostic = {"queries_submitted": len(query_observations),
+                "empty_receipts": len(completed_empty_queries),
+                "query_timings": query_observations[:32],
+                "query_timings_omitted": max(0, len(query_observations) - 32)}
+            value.source_attempts = list(getattr(value, "source_attempts", ()) or ()) + [
+                "Arkansas same-run query diagnostics: " + json.dumps(diagnostic, separators=(",", ":"))]
+        return value
+    result = search_ar_precise(page, org, _completed_empty_queries=completed_empty_queries,
+        _query_observations=query_observations if APP_VERSION.endswith("-performance-lab") else None)
     if public_status(result) != "Not Registered":
-        return result
+        return finish(result)
 
     original_name = getattr(org, "organization_name", "") or ""
     for retry_name in ar_high_signal_alias_retry_names(org):
-        retry_result = search_ar_precise(page, org_with_name(org, retry_name))
+        retry_result = search_ar_precise(page, org_with_name(org, retry_name),
+            _completed_empty_queries=completed_empty_queries,
+            _query_observations=query_observations if APP_VERSION.endswith("-performance-lab") else None)
         retry_status = public_status(retry_result)
         if retry_status in {"Site Not Reachable", "Not Registered", "Unknown"}:
             continue
@@ -31548,8 +31583,8 @@ def search_ar_name_variants_once(page, org):
             retry_result.source_note or "",
             f"Matched after retrying generated Arkansas high-signal alias: {retry_name}.",
         ]).strip()
-        return retry_result
-    return result
+        return finish(retry_result)
+    return finish(result)
 
 
 def lab_sales_ar_access_block_is_terminal(result) -> bool:
