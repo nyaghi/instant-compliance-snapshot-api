@@ -7640,16 +7640,17 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         if (state == "NC" and trial_identity() and index >= len(required)
                 and nc_redundant_broad_query(name, required, records)):
             continue
-        if state in {"AL", "NC", "NV"} and trial_identity() and index >= len(required) and records and not unreviewed_scope:
+        if state in {"AL", "NC", "NV", "TN"} and trial_identity() and index >= len(required) and records and not unreviewed_scope:
             # Every reviewed identity has now completed (or was covered by a
             # complete literal prefix). Generated probes retrieve a missing
             # record; they are not additional accepted identities. Preserve
             # the master's selection across all collected rows, including a
             # newer record under any reviewed alias, before ending the search.
             selected, review = select_licensed_charity(org, records, state, deadline)
-            if selected and not review and (state == "NV" or selected["status"] in {
+            if selected and not review and ((state == "TN" and selected["status"] in {
+                    "Current", "Upcoming Filing", "Exempt"}) or (state != "TN" and (state == "NV" or selected["status"] in {
                     "Current", "Upcoming Filing", "Exempt", "Pending", "Delinquent",
-                    "Closed / Withdrawn / Canceled", "Suspended", "Revoked", "Failed to Renew"}):
+                    "Closed / Withdrawn / Canceled", "Suspended", "Revoked", "Failed to Renew"}))):
                 break
         # Complete literal Starts With results contain every row of a longer
         # prefix. NC may reuse them for reviewed aliases as well as generated
@@ -7670,12 +7671,17 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 if state == "NV" and index < len(required):
                     covered_reviewed_names.append({"name": name, "completed_starts_with": covering})
                 continue
-        if state == "TN" and index >= len(required) and any(
-                prior.casefold() in name.casefold() for prior in completed_searches):
-            # The observed Tennessee Charity Name filter is case-insensitive
-            # literal Contains. Only a fully collected prior result set covers
-            # a generated longer spelling; all reviewed names remain required.
-            continue
+        if state == "TN" and (index >= len(required) or trial_identity()):
+            # TN's fixed public filter is literal Contains. A complete query
+            # collects every row of a longer spelling, including reviewed
+            # aliases. Retain every original identity target and audit which
+            # completed source query covered each omitted redundant request.
+            covering = next((prior for prior in completed_searches
+                             if prior.casefold() in name.casefold()), None)
+            if covering is not None:
+                if index < len(required):
+                    covered_reviewed_names.append({"name": name, "completed_contains": covering})
+                continue
         all_words_phrase = nc_all_words_probes.get(name)
         query = {"state": state, "operation": "search",
                  "name": all_words_phrase or name}
