@@ -1290,9 +1290,16 @@
   function ncProfile(query) {
     if(location.href!==query.url||!/^\/online_services\/search\/charities_profile\/\d+$/.test(location.pathname))throw new Error('REGISTRY_NC_PROFILE_CHANGED');
     const main=document.querySelector('main'),fields=ncLabeled(main,['Name','Status','Registration #','Expiration Date','Last Application Date','Extension End Date']);
-    if(!fields.Name||!fields.Status||fields['Registration #']!==query.identifier||!Object.hasOwn(fields,'Last Application Date'))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
+    const application=/^NCAPP-\d+$/.test(query.identifier||'')&&
+      query.url===location.origin+'/online_services/search/charities_profile/'+query.identifier.slice(6);
+    if(application) {
+      if(fields.Status!=='In-Process'||fields['Registration #']||fields['Expiration Date']||fields['Extension End Date'])
+        throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
+      fields['Registration #']='';
+    }
+    if(!fields.Name||!fields.Status||fields['Registration #']!==(application?'':query.identifier)||!Object.hasOwn(fields,'Last Application Date'))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
     if(!Object.hasOwn(fields,'Expiration Date')) {
-      if(!/^EX\d+$/.test(query.identifier))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
+      if(!application&&!/^EX\d+$/.test(query.identifier))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
       fields['Expiration Date']='';
     }
     const addresses=[...main.querySelectorAll('.para-small > .boldSpan')].filter(el=>text(el)==='Address');

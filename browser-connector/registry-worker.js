@@ -1089,7 +1089,13 @@ async function registryNorthCarolinaQuery(job,query) {
           diagnostic('nc-count',job,`Pending application cards retained: displayed=${entry.displayed}; cards=${entry.cards}; groups=${entry.groups}`);
       }
       job.ncProfiles ||= Object.create(null);
-      for(const row of result.evidence.rows||[])job.ncProfiles[row.License]=row.profile_url;
+      for(const row of result.evidence.rows||[]) {
+        const application=!row.License&&row.Status==='In-Process'
+          && ['In-Process','Charitable Organization'].includes(row['CSL Type'])
+          && /^https:\/\/www\.sosnc\.gov\/online_services\/search\/charities_profile\/\d+$/.test(row.profile_url||'');
+        const identifier=application?'NCAPP-'+row.profile_url.split('/').pop():row.License;
+        if(identifier)job.ncProfiles[identifier]=row.profile_url;
+      }
     }
     return result;
   }
@@ -1100,7 +1106,7 @@ async function registryNorthCarolinaQuery(job,query) {
   phase(`profile-${profile?.ok?'complete':profile?.reason||'incomplete'}`);
   if(!profile?.ok)return profile;
   const expected=query.url.replace('/charities_profile/','/charities_filings/');
-  if(profile.filings_url===expected) {
+  if(!/^NCAPP-\d+$/.test(query.identifier)&&profile.filings_url===expected) {
     profile.evidence.filings={url:expected,complete:false,rows:[]};
     if(job.activeExpiresAt-Date.now()>5000) {
       try {

@@ -47,8 +47,10 @@
       }
       if (value.state === "AL") return false;
       if (value.state === "NC") return value.operation === "detail" && keys === "identifier,operation,state,url"
-        && typeof value.identifier === "string" && /^(SL|EX)\d+$/.test(value.identifier) && typeof value.url === "string"
-        && /^https:\/\/www\.sosnc\.gov\/online_services\/search\/charities_profile\/\d+$/.test(value.url);
+        && typeof value.identifier === "string" && typeof value.url === "string"
+        && /^https:\/\/www\.sosnc\.gov\/online_services\/search\/charities_profile\/\d+$/.test(value.url)
+        && (/^(SL|EX)\d+$/.test(value.identifier) || !!TRIAL_ORIGIN && /^NCAPP-\d+$/.test(value.identifier)
+          && value.url==='https://www.sosnc.gov/online_services/search/charities_profile/'+value.identifier.slice(6));
       return value.operation === "detail" && keys === "identifier,operation,state" && typeof value.identifier === "string"
         && (value.state === "NV" ? /^(?:NV\d+|(?:NR|C)\d{8}-\d+)$/.test(value.identifier)
           || !!TRIAL_ORIGIN && /^E\d{7,14}-\d$/.test(value.identifier) : /^CO\d+$/.test(value.identifier));

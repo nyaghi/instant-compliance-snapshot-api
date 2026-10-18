@@ -6514,6 +6514,10 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                     probe = {"state": state, "orgName": prefix}
         try:
             found = evidence(probe)["rows"]
+        except NYConnectorQueryNeeded:
+            # The signed continuation must issue this probe before deciding
+            # whether it failed. A request for evidence is not a source error.
+            raise
         except Exception:
             if probe is query:
                 raise
@@ -6919,7 +6923,12 @@ def nc_charity_profile_evidence(card, profile, filings=None):
                 "Street", "City", "State", "Zip", "profile_url"}
     if not isinstance(profile, dict) or not required.issubset(profile) or not all(isinstance(profile[k], str) for k in required):
         raise ValueError("North Carolina profile is incomplete")
-    if (profile["profile_url"] != card["url"] or profile["Registration #"].strip() != card["identifier"]
+    application = (card.get("unissued_application") is True
+                   and card.get("raw_status") == "In-Process"
+                   and card.get("identifier") == "NCAPP-" + card["url"].rsplit("/", 1)[-1])
+    expected_number = "" if application else card["identifier"]
+    if (profile["profile_url"] != card["url"] or profile["Registration #"].strip() != expected_number
+            or application and profile["Status"] != "In-Process"
             or normalized_match_name(profile["Name"]) not in {normalized_match_name(n) for n in [card["name"], *card.get("aliases", [])]}):
         raise ValueError("North Carolina profile does not belong to the selected charity")
     result = nc_charity_record_evidence({"CSL Legal Name": profile["Name"], "CSL Type": card["license_category"],
@@ -6928,6 +6937,8 @@ def nc_charity_profile_evidence(card, profile, filings=None):
     result.update(street=profile["Street"].strip(), region=profile["State"].strip().upper(),
                   postal_code=profile["Zip"].strip(), location=", ".join(v.strip() for v in (profile["City"], profile["State"]) if v.strip()),
                   source_last_application=final_four_source_date(profile["Last Application Date"], "North Carolina application"))
+    if application:
+        result["_nc_application_profile_confirmed"] = True
     result["aliases"] = list(dict.fromkeys(n for n in [card["name"], *card.get("aliases", [])] if n != result["name"]))
     # The profile's Last Application can be an extension request. Only an
     # explicitly labeled Renewal Charity entry populates the renewal column.
@@ -7776,9 +7787,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 # sponsor row. A possible/exact sponsor cannot prove registration
                 # or non-registration and must retain the conservative hold.
                 raise ValueError("North Carolina matching sponsor category needs scope confirmation")
-            if state == "NC" and row.get("unissued_application"):
-                # The master still confirms identity; Pending is an application,
-                # never an issued license and never a name-only first-row guess.
+            if (state == "NC" and row.get("unissued_application")
+                    and (not trial_identity() or row.get("raw_status") != "In-Process")):
+                # Terminal applications retain their existing coverage rules.
                 records.append(row)
                 seen.add(row["identifier"])
                 continue
@@ -8343,7 +8354,16 @@ def final_four_clean_evidence(payload, query):
             if not isinstance(fields, dict) or not nv_entity_number_detail_allowed(query["identifier"],
                     fields.get("Entity Type"), fields.get("NV Business ID"), fields.get("Entity Number")):
                 raise ValueError("Unsupported Nevada entity-number detail")
-        if not isinstance(fields, dict) or set(fields) - allowed or fields.get(identity_key) != query.get("identifier"):
+        application_detail = (state == "NC"
+            and re.fullmatch(r"NCAPP-\d+", str(query.get("identifier", "")))
+            and isinstance(query.get("url"), str)
+            and query["url"] == "https://www.sosnc.gov/online_services/search/charities_profile/"
+                + query["identifier"].removeprefix("NCAPP-"))
+        expected_number = "" if application_detail else query.get("identifier")
+        if (not isinstance(fields, dict) or set(fields) - allowed or fields.get(identity_key) != expected_number
+                or application_detail and (fields.get("profile_url") != query["url"]
+                    or fields.get("Status") != "In-Process"
+                    or fields.get("Expiration Date") or fields.get("Extension End Date"))):
             raise ValueError("Unexpected or mismatched detail identity fields")
         if state == "TN" and "financial_history_absent" in fields:
             if (fields["financial_history_absent"] is not True or type(fields.get("financial_count")) is not int
@@ -8876,6 +8896,18 @@ def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
                for target in required)]
     planned = list(dict.fromkeys(required + generated))
     all_words_probes = dict(all_words_probes)
+    precise_prefixes = {}
+    for target, phrase in list(all_words_probes.items()):
+        words = re.findall(r"[A-Za-z0-9]+", phrase)
+        if any(word.casefold() in {"on", "of", "in", "to", "at", "by", "for", "the", "and"}
+               for word in words):
+            spans = list(re.finditer(r"[A-Za-z0-9]+", target))
+            if (len(spans) >= 2 and all(len(match.group()) >= 5 for match in spans[:2])
+                    and not licensed_compound_retrieval_names(target)):
+                prefix = target[:spans[1].end()]
+                precise_prefixes[target] = prefix
+                planned.append(prefix)
+                del all_words_probes[target]
     shared_acronym_prefixes = set()
     # A reviewed acronym can have both a full-name and suffixed spelling,
     # e.g. ABCD Foundation / ABCDF. A literal shared prefix retrieves both.
@@ -8947,7 +8979,7 @@ def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
         if name == required[0] and primary_legal:
             candidates = [probe for probe in candidates if covers(probe, primary_legal)]
         # Stable ties retain the existing query, including its positive path.
-        best = max([name, *candidates], key=score)
+        best = precise_prefixes.get(name) or max([name, *candidates], key=score)
         if best not in probes:
             probes.append(best)
         if best != name:
@@ -8960,8 +8992,9 @@ def nc_reliable_match_complete(org, selected, records, review, unreviewed_scope,
     """Stop NC name probing once complete source evidence confirms identity.
 
     Every row/detail of this search has already passed the ordinary master.
-    Adverse/pending standing is final only after known aliases are covered:
-    an older credential must not hide a newer registration under another name.
+    Adverse/alternate-name pending standing requires known-alias coverage.
+    A complete, office-corroborated primary In-Process application may finish
+    as Pending under the user's stop-on-reliable-primary policy.
     A name alone, an unresolved candidate, or unknown standing cannot finish.
     """
     if (unreviewed_scope or review or not selected
@@ -8971,7 +9004,17 @@ def nc_reliable_match_complete(org, selected, records, review, unreviewed_scope,
                 'Closed / Withdrawn / Canceled', 'Suspended', 'Revoked', 'Failed to Renew'}
             or any(row.get('_identity_outcome') == 'possible' for row in records)):
         return False
-    if (uncovered_reviewed_names
+    primary_application = (
+        selected.get('status') == 'Pending'
+        and selected.get('_nc_application_profile_confirmed') is True
+        and selected.get('unissued_application') is True
+        and selected.get('raw_status') == 'In-Process'
+        and normalized_match_name(selected['name']) == normalized_match_name(org.organization_name)
+        and selected.get('source_last_application') is not None
+        and selected['source_last_application'] <= date.today()
+        and selected.get('street') and selected.get('location')
+        and selected.get('address_evidence', {}).get('decision') == 'corroborated')
+    if (uncovered_reviewed_names and not primary_application
             and selected.get('status') not in {'Current', 'Upcoming Filing', 'Exempt'}):
         return False
     observed_ein = canonical_ein_digits(selected.get('ein', ''))
