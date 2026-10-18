@@ -25130,8 +25130,10 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
         result = completion_guard(checker.search_pa(page, org))
     if public_status(result) != "Not Registered": return result
     url = "https://www.charities.pa.gov/#/page/searchCharities"
-    try: budget = max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "20")))
-    except (ValueError, TypeError): budget = 20.0
+    # One PA name fallback, with no more than 30 seconds of request budget.
+    # A completed negative is different from a request which did not finish.
+    try: budget = min(30.0, max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "30"))))
+    except (ValueError, TypeError): budget = 30.0
     deadline = time.monotonic() + budget
     attempts, attempted, collected = [], [], []
     for variant in pa_name_search_plan(org):
@@ -34891,7 +34893,7 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         attempts = max(attempts, 3)
     if state == "AK":
         attempts = max(attempts, 3)
-    if state in {"WA", "NY"}:
+    if state in {"WA", "NY", "PA"}:
         attempts = 1
     if state == "ME":
         attempts = 2
