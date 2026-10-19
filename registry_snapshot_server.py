@@ -384,6 +384,17 @@ def downloadable_data_info(state: str) -> dict:
         return {"usable": False, "state": state, "reason": "Missing or invalid weekly source manifest/assets"}
 
 
+def freshness_display_time(value: str) -> str:
+    """Display an aware retrieval timestamp in the user's reporting zone."""
+    try:
+        checked = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if checked.tzinfo is None:
+            return "unverified"
+        return checked.astimezone(ZoneInfo("America/New_York")).strftime("%B %d, %Y at %I:%M %p %Z")
+    except (ValueError, TypeError):
+        return "unverified"
+
+
 def weekly_asset(state: str, filename: str) -> Path | None:
     info = downloadable_data_info(state)
     if info.get("usable") and any(a["path"] == filename for a in info.get("assets", [])):
@@ -2793,8 +2804,11 @@ def identity_or_names(ein: str, deadline: float) -> dict:
     names = []
     if row and canonical_ein_digits(str(row.get("EIN") or "")) == ein:
         item = identity_candidate(row.get("Name"), "Oregon", "Registered name — weekly data",
-                                  "https://justice.oregon.gov/charities", str(info.get("downloaded_at") or info.get("source_date") or ""))
-        if item: names.append(item)
+                                  "https://justice.oregon.gov/charities", str(info.get("source_date") or ""))
+        if item:
+            item["evidence"][0]["downloaded_at"] = info.get("downloaded_at", "")
+            item["evidence"][0]["downloaded_at_display"] = freshness_display_time(info.get("downloaded_at", ""))
+            names.append(item)
     return {"names": names, "complete": True, "freshness": info}
 
 
@@ -6846,16 +6860,17 @@ def nc_charity_record_evidence(fields):
                        or kind == "In-Process" and raw == "In-Process"))
     unsupported_scope = kind == "Sponsor Organization" and bool(re.fullmatch(r"SL\d+", identifier))
     unsupported_denied = kind == "Not Determined" and raw == "Denied" and not identifier
-    if not name or (not valid_kind and not unissued and not non_charity_scope and not unsupported_scope and not unsupported_denied):
+    unsupported_inactive = kind == "In-Process" and raw == "Expired Inactive" and not identifier
+    if not name or (not valid_kind and not unissued and not non_charity_scope and not unsupported_scope and not unsupported_denied and not unsupported_inactive):
         raise ValueError("North Carolina result is not an identified charity license")
     url = urlparse(fields["profile_url"])
     if url.scheme != "https" or url.netloc != "www.sosnc.gov" or not re.fullmatch(r"/online_services/search/charities_profile/\d+", url.path) or url.query or url.fragment:
         raise ValueError("North Carolina profile link is not an official charity record")
-    if unsupported_denied:
+    if unsupported_denied or unsupported_inactive:
         # Preserve this complete source row for identity filtering only. A
         # possibly matching unknown category retains the existing scope hold.
         if fields["Expiration Date"].strip() or str(fields.get("Extension End Date") or "").strip():
-            raise ValueError("North Carolina unclassified denied row has conflicting license dates")
+            raise ValueError("North Carolina unissued review row has conflicting license dates")
         return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1],
                     ein="", aliases=aliases, raw_status=raw, status="Unable to Confirm",
                     url=fields["profile_url"], license_category=kind,
@@ -9351,6 +9366,13 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
 def licensed_charity_identity(org, row, state, deadline):
     """Shared master name/EIN and cross-state office checks; never address-only."""
     names = [row["name"], *row.get("aliases", [])]
+    # DC relocates the definite article to a terminal parenthesis. Keep its
+    # source label intact and retain all ordinary EIN/address safeguards.
+    if state == "DC":
+        names += [re.sub(r"\s+\(THE\)\s*$", "", name, flags=re.I)
+                  for name in names if re.search(r"\s+\(THE\)\s*$", name, re.I)]
+        names += ["THE " + re.sub(r"\s+\(THE\)\s*$", "", name, flags=re.I)
+                  for name in names if re.search(r"\s+\(THE\)\s*$", name, re.I)]
     if user_rejected_credential(org.ein, state, row.get("identifier", "")):
         row["match"] = {"decision": "rejected", "score": 0, "reason": "USER_REJECTED_IDENTITY"}
         return "rejected"
@@ -11367,6 +11389,11 @@ def sc_official_detail_lookup(org) -> object | None:
         include_name_segments=True,
         max_queries=18,
     )
+    # Prefer the existing full primary-name query without its legal suffix
+    # before a historical alias; retain the query set, allowance and guards.
+    literal_primary = {q.casefold() for q in literal_name_retrieval_forms(original_name)[:1]}
+    search_queries = ([q for q in search_queries if q.casefold() in literal_primary]
+                      + [q for q in search_queries if q.casefold() not in literal_primary])
     last_html = ""
     transport_errors = 0
     lookup_incomplete = False
@@ -13204,6 +13231,11 @@ def classify_nm_status_history(raw_status: str) -> str:
 
 
 def classify_or_latest_report_status(raw_status: str) -> str:
+    if re.search(r"\bStatus\s*:\s*(?:Suspended|Revoked|Withdrawn|Closed|Exempt)\s*(?:\||$)", raw_status or "", re.I):
+        return ""  # Explicit standing is not overridden by a filing calculation.
+    next_due = or_completed_report_next_due(raw_status)
+    if next_due:
+        return status_from_calendar_date(next_due)
     due_date = or_latest_report_base_due_date(raw_status)
     if due_date:
         return status_from_calendar_date(due_date)
@@ -13216,6 +13248,22 @@ def classify_or_latest_report_status(raw_status: str) -> str:
     if year_values and max(year_values) <= date.today().year - 2:
         return checker.STATUS_DELINQUENT
     return ""
+
+
+def or_completed_report_next_due(raw_status: str) -> date | None:
+    """The legacy live reader's filed-period evidence concerns the next cycle."""
+    raw = re.sub(r"\s+", " ", raw_status or "").strip()
+    if not re.search(r"\bStatus\s*:\s*Registered\s*(?:\||$)", raw, re.I):
+        return None
+    if not re.search(r"\bLatest\s+Report\s+Year\s*:\s*20\d{2}\b", raw, re.I):
+        return None
+    end = re.search(r"\bFiscal\s+Year\s+End\s*:\s*([0-9/]+)", raw, re.I)
+    due = re.search(r"\bNext\s+Due\s*:\s*([0-9/]+)", raw, re.I)
+    period_end = parse_due_date(end[1]) if end else None
+    next_due = parse_due_date(due[1]) if due else None
+    if period_end and period_end <= date.today() and next_due == or_next_due_from_period_end(period_end):
+        return next_due
+    return None
 
 
 def or_latest_report_base_due_date(raw_status: str) -> date | None:
@@ -13250,7 +13298,7 @@ def copy_external_result(org, state: str, external_result):
         or_status = classify_or_latest_report_status(raw_status)
         if or_status:
             status = or_status
-            base_due = or_latest_report_base_due_date(raw_status)
+            base_due = None if or_completed_report_next_due(raw_status) else or_latest_report_base_due_date(raw_status)
             if base_due and "Base Due from Latest Report Period" not in raw_status:
                 raw_status = f"{raw_status} | Base Due from Latest Report Period: {format_date(base_due)}"
     if state_upper == "MI":
@@ -13279,6 +13327,13 @@ def copy_external_result(org, state: str, external_result):
     )
     result.raw_status_text = raw_status
     result.source_note = getattr(external_result, "source_note", "") or ""
+    if state_upper == "OR" and or_completed_report_next_due(raw_status):
+        result.computed_due_date = format_date(or_completed_report_next_due(raw_status))
+        result.status_reason = "OR_STATUS_FROM_COMPLETED_LIVE_REPORT"
+        result.source_note = (
+            "Oregon's live filing history lists a completed fiscal report. "
+            f"The next annual filing is due {result.computed_due_date}; CharityClarity reports {status}."
+        )
     matched_registry_name = (
         getattr(external_result, "matched_registry_name", "")
         or getattr(external_result, "matched_name", "")
@@ -27799,8 +27854,10 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if context.get("due_date") and context.get("due_date") == context.get("extended_due_date") and context.get("base_due_date"):
             comment += (f" Automatic extension applied: {format_date(context['base_due_date'])} → "
                         f"{format_date(context['extended_due_date'])}, through the 15th day of the 11th month after fiscal year end, for the current registration.")
-    if source_state == "OR" and getattr(result, "status_reason", "") in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_EXPLICIT_STATUS"}:
-        return comment
+    if source_state == "OR" and getattr(result, "status_reason", "") in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_EXPLICIT_STATUS", "OR_STATUS_FROM_COMPLETED_LIVE_REPORT"}:
+        checked = getattr(result, "checked_at_epoch", None) or time.time()
+        stamp = datetime.fromtimestamp(checked, ZoneInfo("UTC")).isoformat()
+        return comment + " Live Oregon record checked: " + freshness_display_time(stamp) + "."
     if source_state == "OK":
         freshness = re.search(r"Certificate freshness note:.*", getattr(result, "source_note", "") or "")
         if freshness and freshness.group(0) not in comment:
@@ -27809,7 +27866,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     if source_state in {"KS", "KY", "LA", "NH", "OR"}:
         info = downloadable_data_info(source_state)
         footer = (
-            f"Data freshness note: Scheduled {source_state} dataset last downloaded: {info.get('downloaded_at', 'unverified')}. "
+            f"Data freshness note: Scheduled {source_state} dataset last downloaded: {freshness_display_time(info.get('downloaded_at', ''))}. "
             f"State source date: {info.get('source_date') or 'not stated by source'}. "
             "Downloads may lag registry changes; confirm time-sensitive decisions directly with the state."
         )
@@ -30182,7 +30239,11 @@ def ok_choose_safe_result_row_on_page(page, org, module):
                 getattr(org, "original_organization_name", org.organization_name), registry_name):
             score = 450
         rank = (score, registry_exact_active_tiebreak(registry_name, safe_targets, registry_candidate_fields(row).get("status", "")))
-        if score >= 450:
+        name_history = ""
+        name_cells = row.locator("td")
+        if name_cells.count() >= 5:
+            name_history = name_cells.nth(4).inner_text(timeout=ok_action_timeout(org, 750))
+        if score >= 450 and not re.search(r"\b(?:Former|Inactive)\b", name_history, re.I):
             equivalent_records.append((registry_name, filing_number))
         if rank > best_rank:
             best_rank = rank
