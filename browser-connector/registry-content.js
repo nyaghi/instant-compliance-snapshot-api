@@ -1976,19 +1976,45 @@
     const inView=targets.every(el=>el.getBoundingClientRect().top>=viewportTop&&el.getBoundingClientRect().bottom<=viewportBottom);
     return {ok:snapshotDialog(m.query)===dialog&&inView};
   }
+  function snapshotNvVisibility(query) {
+    if(!NV||query?.state!=='NV'||query.operation!=='detail')return null;
+    try {
+      const business=nvFields(query.identifier),fields=business||nvReservationFields(query.identifier);
+      if(!fields)return {source_detail:false,source_fields_visible:false};
+      const title=business?'Entity Information':'Name Reservation Information';
+      const forms=[...document.querySelectorAll('[role="form"]')].filter(el=>[...el.querySelectorAll('h4')].some(h=>text(h)===title));
+      const panels=[...document.querySelectorAll('section.app-l-body')].filter(visible);
+      if(forms.length!==1||panels.length!==1)return {source_detail:false,source_fields_visible:false};
+      const wanted=business?['Entity Name','NV Business ID','Entity Status','Entity Type','FEIN','Solicits Charitable Contribution?','Annual Renewal Due Date/Expiration Date',...(/^E\d{7,14}-\d$/.test(query.identifier)?['Entity Number']:[])]:
+        ['Reserved Name','Entity Number','Status','Formation Date','Expiration Date'];
+      const cells=[];
+      for(const el of forms[0].querySelectorAll('h4,p')) {
+        if(el.tagName==='H4'&&text(el)==='Agent Information')break;
+        const label=el.querySelector('strong');
+        if(label&&wanted.includes(text(label)))cells.push(el,el.nextElementSibling);
+      }
+      const panel=panels[0].getBoundingClientRect(),top=Math.max(0,panel.top),bottom=Math.min(innerHeight,panel.bottom);
+      const full=cells.length===wanted.length*2&&cells.every(el=>{
+        if(!visible(el))return false;const r=el.getBoundingClientRect();
+        return r.top>=top&&r.bottom<=bottom&&r.left>=0&&r.right<=innerWidth;
+      });
+      return {source_detail:true,source_fields_visible:full};
+    }catch{return {source_detail:false,source_fields_visible:false};}
+  }
   function snapshotMetadata(query) {
     const dialog=snapshotDialog(query);
     const capture_views=dialog&&dialog.scrollHeight>dialog.clientHeight+1?['top',
       ...([...dialog.querySelectorAll('h4')].some(el=>/^Status:/.test(text(el)))?['expiration']:[]),
       ...(snapshotFinancialCell(dialog)?['financial']:[])]:null;
     return {url:location.href,public_text:(document.body?.innerText||'').slice(0,20000),
-      ...(TN&&query?.operation==='detail'?{source_detail:!!dialog}:{}),...(capture_views?{capture_views}:{})};
+      ...(TN&&query?.operation==='detail'?{source_detail:!!dialog}:{}),...(snapshotNvVisibility(query)||{}),...(capture_views?{capture_views}:{})};
   }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
     if(m.action==='registry-snapshot-metadata') {
-      if(m.settle===true&&TN) {
-        setTimeout(()=>reply(snapshotMetadata(m.query)),40);return true;
+      if(m.settle===true&&(TN||NV)) {
+        // Nevada's original panel has a 0.2s height transition after resize.
+        setTimeout(()=>reply(snapshotMetadata(m.query)),NV?220:40);return true;
       }
       reply(snapshotMetadata(m.query));return false;
     }

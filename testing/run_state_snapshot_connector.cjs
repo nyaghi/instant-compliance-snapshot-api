@@ -11,13 +11,13 @@ function fixture(changes={}) {
     registryOrigin:()=> 'https://www.sosnc.gov',
     chrome:{tabs:{get:async()=>({url:state.url}),sendMessage:async(_tab,message)=>{
       if(message.action==='registry-snapshot-view'){calls.push(['view:'+message.view,{tabId:_tab}]);state.view=message.view;if(state.viewError)return {ok:false};return {ok:true};}
-      return {url:state.url,public_text:state.text,source_detail:state.sourceDetail!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{})};}},
+      return {url:state.url,public_text:state.text,source_detail:state.sourceDetail!==false,source_fields_visible:state.sourceFieldsVisible!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{})};}},
       debugger:{attach:async target=>{calls.push(['attach',target]);if(state.attachError)throw Error('refused');},
-        sendCommand:async(target,command)=>{calls.push([command,target]);if(state.throwCommand)throw Error('capture error');
+        sendCommand:async(target,command,params)=>{calls.push([command,target]);if(state.throwCommand)throw Error('capture error');
           if(state.mutate)job.generation++;
-          if(command==='Emulation.setDeviceMetricsOverride'){state.viewportWidth=1024;return {};}
-          if(command==='Emulation.clearDeviceMetricsOverride'){state.viewportWidth=640;return {};}
-          if(command==='Page.getLayoutMetrics')return {cssContentSize:{width:state.viewportWidth||1000,height:state.height||1200},cssLayoutViewport:{clientWidth:state.viewportWidth||640,clientHeight:400}};
+          if(command==='Emulation.setDeviceMetricsOverride'){state.viewportWidth=params.width;state.viewportHeight=params.height;return {};}
+          if(command==='Emulation.clearDeviceMetricsOverride'){state.viewportWidth=640;state.viewportHeight=400;return {};}
+          if(command==='Page.getLayoutMetrics')return {cssContentSize:{width:state.viewportWidth||1000,height:state.height||1200},cssLayoutViewport:{clientWidth:state.viewportWidth||640,clientHeight:state.viewportHeight||400}};
           if(state.captureHook)state.captureHook(job);
           return {data:state.imageData||(state.modal?{top:'AA==',expiration:'AQ==',financial:'Ag=='}[state.view]:'AA==')};},
         detach:async target=>calls.push(['detach',target])}}};
@@ -41,6 +41,22 @@ test('30 Tennessee modal captures preserve three actual views, restore scroll, r
     assert.equal(h.job.activeExpiresAt,expires);assert.equal(h.job.pending,'command123');assert.equal(h.job.snapshotCaptures,1);
     assert.deepEqual(h.calls.filter(c=>c[0].startsWith('view:')).map(c=>c[0]),['view:top','view:expiration','view:financial','view:restore']);
     assert.ok(h.calls.every(c=>c[1].tabId===1));assert.equal(h.calls.at(-1)[0],'detach');}
+});
+
+function nvFixture(options={}) {
+ const h=fixture({url:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=local',text:'LOCAL NV19951158753 Permanently Revoked',...options});
+ Object.assign(h.query,{state:'NV',identifier:'NV19951158753'});h.job.registryState='NV';h.ctx.registryOrigin=()=> 'https://orion.nv.gov';return h;
+}
+test('30 Nevada workflows require visible source fields, restore desktop viewport and preserve budget',async()=>{
+ const orgs=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/oct19-cohort.json'))).slice(0,30);
+ for(const org of orgs){const h=nvFixture({text:org.name+' NV19951158753'}),deadline=h.job.activeExpiresAt,out=await h.run();
+  assert.ok(out);assert.equal(h.job.activeExpiresAt,deadline);assert.equal(h.job.pending,'command123');assert.equal(h.job.snapshotCaptures,1);
+  assert.equal(h.state.viewportWidth,640);assert.equal(h.state.viewportHeight,400);assert.equal(h.job.snapshotViewportBusy,undefined);
+  assert.equal(h.calls.filter(c=>c[0]==='Emulation.setDeviceMetricsOverride').length,1);assert.equal(h.calls.at(-2)[0],'Emulation.clearDeviceMetricsOverride');assert.equal(h.calls.at(-1)[0],'detach');}
+});
+test('Nevada rejects missing identity and clipped fields while ordinary search never overrides viewport',async()=>{
+ for(const option of [{sourceDetail:false},{sourceFieldsVisible:false}]){const h=nvFixture(option);assert.equal(await h.run(),null);assert.ok(!h.calls.some(c=>c[0]==='Page.captureScreenshot'));}
+ const h=nvFixture({sourceDetail:false,sourceFieldsVisible:false});h.query.operation='search';assert.ok(await h.run());assert.ok(!h.calls.some(c=>c[0].startsWith('Emulation.')));
 });
 
 test('modal source failure is fail-soft and restores only its own source tab',async()=>{

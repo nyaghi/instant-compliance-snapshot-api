@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from deployment import state_snapshots as s
 from testing.test_state_snapshots import Snapshots,image,COHORT
-source=subprocess.check_output(['git','show','HEAD:deployment/state_snapshots.py'],cwd=ROOT,text=True,encoding='utf-8');node=next(x for x in ast.parse(source).body if isinstance(x,ast.FunctionDef) and x.name=='matching_reference');scope=dict(s.__dict__);exec(compile(ast.Module(body=[node],type_ignores=[]),'<GC-snapshot-selector>','exec'),scope);BASELINE=scope['matching_reference']
+source=subprocess.check_output(['git','show','c511aede52579f0e82b953e113fd7165d918205f:deployment/state_snapshots.py'],cwd=ROOT,text=True,encoding='utf-8');node=next(x for x in ast.parse(source).body if isinstance(x,ast.FunctionDef) and x.name=='matching_reference');scope=dict(s.__dict__);exec(compile(ast.Module(body=[node],type_ignores=[]),'<GC-snapshot-selector>','exec'),scope);BASELINE=scope['matching_reference']
 class References(Snapshots):
  def test_thirty_real_archive_continuations_keep_detail_after_later_search(self):
   for org in COHORT:

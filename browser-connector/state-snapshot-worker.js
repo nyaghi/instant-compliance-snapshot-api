@@ -1,4 +1,4 @@
-/* Capture only an admitted connector-owned public source tab. Tennessee may
+/* Capture only an admitted connector-owned public source tab. Tennessee/Nevada may
    temporarily use its native desktop-responsive viewport; always restore it.
    No navigation, focus, verification, DOM/CSS rewriting or other-window capture. */
 async function captureStateSnapshot(job, query, commandId) {
@@ -20,16 +20,18 @@ async function captureStateSnapshot(job, query, commandId) {
       if(!alive() || meta?.url!==tab.url || typeof meta.public_text!=='string'
           || !meta.public_text.trim() || meta.public_text.length>20000
           || /verify you are human|user validation required|just a moment|access denied/i.test(meta.public_text))return null;
-      if(state==='TN'&&query.operation==='detail'&&meta.source_detail!==true)return null;
+      if(['TN','NV'].includes(state)&&query.operation==='detail'&&meta.source_detail!==true)return null;
       await chrome.debugger.attach({tabId},'1.3');attached=true;
       if(cancelled || !alive())return null;
       let layout=await chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics');
-      if(state==='TN'&&query.operation==='detail'&&layout.cssLayoutViewport?.clientWidth<800) {
+      const nvDesktop=state==='NV'&&query.operation==='detail'&&
+        (layout.cssLayoutViewport?.clientWidth<1280||layout.cssLayoutViewport?.clientHeight<1200);
+      if(nvDesktop||state==='TN'&&query.operation==='detail'&&layout.cssLayoutViewport?.clientWidth<800) {
         // The state's Kendo FinancialPeriod column has media:min-width 800px.
         // Ask Chrome to render that original desktop layout, not invented CSS.
         job.snapshotViewportBusy=true;desktopViewport=true;
         await chrome.debugger.sendCommand({tabId},'Emulation.setDeviceMetricsOverride',
-          {width:1024,height:900,deviceScaleFactor:0,mobile:false});
+          {width:nvDesktop?1280:1024,height:nvDesktop?1200:900,deviceScaleFactor:0,mobile:false});
         if(cancelled||!alive())return null;
         meta=await chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query,settle:true},{frameId:0});
         layout=await chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics');
@@ -38,6 +40,7 @@ async function captureStateSnapshot(job, query, commandId) {
           ||/verify you are human|user validation required|just a moment|access denied/i.test(meta.public_text))return null;
         if(meta.source_detail!==true)return null;
       }
+      if(state==='NV'&&query.operation==='detail'&&meta.source_fields_visible!==true)return null;
       const size=layout.cssContentSize;
       if(cancelled || !alive() || !size || size.width<=0 || size.height<=0
           || size.width*size.height>20000000)return null;
@@ -70,6 +73,7 @@ async function captureStateSnapshot(job, query, commandId) {
       if(cancelled || !alive() || after.url!==tab.url || !images.length
           || afterMeta?.url!==meta.url || afterMeta?.public_text!==meta.public_text
           || (state==='TN'&&query.operation==='detail'&&afterMeta.source_detail!==true)
+          || (state==='NV'&&query.operation==='detail'&&(afterMeta.source_detail!==true||afterMeta.source_fields_visible!==true))
           )return null;
       job.snapshotCaptures=(job.snapshotCaptures||0)+1;
       return {query:JSON.parse(JSON.stringify(query)),source_url:tab.url,public_text:meta.public_text,

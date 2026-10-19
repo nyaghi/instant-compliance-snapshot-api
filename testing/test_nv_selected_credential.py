@@ -6,7 +6,7 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 import registry_snapshot_server as c
 COHORT=json.loads((ROOT/'testing/fixtures/oct19-cohort.json').read_text())[:30]
-GC=subprocess.check_output(['git','show','HEAD:registry_snapshot_server.py'],cwd=ROOT,text=True,encoding='utf-8')
+GC=subprocess.check_output(['git','show','c511aede52579f0e82b953e113fd7165d918205f:registry_snapshot_server.py'],cwd=ROOT,text=True,encoding='utf-8')
 node=next(n for n in ast.parse(GC).body if isinstance(n,ast.FunctionDef) and n.name=='resolve_identity_review')
 scope=dict(c.__dict__);exec(compile(ast.Module(body=[node],type_ignores=[]),'<exact-GC-resolver>','exec'),scope);BASELINE=scope['resolve_identity_review']
 class Selection(unittest.TestCase):

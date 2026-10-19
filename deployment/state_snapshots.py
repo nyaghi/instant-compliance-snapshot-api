@@ -363,8 +363,10 @@ def connector_archive(record,payload,query,evidence):
                 name=next((str(value[k]) for k in ('Name','CSL Legal Name','Entity Name','Organization Name','Business Name','orgName','name','full_name') if value.get(k)), '')
                 ident=next((str(value[k]) for k in ('identifier','License','License/Registration#','Registration/License#','Registration #','CO Number','NV Business ID','orgID','license_no') if value.get(k)), '')
                 if name:rows.append((ident,name))
-                for item in value.values():
-                    if isinstance(item,(dict,list)):walk(item)
+                for field,item in value.items():
+                    # Request query names are not registry rows. In particular,
+                    # they must not hide an explicit completed empty receipt.
+                    if field!='query' and isinstance(item,(dict,list)):walk(item)
         walk(evidence)
         if record['state']=='AL' and isinstance(evidence,dict):
             headers=evidence.get('headers',[])
