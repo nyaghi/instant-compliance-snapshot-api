@@ -1104,6 +1104,7 @@
         `;
 
         resultRows.appendChild(row);
+        window.CCIdentityReview?.renderEvidence(row.lastElementChild, result);
         window.CCIdentityReview?.render(row.lastElementChild, result,
           (candidateId, action) => reviewIdentity(result, candidateId, action), () => retryStateResult(result));
 

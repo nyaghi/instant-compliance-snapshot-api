@@ -13,7 +13,7 @@ import zipfile
 from deployment.lab_identity import PROTECTED_ORIGINS
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ('protocol.js','worker.js','registry-worker.js','registry-content.js','registry-ga-main.js','staging-bridge.js','recovery.js','ny-main.js','ny-content.js')
+FILES = ('protocol.js','worker.js','registry-worker.js','registry-content.js','registry-ga-main.js','staging-bridge.js','recovery.js','ny-main.js','ny-content.js','state-snapshot-worker.js')
 MATCHES = [
     'https://secure.nmdoj.gov/CharitySearch/*',
     'https://ago.igovsolution.net/online/Lookups/Business.aspx*',

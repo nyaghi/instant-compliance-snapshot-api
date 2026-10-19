@@ -29,6 +29,9 @@
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return false;
+    if (message?.action === 'registry-snapshot-metadata') {
+      respond({url:location.href,public_text:(document.body?.innerText||'').slice(0,20000)});return false;
+    }
     if (message?.action === "ready") {
       const ready = !!document.querySelector("#ein") || /^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname);
       // Report only which public filters are populated, never their values or

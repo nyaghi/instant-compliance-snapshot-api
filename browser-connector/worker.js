@@ -1,4 +1,4 @@
-importScripts("protocol.js", "recovery.js", "registry-worker.js");
+importScripts("protocol.js", "recovery.js", "registry-worker.js", "state-snapshot-worker.js");
 const P = CCNYProtocol;
 // Public diagnostic correlation only; never a credential or authorization key.
 const nvHandoffWorkerTag=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
@@ -87,7 +87,8 @@ function collectNyDiagnostics(job, response) {
   if(P.TRIAL_ORIGIN && job.registryState === "NY")
     job.nyDiagnostics=P.nyDiagnostics([...(job.nyDiagnostics||[]),...P.nyDiagnostics(response?.ny_diagnostics)]);
 }
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : withoutSourcePixels(j.lastResponse), snapshotCaptures: j.snapshotCaptures || 0, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+function withoutSourcePixels(value) { if(!value)return value; const {state_snapshot,...rest}=value; return rest; }
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -602,6 +603,11 @@ async function performSearch(job, query, id) {
     diagnostic("lookup-error", job, /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : error.name);
     if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_FAILED" });
     response = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : "NY_CONNECTOR_INCOMPLETE", ...(error.nvSequence?{nv_readiness:error.nvSequence}:{}) };
+  }
+  if (job.closed) return;
+  if (response.ok && typeof captureStateSnapshot === 'function') {
+    const snapshot=await captureStateSnapshot(job,query,id);
+    if(snapshot)response.state_snapshot=snapshot;
   }
   if (job.closed) return;
   job.pending = null;

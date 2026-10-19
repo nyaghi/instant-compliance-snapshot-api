@@ -568,6 +568,11 @@ class Supervisor:
         # Failed commits keep their physical/source reservations for retry.
         ready=[(ident,r) for ident,r in self.active.items() if r.get('terminated')]
         if not ready:return
+        from deployment.state_snapshots import persist_worker_result
+        for ident,r in ready:
+            if not r.get('snapshots_archived'):
+                r['result']=persist_worker_result(self.queue,r['result'],r['job'])
+                r['snapshots_archived']=True
         completions=[(ident,r['job']['token'],r['result'],r['error']) for ident,r in ready]
         try:self.queue.complete_many(self.id,completions)
         except (ValueError, DataError):

@@ -213,7 +213,7 @@
           completed = {ok:false,reason:"NY_CONNECTOR_TIMEOUT"};
         }
         state = completed.ok
-          ? await api({ action: "advance", check_token: checkToken, query_id: state.query_id, evidence: completed.evidence })
+          ? await api({ action: "advance", check_token: checkToken, query_id: state.query_id, evidence: completed.evidence, state_snapshot: completed.state_snapshot })
           : await api({ action: "fail", check_token: checkToken, query_id: state.query_id, reason: completed.reason });
       }
       if (state.phase !== "complete" || !state.result || state.result.state !== registryState) throw new Error(`${label} did not return a complete result.`);

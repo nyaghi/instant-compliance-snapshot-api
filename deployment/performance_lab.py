@@ -344,6 +344,9 @@ def lab_asset(path):
 
 
 def build_handler(master, key, capacity=None, durable=None):
+    if durable is not None:
+        from deployment import state_snapshots
+        state_snapshots.STORE = state_snapshots.PostgresStore(durable.pool)
     lock = threading.Lock()
     telemetry = {'started_epoch': time.time(), 'active_requests': 0, 'peak_requests': 0, 'completed_requests': 0}
 
@@ -425,6 +428,10 @@ def build_handler(master, key, capacity=None, durable=None):
                 if include_body:self.wfile.write(body)
                 return
             if not self.authorized(): return
+            if self.path.startswith('/state-snapshots/'):
+                from deployment.state_snapshots import serve
+                serve(self,include_body)
+                return
             if (self.path == '/api/lab/trial-export' and os.environ.get('CE_FINAL_FOUR_TRIAL') == '1'
                     and trial_identity() and durable is not None):
                 # Authenticated evidence export before retiring this disposable

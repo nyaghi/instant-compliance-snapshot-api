@@ -1,0 +1,2342 @@
+[
+  {
+    "name": "National Parks Traveler",
+    "ein": "26-2378789",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "National Parks Traveler"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "National Parks Traveler",
+          "display_name": "National Parks Traveler",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "National Parks Traveler",
+    "ein": "26-2378789",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "National Parks Traveler"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "National Parks Traveler",
+          "display_name": "National Parks Traveler",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Language Connects Foundation",
+    "ein": "88-3775364",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Language Connects Foundation"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Language Connects Foundation",
+          "display_name": "Language Connects Foundation",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Language Connects Foundation",
+    "ein": "88-3775364",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Language Connects Foundation"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Language Connects Foundation",
+          "display_name": "Language Connects Foundation",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "College of William & Mary",
+    "ein": "54-6001718",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "College of William & Mary"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "College of William & Mary",
+          "display_name": "College of William & Mary",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "College of William & Mary",
+    "ein": "54-6001718",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "College of William & Mary"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "College of William & Mary",
+          "display_name": "College of William & Mary",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Achieving the Dream, Inc.",
+    "ein": "27-1635830",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Achieving the Dream, Inc."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Achieving the Dream, Inc.",
+          "display_name": "Achieving the Dream, Inc.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Achieving the Dream, Inc.",
+    "ein": "27-1635830",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Achieving the Dream, Inc."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Achieving the Dream, Inc.",
+          "display_name": "Achieving the Dream, Inc.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "United Animal Nations — RedRover",
+    "ein": "68-0124097",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "United Animal Nations — RedRover"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "United Animal Nations — RedRover",
+          "display_name": "United Animal Nations — RedRover",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "United Animal Nations — RedRover",
+    "ein": "68-0124097",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "United Animal Nations — RedRover"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "United Animal Nations — RedRover",
+          "display_name": "United Animal Nations — RedRover",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Better World Fund, Inc.",
+    "ein": "58-2366765",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Better World Fund, Inc."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Better World Fund, Inc.",
+          "display_name": "Better World Fund, Inc.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Better World Fund, Inc.",
+    "ein": "58-2366765",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Better World Fund, Inc."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Better World Fund, Inc.",
+          "display_name": "Better World Fund, Inc.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "YWCA USA, Inc",
+    "ein": "13-1624103",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "YWCA USA, Inc"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "YWCA USA, Inc",
+          "display_name": "YWCA USA, Inc",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "YWCA USA, Inc",
+    "ein": "13-1624103",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "YWCA USA, Inc"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "YWCA USA, Inc",
+          "display_name": "YWCA USA, Inc",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Partnership for Civil Justice Fund",
+    "ein": "26-2851211",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Partnership for Civil Justice Fund"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Partnership for Civil Justice Fund",
+          "display_name": "Partnership for Civil Justice Fund",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Partnership for Civil Justice Fund",
+    "ein": "26-2851211",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Partnership for Civil Justice Fund"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Partnership for Civil Justice Fund",
+          "display_name": "Partnership for Civil Justice Fund",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "NHL Foundation U.S.",
+    "ein": "13-3498589",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "NHL Foundation U.S."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "NHL Foundation U.S.",
+          "display_name": "NHL Foundation U.S.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "NHL Foundation U.S.",
+    "ein": "13-3498589",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "NHL Foundation U.S."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "NHL Foundation U.S.",
+          "display_name": "NHL Foundation U.S.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Planned Parenthood Minnesota, North Dakota, South Dakota",
+    "ein": "41-0948382",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Planned Parenthood Minnesota, North Dakota, South Dakota"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Planned Parenthood Minnesota, North Dakota, South Dakota",
+          "display_name": "Planned Parenthood Minnesota, North Dakota, South Dakota",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Planned Parenthood Minnesota, North Dakota, South Dakota",
+    "ein": "41-0948382",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Planned Parenthood Minnesota, North Dakota, South Dakota"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Planned Parenthood Minnesota, North Dakota, South Dakota",
+          "display_name": "Planned Parenthood Minnesota, North Dakota, South Dakota",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Research Data Access and Preservation Association",
+    "ein": "83-1435053",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Research Data Access and Preservation Association"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Research Data Access and Preservation Association",
+          "display_name": "Research Data Access and Preservation Association",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Research Data Access and Preservation Association",
+    "ein": "83-1435053",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Research Data Access and Preservation Association"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Research Data Access and Preservation Association",
+          "display_name": "Research Data Access and Preservation Association",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "WGU Corporation — Western Governors University",
+    "ein": "84-1383926",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "WGU Corporation — Western Governors University"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "WGU Corporation — Western Governors University",
+          "display_name": "WGU Corporation — Western Governors University",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "WGU Corporation — Western Governors University",
+    "ein": "84-1383926",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "WGU Corporation — Western Governors University"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "WGU Corporation — Western Governors University",
+          "display_name": "WGU Corporation — Western Governors University",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "American Indian/Alaska Native Tourism Association",
+    "ein": "45-0541654",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "American Indian/Alaska Native Tourism Association"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "American Indian/Alaska Native Tourism Association",
+          "display_name": "American Indian/Alaska Native Tourism Association",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "American Indian/Alaska Native Tourism Association",
+    "ein": "45-0541654",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "American Indian/Alaska Native Tourism Association"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "American Indian/Alaska Native Tourism Association",
+          "display_name": "American Indian/Alaska Native Tourism Association",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ASPEN Rhoads Research Foundation",
+    "ein": "65-1226034",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "ASPEN Rhoads Research Foundation"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "ASPEN Rhoads Research Foundation",
+          "display_name": "ASPEN Rhoads Research Foundation",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ASPEN Rhoads Research Foundation",
+    "ein": "65-1226034",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "ASPEN Rhoads Research Foundation"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "ASPEN Rhoads Research Foundation",
+          "display_name": "ASPEN Rhoads Research Foundation",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Joslin Diabetes Center",
+    "ein": "04-2203836",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Joslin Diabetes Center"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Joslin Diabetes Center",
+          "display_name": "Joslin Diabetes Center",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Joslin Diabetes Center",
+    "ein": "04-2203836",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Joslin Diabetes Center"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Joslin Diabetes Center",
+          "display_name": "Joslin Diabetes Center",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "RezilientKidz",
+    "ein": "45-2158585",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "RezilientKidz"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "RezilientKidz",
+          "display_name": "RezilientKidz",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "RezilientKidz",
+    "ein": "45-2158585",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "RezilientKidz"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "RezilientKidz",
+          "display_name": "RezilientKidz",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "RHF Charitable Foundation",
+    "ein": "47-2747112",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "RHF Charitable Foundation"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "RHF Charitable Foundation",
+          "display_name": "RHF Charitable Foundation",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "RHF Charitable Foundation",
+    "ein": "47-2747112",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "RHF Charitable Foundation"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "RHF Charitable Foundation",
+          "display_name": "RHF Charitable Foundation",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Association for the Advancement of Sustainability in Higher Education",
+    "ein": "22-3319874",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Association for the Advancement of Sustainability in Higher Education"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Association for the Advancement of Sustainability in Higher Education",
+          "display_name": "Association for the Advancement of Sustainability in Higher Education",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Association for the Advancement of Sustainability in Higher Education",
+    "ein": "22-3319874",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Association for the Advancement of Sustainability in Higher Education"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Association for the Advancement of Sustainability in Higher Education",
+          "display_name": "Association for the Advancement of Sustainability in Higher Education",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Brown Girls Do, Inc.",
+    "ein": "81-0945532",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Brown Girls Do, Inc."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Brown Girls Do, Inc.",
+          "display_name": "Brown Girls Do, Inc.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Brown Girls Do, Inc.",
+    "ein": "81-0945532",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Brown Girls Do, Inc."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Brown Girls Do, Inc.",
+          "display_name": "Brown Girls Do, Inc.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Consumer Advocates for Smoke-free Alternatives Association — CASAA",
+    "ein": "30-0580814",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Consumer Advocates for Smoke-free Alternatives Association — CASAA"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Consumer Advocates for Smoke-free Alternatives Association — CASAA",
+          "display_name": "Consumer Advocates for Smoke-free Alternatives Association — CASAA",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Consumer Advocates for Smoke-free Alternatives Association — CASAA",
+    "ein": "30-0580814",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Consumer Advocates for Smoke-free Alternatives Association — CASAA"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Consumer Advocates for Smoke-free Alternatives Association — CASAA",
+          "display_name": "Consumer Advocates for Smoke-free Alternatives Association — CASAA",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Cure Violence Global",
+    "ein": "82-3471223",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Cure Violence Global"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Cure Violence Global",
+          "display_name": "Cure Violence Global",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Cure Violence Global",
+    "ein": "82-3471223",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Cure Violence Global"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Cure Violence Global",
+          "display_name": "Cure Violence Global",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Seed Your Future",
+    "ein": "88-2593158",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Seed Your Future"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Seed Your Future",
+          "display_name": "Seed Your Future",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Seed Your Future",
+    "ein": "88-2593158",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Seed Your Future"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Seed Your Future",
+          "display_name": "Seed Your Future",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Sentient Media",
+    "ein": "83-0804345",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Sentient Media"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Sentient Media",
+          "display_name": "Sentient Media",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Sentient Media",
+    "ein": "83-0804345",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Sentient Media"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Sentient Media",
+          "display_name": "Sentient Media",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Service Year Exchange, Inc. — Service Year Alliance",
+    "ein": "47-4970343",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Service Year Exchange, Inc. — Service Year Alliance"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Service Year Exchange, Inc. — Service Year Alliance",
+          "display_name": "Service Year Exchange, Inc. — Service Year Alliance",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Service Year Exchange, Inc. — Service Year Alliance",
+    "ein": "47-4970343",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Service Year Exchange, Inc. — Service Year Alliance"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Service Year Exchange, Inc. — Service Year Alliance",
+          "display_name": "Service Year Exchange, Inc. — Service Year Alliance",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Sexually Abused Children’s Relief Endeavor — SACRED",
+    "ein": "27-0567085",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Sexually Abused Children’s Relief Endeavor — SACRED"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Sexually Abused Children’s Relief Endeavor — SACRED",
+          "display_name": "Sexually Abused Children’s Relief Endeavor — SACRED",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Sexually Abused Children’s Relief Endeavor — SACRED",
+    "ein": "27-0567085",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Sexually Abused Children’s Relief Endeavor — SACRED"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Sexually Abused Children’s Relief Endeavor — SACRED",
+          "display_name": "Sexually Abused Children’s Relief Endeavor — SACRED",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Society for Scholarly Publishing",
+    "ein": "52-1125072",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Society for Scholarly Publishing"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Society for Scholarly Publishing",
+          "display_name": "Society for Scholarly Publishing",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Society for Scholarly Publishing",
+    "ein": "52-1125072",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Society for Scholarly Publishing"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Society for Scholarly Publishing",
+          "display_name": "Society for Scholarly Publishing",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Solid Rock–Climbers for Christ",
+    "ein": "77-0229817",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Solid Rock–Climbers for Christ"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Solid Rock–Climbers for Christ",
+          "display_name": "Solid Rock–Climbers for Christ",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Solid Rock–Climbers for Christ",
+    "ein": "77-0229817",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Solid Rock–Climbers for Christ"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Solid Rock–Climbers for Christ",
+          "display_name": "Solid Rock–Climbers for Christ",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Stand for the Silent",
+    "ein": "45-2317929",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Stand for the Silent"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Stand for the Silent",
+          "display_name": "Stand for the Silent",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Stand for the Silent",
+    "ein": "45-2317929",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Stand for the Silent"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Stand for the Silent",
+          "display_name": "Stand for the Silent",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Start Small. Think Big.",
+    "ein": "27-1821066",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Start Small. Think Big."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Start Small. Think Big.",
+          "display_name": "Start Small. Think Big.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Start Small. Think Big.",
+    "ein": "27-1821066",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "Start Small. Think Big."
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "Start Small. Think Big.",
+          "display_name": "Start Small. Think Big.",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "The ERM Group Foundation",
+    "ein": "23-2792333",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "The ERM Group Foundation"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "The ERM Group Foundation",
+          "display_name": "The ERM Group Foundation",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  },
+  {
+    "name": "The ERM Group Foundation",
+    "ein": "23-2792333",
+    "evidence": {
+      "state": "NC",
+      "query": {
+        "state": "NC",
+        "operation": "search",
+        "name": "The ERM Group Foundation"
+      },
+      "complete": true,
+      "verification_pending": false,
+      "search_mode": "STARTS_WITH",
+      "total": 2,
+      "rows": [
+        {
+          "CSL Type": "In-Process",
+          "Status": "Expired Inactive",
+          "CSL Legal Name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "display_name": "William Paul-Stallings American Legion Auxiliary Unit #126",
+          "aliases": [],
+          "License": "",
+          "Expiration Date": "",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/101"
+        },
+        {
+          "CSL Type": "Charitable Organization",
+          "Status": "Current Active",
+          "License": "SL123456",
+          "Expiration Date": "7/31/2027",
+          "Extension End Date": "",
+          "CSL Legal Name": "The ERM Group Foundation",
+          "display_name": "The ERM Group Foundation",
+          "aliases": [],
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/102"
+        }
+      ]
+    }
+  }
+]

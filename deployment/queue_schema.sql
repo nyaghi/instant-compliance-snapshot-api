@@ -1,4 +1,11 @@
 -- Lab-only schema. One short transaction coordinates all API/worker replicas.
+-- Source archives are immutable and independent of short-lived browser sessions.
+-- They are not cleared when a workflow or candidate decision expires.
+CREATE TABLE IF NOT EXISTS cc_state_snapshots (
+ id text PRIMARY KEY CHECK (id ~ '^[a-f0-9]{64}$'),
+ metadata jsonb NOT NULL, source bytea NOT NULL CHECK (octet_length(source) BETWEEN 1 AND 3000000),
+ pdf bytea
+);
 CREATE TABLE IF NOT EXISTS cc_lab_settings (
  id integer PRIMARY KEY CHECK (id = 1),
  workflow_limit integer NOT NULL CHECK (workflow_limit BETWEEN 1 AND 20),

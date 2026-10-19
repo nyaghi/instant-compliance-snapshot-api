@@ -518,7 +518,8 @@ def execute(master, job, source_finished=None, trace_path=None):
     if trace: master.search_fl = trace.wrap(original)
     mode_context = getattr(master, 'LAB_LOOKUP_MODE_CONTEXT', None)
     mode_token = mode_context.set(p.get('mode', 'standard')) if mode_context is not None else None
-    with observe_fl_headers(master, trace), observe_transport(master, job['state'], trace_path) as transport_trace, observe_browser_transport(master, job['state'], trace_path) as browser_trace:
+    from deployment.state_snapshots import task_deadline
+    with task_deadline(job), observe_fl_headers(master, trace), observe_transport(master, job['state'], trace_path) as transport_trace, observe_browser_transport(master, job['state'], trace_path) as browser_trace:
         try:
             results = (master.run_sales_lookups_with_source_evidence(organizations, [job['state']], identity)
                        if identity is not None else master.run_state_lookups_parallel(organizations, [job['state']]))
@@ -535,6 +536,8 @@ def execute(master, job, source_finished=None, trace_path=None):
 
 
 def run_job(job, output, supervisor_pid=None, warmed=None):
+    import time
+    job={**job,'_deadline_monotonic':min(time.monotonic()+job['run_seconds'],job.get('_deadline_monotonic',float('inf')))}
     from deployment.performance_lab import validate_environment, install_http_egress_guard
     validate_environment(os.environ)
     install_http_egress_guard()

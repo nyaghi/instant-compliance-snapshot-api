@@ -384,6 +384,17 @@ def downloadable_data_info(state: str) -> dict:
         return {"usable": False, "state": state, "reason": "Missing or invalid weekly source manifest/assets"}
 
 
+def freshness_display_time(value: str) -> str:
+    """Display an aware retrieval timestamp in the user's reporting zone."""
+    try:
+        checked = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if checked.tzinfo is None:
+            return "unverified"
+        return checked.astimezone(ZoneInfo("America/New_York")).strftime("%B %d, %Y at %I:%M %p %Z")
+    except (ValueError, TypeError):
+        return "unverified"
+
+
 def weekly_asset(state: str, filename: str) -> Path | None:
     info = downloadable_data_info(state)
     if info.get("usable") and any(a["path"] == filename for a in info.get("assets", [])):
@@ -732,8 +743,11 @@ def launch_lookup_browser(playwright, **kwargs):
         browser = leased_browser(playwright, kwargs)
         if browser is not None:
             launch_lookup_browser.lab_reused = True
-            return browser
-    return playwright.chromium.launch(**kwargs)
+            from deployment.state_snapshots import CURRENT, BrowserCaptureProxy
+            return BrowserCaptureProxy(browser) if CURRENT.get() is not None else browser
+    browser = playwright.chromium.launch(**kwargs)
+    from deployment.state_snapshots import CURRENT, BrowserCaptureProxy
+    return BrowserCaptureProxy(browser) if CURRENT.get() is not None else browser
 
 
 def configure_browser_context(context) -> None:
@@ -2793,8 +2807,11 @@ def identity_or_names(ein: str, deadline: float) -> dict:
     names = []
     if row and canonical_ein_digits(str(row.get("EIN") or "")) == ein:
         item = identity_candidate(row.get("Name"), "Oregon", "Registered name — weekly data",
-                                  "https://justice.oregon.gov/charities", str(info.get("downloaded_at") or info.get("source_date") or ""))
-        if item: names.append(item)
+                                  "https://justice.oregon.gov/charities", str(info.get("source_date") or ""))
+        if item:
+            item["evidence"][0]["downloaded_at"] = info.get("downloaded_at", "")
+            item["evidence"][0]["downloaded_at_display"] = freshness_display_time(info.get("downloaded_at", ""))
+            names.append(item)
     return {"names": names, "complete": True, "freshness": info}
 
 
@@ -6703,7 +6720,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134", "0.6.135"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6846,16 +6863,17 @@ def nc_charity_record_evidence(fields):
                        or kind == "In-Process" and raw == "In-Process"))
     unsupported_scope = kind == "Sponsor Organization" and bool(re.fullmatch(r"SL\d+", identifier))
     unsupported_denied = kind == "Not Determined" and raw == "Denied" and not identifier
-    if not name or (not valid_kind and not unissued and not non_charity_scope and not unsupported_scope and not unsupported_denied):
+    unsupported_inactive = kind == "In-Process" and raw == "Expired Inactive" and not identifier
+    if not name or (not valid_kind and not unissued and not non_charity_scope and not unsupported_scope and not unsupported_denied and not unsupported_inactive):
         raise ValueError("North Carolina result is not an identified charity license")
     url = urlparse(fields["profile_url"])
     if url.scheme != "https" or url.netloc != "www.sosnc.gov" or not re.fullmatch(r"/online_services/search/charities_profile/\d+", url.path) or url.query or url.fragment:
         raise ValueError("North Carolina profile link is not an official charity record")
-    if unsupported_denied:
+    if unsupported_denied or unsupported_inactive:
         # Preserve this complete source row for identity filtering only. A
         # possibly matching unknown category retains the existing scope hold.
         if fields["Expiration Date"].strip() or str(fields.get("Extension End Date") or "").strip():
-            raise ValueError("North Carolina unclassified denied row has conflicting license dates")
+            raise ValueError("North Carolina unissued review row has conflicting license dates")
         return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1],
                     ein="", aliases=aliases, raw_status=raw, status="Unable to Confirm",
                     url=fields["profile_url"], license_category=kind,
@@ -8806,15 +8824,20 @@ def final_four_connector_request(payload, origin):
         except (ValueError, TypeError, KeyError):
             return 200, {"phase": "complete", "result": final_four_connector_failure(
                 record, diagnostic="SERVER_EVIDENCE_REJECTED")}
+        from deployment.state_snapshots import connector_archive
+        connector_archive(record,payload,pending['query'],evidence)
         evidence = final_four_compact_search_evidence(record, evidence)
         record["completed"].append({"query": pending["query"], "evidence": evidence})
         record["pending"] = None
     names = {canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
     context = REVIEWED_NAME_CONTEXT.set(names)
     identity_context = USER_IDENTITY_CONTEXT.set(record.get("identity_context", {}))
+    from deployment.state_snapshots import REFERENCES
+    snapshot_context = REFERENCES.set(record.get('source_snapshots', []))
     try:
         response = final_four_connector_advance(record)
     finally:
+        REFERENCES.reset(snapshot_context)
         REVIEWED_NAME_CONTEXT.reset(context)
         USER_IDENTITY_CONTEXT.reset(identity_context)
     if response["phase"] == "search":
@@ -8823,6 +8846,9 @@ def final_four_connector_request(payload, origin):
                             lookup_remaining_ms=max(0, int((record["expires"]-time.time())*1000)))
         except ValueError:
             return 200, {"phase": "complete", "result": final_four_connector_failure(record)}
+    if response.get('phase') == 'complete':
+        from deployment.state_snapshots import attach_links
+        response['result'] = attach_links(response['result'],record.get('source_snapshots',[]))
     return 200, response
 
 
@@ -9351,6 +9377,13 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
 def licensed_charity_identity(org, row, state, deadline):
     """Shared master name/EIN and cross-state office checks; never address-only."""
     names = [row["name"], *row.get("aliases", [])]
+    # DC relocates the definite article to a terminal parenthesis. Keep its
+    # source label intact and retain all ordinary EIN/address safeguards.
+    if state == "DC":
+        names += [re.sub(r"\s+\(THE\)\s*$", "", name, flags=re.I)
+                  for name in names if re.search(r"\s+\(THE\)\s*$", name, re.I)]
+        names += ["THE " + re.sub(r"\s+\(THE\)\s*$", "", name, flags=re.I)
+                  for name in names if re.search(r"\s+\(THE\)\s*$", name, re.I)]
     if user_rejected_credential(org.ein, state, row.get("identifier", "")):
         row["match"] = {"decision": "rejected", "score": 0, "reason": "USER_REJECTED_IDENTITY"}
         return "rejected"
@@ -11367,6 +11400,11 @@ def sc_official_detail_lookup(org) -> object | None:
         include_name_segments=True,
         max_queries=18,
     )
+    # Prefer the existing full primary-name query without its legal suffix
+    # before a historical alias; retain the query set, allowance and guards.
+    literal_primary = {q.casefold() for q in literal_name_retrieval_forms(original_name)[:1]}
+    search_queries = ([q for q in search_queries if q.casefold() in literal_primary]
+                      + [q for q in search_queries if q.casefold() not in literal_primary])
     last_html = ""
     transport_errors = 0
     lookup_incomplete = False
@@ -13204,6 +13242,11 @@ def classify_nm_status_history(raw_status: str) -> str:
 
 
 def classify_or_latest_report_status(raw_status: str) -> str:
+    if re.search(r"\bStatus\s*:\s*(?:Suspended|Revoked|Withdrawn|Closed|Exempt)\s*(?:\||$)", raw_status or "", re.I):
+        return ""  # Explicit standing is not overridden by a filing calculation.
+    next_due = or_completed_report_next_due(raw_status)
+    if next_due:
+        return status_from_calendar_date(next_due)
     due_date = or_latest_report_base_due_date(raw_status)
     if due_date:
         return status_from_calendar_date(due_date)
@@ -13216,6 +13259,24 @@ def classify_or_latest_report_status(raw_status: str) -> str:
     if year_values and max(year_values) <= date.today().year - 2:
         return checker.STATUS_DELINQUENT
     return ""
+
+
+def or_completed_report_next_due(raw_status: str) -> date | None:
+    """The legacy live reader's filed-period evidence concerns the next cycle."""
+    raw = re.sub(r"\s+", " ", raw_status or "").strip()
+    if not re.search(r"\bStatus\s*:\s*Registered\s*(?:\||$)", raw, re.I):
+        return None
+    report_year = re.search(r"\bLatest\s+Report\s+Year\s*:\s*(20\d{2})\b", raw, re.I)
+    if not report_year:
+        return None
+    end = re.search(r"\bFiscal\s+Year\s+End\s*:\s*([0-9/]+)", raw, re.I)
+    due = re.search(r"\bNext\s+Due\s*:\s*([0-9/]+)", raw, re.I)
+    period_end = parse_due_date(end[1]) if end else None
+    next_due = parse_due_date(due[1]) if due else None
+    if (period_end and period_end.year in {int(report_year[1]),int(report_year[1])+1}
+            and period_end <= date.today() and next_due == or_next_due_from_period_end(period_end)):
+        return next_due
+    return None
 
 
 def or_latest_report_base_due_date(raw_status: str) -> date | None:
@@ -13250,7 +13311,7 @@ def copy_external_result(org, state: str, external_result):
         or_status = classify_or_latest_report_status(raw_status)
         if or_status:
             status = or_status
-            base_due = or_latest_report_base_due_date(raw_status)
+            base_due = None if or_completed_report_next_due(raw_status) else or_latest_report_base_due_date(raw_status)
             if base_due and "Base Due from Latest Report Period" not in raw_status:
                 raw_status = f"{raw_status} | Base Due from Latest Report Period: {format_date(base_due)}"
     if state_upper == "MI":
@@ -13279,6 +13340,13 @@ def copy_external_result(org, state: str, external_result):
     )
     result.raw_status_text = raw_status
     result.source_note = getattr(external_result, "source_note", "") or ""
+    if state_upper == "OR" and or_completed_report_next_due(raw_status):
+        result.computed_due_date = format_date(or_completed_report_next_due(raw_status))
+        result.status_reason = "OR_STATUS_FROM_COMPLETED_LIVE_REPORT"
+        result.source_note = (
+            "Oregon's live filing history lists a completed fiscal report. "
+            f"The next annual filing is due {result.computed_due_date}; CharityClarity reports {status}."
+        )
     matched_registry_name = (
         getattr(external_result, "matched_registry_name", "")
         or getattr(external_result, "matched_name", "")
@@ -26165,6 +26233,11 @@ NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
 def ny_connector_pack(record):
     # Public search evidence and check binding only; no passcode or state credential.
     body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 320000 and record.get('source_snapshots'):
+        # Optional PDF links cannot make otherwise valid source evidence exceed
+        # the mature continuation limit. Preserve the original evidence/budget.
+        record.pop('source_snapshots',None)
+        body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     if len(body) > 320000:
         raise ValueError("The New York check exceeded the connector evidence limit.")
     signature = hmac.new(NY_CONNECTOR_SIGNING_KEY.encode(), b"cc-ny-staging-v1." + body, hashlib.sha256).hexdigest()
@@ -26341,7 +26414,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134", "0.6.135"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -26396,7 +26469,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114", "0.6.115", "0.6.116", "0.6.117", "0.6.118", "0.6.119", "0.6.120", "0.6.121", "0.6.124", "0.6.125", "0.6.126", "0.6.127", "0.6.128", "0.6.129", "0.6.130", "0.6.131", "0.6.132", "0.6.133", "0.6.134", "0.6.135"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -26448,17 +26521,22 @@ def ny_connector_request(payload, origin):
                 rows = ny_connector_clean_response(payload.get("evidence"), pending["query"])
             except ValueError:
                 return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
+            from deployment.state_snapshots import connector_archive
+            connector_archive(record,payload,pending['query'],rows)
             record["completed"].append({"query": pending["query"], "rows": rows})
             record["pending"] = None
     names = ({canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
              if "alternate_names" in record else {})
     context_token = REVIEWED_NAME_CONTEXT.set(names)
     office_context_token = NY_OFFICE_EVIDENCE_CONTEXT.set(record.get("ny_offices", []) if record.get("state") == "NY" else [])
+    from deployment.state_snapshots import REFERENCES
+    snapshot_context_token = REFERENCES.set(record.get('source_snapshots', []))
     try:
         response = ((il_verification_recovery(record, payload, now)
                      or {"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))})
                     if action == "fail" else ny_connector_advance(record))
     finally:
+        REFERENCES.reset(snapshot_context_token)
         REVIEWED_NAME_CONTEXT.reset(context_token)
         NY_OFFICE_EVIDENCE_CONTEXT.reset(office_context_token)
     if record.get("state") in IL_GA_SOURCES and time.time() >= record["issued"] + NY_CONNECTOR_TTL_SECONDS:
@@ -26474,6 +26552,9 @@ def ny_connector_request(payload, origin):
             return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
     elif response["phase"] == "complete" and record.get("il_verification_recovery"):
         response["result"]["connector_recovery"] = record["il_verification_recovery"]
+    if response.get('phase') == 'complete':
+        from deployment.state_snapshots import attach_links
+        response['result'] = attach_links(response['result'], record.get('source_snapshots', []))
     return 200, response
 
 
@@ -26978,6 +27059,10 @@ def true_status_from_body(result, body: str) -> str:
         return public_status(result)
     if getattr(result, 'status_reason', '') == 'OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD':
         return public_status(result)
+    if (result.state == 'OR' and getattr(result, 'status_reason', '') == 'OR_STATUS_FROM_COMPLETED_LIVE_REPORT'):
+        confirmed_due = or_completed_report_next_due(result.raw_status_text)
+        if confirmed_due and parsed_result_date(getattr(result, 'computed_due_date', '')) == confirmed_due:
+            return status_from_calendar_date(confirmed_due)
     if (getattr(result, "state", "") in {"KY", "HI"}
             and getattr(result, "status_reason", "") == f"{result.state}_CONFIRMED_TAX_PERIOD"):
         return public_status(result)
@@ -27470,7 +27555,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     "a registration expiration date or a specific suspended, revoked, or delinquent status. "
                     "Confirm registration details directly with Virginia.")
 
-    if state == "OR" and reason in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_PERIOD_UNCONFIRMED", "OR_LIVE_EXPLICIT_STATUS", "OR_OVERDUE_UNDER_BOTH_CONFIRMED_PERIODS"}:
+    if state == "OR" and reason in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_PERIOD_UNCONFIRMED", "OR_LIVE_EXPLICIT_STATUS", "OR_OVERDUE_UNDER_BOTH_CONFIRMED_PERIODS", "OR_STATUS_FROM_COMPLETED_LIVE_REPORT"}:
         return note
 
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
@@ -27799,8 +27884,10 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if context.get("due_date") and context.get("due_date") == context.get("extended_due_date") and context.get("base_due_date"):
             comment += (f" Automatic extension applied: {format_date(context['base_due_date'])} → "
                         f"{format_date(context['extended_due_date'])}, through the 15th day of the 11th month after fiscal year end, for the current registration.")
-    if source_state == "OR" and getattr(result, "status_reason", "") in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_EXPLICIT_STATUS"}:
-        return comment
+    if source_state == "OR" and getattr(result, "status_reason", "") in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_EXPLICIT_STATUS", "OR_STATUS_FROM_COMPLETED_LIVE_REPORT"}:
+        checked = getattr(result, "checked_at_epoch", None) or time.time()
+        stamp = datetime.fromtimestamp(checked, ZoneInfo("UTC")).isoformat()
+        return comment + " Live Oregon record checked: " + freshness_display_time(stamp) + "."
     if source_state == "OK":
         freshness = re.search(r"Certificate freshness note:.*", getattr(result, "source_note", "") or "")
         if freshness and freshness.group(0) not in comment:
@@ -27809,7 +27896,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     if source_state in {"KS", "KY", "LA", "NH", "OR"}:
         info = downloadable_data_info(source_state)
         footer = (
-            f"Data freshness note: Scheduled {source_state} dataset last downloaded: {info.get('downloaded_at', 'unverified')}. "
+            f"Data freshness note: Scheduled {source_state} dataset last downloaded: {freshness_display_time(info.get('downloaded_at', ''))}. "
             f"State source date: {info.get('source_date') or 'not stated by source'}. "
             "Downloads may lag registry changes; confirm time-sensitive decisions directly with the state."
         )
@@ -30181,9 +30268,18 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         if score < 450 and shared_distinctive_core_match(
                 getattr(org, "original_organization_name", org.organization_name), registry_name):
             score = 450
-        rank = (score, registry_exact_active_tiebreak(registry_name, safe_targets, registry_candidate_fields(row).get("status", "")))
+        name_history = ""
         if score >= 450:
-            equivalent_records.append((registry_name, filing_number))
+            name_cells = row.locator("td")
+            if name_cells.count() >= 5:
+                name_history = name_cells.nth(4).inner_text(timeout=ok_action_timeout(org, 750))
+            if not re.search(r"\b(?:Former|Inactive)\b", name_history, re.I):
+                equivalent_records.append((registry_name, filing_number))
+        # A name-history flag does not classify charity standing. It breaks an
+        # otherwise equal identity/standing tie so row order cannot pick the
+        # superseded name ahead of an equally matching current name.
+        name_rank = 1 if re.search(r"\bIn\s+use\b", name_history, re.I) else -1 if re.search(r"\b(?:Former|Inactive)\b", name_history, re.I) else 0
+        rank = (score, registry_exact_active_tiebreak(registry_name, safe_targets, registry_candidate_fields(row).get("status", "")), name_rank)
         if rank > best_rank:
             best_rank = rank
             best_score = score
@@ -33635,6 +33731,24 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
 
 
 def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None, me_progress: dict | None = None, wi_progress: dict | None = None) -> dict:
+    if not trial_identity():
+        return _run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
+    from deployment.state_snapshots import CaptureRun
+    with CaptureRun(organization_name,ein,state) as capture:
+        data=_run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
+        from deployment.state_snapshots import downloaded_record
+        downloaded_record(sys.modules[__name__],data)
+        try:
+            data=capture.finish(data)
+            if os.environ.get('CE_FINAL_FOUR_CHILD') != '1':
+                from deployment.state_snapshots import persist_inline_result
+                data=persist_inline_result(sys.modules[__name__],data)
+            return data
+        except Exception:
+            return {**data, 'evidence_capture': 'unavailable'}
+
+
+def _run_state_lookup_source(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None, me_progress: dict | None = None, wi_progress: dict | None = None) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
     lookup_name = canonical_name_punctuation(organization_name)
@@ -35264,6 +35378,13 @@ def identity_review_pack(record):
         raise ValueError("Identity review is unavailable. Rerun this check later.")
     body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     if len(body) > 250000:
+        # Optional archive links are dropped before rejecting otherwise valid
+        # identity evidence. No candidate, status or signing bound is relaxed.
+        for row in [record.get('base',{}),*record.get('records',[])]:
+            if str(row.get('evidence_url','')).startswith('/state-snapshots/'):
+                row.pop('evidence_url',None)
+        body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 250000:
         raise ValueError("Too many candidate details for one identity review.")
     signature = hmac.new(NY_CONNECTOR_SIGNING_KEY.encode(), b"cc-identity-review-v1." + body, hashlib.sha256).hexdigest()
     return body.decode() + "." + signature
@@ -35289,6 +35410,7 @@ def identity_review_view(record):
             "exclusive": record.get("exclusive") is True,
             "candidates": [{"id": row["id"], "name": row["name"], "identifier": row["identifier"],
                 "location": row.get("location", ""), "source_url": row.get("url", ""),
+                "evidence_url": row.get("evidence_url", ""),
                 "raw_status": row.get("raw_status", ""), "expiration": row.get("expiration", ""),
                 "suggested": row.get("suggested") is True,
                 "decision": record["decisions"].get(row["id"], {}).get("decision", "")}
@@ -35316,7 +35438,11 @@ def attach_identity_review(data, context):
         if row.get("ein") and canonical_ein_digits(row["ein"]) != canonical_ein_digits(data["ein"]):
             continue
         clean = {key: row.get(key, "") for key in
-                 ("name", "identifier", "ein", "location", "url", "raw_status", "expiration", "license_category", "initial")}
+                 ("name", "identifier", "ein", "location", "url", "raw_status", "expiration", "license_category", "initial", "evidence_url")}
+        from deployment.state_snapshots import REFERENCES, matching_reference
+        snapshot_ref = matching_reference({**clean, 'state': data['state'], 'ein': data['ein']}, REFERENCES.get())
+        if snapshot_ref:
+            clean['evidence_url'] = snapshot_ref['url']
         clean["suggested"] = row.get("suggested") is True
         if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA"}:
             # Keep the master interpretation of complete state evidence in the
@@ -35428,6 +35554,7 @@ def resolve_identity_review(payload, email, device):
                         "decision": "reject", "reviewed_by": email, "reviewed_at": decision["reviewed_at"],
                         "implicit": True}
     data = dict(base)
+    fresh_state_lookup = False
     pending = [r for r in record["records"] if r["reviewable"] and r["id"] not in record["decisions"]]
     accepted = [r for r in record["records"] if not r["reviewable"] or record["decisions"].get(r["id"], {}).get("decision") == "accept"]
     rejected = [r for r in record["records"] if record["decisions"].get(r["id"], {}).get("decision") == "reject"]
@@ -35445,6 +35572,7 @@ def resolve_identity_review(payload, email, device):
         names_token = REVIEWED_NAME_CONTEXT.set({**REVIEWED_NAME_CONTEXT.get(), canonical_ein_digits(base["ein"]): base.get("reviewed_alternate_names", [])})
         try:
             data = run_state_lookup(base["organization_name"], base["ein"], "WI")
+            fresh_state_lookup = True
         finally:
             REVIEWED_NAME_CONTEXT.reset(names_token); USER_IDENTITY_CONTEXT.reset(token)
         data["comments"] = note + data["comments"]
@@ -35471,6 +35599,7 @@ def resolve_identity_review(payload, email, device):
                 **REVIEWED_NAME_CONTEXT.get(), canonical_ein_digits(base["ein"]): base.get("reviewed_alternate_names", [])})
             try:
                 data = run_state_lookup(base["organization_name"], base["ein"], "KY")
+                fresh_state_lookup = True
             finally:
                 REVIEWED_NAME_CONTEXT.reset(names_token); USER_IDENTITY_CONTEXT.reset(token)
             if (data.get("matched_registry_identifier") != source_row["identifier"] or
@@ -35511,6 +35640,10 @@ def resolve_identity_review(payload, email, device):
                 reason_code="USER_IDENTITY_REVIEW", identity_review_history=record["history"],
                 status_reason="User identity decision; state status rules retained.")
     data["identity_evidence"] = {"automated": base.get("identity_evidence", {}), "user_review": record["history"]}
+    selected_snapshot = next((row.get('evidence_url','') for row in record['records']
+        if row['identifier'] == data.get('matched_registry_identifier') and row['name'] == data.get('matched_registry_name')), '')
+    if not fresh_state_lookup:
+        data['evidence_url'] = selected_snapshot
     # Preserve a newly found candidate's token after continued Wisconsin search.
     if "identity_review" not in data: data["identity_review"] = identity_review_view(record)
     log_event(f"Identity review {base['state']} {base['ein']} {selected['identifier']}: {action} by {email}; result {data['status']}")
@@ -35623,7 +35756,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
     def _send_final_four_connector(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 4500000:
+            if not 0 < length <= (8100000 if trial_identity() else 4500000):
                 self._send_json(413, {"error": "Trial registry evidence exceeds the bounded request size."})
                 return
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -35638,8 +35771,8 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
     def _send_ny_connector(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 524288:
-                self._send_json(413, {"error": "Connector input must be between 1 byte and 512 KB."})
+            if not 0 < length <= (4500000 if trial_identity() else 524288):
+                self._send_json(413, {"error": "Connector input exceeds the bounded request size."})
                 return
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             code, response = ny_connector_request(payload, self.headers.get("Origin", ""))

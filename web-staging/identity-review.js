@@ -4,6 +4,15 @@
   function add(parent, tag, value, classes = '') {
     const el = document.createElement(tag); el.textContent = value; el.className = classes; parent.appendChild(el); return el;
   }
+  function renderEvidence(parent, result) {
+    // Saved first-party archives only; never open a session-bound state URL.
+    if (!/^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(result.evidence_url || '')) {
+      if (result.evidence_capture === 'unavailable') add(parent,'p','State snapshot unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
+      return;
+    }
+    const link = add(parent, 'a', 'View State Snapshot (PDF)', 'mt-2 block text-xs underline whitespace-normal');
+    link.href = result.evidence_url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+  }
   function render(parent, result, decide, retry) {
     const review = result.identity_review;
     const inconclusive = ['Needs Review', 'Unable to Confirm', 'Site Not Reachable', 'No Confirmed Match'].includes(result.status);
@@ -36,13 +45,7 @@
         add(card, 'p', candidate.name, 'font-semibold');
         add(card, 'p', [candidate.identifier, candidate.location].filter(Boolean).join(' · '), 'mt-1 text-xs');
         add(card, 'p', [candidate.raw_status, candidate.expiration ? `Expiration: ${candidate.expiration}` : ''].filter(Boolean).join(' · '), 'mt-1 text-xs text-slate-600');
-        try {
-          const url = new URL(candidate.source_url);
-          if (url.protocol === 'https:') {
-            const link = add(card, 'a', 'View state record', 'mt-1 inline-block text-xs underline');
-            link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
-          }
-        } catch { /* No public link was supplied. */ }
+        renderEvidence(card, candidate);
         if (candidate.decision) add(card, 'p', candidate.decision === 'accept' ? 'Identity accepted by user' : 'Identity rejected by user', 'mt-2 text-xs font-semibold');
         const controls = add(card, 'div', '', 'mt-2 flex flex-wrap gap-2');
         action(controls, review.exclusive ? 'Confirm this record' : 'Accept match', () => decide(candidate.id, 'accept'), candidate.decision === 'accept').setAttribute('aria-pressed', String(candidate.decision === 'accept'));
@@ -62,5 +65,5 @@
     if (inconclusive && result.identity_review?.candidates?.some(candidate => !candidate.decision)) return 'Confirm match';
     return result.status === 'Needs Review' ? 'Unable to Confirm' : result.status || 'Unknown';
   }
-  window.CCIdentityReview = Object.freeze({render, statusLabel});
+  window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel});
 })();
