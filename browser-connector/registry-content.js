@@ -1228,13 +1228,12 @@
       // categorized In-Process even though it displays no issued number.
       const pending=!fields.License&&(
         fields['CSL Type']==='In-Process'&&
-          (fields.Status==='In-Process'||fields.Status==='Expired Inactive'||/\bWithdrawn\b/i.test(fields.Status||'')||
+          (fields.Status==='In-Process'||/\bWithdrawn\b/i.test(fields.Status||'')||
            /^(?:expired license|denied)$/i.test((fields.Status||'').trim()))||
         fields['CSL Type']==='Charitable Organization'&&fields.Status==='In-Process');
       const unsupportedDenied=!fields.License&&fields['CSL Type']==='Not Determined'&&fields.Status==='Denied';
-      const unsupportedInactive=!fields.License&&fields['CSL Type']==='In-Process'&&fields.Status==='Expired Inactive';
       const numberless=pending||unsupportedDenied;
-      if((unsupportedDenied||unsupportedInactive)&&(fields['Expiration Date']||fields['Extension End Date']))
+      if(unsupportedDenied&&(fields['Expiration Date']||fields['Extension End Date']))
         throw new Error('REGISTRY_NC_CARD_CHANGED');
       const header=headerText.match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
       const displayName=numberless?headerText:header?.[1].trim();
