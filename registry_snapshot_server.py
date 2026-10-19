@@ -6857,7 +6857,7 @@ def nc_charity_record_evidence(fields):
         or kind == "Charitable Organization" and raw == "In-Process")
     # NC retains historical SL/EX identifiers when the explicit record category
     # changes. Validate both source fields without deriving one from the other.
-    non_charity_scope = kind == "Fund-Raising Consultant" and bool(re.fullmatch(r"SL\d+", identifier))
+    non_charity_scope = kind in {"Fund-Raising Consultant", "Solicitor"} and bool(re.fullmatch(r"SL\d+", identifier))
     valid_kind = (re.fullmatch(r"(?:SL|EX)\d+", identifier)
                   and (kind in {"Charitable Organization", "CSL Exempt Organization"}
                        or kind == "In-Process" and raw == "In-Process"))
@@ -7760,7 +7760,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             rows = prioritized_registry_candidates(org.organization_name, org.ein, state, rows)
         if state == "NC":
             for card in payload["rows"]:
-                if card.get("CSL Type", "").strip() == "Fund-Raising Consultant":
+                if card.get("CSL Type", "").strip() in {"Fund-Raising Consultant", "Solicitor"}:
                     exclusion = {"name": card.get("display_name", card["CSL Legal Name"]),
                                  "identifier": card["License"], "category": card["CSL Type"],
                                  "source_url": card["profile_url"]}

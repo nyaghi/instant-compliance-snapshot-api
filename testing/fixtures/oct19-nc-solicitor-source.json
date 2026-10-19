@@ -1,0 +1,24 @@
+{
+  "observed_at": "2026-10-19T21:45:00Z",
+  "source_url": "https://www.sosnc.gov/online_services/search/Charities_Results#",
+  "query": "WILLIAM",
+  "mode": "Starting With",
+  "displayed_total": 47,
+  "page": 2,
+  "observation_method": "Official search UI; read-only DOM of the actual source card's labeled fields. Transcribed exact normalized field values; not the installed collector's raw reply.",
+  "fields": {
+    "CSL Legal Name": "William Thomas Vallini",
+    "CSL Type": "Solicitor",
+    "Status": "Expired Inactive",
+    "Expiration Date": "3/31/2016",
+    "License": "SL101159",
+    "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/10559313",
+    "display_name": "William Thomas Vallini",
+    "aliases": []
+  },
+  "firstpass_export": "gb-wm-nc-firstpass.xls",
+  "firstpass_diagnostic": "SERVER_EVIDENCE_REJECTED",
+  "firstpass_execution_ms": 6188,
+  "firstpass_discovery_seconds": 17,
+  "causal_limit": "This observed Solicitor row is deterministically rejected by the deployed master parser. The export reports evidence rejection but omits the full collector reply, so do not claim it is the only rejected row."
+}

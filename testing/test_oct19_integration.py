@@ -24,7 +24,7 @@ class Integration(unittest.TestCase):
                 t=signed.ContinuationControls('test_all_four_complete_through_signed_master_replay');t.setUp()
                 try:
                     t.orgs['NC']=c.checker.Organization(out['name'],out['ein'])
-                    source=next(x for x in out['evidence']['rows'] if x['License'])
+                    source=next(x for x in out['evidence']['rows'] if x['License'] and x['CSL Type']=='Charitable Organization')
                     with patch.object(c,'licensed_charity_names',return_value=([out['name']],[])):
                         code,res=t.start('NC')
                         for _ in range(15):

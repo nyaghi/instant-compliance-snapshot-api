@@ -1933,10 +1933,44 @@
     }
     throw new Error("REGISTRY_COMMAND_INVALID");
   }
+  let snapshotScroll=null;
+  function snapshotDialog(query) {
+    if(!TN||query?.state!=='TN'||query.operation!=='detail'||!/^CO\d+$/.test(query.identifier||''))return null;
+    const dialog=document.querySelector('#KendoWindowLevel1');
+    if(!visible(dialog)||![...dialog.querySelectorAll('h4')].some(el=>text(el)==='CO Number: '+query.identifier))return null;
+    return dialog;
+  }
+  async function snapshotView(m) {
+    const dialog=snapshotDialog(m.query);
+    if(!dialog||typeof m.command_id!=='string'||!m.command_id||m.command_id.length>200)return {ok:false};
+    if(m.view==='restore') {
+      if(snapshotScroll?.dialog!==dialog||snapshotScroll.command!==m.command_id)return {ok:false};
+      dialog.scrollTop=snapshotScroll.top;
+      snapshotScroll=null;return {ok:true};
+    }
+    if(!['top','expiration','financial'].includes(m.view))return {ok:false};
+    if(m.view==='top')snapshotScroll={dialog,command:m.command_id,top:dialog.scrollTop};
+    if(snapshotScroll?.dialog!==dialog||snapshotScroll.command!==m.command_id)return {ok:false};
+    const target=m.view==='expiration'?[...dialog.querySelectorAll('h4')].find(el=>/^Expiration Date:/.test(text(el))):
+      m.view==='financial'?dialog.querySelector('#DetailsTabStrip-1 table tbody tr'):null;
+    if(m.view!=='top'&&!visible(target))return {ok:false};
+    dialog.scrollTop=target?dialog.scrollTop+target.getBoundingClientRect().top-dialog.getBoundingClientRect().top-16:0;
+    await new Promise(resolve=>setTimeout(resolve,40));
+    const inView=!target||(target.getBoundingClientRect().top>=dialog.getBoundingClientRect().top
+      &&target.getBoundingClientRect().top<dialog.getBoundingClientRect().top+dialog.clientHeight);
+    return {ok:snapshotDialog(m.query)===dialog&&inView};
+  }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
     if(m.action==='registry-snapshot-metadata') {
-      reply({url:location.href,public_text:(document.body?.innerText||'').slice(0,20000)});return false;
+      const dialog=snapshotDialog(m.query);
+      const capture_views=dialog&&dialog.scrollHeight>dialog.clientHeight+1?['top',
+        ...([...dialog.querySelectorAll('h4')].some(el=>/^Expiration Date:/.test(text(el)))?['expiration']:[]),
+        ...(visible(dialog.querySelector('#DetailsTabStrip-1 table tbody tr'))?['financial']:[])]:null;
+      reply({url:location.href,public_text:(document.body?.innerText||'').slice(0,20000),...(capture_views?{capture_views}:{})});return false;
+    }
+    if(m.action==='registry-snapshot-view') {
+      snapshotView(m).then(reply,()=>reply({ok:false}));return true;
     }
     handle(m).then(reply,error=>{
       const code=error?.message||'';

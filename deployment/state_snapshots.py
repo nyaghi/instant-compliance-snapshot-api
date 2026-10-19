@@ -80,19 +80,27 @@ def validate_asset(asset, *, ein, state, run_id):
         raise ValueError('Snapshot belongs to a different run, EIN or state')
     url=public_url(asset.get('source_url',''),state)
     kind=asset.get('kind')
-    if kind not in {'image','source_pdf'}:raise ValueError('Snapshot requires actual page pixels or original state PDF pages')
+    if kind not in {'image','image_pages','source_pdf'}:raise ValueError('Snapshot requires actual page pixels or original state PDF pages')
     raw=base64.b64decode(asset.get('content',''),validate=True)
     if not 1<=len(raw)<=MAX_BYTES:raise ValueError('Source archive exceeds bound')
     stamp=asset.get('captured_at')
     if type(stamp) not in (int,float) or not 0<stamp<=time.time()+60:raise ValueError('Invalid capture time')
-    if kind=='image':
+    if kind in {'image','image_pages'}:
         from PIL import Image
-        with Image.open(io.BytesIO(raw)) as im:
-            if im.format not in {'PNG','JPEG'} or im.width*im.height>MAX_PIXELS:raise ValueError('Invalid source image')
-            im.verify()
-        with Image.open(io.BytesIO(raw)) as im:
-            low,high=im.convert('L').getextrema()
-            if high-low<8:raise ValueError('Blank source screenshot')
+        pages=[raw]
+        if kind=='image_pages':
+            encoded=json.loads(raw)
+            if not isinstance(encoded,list) or not 2<=len(encoded)<=3 or any(not isinstance(v,str) for v in encoded):raise ValueError('Invalid source image pages')
+            pages=[base64.b64decode(v,validate=True) for v in encoded]
+        pixels=0
+        for page in pages:
+            with Image.open(io.BytesIO(page)) as im:
+                pixels+=im.width*im.height
+                if im.format not in {'PNG','JPEG'} or pixels>MAX_PIXELS:raise ValueError('Invalid source image')
+                im.verify()
+            with Image.open(io.BytesIO(page)) as im:
+                low,high=im.convert('L').getextrema()
+                if high-low<8:raise ValueError('Blank source screenshot')
     elif kind=='source_pdf':
         from pypdf import PdfReader
         if not raw.startswith(b'%PDF-') or not 1<=len(PdfReader(io.BytesIO(raw)).pages)<=12:raise ValueError('Invalid source PDF')
@@ -369,9 +377,15 @@ def connector_archive(record,payload,query,evidence):
             # on an earlier page, or a different record behind a detail dialog.
             if ident!='@completed-search':
                 if key(name) not in key(text):continue
-                if ident and ident not in text and ident not in url:continue
-            asset=dict(kind='image',state=record['state'],ein=record['ein'],run_id=run_id,
-                source_url=url,captured_at=incoming['captured_at'],content=incoming['image'],
+                application=re.fullmatch(r'NCAPP-(\d+)',ident) if record['state']=='NC' and query.get('operation')=='detail' else None
+                bound_application=bool(application and query.get('url')==url and urlsplit(url).path=='/online_services/search/charities_profile/'+application[1])
+                if ident and ident not in text and ident not in url and not bound_application:continue
+            images=incoming.get('images')
+            multiple=record['state']=='TN' and query.get('operation')=='detail' and isinstance(images,list) and 2<=len(images)<=3
+            if 'images' in incoming and (not multiple or images[0]!=incoming.get('image')):raise ValueError('Invalid snapshot page binding')
+            content=base64.b64encode(json.dumps(images).encode()).decode() if multiple else incoming['image']
+            asset=dict(kind='image_pages' if multiple else 'image',state=record['state'],ein=record['ein'],run_id=run_id,
+                source_url=url,captured_at=incoming['captured_at'],content=content,
                 identifier=ident,record_name=name,organization_name=record['organization_name'],
                 public_text=text,query_id=str(payload['query_id']))
             ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id)
@@ -430,21 +444,21 @@ def render_pdf(meta,raw):
     Original state PDF page bytes are returned without a cover or overlays.
     """
     if meta['kind']=='source_pdf':return raw
-    if meta['kind']!='image':
+    if meta['kind'] not in {'image','image_pages'}:
         raise ValueError('Snapshot requires actual page pixels or original state PDF pages')
     from reportlab.pdfgen import canvas
     from reportlab.lib.utils import ImageReader
     from PIL import Image
-    with Image.open(io.BytesIO(raw)) as im:
-        width,height=im.size
     # Keep the entire screenshot on one zoomable PDF page. Embedding preserves
     # the captured image pixels; page dimensions only control initial display.
-    scale=min(612/width,14400/height)
-    w,h=width*scale,height*scale
-    out=io.BytesIO();c=canvas.Canvas(out,pagesize=(w,h),pageCompression=1)
+    pages=[raw] if meta['kind']=='image' else [base64.b64decode(v,validate=True) for v in json.loads(raw)]
+    out=io.BytesIO();c=canvas.Canvas(out,pageCompression=1)
     c.setTitle('Saved state page capture')
-    c.drawImage(ImageReader(io.BytesIO(raw)),0,0,width=w,height=h)
-    c.showPage();c.save()
+    for raw_page in pages:
+        with Image.open(io.BytesIO(raw_page)) as im:width,height=im.size
+        scale=min(612/width,14400/height);w,h=width*scale,height*scale
+        c.setPageSize((w,h));c.drawImage(ImageReader(io.BytesIO(raw_page)),0,0,width=w,height=h);c.showPage()
+    c.save()
     return out.getvalue()
 
 
@@ -454,7 +468,7 @@ def saved_pdf(ident,store=None):
     item=store.load(ident)
     if item is None:return None
     meta,raw,pdf=item
-    if meta.get('kind') not in {'image','source_pdf'}:raise ValueError('No original visual source was captured')
+    if meta.get('kind') not in {'image','image_pages','source_pdf'}:raise ValueError('No original visual source was captured')
     if hashlib.sha256(raw).hexdigest()!=meta['source_sha256']:raise ValueError('Archived source integrity failed')
     if pdf is None:pdf=render_pdf(meta,raw);store.cache_pdf(ident,pdf)
     return meta,pdf
