@@ -11,11 +11,13 @@ function fixture(changes={}) {
     registryOrigin:()=> 'https://www.sosnc.gov',
     chrome:{tabs:{get:async()=>({url:state.url}),sendMessage:async(_tab,message)=>{
       if(message.action==='registry-snapshot-view'){calls.push(['view:'+message.view,{tabId:_tab}]);state.view=message.view;if(state.viewError)return {ok:false};return {ok:true};}
-      return {url:state.url,public_text:state.text,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{})};}},
+      return {url:state.url,public_text:state.text,source_detail:state.sourceDetail!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{})};}},
       debugger:{attach:async target=>{calls.push(['attach',target]);if(state.attachError)throw Error('refused');},
         sendCommand:async(target,command)=>{calls.push([command,target]);if(state.throwCommand)throw Error('capture error');
           if(state.mutate)job.generation++;
-          if(command==='Page.getLayoutMetrics')return {cssContentSize:{width:1000,height:state.height||1200},cssLayoutViewport:{clientWidth:640,clientHeight:400}};
+          if(command==='Emulation.setDeviceMetricsOverride'){state.viewportWidth=1024;return {};}
+          if(command==='Emulation.clearDeviceMetricsOverride'){state.viewportWidth=640;return {};}
+          if(command==='Page.getLayoutMetrics')return {cssContentSize:{width:state.viewportWidth||1000,height:state.height||1200},cssLayoutViewport:{clientWidth:state.viewportWidth||640,clientHeight:400}};
           if(state.captureHook)state.captureHook(job);
           return {data:state.imageData||(state.modal?{top:'AA==',expiration:'AQ==',financial:'Ag=='}[state.view]:'AA==')};},
         detach:async target=>calls.push(['detach',target])}}};
@@ -95,4 +97,38 @@ test('UI exposes only saved same-origin PDF links and removes expiring source li
   assert.equal(parent.children.length,1);assert.equal(parent.children[0].textContent,'View State Snapshot (PDF)');
   assert.equal(parent.children[0].rel,'noopener noreferrer');
   assert.equal(source.includes('View state record'),false);
+});
+
+test('narrow Tennessee source uses and clears only its own desktop viewport',async()=>{
+ const h=fixture({text:'LOCAL CO42115',url:'https://tncab.tnsos.gov/portal/registered-charities-search',modal:true});
+ Object.assign(h.query,{state:'TN',identifier:'CO42115'});h.job.registryState='TN';h.ctx.registryOrigin=()=> 'https://tncab.tnsos.gov';
+ assert.ok(await h.run());assert.equal(h.state.viewportWidth,640);assert.equal(h.job.snapshotViewportBusy,undefined);
+ assert.equal(h.calls.filter(c=>c[0]==='Emulation.setDeviceMetricsOverride').length,1);assert.equal(h.calls.filter(c=>c[0]==='Emulation.clearDeviceMetricsOverride').length,1);
+ assert.ok(h.calls.every(c=>c[1].tabId===1));
+});
+test('closed Tennessee detail cannot be mislabeled as a detail screenshot',async()=>{
+ const h=fixture({text:'LOCAL CO42115',url:'https://tncab.tnsos.gov/portal/registered-charities-search',sourceDetail:false});
+ Object.assign(h.query,{state:'TN',identifier:'CO42115'});h.job.registryState='TN';h.ctx.registryOrigin=()=> 'https://tncab.tnsos.gov';
+ assert.equal(await h.run(),null);assert.equal(h.calls.length,0);
+});
+
+test('narrow TN viewport failure restores and detaches the original target',async()=>{
+ const h=fixture({text:'LOCAL CO42115',url:'https://tncab.tnsos.gov/portal/registered-charities-search',modal:true});
+ Object.assign(h.query,{state:'TN',identifier:'CO42115'});h.job.registryState='TN';h.ctx.registryOrigin=()=> 'https://tncab.tnsos.gov';
+ const original=h.ctx.chrome.debugger.sendCommand;h.ctx.chrome.debugger.sendCommand=async(target,command)=>{if(command==='Emulation.setDeviceMetricsOverride'){h.calls.push([command,target]);throw Error('viewport refused');}return original(target,command);};
+ assert.equal(await h.run(),null);assert.equal(h.job.snapshotViewportBusy,undefined);assert.equal(h.calls.at(-1)[0],'detach');assert.ok(h.calls.some(c=>c[0]==='Emulation.clearDeviceMetricsOverride'));
+});
+test('busy source viewport cannot start another capture',async()=>{const h=fixture();h.job.snapshotViewportBusy=true;assert.equal(await h.run(),null);assert.deepEqual(h.calls,[]);});
+test('ordinary state and TN search never receive a viewport override',async()=>{
+ for(const state of ['NC','TN']){const h=fixture({text:'LOCAL CO42115',url:state==='TN'?'https://tncab.tnsos.gov/portal/registered-charities-search':'https://www.sosnc.gov/public'});h.job.registryState=state;h.query.state=state;h.query.operation='search';h.ctx.registryOrigin=()=>new URL(h.state.url).origin;assert.ok(await h.run());assert.equal(h.calls.some(c=>c[0].startsWith('Emulation.')),false);}
+});
+test('late TN viewport callback cannot publish after its original capture deadline',async()=>{
+ const h=fixture({text:'LOCAL CO42115',url:'https://tncab.tnsos.gov/portal/registered-charities-search',modal:true});Object.assign(h.query,{state:'TN',identifier:'CO42115'});h.job.registryState='TN';h.ctx.registryOrigin=()=> 'https://tncab.tnsos.gov';
+ let release;const original=h.ctx.chrome.debugger.sendCommand;h.ctx.chrome.debugger.sendCommand=async(target,command)=>{if(command==='Emulation.setDeviceMetricsOverride'){h.calls.push([command,target]);h.state.viewportWidth=1024;return new Promise(resolve=>release=resolve);}return original(target,command);};
+ const deadline=h.job.activeExpiresAt;assert.equal(await h.run(),null);assert.equal(h.job.activeExpiresAt,deadline);assert.ok(h.calls.some(c=>c[0]==='detach'));assert.equal(h.job.snapshotViewportBusy,true);release({});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.job.snapshotViewportBusy,undefined);assert.equal(h.state.viewportWidth,640);assert.equal(h.calls.some(c=>c[0]==='Page.captureScreenshot'),false);
+});
+
+test('capture timing contains only bounded phase facts and never image pixels',async()=>{
+ const h=fixture(),facts=[];h.ctx.diagnostic=(type,job,detail)=>facts.push({type,detail:JSON.parse(detail)});await h.run();assert.equal(facts.length,1);assert.equal(facts[0].type,'source-snapshot');assert.equal(facts[0].detail.saved,true);assert.equal(facts[0].detail.pages,1);assert.ok(facts[0].detail.capture_ms>=0);assert.deepEqual(Object.keys(facts[0].detail).sort(),['capture_ms','operation','pages','saved']);
 });

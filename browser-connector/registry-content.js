@@ -1940,6 +1940,17 @@
     if(!visible(dialog)||![...dialog.querySelectorAll('h4')].some(el=>text(el)==='CO Number: '+query.identifier))return null;
     return dialog;
   }
+  function snapshotFinancialCell(dialog) {
+    if(!dialog)return null;
+    const table=dialog.querySelector('#DetailsTabStrip-1 table');
+    if(!table)return null;
+    const headers=[...table.querySelectorAll('thead th')],index=headers.findIndex(el=>text(el)==='Fiscal Year End');
+    if(index<0||!visible(headers[index]))return null;
+    const cells=[...table.querySelectorAll('tbody tr')].map(row=>row.children[index]).filter(visible);
+    const dated=cells.map(cell=>({cell,date:text(cell).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)}))
+      .filter(item=>item.date).map(item=>({...item,order:Number(item.date[3])*10000+Number(item.date[1])*100+Number(item.date[2])}));
+    return dated.sort((a,b)=>b.order-a.order)[0]?.cell||null;
+  }
   async function snapshotView(m) {
     const dialog=snapshotDialog(m.query);
     if(!dialog||typeof m.command_id!=='string'||!m.command_id||m.command_id.length>200)return {ok:false};
@@ -1951,23 +1962,35 @@
     if(!['top','expiration','financial'].includes(m.view))return {ok:false};
     if(m.view==='top')snapshotScroll={dialog,command:m.command_id,top:dialog.scrollTop};
     if(snapshotScroll?.dialog!==dialog||snapshotScroll.command!==m.command_id)return {ok:false};
-    const target=m.view==='expiration'?[...dialog.querySelectorAll('h4')].find(el=>/^Expiration Date:/.test(text(el))):
-      m.view==='financial'?dialog.querySelector('#DetailsTabStrip-1 table tbody tr'):null;
+    const financial=m.view==='financial'?snapshotFinancialCell(dialog):null;
+    const header=financial?[...dialog.querySelector('#DetailsTabStrip-1 table').querySelectorAll('thead th')].find(el=>text(el)==='Fiscal Year End'):null;
+    const showHeader=visible(header)&&financial.getBoundingClientRect().bottom-header.getBoundingClientRect().top<=dialog.clientHeight-32;
+    const target=m.view==='expiration'?[...dialog.querySelectorAll('h4')].find(el=>/^Status:/.test(text(el))):
+      m.view==='financial'?(showHeader?header:financial):null;
     if(m.view!=='top'&&!visible(target))return {ok:false};
     dialog.scrollTop=target?dialog.scrollTop+target.getBoundingClientRect().top-dialog.getBoundingClientRect().top-16:0;
     await new Promise(resolve=>setTimeout(resolve,40));
-    const inView=!target||(target.getBoundingClientRect().top>=dialog.getBoundingClientRect().top
-      &&target.getBoundingClientRect().top<dialog.getBoundingClientRect().top+dialog.clientHeight);
+    const viewportTop=Math.max(0,dialog.getBoundingClientRect().top),viewportBottom=Math.min(innerHeight,dialog.getBoundingClientRect().top+dialog.clientHeight);
+    const targets=m.view==='expiration'?[...dialog.querySelectorAll('h4')].filter(el=>/^(Status|CO Number|Registration Date|Expiration Date):/.test(text(el))):
+      financial?(showHeader?[header,financial]:[financial]):target?[target]:[];
+    const inView=targets.every(el=>el.getBoundingClientRect().top>=viewportTop&&el.getBoundingClientRect().bottom<=viewportBottom);
     return {ok:snapshotDialog(m.query)===dialog&&inView};
+  }
+  function snapshotMetadata(query) {
+    const dialog=snapshotDialog(query);
+    const capture_views=dialog&&dialog.scrollHeight>dialog.clientHeight+1?['top',
+      ...([...dialog.querySelectorAll('h4')].some(el=>/^Status:/.test(text(el)))?['expiration']:[]),
+      ...(snapshotFinancialCell(dialog)?['financial']:[])]:null;
+    return {url:location.href,public_text:(document.body?.innerText||'').slice(0,20000),
+      ...(TN&&query?.operation==='detail'?{source_detail:!!dialog}:{}),...(capture_views?{capture_views}:{})};
   }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
     if(m.action==='registry-snapshot-metadata') {
-      const dialog=snapshotDialog(m.query);
-      const capture_views=dialog&&dialog.scrollHeight>dialog.clientHeight+1?['top',
-        ...([...dialog.querySelectorAll('h4')].some(el=>/^Expiration Date:/.test(text(el)))?['expiration']:[]),
-        ...(visible(dialog.querySelector('#DetailsTabStrip-1 table tbody tr'))?['financial']:[])]:null;
-      reply({url:location.href,public_text:(document.body?.innerText||'').slice(0,20000),...(capture_views?{capture_views}:{})});return false;
+      if(m.settle===true&&TN) {
+        setTimeout(()=>reply(snapshotMetadata(m.query)),40);return true;
+      }
+      reply(snapshotMetadata(m.query));return false;
     }
     if(m.action==='registry-snapshot-view') {
       snapshotView(m).then(reply,()=>reply({ok:false}));return true;

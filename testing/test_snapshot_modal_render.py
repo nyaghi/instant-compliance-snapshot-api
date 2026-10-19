@@ -24,7 +24,7 @@ class Render(unittest.TestCase):
     page.goto('https://tncab.tnsos.gov/portal/registered-charities-search')
     for index,org in enumerate(COHORT):
      page.set_content('''<style>body{font-family:Arial;background:#ddd}#KendoWindowLevel1{position:fixed;top:20px;left:30px;width:550px;height:300px;overflow:auto;background:white;border:2px solid #333}.gap{height:270px}h4{margin:12px}</style>
-      <p>LOCAL SOURCE FIXTURE -- NOT A LIVE STATE CAPTURE</p><div id="KendoWindowLevel1"><h2 id="name"></h2><h4>CO Number: CO42115</h4><h4>Status: Expired</h4><div class="gap"></div><h4>Expiration Date: 08/28/2023</h4><div class="gap"></div><div id="DetailsTabStrip-1"><table><tbody><tr><td>Fiscal Year End: 09/30/2020</td></tr></tbody></table></div><div class="gap"></div></div>''')
+      <p>LOCAL SOURCE FIXTURE -- NOT A LIVE STATE CAPTURE</p><div id="KendoWindowLevel1"><h2 id="name"></h2><h4>Status: Expired</h4><h4>CO Number: CO42115</h4><h4>Registration Date: 12/07/2021</h4><h4>Expiration Date: 08/28/2023</h4><div class="gap"></div><div id="DetailsTabStrip-1"><table><thead><tr><th>Fiscal Year End</th></tr></thead><tbody><tr><td>09/30/2020</td></tr></tbody></table></div><div class="gap"></div></div>''')
      page.locator('#name').evaluate('(el,name)=>el.textContent="LOCAL FIXTURE: "+name',org['name'])
      page.evaluate('''() => {window.chrome={runtime:{id:'local-extension',onMessage:{addListener:fn=>window.localSnapshotListener=fn}}};document.querySelector('#KendoWindowLevel1').scrollTop=90;}''')
      page.add_script_tag(content=source)

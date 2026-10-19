@@ -1,27 +1,43 @@
-/* Capture only an admitted connector-owned public source tab. No navigation,
-   focus, scroll, verification, arbitrary CDP commands or other-window capture. */
+/* Capture only an admitted connector-owned public source tab. Tennessee may
+   temporarily use its native desktop-responsive viewport; always restore it.
+   No navigation, focus, verification, DOM/CSS rewriting or other-window capture. */
 async function captureStateSnapshot(job, query, commandId) {
   const started=Date.now(), tabId=job.tab, generation=job.generation;
   const alive=()=>P.TRIAL_ORIGIN && isActive(job) && !job.closed && owned.has(tabId)
     && job.tab===tabId && job.generation===generation && job.pending===commandId
     && job.command?.id===commandId && P.sameQuery(job.command.query,query)
     && Date.now()<job.activeExpiresAt;
-  if(!alive() || !chrome.debugger || (job.snapshotCaptures||0)>=4
+  if(!alive() || job.snapshotViewportBusy || !chrome.debugger || (job.snapshotCaptures||0)>=4
       || job.activeExpiresAt-Date.now()<4000)return null;
   const state=job.registryState;
   const allowed=state==='NY' ? P.NY : registryOrigin(state);
-  let attached=false, cancelled=false, timeoutId,restoreModal=false;
+  let attached=false, cancelled=false, timeoutId,restoreModal=false,desktopViewport=false;
   const operation=async()=>{
     try {
       const tab=await chrome.tabs.get(tabId);
       if(!alive() || new URL(tab.url).origin!==allowed)return null;
-      const meta=await chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0});
+      let meta=await chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0});
       if(!alive() || meta?.url!==tab.url || typeof meta.public_text!=='string'
           || !meta.public_text.trim() || meta.public_text.length>20000
           || /verify you are human|user validation required|just a moment|access denied/i.test(meta.public_text))return null;
+      if(state==='TN'&&query.operation==='detail'&&meta.source_detail!==true)return null;
       await chrome.debugger.attach({tabId},'1.3');attached=true;
       if(cancelled || !alive())return null;
-      const layout=await chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics');
+      let layout=await chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics');
+      if(state==='TN'&&query.operation==='detail'&&layout.cssLayoutViewport?.clientWidth<800) {
+        // The state's Kendo FinancialPeriod column has media:min-width 800px.
+        // Ask Chrome to render that original desktop layout, not invented CSS.
+        job.snapshotViewportBusy=true;desktopViewport=true;
+        await chrome.debugger.sendCommand({tabId},'Emulation.setDeviceMetricsOverride',
+          {width:1024,height:900,deviceScaleFactor:0,mobile:false});
+        if(cancelled||!alive())return null;
+        meta=await chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query,settle:true},{frameId:0});
+        layout=await chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics');
+        if(cancelled||!alive()||meta?.url!==tab.url||typeof meta.public_text!=='string'
+          ||!meta.public_text.trim()||meta.public_text.length>20000
+          ||/verify you are human|user validation required|just a moment|access denied/i.test(meta.public_text))return null;
+        if(meta.source_detail!==true)return null;
+      }
       const size=layout.cssContentSize;
       if(cancelled || !alive() || !size || size.width<=0 || size.height<=0
           || size.width*size.height>20000000)return null;
@@ -53,6 +69,7 @@ async function captureStateSnapshot(job, query, commandId) {
       const afterMeta=await chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0});
       if(cancelled || !alive() || after.url!==tab.url || !images.length
           || afterMeta?.url!==meta.url || afterMeta?.public_text!==meta.public_text
+          || (state==='TN'&&query.operation==='detail'&&afterMeta.source_detail!==true)
           )return null;
       job.snapshotCaptures=(job.snapshotCaptures||0)+1;
       return {query:JSON.parse(JSON.stringify(query)),source_url:tab.url,public_text:meta.public_text,
@@ -60,12 +77,26 @@ async function captureStateSnapshot(job, query, commandId) {
     } catch {return null;}
     finally {
       if(restoreModal&&alive())try{await chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-view',query,command_id:commandId,view:'restore'},{frameId:0});}catch{}
+      if(desktopViewport&&attached)try{await chrome.debugger.sendCommand({tabId},'Emulation.clearDeviceMetricsOverride');}catch{}
       if(attached)try{await chrome.debugger.detach({tabId});}catch{}
+      if(desktopViewport)delete job.snapshotViewportBusy;
     }
   };
   // Evidence capture may consume at most 1.5s of the original budget. A late
   // callback discards its image and detaches its own tab; it never publishes it.
-  const timed=new Promise(resolve=>{timeoutId=setTimeout(()=>{cancelled=true;resolve(null);},1500);});
-  try{return await Promise.race([operation(),timed]);}
-  finally{clearTimeout(timeoutId);}
+  const timed=new Promise(resolve=>{timeoutId=setTimeout(()=>{
+    cancelled=true;
+    // Detach the original owned target on timeout so Chrome also drops its
+    // session viewport override. Late callbacks cannot publish a source image.
+    if(desktopViewport&&attached)chrome.debugger.detach({tabId}).catch(()=>{});
+    resolve(null);
+  },1500);});
+  let captured=null;
+  try{captured=await Promise.race([operation(),timed]);return captured;}
+  finally{
+    clearTimeout(timeoutId);
+    if(typeof diagnostic==='function')diagnostic('source-snapshot',job,JSON.stringify({
+      operation:query.operation||'search',capture_ms:Math.max(0,Date.now()-started),
+      saved:!!captured,pages:captured?(captured.images?.length||1):0}));
+  }
 }

@@ -35558,6 +35558,16 @@ def resolve_identity_review(payload, email, device):
     pending = [r for r in record["records"] if r["reviewable"] and r["id"] not in record["decisions"]]
     accepted = [r for r in record["records"] if not r["reviewable"] or record["decisions"].get(r["id"], {}).get("decision") == "accept"]
     rejected = [r for r in record["records"] if record["decisions"].get(r["id"], {}).get("decision") == "reject"]
+    if base["state"] == "NV":
+        # An explicit Nevada choice selects that signed registration, not just
+        # another identity for the automatic live-record ranking pool. Keep all
+        # other evidence/decisions for Reject and Undo; never alter its standing.
+        selected_nv = next((row for item in reversed(record["history"])
+            if item["decision"] == "accept"
+            and record["decisions"].get(item["candidate_id"], {}).get("decision") == "accept"
+            for row in accepted if row["id"] == item["candidate_id"] and row["reviewable"]), None)
+        if selected_nv:
+            accepted, pending = [selected_nv], []
     note = ("User identity review for this snapshot: " + "; ".join(
         f"{d['decision']} {next(r['name'] for r in record['records'] if r['id'] == key)} ({d['identifier']})"
         for key, d in record["decisions"].items()) + f". Reviewed by {email}. ") if record["decisions"] else ""

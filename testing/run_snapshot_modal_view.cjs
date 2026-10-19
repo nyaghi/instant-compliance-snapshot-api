@@ -4,13 +4,14 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
 function fixture(name='LOCAL ORGANIZATION'){
  let listener;const state={identifier:'CO42115',visible:true,top:90,scrolls:[]};
- const field=(label,offset)=>({innerText:label,getClientRects:()=>[{}],getBoundingClientRect:()=>({top:100+offset-state.top})});
- const expiry=field('Expiration Date: 08/28/2023',400),financial=field('09/30/2020',720);
+ const field=(label,offset)=>({innerText:label,getClientRects:()=>[{}],getBoundingClientRect:()=>({top:100+offset-state.top,bottom:125+offset-state.top})});
+ const status=field('Status: Expired',400),number=field('CO Number: '+state.identifier,435),registration=field('Registration Date: 12/07/2021',470),expiry=field('Expiration Date: 08/28/2023',505),financial=field('09/30/2020',720);
+ const table={querySelectorAll:q=>q==='thead th'?[field('Fiscal Year End',680)]:q==='tbody tr'?[{children:[financial]}]:[]};
  const dialog={getClientRects:()=>state.visible?[{}]:[],scrollHeight:1000,clientHeight:250,
   getBoundingClientRect:()=>({top:100}),get scrollTop(){return state.top;},set scrollTop(v){state.top=Math.max(0,Math.min(750,v));state.scrolls.push(state.top);},
-  querySelectorAll:q=>q==='h4'?[field('CO Number: '+state.identifier,0),expiry]:[],querySelector:q=>q==='#DetailsTabStrip-1 table tbody tr'?financial:null};
+  querySelectorAll:q=>q==='h4'?[status,number,registration,expiry]:[],querySelector:q=>q==='#DetailsTabStrip-1 table'?table:null};
  const win={};win.top=win;
- const ctx={window:win,document:{body:{innerText:name+' CO42115 Expired Expiration Date: 08/28/2023'},querySelector:q=>q==='#KendoWindowLevel1'?dialog:null},
+ const ctx={innerHeight:1000,window:win,document:{body:{innerText:name+' CO42115 Expired Expiration Date: 08/28/2023'},querySelector:q=>q==='#KendoWindowLevel1'?dialog:null},
   location:{origin:'https://tncab.tnsos.gov',href:'https://tncab.tnsos.gov/portal/registered-charities-search'},crypto:{randomUUID:()=> 'local'},
   Date,Promise,setTimeout,clearTimeout,chrome:{runtime:{id:'local-extension',onMessage:{addListener:fn=>listener=fn}}}};
  vm.createContext(ctx);vm.runInContext(source,ctx);
@@ -23,7 +24,7 @@ test('30 modeled organization DOMs show top, expiry and financial views and rest
  for(const org of orgs){const f=fixture(org.name),meta=await f.request({action:'registry-snapshot-metadata',query:f.query});
   assert.deepEqual(Array.from(meta.capture_views),['top','expiration','financial']);assert.ok(meta.public_text.includes(org.name));
   for(const view of ['top','expiration','financial','restore'])assert.equal((await f.request({action:'registry-snapshot-view',query:f.query,command_id:'local-command',view})).ok,true);
-  assert.deepEqual(f.state.scrolls,[0,384,704,90]);assert.equal(f.state.top,90);}
+  assert.deepEqual(f.state.scrolls,[0,384,664,90]);assert.equal(f.state.top,90);}
 });
 test('a stale restore cannot erase another command scroll binding',async()=>{
  const f=fixture();await f.request({action:'registry-snapshot-view',query:f.query,command_id:'current',view:'top'});

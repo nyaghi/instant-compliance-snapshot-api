@@ -164,6 +164,10 @@ def matching_reference(result, refs):
     name=str(result.get('matched_registry_name') or result.get('name') or '')
     ein=digits(result.get('ein',''));state=result.get('state')
     candidates=[r for r in refs if r.get('ein')==ein and r.get('state')==state]
+    if state=='TN':
+        # Later alias searches must not replace a captured detail for the same
+        # selected registration. Stable order retains latest-within-kind rules.
+        candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
     if state=='NY':
         path=urlsplit(result.get('source_url') or result.get('url') or '').path
         observed=re.fullmatch(r'/RegistrySearch/(\d{2}-\d{2}-\d{2})/?',path)
@@ -391,8 +395,12 @@ def connector_archive(record,payload,query,evidence):
             ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id)
             # The complete metadata stays in persistent storage. Continuations
             # carry short references, never images or repeated source URLs.
-            record.setdefault('source_snapshots',[]).append({k:ref[k] for k in ('url','identifier','record_name','captured_at','ein','state')})
-        record['source_snapshots']=record.get('source_snapshots',[])[-24:]
+            record.setdefault('source_snapshots',[]).append({
+                **{k:ref[k] for k in ('url','identifier','record_name','captured_at','ein','state')},
+                'operation':query.get('operation','')})
+        refs=record.get('source_snapshots',[])
+        if record['state']=='TN':refs=sorted(refs,key=lambda r:r.get('operation')=='detail')
+        record['source_snapshots']=refs[-24:]
     except Exception:
         record['snapshot_capture_unavailable']=True
     finally:
