@@ -383,7 +383,7 @@ def connector_archive(record,payload,query,evidence):
             source=urlsplit(url)
             keys=[v for k,v in parse_qsl(source.query,keep_blank_values=True) if k=='result']
             if (source.hostname!='verify.sos.ga.gov' or source.path!='/verification/Details.aspx'
-                    or len(keys)!=1 or keys[0]!=query.get('detail_key')
+                    or len(keys)!=1
                     or not re.fullmatch(r'[a-f0-9-]{36}',keys[0])):return
         text=incoming.get('public_text','')
         if not isinstance(text,str) or len(text)>20000:return
