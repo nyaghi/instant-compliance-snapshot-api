@@ -10,17 +10,26 @@ from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 
 SCHEMA='cc-search-history-v1'
-STATES={'GA','NC'}  # First focused integration; other states are not claimed.
-FIELDS={'state','operation','orgName','name','ein','search_mode','identifier','orgID','url'}
+# Capability boundary, not a claim that every route is instrumented.
+from deployment.state_snapshots import OFFICIAL_HOSTS
+STATES=frozenset(OFFICIAL_HOSTS)
+FIELDS={'state','operation','orgName','name','ein','search_mode','identifier','orgID','url','exact_above','source_kind','filter_label'}
 
 def public_query(query,state):
     if not isinstance(query,dict) or query.get('state')!=state:raise ValueError('Wrong query state')
     out={k:v for k,v in query.items() if k in FIELDS}
-    if any(not isinstance(v,str) or len(v)>1000 for v in out.values()):raise ValueError('Invalid public query')
+    if 'exact_above' in out and (state!='NV' or type(out['exact_above']) is not int or out['exact_above']!=20):raise ValueError('Invalid narrowing policy')
+    if any(not isinstance(v,str) or len(v)>1000 for k,v in out.items() if k!='exact_above'):raise ValueError('Invalid public query')
+    if out.get('source_kind') not in {None,'state_portal','official_dataset'}:raise ValueError('Invalid source kind')
     if state=='NC' and out.get('operation')=='search' and out.get('search_mode') not in {None,'STARTS_WITH','ALL_WORDS','EXACT_MATCH'}:raise ValueError('Unknown NC search mode')
     if 'url' in out:
         from deployment.state_snapshots import public_url
-        out['url']=public_url(out['url'],state)
+        source=urlsplit(out['url'])
+        # This is the public API used by WA's own portal, not an additional
+        # screenshot origin. History stores its path only, never credentials.
+        if state=='WA' and source.scheme=='https' and source.hostname=='ccfs-api.prod.sos.wa.gov' and not source.username and not source.password and source.port in (None,443) and not source.query and not source.fragment:
+            out['url']=source.geturl()
+        else:out['url']=public_url(out['url'],state)
     if not any(out.get(k) for k in ('name','orgName','ein','identifier','orgID','url')):raise ValueError('No query identity')
     return out
 
@@ -34,6 +43,14 @@ def complete_receipt(record,pending,evidence,now):
     digest=hashlib.sha256(json.dumps(query,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     receipt={'query_id':str(pending['query_id']),'query_sha256':digest,'operation':operation,
              'completed_at':now,'outcome':'Completed source response','returned_rows':total}
+    if record['state']=='NV' and operation=='search':
+        mode=evidence.get('search_mode')
+        broad=evidence.get('broad_total')
+        if mode not in {'STARTS_WITH','EXACT_MATCH'}:raise ValueError('NV observed filter not recorded')
+        if mode=='EXACT_MATCH' and (query.get('exact_above')!=20 or type(broad) is not int or not 20<broad<=10000):raise ValueError('NV narrowing not recorded')
+        if mode=='STARTS_WITH' and broad is not None:raise ValueError('NV contradictory filters')
+        receipt['observed_search_mode']=mode
+        if broad is not None:receipt['broad_result_count']=broad
     issued=pending.get('history_issued_at')
     if isinstance(issued,(int,float)) and issued<=now:receipt['issued_at']=issued
     return {'search_receipt':receipt}
@@ -89,10 +106,17 @@ def manifest(record,result,snapshot,now):
         if type(stamp) not in (float,int) or not record['issued']-1<=stamp<=now+1:raise ValueError('Receipt clock changed')
         if issued is not None and (type(issued) not in (float,int) or not record['issued']-1<=issued<=stamp):raise ValueError('Invalid issue time')
         count=receipt.get('returned_rows')
-        if count is not None and (type(count) is not int or not 0<=count<=1000):raise ValueError('Invalid source row count')
+        if count is not None and (type(count) is not int or not 0<=count<=10000):raise ValueError('Invalid source row count')
+        if receipt.get('observation_kind')=='transport_response':
+            if count is not None or receipt.get('outcome')!='Transport response received; source validation not recorded' or type(receipt.get('http_status')) is not int or not 200<=receipt['http_status']<400:raise ValueError('Invalid transport observation')
+        if state=='NV' and receipt['operation']=='search':
+            mode=receipt.get('observed_search_mode');broad=receipt.get('broad_result_count')
+            if mode not in {'STARTS_WITH','EXACT_MATCH'}:raise ValueError('NV filter receipt missing')
+            if mode=='EXACT_MATCH' and (query.get('exact_above')!=20 or type(broad) is not int or not 20<broad<=10000):raise ValueError('NV filter receipt changed')
+            if mode=='STARTS_WITH' and broad is not None:raise ValueError('NV filter receipt contradicted')
         entries.append({**receipt,'sequence':len(entries)+1})
     failed=record.get('search_failed_receipts',[])
-    if not isinstance(failed,list) or len(failed)>10:raise ValueError('Invalid incomplete attempts')
+    if not isinstance(failed,list) or len(failed)>(150 if record.get('history_order')=='issued-sequence-v1' else 10):raise ValueError('Invalid incomplete attempts')
     for e in failed:
         e=dict(e)
         if (e.get('outcome')!='Completion not confirmed' or e.get('completed_at') is not None
@@ -101,7 +125,11 @@ def manifest(record,result,snapshot,now):
             or not record['issued']-1<=e['reported_at']<=now+1):raise ValueError('Invalid failure receipt')
         entries.append(e)
     if not entries or len(entries)>150 or len({e['query_id'] for e in entries})!=len(entries):raise ValueError('Missing or duplicate receipts')
-    entries.sort(key=lambda e:e.get('completed_at') or e['reported_at'])
+    if record.get('history_order')=='issued-sequence-v1':
+        orders=[e.get('source_order') for e in entries]
+        if any(type(n) is not int or not 1<=n<=150 for n in orders) or len(set(orders))!=len(orders):raise ValueError('Invalid source request order')
+        entries.sort(key=lambda e:e['source_order'])
+    else:entries.sort(key=lambda e:e.get('completed_at') or e['reported_at'])
     for i,e in enumerate(entries):e['sequence']=i+1
     name=record.get('organization_name','')
     if not isinstance(name,str) or not 1<=len(name)<=500:raise ValueError('Invalid organization')
@@ -148,11 +176,19 @@ def loaded(ident,store):
 def stamp(value):
     return datetime.fromtimestamp(value,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if value is not None else 'Not recorded'
 
-def query_label(q):
+def query_label(q,receipt=None):
     if q.get('operation')=='detail' or 'identifier' in q:return 'Selected detail: '+(q.get('identifier') or q.get('url',''))
     if q.get('ein'):return 'EIN: '+q['ein']
     name=q.get('orgName') or q.get('name','')
-    mode='Prefix wildcard (*)' if q['state']=='GA' else {'STARTS_WITH':'Starting With','ALL_WORDS':'All Words','EXACT_MATCH':'Exact'}.get(q.get('search_mode'),'Starting With')
+    if q['state']=='GA':return 'Names beginning with "'+name+'" (entered as '+name+'*)'
+    if q['state'] not in {'GA','NC'}:
+        prefix='Official dataset lookup: ' if q.get('source_kind')=='official_dataset' else ''
+        if q['state']=='NV':
+            mode=(receipt or {}).get('observed_search_mode')
+            if mode=='STARTS_WITH':return prefix+'Name: '+name+' | Starting With'
+            if mode=='EXACT_MATCH':return prefix+'Name: '+name+' | Starting With returned '+str(receipt['broad_result_count'])+' rows, then Exact Match'
+        return prefix+('Name: '+name+' | '+q.get('filter_label','Filter not recorded'))
+    mode={'STARTS_WITH':'Starting With','ALL_WORDS':'All Words','EXACT_MATCH':'Exact'}.get(q.get('search_mode'),'Starting With')
     return name+' | '+mode
 
 def render_pdf(doc,asset_root=None):
@@ -174,12 +210,13 @@ def render_pdf(doc,asset_root=None):
     story += [p(doc['organization_name']),p('EIN '+doc['ein'][:2]+'-'+doc['ein'][2:]+' | State '+doc['state']+' | Result at completion: '+doc['result_at_completion']),p('Run '+doc['run_id']),p('Started '+stamp(doc['started_at'])+' | Completed '+stamp(doc['completed_at'])),Spacer(1,7)]
     story += [Paragraph('Recorded source requests',styles['Heading2']),p('Completed responses and attempts without confirmed completion are labeled separately. Row counts are the rows returned to CharityClarity before identity evaluation. An unrelated record does not establish a match.')]
     for e in doc['queries']:
-        cells=[[p(str(e['sequence'])+'. '+query_label(e['query'])),p(e['outcome'])],[p('Issued: '+stamp(e.get('issued_at'))),p('Completed: '+stamp(e['completed_at']))]]
+        timing_label='Response received: ' if e.get('observation_kind')=='transport_response' else 'Completed: '
+        cells=[[p(str(e['sequence'])+'. '+query_label(e['query'],e)),p(e['outcome'])],[p('Issued: '+stamp(e.get('issued_at'))),p(timing_label+stamp(e['completed_at']))]]
         if e.get('returned_rows') is not None:cells.append([p('Rows returned: '+str(e['returned_rows'])),p('Query receipt: '+e['query_id'])])
         if e.get('reason'):cells.append([p('Incomplete: '+e['reason']),p('Reported: '+stamp(e['reported_at']))])
         table=Table(cells,colWidths=[280,230],hAlign='LEFT');table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#edf3f7')),('BOX',(0,0),(-1,-1),.4,colors.HexColor('#ccd6df')),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8)]))
         story += [KeepTogether([table,Spacer(1,10)])]
-    story += [Paragraph('Reviewed input names',styles['Heading2']),p('These were inputs to the search plan. This list does not claim that each name was searched literally; the actual requests are listed above.')]
+    story += [Paragraph('Names supplied to CharityClarity',styles['Heading2']),p('These names were supplied for identity and search planning; they are not state registration matches. This list does not claim that each name was searched literally. The actual recorded requests are listed above.')]
     for n in doc['reviewed_names']:story.append(p(n))
     story += [Spacer(1,8),Paragraph('Evidence limits',styles['Heading2'])]
     if not doc.get('snapshot_url'):story.append(p('Original state-page snapshot unavailable for this run. This search history does not replace the missing original image.'))
@@ -227,3 +264,87 @@ def serve(handler,include_body=True,store=None):
     for k,v in [('Content-Type',mime),('Content-Length',str(len(body))),('Content-Disposition','attachment; filename="'+doc['state']+'-'+match[2]+'"'),('Cache-Control','private, max-age=86400'),('X-Content-Type-Options','nosniff')]:handler.send_header(k,v)
     handler.end_headers()
     if include_body:handler.wfile.write(body)
+
+
+class SourceQueryReceipt:
+    """Bounded observation of an existing source operation; performs no I/O."""
+    def __init__(self,run,query):
+        self.run=run;self.query=public_query(query,run.state)
+        run.search_history_sequence=getattr(run,'search_history_sequence',0)+1
+        self.sequence=run.search_history_sequence
+        self.issued=time.time();self.query_id=secrets.token_hex(12);self.saved=False
+    def complete(self,row_count=None):
+        if row_count is not None and (type(row_count) is not int or not 0<=row_count<=10000):
+            self.run.search_history_overflow=True;return
+        self._save('Completed official dataset evaluation' if self.query.get('source_kind')=='official_dataset' else 'Completed source response',time.time(),row_count)
+    def received(self,status):
+        self._save('Transport response received; source validation not recorded',time.time(),None,observation_kind='transport_response',http_status=status)
+    def incomplete(self):
+        self._save('Completion not confirmed',None,None)
+    def _save(self,outcome,completed,count,**extra):
+        if self.saved:return
+        self.saved=True
+        entries=getattr(self.run,'search_history_receipts',None)
+        if entries is None:entries=self.run.search_history_receipts=[]
+        if len(entries)>=150:
+            self.run.search_history_overflow=True;return
+        entries.append({'query':self.query,'query_id':self.query_id,'source_order':self.sequence,
+            'issued_at':self.issued,'completed_at':completed,'reported_at':time.time(),
+            'outcome':outcome,'returned_rows':count,**extra})
+
+def begin_source_query(state,name,filter_label,source_url='',source_kind='state_portal'):
+    """Called at the existing source operation, never from a planned-name list."""
+    from deployment.state_snapshots import CURRENT
+    run=CURRENT.get()
+    if not run or run.state!=state:return None
+    try:
+        query={'state':state,'operation':'search','name':name,
+               'filter_label':filter_label,'source_kind':source_kind}
+        if source_url:query['url']=source_url
+        return SourceQueryReceipt(run,query)
+    except (ValueError,TypeError,KeyError):
+        run.search_history_overflow=True;return None
+
+def finish_worker_history(run,result):
+    """Private child output only; the supervisor owns persistent storage."""
+    for pending in getattr(run,'search_history_pending',[]):
+        for receipts in pending.values():
+            for receipt in receipts:receipt.incomplete()
+        pending.clear()
+    data=dict(result);entries=getattr(run,'search_history_receipts',[])
+    if data.get('status')!='Not Registered' or data.get('success') is not True:return data
+    if getattr(run,'search_history_overflow',False):
+        data['search_history_capture']='unavailable';return data
+    if not entries:return data
+    issued=min(e['issued_at'] for e in entries)
+    record={'state':run.state,'ein':run.ein,'organization_name':run.name,
+        'purpose':'registration','issued':issued,'alternate_names':[],
+        'source_archive_run_id':run.run_id,'history_order':'issued-sequence-v1','completed':[],'search_failed_receipts':[]}
+    for entry in entries:
+        entry=dict(entry);query=entry.pop('query')
+        if entry['completed_at'] is not None:
+            entry.pop('reported_at',None)
+            entry['operation']=query['operation']
+            entry['query_sha256']=hashlib.sha256(json.dumps(query,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            record['completed'].append({'query':query,'search_receipt':entry})
+        else:
+            entry.update(query=query,operation=query['operation'],reason='SOURCE_RETRIEVAL_INCOMPLETE')
+            record['search_failed_receipts'].append(entry)
+    # No private identity tokens, credentials, source bodies or page images.
+    if len(json.dumps(record).encode())>150000:
+        data['search_history_capture']='unavailable';return data
+    data['_worker_search_history']=record
+    return data
+
+def persist_worker_history(result,job,record,refs,store=None):
+    """Supervisor-only pairing; no source request occurs on report download."""
+    from deployment.state_snapshots import digits
+    data=dict(result)
+    if not record:return data
+    if (not isinstance(record,dict) or record.get('state')!=job.get('state')
+        or record.get('state')!=data.get('state')
+        or digits(record.get('ein'))!=digits(job.get('payload',{}).get('ein'))
+        or digits(record.get('ein'))!=digits(data.get('ein'))):
+        data['search_history_capture']='unavailable';return data
+    record={**record,'source_snapshots':refs}
+    return attach(record,data,store)

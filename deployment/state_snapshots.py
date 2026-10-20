@@ -215,7 +215,10 @@ def persist_worker_result(queue,result,job,store=None):
     """Supervisor only, after reaping. Never give child processes DB access."""
     if not isinstance(result,dict):return result
     data=dict(result);assets=data.pop('_worker_source_archives',[])
-    if not assets:return data
+    history=data.pop('_worker_search_history',None)
+    if not assets:
+        from deployment.search_history import persist_worker_history
+        return persist_worker_history(data,job,history,[],store=store or (PostgresStore(queue.pool) if history and queue else None))
     data['evidence_url']=''
     refs=[];started=time.perf_counter()
     if (not isinstance(assets,list) or len(assets)>12
@@ -238,12 +241,14 @@ def persist_worker_result(queue,result,job,store=None):
             ref=matching_reference({**row,'ein':data['ein'],'state':data['state']},refs)
             if ref:row['evidence_url']=ref['url']
         data['_worker_identity_review']=context
-    return data
+    from deployment.search_history import persist_worker_history
+    return persist_worker_history(data,job,history,refs,store=store)
 
 def persist_inline_result(master,result):
     """API-owned continuation: archive now, never expose private image bytes."""
     if STORE is None:
         data=dict(result);data.pop('_worker_source_archives',None)
+        data.pop('_worker_search_history',None)
         data['evidence_capture']='unavailable';return data
     data=persist_worker_result(None,result,{'state':result['state'],'payload':{'ein':result['ein']}},store=STORE)
     try:
@@ -321,10 +326,16 @@ class CaptureRun:
         if assets:data['_worker_source_archives']=assets
         data['evidence_capture_ms']=round(self.capture_ms,2)
         data['evidence_capture']='captured' if assets else 'unavailable'
-        return data
+        from deployment.search_history import finish_worker_history
+        return finish_worker_history(self,data)
 
 class ContextCaptureProxy:
-    def __init__(self,context):self._context=context;self._captured=False;self._closed=False
+    def __init__(self,context):
+        self._context=context;self._captured=False;self._closed=False
+        run=CURRENT.get()
+        if run:
+            from deployment.search_observation import observe_browser_context
+            observe_browser_context(context,run)
     def __getattr__(self,key):return getattr(self._context,key)
     def capture(self):
         run=CURRENT.get()
@@ -404,6 +415,36 @@ def nc_completed_empty_snapshot(record,query,evidence,url,text):
     return bool(re.search(r'\bRecords Found:\s*0(?:\s|$)',observed)
                 and expected.casefold() in observed.casefold())
 
+def nc_completed_results_snapshot(record,query,evidence,url,text):
+    """A bound results list may contain unrelated rows on a negative check.
+
+    This is an original results page, not a declaration that it was empty.
+    Selected registrations still require their own credential-bound evidence.
+    """
+    if nc_completed_empty_snapshot(record,query,evidence,url,text):return True
+    source=urlsplit(url)
+    if (record.get('state')!='NC' or query.get('state')!='NC'
+        or query.get('operation')!='search' or not isinstance(evidence,dict)
+        or evidence.get('query')!=query or evidence.get('complete') is not True
+        or evidence.get('state')!='NC' or evidence.get('verification_pending') is not False
+        or type(evidence.get('total')) is not int or not 0<evidence['total']<=100
+        or not isinstance(evidence.get('rows'),list) or len(evidence['rows'])!=evidence['total']
+        or not isinstance(query.get('name'),str) or not query['name'].strip()
+        or not isinstance(text,str) or source.scheme!='https' or source.hostname!='www.sosnc.gov'
+        or source.path!='/online_services/search/Charities_Results' or source.query or source.fragment
+        or re.search(r'verify you are human|user validation required|just a moment|access denied',text,re.I)):
+        return False
+    mode={None:'Starting With','STARTS_WITH':'Starting With','ALL_WORDS':'All Words','EXACT_MATCH':'Exact'}.get(query.get('search_mode'))
+    if mode is None:return False
+    observed=' '.join(text.split())
+    heading='Words: '+mode+' Organization Name '+' '.join(query['name'].split())+' Search Time '
+    if heading.casefold() not in observed.casefold() or not re.search(r'\bRecords Found:\s*'+str(evidence['total'])+r'(?:\s|$)',observed):return False
+    # Require at least one returned registration to be visible in the image's
+    # bound original text. Do not archive an unrelated page sharing a heading.
+    return any(isinstance(row,dict) and str(row.get('name') or row.get('CSL Legal Name') or row.get('Organization Name') or '').strip()
+        and key(row.get('name') or row.get('CSL Legal Name') or row.get('Organization Name')) in key(text)
+        for row in evidence['rows'])
+
 def connector_archive(record,payload,query,evidence):
     """Called only after the original query ID and source schema were validated."""
     incoming=payload.get('state_snapshot')
@@ -462,6 +503,10 @@ def connector_archive(record,payload,query,evidence):
                 or not rows and ga_completed_empty_grid_snapshot(record,query,evidence,url,text)
                 or not rows and nc_completed_empty_snapshot(record,query,evidence,url,text)):
             rows=[('@completed-search',record['organization_name'])]
+        elif nc_completed_results_snapshot(record,query,evidence,url,text):
+            # Archive once as search evidence. This marker cannot be selected
+            # as a positive credential or used to manufacture a zero count.
+            rows=[('@completed-search',record['organization_name']),*rows]
         identifier=str(query.get('identifier') or query.get('orgID') or '')
         if identifier and rows:rows=[(identifier,rows[0][1])]
         for ident,name in rows[:12]:
