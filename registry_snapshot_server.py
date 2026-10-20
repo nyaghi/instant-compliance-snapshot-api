@@ -33916,7 +33916,15 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
 def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None, me_progress: dict | None = None, wi_progress: dict | None = None) -> dict:
     if not trial_identity():
         return _run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
-    from deployment.state_snapshots import CaptureRun
+    from deployment.state_snapshots import CaptureRun, CURRENT, digits
+    shared_capture=CURRENT.get()
+    if (shared_capture is not None and getattr(shared_capture,'semantic_history_scope',False)
+            and shared_capture.state==(state or '').upper() and shared_capture.ein==digits(ein)
+            and shared_capture.name==organization_name):
+        data=_run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
+        from deployment.state_snapshots import downloaded_record
+        downloaded_record(sys.modules[__name__],data)
+        return data
     with CaptureRun(organization_name,ein,state) as capture:
         capture.known_names=[organization_name,*known_names_for_ein(ein)]
         data=_run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
@@ -35185,7 +35193,7 @@ def run_me_lookup_with_lane(organization_name: str, ein: str, progress: dict) ->
             ME_LOOKUP_LOCK.release()
 
 
-def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
+def _run_single_state_lookup_reliably_source(organization_name: str, ein: str, state: str) -> dict:
     state = (state or "").upper()
     attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
     if state in {"CT", "FL"}:
@@ -35298,6 +35306,28 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     if result and is_incomplete_no_match_result(state, (result.get("status") or "").strip().lower(), result):
         return conservative_incomplete_lookup_result(result, state)
     return result or run_state_lookup(organization_name, ein, state)
+
+
+
+def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
+    # Wisconsin's existing confirmation passes share completed source queries.
+    # Keep their observations in the same state/EIN/name scope too. The source
+    # retry function and every registry action remain unchanged.
+    if (state or '').upper()!='WI' or not trial_identity():
+        return _run_single_state_lookup_reliably_source(organization_name,ein,state)
+    from deployment.state_snapshots import CaptureRun
+    with CaptureRun(organization_name,ein,'WI') as capture:
+        capture.semantic_history_scope=True
+        capture.known_names=[organization_name,*known_names_for_ein(ein)]
+        data=_run_single_state_lookup_reliably_source(organization_name,ein,state)
+        try:
+            data=capture.finish(data)
+            if os.environ.get('CE_FINAL_FOUR_CHILD')!='1':
+                from deployment.state_snapshots import persist_inline_result
+                data=persist_inline_result(sys.modules[__name__],data)
+            return data
+        except Exception:
+            return {**data,'evidence_capture':'unavailable'}
 
 
 def apply_batch_state_health(results: list[dict]) -> list[dict]:
