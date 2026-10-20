@@ -11,7 +11,7 @@ function fixture(changes={}) {
     registryOrigin:()=> 'https://www.sosnc.gov',
     chrome:{tabs:{get:async()=>({url:state.url}),sendMessage:async(_tab,message)=>{
       if(message.action==='registry-snapshot-view'){calls.push(['view:'+message.view,{tabId:_tab}]);state.view=message.view;if(state.viewError)return {ok:false};return {ok:true};}
-      return {url:state.url,public_text:state.text,source_detail:state.sourceDetail!==false,source_fields_visible:state.sourceFieldsVisible!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{})};}},
+      return {url:state.url,public_text:state.text,source_detail:state.sourceDetail!==false,source_fields_visible:state.sourceFieldsVisible!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{}),...(state.nvViews?{capture_views:state.sourceFieldsVisible===false?[]:state.nvViews}:{})};}},
       debugger:{attach:async target=>{calls.push(['attach',target]);if(state.attachError)throw Error('refused');},
         sendCommand:async(target,command,params)=>{calls.push([command,target]);if(state.throwCommand)throw Error('capture error');
           if(state.mutate)job.generation++;
@@ -19,7 +19,7 @@ function fixture(changes={}) {
           if(command==='Emulation.clearDeviceMetricsOverride'){state.viewportWidth=640;state.viewportHeight=400;return {};}
           if(command==='Page.getLayoutMetrics')return {cssContentSize:{width:state.viewportWidth||1000,height:state.height||1200},cssLayoutViewport:{clientWidth:state.viewportWidth||640,clientHeight:state.viewportHeight||400}};
           if(state.captureHook)state.captureHook(job);
-          return {data:state.imageData||(state.modal?{top:'AA==',expiration:'AQ==',financial:'Ag=='}[state.view]:'AA==')};},
+          return {data:state.imageData||((state.modal||state.nvViews&&state.view)?{top:'AA==',expiration:'AQ==',financial:'Ag==','nv-0':'AA==','nv-1':'AQ==','nv-2':'Ag=='}[state.view]:'AA==')};},
         detach:async target=>calls.push(['detach',target])}}};
   vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(root,'state-snapshot-worker.js'),'utf8'),ctx);
   return {ctx,job,query,calls,state,run:()=>ctx.captureStateSnapshot(job,query,'command123')};
@@ -44,15 +44,15 @@ test('30 Tennessee modal captures preserve three actual views, restore scroll, r
 });
 
 function nvFixture(options={}) {
- const h=fixture({url:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=local',text:'LOCAL NV19951158753 Permanently Revoked',...options});
+ const h=fixture({url:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=local',text:'LOCAL NV19951158753 Permanently Revoked',nvViews:['nv-0'],...options});
  Object.assign(h.query,{state:'NV',identifier:'NV19951158753'});h.job.registryState='NV';h.ctx.registryOrigin=()=> 'https://orion.nv.gov';return h;
 }
-test('30 Nevada workflows require visible source fields, restore desktop viewport and preserve budget',async()=>{
+test('30 Nevada workflows use proven source sections, restore scroll and preserve budget',async()=>{
  const orgs=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/oct19-cohort.json'))).slice(0,30);
  for(const org of orgs){const h=nvFixture({text:org.name+' NV19951158753'}),deadline=h.job.activeExpiresAt,out=await h.run();
   assert.ok(out);assert.equal(h.job.activeExpiresAt,deadline);assert.equal(h.job.pending,'command123');assert.equal(h.job.snapshotCaptures,1);
-  assert.equal(h.state.viewportWidth,640);assert.equal(h.state.viewportHeight,400);assert.equal(h.job.snapshotViewportBusy,undefined);
-  assert.equal(h.calls.filter(c=>c[0]==='Emulation.setDeviceMetricsOverride').length,1);assert.equal(h.calls.at(-2)[0],'Emulation.clearDeviceMetricsOverride');assert.equal(h.calls.at(-1)[0],'detach');}
+  assert.equal(h.state.viewportWidth,undefined);assert.equal(h.job.snapshotViewportBusy,undefined);
+  assert.equal(h.calls.some(c=>c[0].startsWith('Emulation.')),false);assert.equal(h.calls.at(-2)[0],'view:restore');assert.equal(h.calls.at(-1)[0],'detach');}
 });
 test('Nevada rejects missing identity and clipped fields while ordinary search never overrides viewport',async()=>{
  for(const option of [{sourceDetail:false},{sourceFieldsVisible:false}]){const h=nvFixture(option);assert.equal(await h.run(),null);assert.ok(!h.calls.some(c=>c[0]==='Page.captureScreenshot'));}
@@ -147,4 +147,20 @@ test('late TN viewport callback cannot publish after its original capture deadli
 
 test('capture timing contains only bounded phase facts and never image pixels',async()=>{
  const h=fixture(),facts=[];h.ctx.diagnostic=(type,job,detail)=>facts.push({type,detail:JSON.parse(detail)});await h.run();assert.equal(facts.length,1);assert.equal(facts[0].type,'source-snapshot');assert.equal(facts[0].detail.saved,true);assert.equal(facts[0].detail.pages,1);assert.ok(facts[0].detail.capture_ms>=0);assert.deepEqual(Object.keys(facts[0].detail).sort(),['capture_ms','operation','pages','saved']);
+});
+
+
+test('NV detail captures only the source viewport containing all proven visible fields',async()=>{
+ const h=nvFixture();let params;const send=h.ctx.chrome.debugger.sendCommand;h.ctx.chrome.debugger.sendCommand=async(t,c,p)=>{if(c==='Page.captureScreenshot')params=p;return send(t,c,p);};
+ assert.ok(await h.run());assert.equal(params.captureBeyondViewport,false);assert.equal(params.clip.width,640);assert.equal(params.clip.height,400);assert.equal(params.fromSurface,true);
+});
+test('validated image discarded during slow restoration never spends a capture allowance',async()=>{
+ const h=nvFixture();let release;const send=h.ctx.chrome.tabs.sendMessage;h.ctx.chrome.tabs.sendMessage=async(t,m,...rest)=>{if(m.action==='registry-snapshot-view'&&m.view==='restore')return new Promise(r=>release=r);return send(t,m,...rest);};
+ const out=await h.run();assert.equal(out,null);assert.equal(h.job.snapshotCaptures||0,0);release({});await new Promise(r=>setImmediate(r));assert.equal(h.job.snapshotCaptures||0,0);
+});
+
+
+test('NV stalled capture requests only its bound scroll restoration and detaches on timeout',async()=>{
+ const h=nvFixture();let release;const send=h.ctx.chrome.debugger.sendCommand;h.ctx.chrome.debugger.sendCommand=async(t,c,p)=>{if(c==='Page.captureScreenshot')return new Promise(r=>release=r);return send(t,c,p);};
+ assert.equal(await h.run(),null);assert.equal(h.job.snapshotCaptures||0,0);assert.ok(h.calls.some(c=>c[0]==='view:restore'));assert.ok(h.calls.some(c=>c[0]==='detach'));assert.ok(h.calls.every(c=>c[1].tabId===1));release({data:'AA=='});await new Promise(r=>setImmediate(r));assert.equal(h.job.snapshotCaptures||0,0);
 });

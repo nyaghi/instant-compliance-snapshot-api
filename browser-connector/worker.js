@@ -6,11 +6,12 @@ function nvHandoffDiagnostic(job,message) {
   if(!P.TRIAL_ORIGIN || job?.registryState!=='NV' || typeof message.ok!=='boolean' || message.progress)return message;
   const operation=job.command?.query?.operation;
   return {...message,nv_readiness:{...message.nv_readiness,handoff:{
-    build:'functional-recovery-fh-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
+    build:'nv-scroll-evidence-local-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
     active:isActive(job),pending:!!job.pending,search_complete:job.finalFourSearchComplete===true,
     pending_matches_reply:job.pending===message.id,
     command_matches_reply:job.command?.id===message.id,
-    operation:['search','detail'].includes(operation)?operation:'none'
+    operation:['search','detail'].includes(operation)?operation:'none',
+    capture:(job.trialDiagnostics||[]).filter(entry=>entry.type==='source-snapshot-phase').slice(-24)
   }}};
 }
 const QUEUE_TTL = 1200000, ACTIVE_TTL = 300000, PACE_MS = 3000;
@@ -64,7 +65,7 @@ function diagnostic(type, job, detail = "") {
   const at=Date.now(), summary=String(detail).slice(0,180);
   diagnostics.push({ at, type, id: job?.lookupId || "", phase: job?.pending ? "search" : isActive(job) ? "active" : "queued", detail: summary });
   if (diagnostics.length > 80) diagnostics.shift();
-  if(P.TRIAL_ORIGIN && job && ["GA","MS","NC","TN"].includes(job.registryState)) {
+  if(P.TRIAL_ORIGIN && job && ["GA","MS","NC","TN","NV"].includes(job.registryState)) {
     job.trialDiagnostics ||= [];
     job.trialDiagnostics.push({at,type,detail:String(detail).slice(0,600)});
     if(job.trialDiagnostics.length>120)job.trialDiagnostics.shift();
@@ -605,7 +606,13 @@ async function performSearch(job, query, id) {
     response = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : "NY_CONNECTOR_INCOMPLETE", ...(error.nvSequence?{nv_readiness:error.nvSequence}:{}) };
   }
   if (job.closed) return;
-  if (response.ok && typeof captureStateSnapshot === 'function') {
+  // NV positive searches need the observed detail, not an offscreen result
+  // list. Reserve the original four-capture allowance for those detail pages.
+  const nvPositiveSearch=P.TRIAL_ORIGIN&&job.registryState==='NV'&&query.operation==='search'
+    &&response.ok===true&&response.evidence?.complete===true&&response.evidence.total>0
+    &&Array.isArray(response.evidence.rows)&&response.evidence.rows.length>0;
+  if(nvPositiveSearch)diagnostic('source-snapshot-phase',job,JSON.stringify({operation:'search',phase:'positive-search-detail-required'}));
+  if (response.ok && !nvPositiveSearch && typeof captureStateSnapshot === 'function') {
     const snapshot=await captureStateSnapshot(job,query,id);
     if(snapshot)response.state_snapshot=snapshot;
   }

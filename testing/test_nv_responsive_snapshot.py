@@ -1,5 +1,5 @@
 """Actual local Chromium/CDP captures; source-backed layout fixture, no live queries."""
-import asyncio,base64,io,json,sys,tempfile,time,unittest
+import asyncio,base64,io,json,sys,tempfile,time,unittest,os,subprocess
 from pathlib import Path
 from playwright.async_api import async_playwright
 from pypdf import PdfReader
@@ -16,7 +16,8 @@ main{padding:25px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22p
 <h1 id="org">LOCAL ORGANIZATION</h1><button>Return To Results</button><h4>Entity Information</h4><div role="form"><h4>Entity Information</h4><div class="grid">'''+''.join('<div><p><strong>'+k+'</strong></p><p>'+v+'</p></div>' for k,v in FIELDS)+'''</div><h4>Agent Information</h4><p>Excluded from identity</p><div style="height:1800px">LOCAL lower source panel</div></div></main></section><footer>LOCAL footer</footer>'''
 class Responsive(unittest.IsolatedAsyncioTestCase):
  async def test_thirty_native_windows_capture_complete_original_fields_and_restore(self):
-  content=(ROOT/'browser-connector/registry-content.js').read_text(encoding='utf-8');worker=(ROOT/'browser-connector/state-snapshot-worker.js').read_text(encoding='utf-8')
+  # Historical GE viewport experiment, kept separate from candidate scroll coverage.
+  content=subprocess.check_output(['git','show','b033361c760abceaabb08988a2a128b7d5fad10d:browser-connector/registry-content.js'],cwd=ROOT,text=True,encoding='utf-8');worker=subprocess.check_output(['git','show','b033361c760abceaabb08988a2a128b7d5fad10d:browser-connector/state-snapshot-worker.js'],cwd=ROOT,text=True,encoding='utf-8')
   durations=[];requests=[];commands=[];initial_clipped=0
   temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
   async def fulfill(route):requests.append(route.request.url);await route.fulfill(content_type='text/html',body=HTML)
@@ -45,10 +46,10 @@ class Responsive(unittest.IsolatedAsyncioTestCase):
      asset=s.asset_for(base64.b64decode(out['image']),kind='image',state='NV',ein=org['ein'],run_id='local-nv-capture-00000001',source_url=out['source_url'],identifier='NV19951158753',record_name=org['name'])
      ref=s.archive(asset,ein=org['ein'],state='NV',run_id=asset['run_id'],store=store);_,pdf=s.saved_pdf(ref['url'].split('/')[-1][:-4],store)
      pg=PdfReader(io.BytesIO(pdf)).pages[0];self.assertEqual(pg.extract_text(),'');self.assertEqual(list(pg['/Resources']['/XObject'].get_object().values())[0].get_object().get_data(),base64.b64decode(out['image']))
-     if i==0:(ROOT.parent/'local-responsive-NV-fixture.pdf').write_bytes(pdf)
+     if i==0 and not os.environ.get('CC_SNAPSHOT_RECEIPT_PATH'):(ROOT.parent/'local-responsive-NV-fixture.pdf').write_bytes(pdf)
      await context.close()
    finally:
     for browser in browsers.values():await browser.close()
   self.assertEqual(len(requests),30);self.assertGreaterEqual(initial_clipped,20)
-  (ROOT.parent/'nv-crop-local-capture-receipt.json').write_text(json.dumps({'distinct_contexts':30,'local_Chromium_CDP_captures':30,'original_JPEG_byte_preserved':True,'source_fields_visible':True,'viewport_and_scroll_restored':True,'initial_clipped_contexts':initial_clipped,'mean_ms':sum(durations)/len(durations),'max_ms':max(durations),'live_queries':0,'commands':sorted(set(commands)),'limitation':'Source-backed modeled local layout; actual source desktop experiment separate, not 30 live searches.'},indent=2))
+  Path(os.environ.get('CC_SNAPSHOT_RECEIPT_PATH',str(ROOT.parent/'nv-crop-local-capture-receipt.json'))).write_text(json.dumps({'distinct_contexts':30,'local_Chromium_CDP_captures':30,'original_JPEG_byte_preserved':True,'source_fields_visible':True,'viewport_and_scroll_restored':True,'initial_clipped_contexts':initial_clipped,'mean_ms':sum(durations)/len(durations),'max_ms':max(durations),'live_queries':0,'commands':sorted(set(commands)),'limitation':'Source-backed modeled local layout; actual source desktop experiment separate, not 30 live searches.'},indent=2))
 if __name__=='__main__':unittest.main(verbosity=2)

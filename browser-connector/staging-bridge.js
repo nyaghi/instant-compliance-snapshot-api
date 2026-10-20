@@ -60,7 +60,7 @@
         // the caller can start the next job before onDisconnect is delivered.
         if (message.id === job.finishId) dispose(job);
         const response=P.TRIAL_ORIGIN && job.registryState==='NV'
-          ? {...message,nv_readiness:{...message.nv_readiness,bridge:{build:'functional-recovery-fh-1',extension_id:chrome.runtime.id}}}
+          ? {...message,nv_readiness:{...message.nv_readiness,bridge:{build:'nv-scroll-evidence-local-1',extension_id:chrome.runtime.id}}}
           : message;
         reply(message.id, response);
       }

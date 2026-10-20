@@ -1952,6 +1952,7 @@
     return dated.sort((a,b)=>b.order-a.order)[0]?.cell||null;
   }
   async function snapshotView(m) {
+    if(NV)return snapshotNvView(m);
     const dialog=snapshotDialog(m.query);
     if(!dialog||typeof m.command_id!=='string'||!m.command_id||m.command_id.length>200)return {ok:false};
     if(m.view==='restore') {
@@ -1976,30 +1977,64 @@
     const inView=targets.every(el=>el.getBoundingClientRect().top>=viewportTop&&el.getBoundingClientRect().bottom<=viewportBottom);
     return {ok:snapshotDialog(m.query)===dialog&&inView};
   }
-  function snapshotNvVisibility(query) {
+  let snapshotNvScroll=null;
+  function snapshotNvContext(query) {
     if(!NV||query?.state!=='NV'||query.operation!=='detail')return null;
     try {
       const business=nvFields(query.identifier),fields=business||nvReservationFields(query.identifier);
-      if(!fields)return {source_detail:false,source_fields_visible:false};
+      if(!fields)return null;
       const title=business?'Entity Information':'Name Reservation Information';
       const forms=[...document.querySelectorAll('[role="form"]')].filter(el=>[...el.querySelectorAll('h4')].some(h=>text(h)===title));
       const panels=[...document.querySelectorAll('section.app-l-body')].filter(visible);
-      if(forms.length!==1||panels.length!==1)return {source_detail:false,source_fields_visible:false};
+      if(forms.length!==1||panels.length!==1)return null;
       const wanted=business?['Entity Name','NV Business ID','Entity Status','Entity Type','FEIN','Solicits Charitable Contribution?','Annual Renewal Due Date/Expiration Date',...(/^E\d{7,14}-\d$/.test(query.identifier)?['Entity Number']:[])]:
         ['Reserved Name','Entity Number','Status','Formation Date','Expiration Date'];
-      const cells=[];
+      const pairs=[];
       for(const el of forms[0].querySelectorAll('h4,p')) {
         if(el.tagName==='H4'&&text(el)==='Agent Information')break;
         const label=el.querySelector('strong');
-        if(label&&wanted.includes(text(label)))cells.push(el,el.nextElementSibling);
+        if(label&&wanted.includes(text(label)))pairs.push([el,el.nextElementSibling]);
       }
-      const panel=panels[0].getBoundingClientRect(),top=Math.max(0,panel.top),bottom=Math.min(innerHeight,panel.bottom);
-      const full=cells.length===wanted.length*2&&cells.every(el=>{
-        if(!visible(el))return false;const r=el.getBoundingClientRect();
-        return r.top>=top&&r.bottom<=bottom&&r.left>=0&&r.right<=innerWidth;
-      });
-      return {source_detail:true,source_fields_visible:full};
-    }catch{return {source_detail:false,source_fields_visible:false};}
+      if(pairs.length!==wanted.length||pairs.some(pair=>pair.some(el=>!visible(el))))return null;
+      const panel=panels[0],r=panel.getBoundingClientRect(),footer=document.querySelector('footer');
+      const top=Math.max(0,r.top),bottom=Math.min(innerHeight,r.bottom,visible(footer)?footer.getBoundingClientRect().top:innerHeight);
+      if(bottom-top<60)return null;
+      return {panel,pairs,top,bottom};
+    }catch{return null;}
+  }
+  function snapshotNvPlan(context) {
+    if(!context)return null;
+    const rows=context.pairs.map(elements=>({elements,top:Math.min(...elements.map(e=>e.getBoundingClientRect().top)),bottom:Math.max(...elements.map(e=>e.getBoundingClientRect().bottom))})).sort((a,b)=>a.top-b.top);
+    const groups=[],height=context.bottom-context.top-4;
+    for(const row of rows){
+      if(row.bottom-row.top>height||row.elements.some(el=>{const r=el.getBoundingClientRect();return r.left<0||r.right>innerWidth;}))return null;
+      let group=groups.at(-1);
+      if(!group||Math.max(group.bottom,row.bottom)-group.top>height){group={top:row.top,bottom:row.bottom,elements:[]};groups.push(group);}
+      group.bottom=Math.max(group.bottom,row.bottom);group.elements.push(...row.elements);
+    }
+    return groups.length<=3?groups:null;
+  }
+  async function snapshotNvView(m) {
+    const context=snapshotNvContext(m.query);
+    if(!context||typeof m.command_id!=='string'||!m.command_id||m.command_id.length>200)return {ok:false};
+    if(m.view==='restore'){
+      if(snapshotNvScroll?.panel!==context.panel||snapshotNvScroll.command!==m.command_id||snapshotNvScroll.identifier!==m.query.identifier)return {ok:false};
+      context.panel.scrollTop=snapshotNvScroll.top;snapshotNvScroll=null;return {ok:true};
+    }
+    const groups=snapshotNvPlan(context),index=/^nv-[0-2]$/.test(m.view)?Number(m.view.slice(3)):-1;
+    if(!groups||index<0||!groups[index])return {ok:false};
+    if(index===0)snapshotNvScroll={panel:context.panel,command:m.command_id,identifier:m.query.identifier,top:context.panel.scrollTop};
+    if(snapshotNvScroll?.panel!==context.panel||snapshotNvScroll.command!==m.command_id||snapshotNvScroll.identifier!==m.query.identifier)return {ok:false};
+    const group=groups[index];context.panel.scrollTop+=group.top-context.top-2;
+    await new Promise(resolve=>setTimeout(resolve,40));
+    const current=snapshotNvContext(m.query);
+    const full=!!current&&current.panel===context.panel&&group.elements.every(el=>{const r=el.getBoundingClientRect();return visible(el)&&r.top>=current.top&&r.bottom<=current.bottom&&r.left>=0&&r.right<=innerWidth;});
+    return {ok:full};
+  }
+  function snapshotNvVisibility(query) {
+    if(!NV||query?.state!=='NV'||query.operation!=='detail')return null;
+    const context=snapshotNvContext(query),plan=snapshotNvPlan(context);
+    return {source_detail:!!context,source_fields_visible:!!context&&context.pairs.flat().every(el=>{const r=el.getBoundingClientRect();return r.top>=context.top&&r.bottom<=context.bottom;}),capture_views:plan?plan.map((_,i)=>'nv-'+i):[]};
   }
   function snapshotMetadata(query) {
     const dialog=snapshotDialog(query);
@@ -2007,14 +2042,14 @@
       ...([...dialog.querySelectorAll('h4')].some(el=>/^Status:/.test(text(el)))?['expiration']:[]),
       ...(snapshotFinancialCell(dialog)?['financial']:[])]:null;
     return {url:location.href,public_text:(document.body?.innerText||'').slice(0,20000),
-      ...(TN&&query?.operation==='detail'?{source_detail:!!dialog}:{}),...(snapshotNvVisibility(query)||{}),...(capture_views?{capture_views}:{})};
+      ...(TN&&query?.operation==='detail'?{source_detail:!!dialog}:{}),...(snapshotNvVisibility(query)||{}),...(NV?{source_visible:document.visibilityState==='visible'}:{}),...(capture_views?{capture_views}:{})};
   }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
     if(m.action==='registry-snapshot-metadata') {
       if(m.settle===true&&(TN||NV)) {
         // Nevada's original panel has a 0.2s height transition after resize.
-        setTimeout(()=>reply(snapshotMetadata(m.query)),NV?220:40);return true;
+        setTimeout(()=>reply(snapshotMetadata(m.query)),40);return true;
       }
       reply(snapshotMetadata(m.query));return false;
     }
