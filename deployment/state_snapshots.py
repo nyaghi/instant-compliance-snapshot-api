@@ -164,6 +164,13 @@ def matching_reference(result, refs):
     name=str(result.get('matched_registry_name') or result.get('name') or '')
     ein=digits(result.get('ein',''));state=result.get('state')
     candidates=[r for r in refs if r.get('ein')==ein and r.get('state')==state]
+    if state=='NM' and re.fullmatch(r'\d{2}-?\d{7}',ident) and digits(ident)==ein:
+        # The connector uses the nine-digit FEIN while the public result keeps
+        # New Mexico's displayed hyphen. This is one already-bound credential.
+        return next((r for r in reversed(candidates)
+                     if re.fullmatch(r'\d{2}-?\d{7}',str(r.get('identifier','')))
+                     and digits(r['identifier'])==ein
+                     and (not name or key(r.get('record_name'))==key(name))),None)
     if state=='TN':
         # Later alias searches must not replace a captured detail for the same
         # selected registration. Stable order retains latest-within-kind rules.
@@ -339,6 +346,23 @@ class BrowserCaptureProxy:
         return self._browser.close(*args,**kwargs)
 
 
+def nm_detail_snapshot_bound(record,query,evidence,url,text,identifier):
+    """Accept only this observed NM FEIN detail, including its display hyphen."""
+    if (record.get('state')!='NM' or query.get('state')!='NM'
+            or query.get('operation')!='detail' or not re.fullmatch(r'\d{9}',identifier)
+            or digits(record.get('ein'))!=identifier or not isinstance(evidence,dict)
+            or evidence.get('complete') is not True or evidence.get('ein')!=identifier
+            or not query.get('name') or key(evidence.get('name'))!=key(query['name'])):
+        return False
+    parsed=urlsplit(url)
+    feins=[v for k,v in parse_qsl(parsed.query,keep_blank_values=True) if k.casefold()=='fein']
+    return (parsed.scheme=='https' and parsed.hostname=='secure.nmdoj.gov'
+            and parsed.path=='/CharitySearch/CharityDetail.aspx' and len(feins)==1
+            and re.fullmatch(r'\d{2}-?\d{7}',feins[0]) is not None
+            and digits(feins[0])==identifier
+            and re.search(r'(?<!\d)'+identifier[:2]+r'-?'+identifier[2:]+r'(?!\d)',text) is not None)
+
+
 def connector_archive(record,payload,query,evidence):
     """Called only after the original query ID and source schema were validated."""
     incoming=payload.get('state_snapshot')
@@ -385,7 +409,10 @@ def connector_archive(record,payload,query,evidence):
                 if key(name) not in key(text):continue
                 application=re.fullmatch(r'NCAPP-(\d+)',ident) if record['state']=='NC' and query.get('operation')=='detail' else None
                 bound_application=bool(application and query.get('url')==url and urlsplit(url).path=='/online_services/search/charities_profile/'+application[1])
-                if ident and ident not in text and ident not in url and not bound_application:continue
+                nm_detail=record['state']=='NM' and query.get('operation')=='detail'
+                bound_nm=nm_detail_snapshot_bound(record,query,evidence,url,text,ident) if nm_detail else False
+                if nm_detail and not bound_nm:continue
+                if ident and ident not in text and ident not in url and not bound_application and not bound_nm:continue
             images=incoming.get('images')
             multi_source=(record['state'] in {'TN','NV'} and query.get('operation')=='detail') or (record['state']=='NV' and query.get('operation')=='search' and ident=='@completed-search')
             multiple=multi_source and isinstance(images,list) and 2<=len(images)<=(8 if record['state']=='NV' and query.get('operation')=='detail' else 3)
