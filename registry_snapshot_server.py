@@ -8494,6 +8494,47 @@ def nc_completed_candidates_for_review(record):
         REVIEWED_NAME_CONTEXT.reset(context)
 
 
+def al_completed_candidates_for_review(record):
+    """Keep only validated, query-bound numbered AL rows after a later failure.
+
+    This never proves search completeness or automatic identity. It performs no
+    new registry/address requests and ignores conflicting copies of a credential.
+    """
+    if record.get("state") != "AL":
+        return []
+    token = REVIEWED_NAME_CONTEXT.set({canonical_ein_digits(record["ein"]):
+        tuple(record.get("alternate_names", [])) if record.get("mode") != "sales" else ()})
+    retained, blocked = {}, set(record.get("identity_context", {}).get("rejected", []))
+    try:
+        for item in record.get("completed", []):
+            query, payload = item.get("query", {}), item.get("evidence", {})
+            if query.get("state") != "AL" or query.get("operation") != "search":
+                continue
+            try:
+                final_four_clean_evidence(payload, query)
+                rows = final_four_search_evidence(payload, "AL", query)
+            except (ValueError, KeyError, TypeError):
+                continue
+            for row in rows:
+                key = row["identifier"]
+                if key in blocked or row.get("registration_identifier_missing"):
+                    continue
+                if key in retained and any(retained[key].get(k) != row.get(k) for k in
+                        ("name", "raw_status", "expiration", "source_issued", "license_category",
+                         "location", "street", "region", "postal_code", "_al_address_variants")):
+                    retained.pop(key, None)
+                    blocked.add(key)
+                    continue
+                candidates = final_four_search_candidate_scores(record["organization_name"], record["ein"], "AL", row)
+                if not candidates or all(c["decision"] == "rejected" for c in candidates):
+                    continue
+                row["_identity_outcome"] = "possible"
+                retained[key] = row
+        return list(retained.values())
+    finally:
+        REVIEWED_NAME_CONTEXT.reset(token)
+
+
 def final_four_connector_failure(record, reason="", diagnostic=""):
     state = record["state"]
     sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
@@ -8528,10 +8569,14 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "The trial browser connector is unavailable or needs an update." if reason in {"NY_CONNECTOR_UNAVAILABLE", "NY_CONNECTOR_UPDATE_REQUIRED"} else
            "The registry search or selected record did not return complete, confirmed information.")
     result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
-    candidates = nc_completed_candidates_for_review(record)
+    candidates = (al_completed_candidates_for_review(record) if state == "AL"
+                  else nc_completed_candidates_for_review(record))
     if candidates:
         result._cc_identity_review = {"records": candidates, "search_complete": False, "freshness": ""}
-        result.source_note += " Complete North Carolina profiles were retrieved before the later search failed. Their identity remains unconfirmed; use Accept or Reject match to review them. Rejecting them does not establish non-registration because the search is incomplete."
+        result.source_note += (" Complete North Carolina profiles were retrieved before the later search failed. Their identity remains unconfirmed; use Accept or Reject match to review them. Rejecting them does not establish non-registration because the search is incomplete." if state == "NC" else
+            " Complete Alabama records were retrieved before the later search failed. "
+            "Their identity remains unconfirmed; use Accept or Reject match to review them. "
+            "Rejecting them does not establish non-registration because the search is incomplete.")
     started = time.perf_counter() - max(0, time.time() - record["issued"])
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, started)
     # Explicit failure requests return before the continuation's name context
@@ -16009,7 +16054,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     if re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", combined, re.I):
         score -= 100
     result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
-    return result, score
+    return ct_shortened_identity_review(org, result, detail_text), score
 
 
 def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str], url: str):
@@ -16075,7 +16120,58 @@ def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str],
     if re.search(r"\bEXEMPT\b", combined, re.I):
         score += 10
     result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
-    return result, score
+    return ct_shortened_identity_review(org, result, row_text), score
+
+
+def ct_shortened_institutional_queries(original_name: str, ein: str) -> list[str]:
+    """Retrieval only: retain the institution words of a reviewed foundation name.
+
+    Do not turn these shorter probes into approved aliases or matching targets.
+    Full reviewed queries still run first within the existing time/fallback cap.
+    """
+    probes = []
+    for name in equivalent_name_queries(original_name, ein, preserve_at=True):
+        if (not re.search(r"\b(?:college|university|hospital)\b", name, re.I)
+                or not re.search(r"\s+foundation$", name, re.I)):
+            continue
+        root = re.sub(r"\s+foundation$", "", name, flags=re.I)
+        root = re.sub(r"^the\s+", "", root, flags=re.I)
+        if root == name or len(distinctive_match_tokens(root)) < 2:
+            continue
+        if root.casefold() not in {v.casefold() for v in probes}:
+            probes.append(root)
+    return probes
+
+
+def ct_shortened_identity_review(org, result, detail_text=""):
+    """A retrieved institution without Foundation remains a signed choice."""
+    targets = [org.organization_name, *known_names_for_ein(org.ein)]
+    target_keys = {normalized_match_name(v) for v in targets}
+    if (getattr(result, "identity_anchor", "") in {"CT_DETAIL_DBA_ALIAS", "CT_AJAX_DBA_ALIAS"}
+            and any(normalized_match_name(v) in target_keys for v in ct_identity_names_from_detail(detail_text))):
+        # A full approved name displayed as DBA already passed the existing
+        # detail-identity check; this guard must not downgrade that proof.
+        return result
+    if normalized_match_name(result.matched_registry_name) in target_keys:
+        return result
+    if normalized_match_name(result.matched_registry_name) not in {
+            normalized_match_name(v) for v in ct_shortened_institutional_queries(org.organization_name, org.ein)}:
+        return result
+    if not re.fullmatch(r"CHR\.[0-9A-Z.-]+", result.matched_registry_identifier, re.I):
+        return result
+    address = text_between_labels(detail_text, "Address", ["Registration", "Credential", "Status", "Expiration Date"])
+    row = {"name": result.matched_registry_name, "identifier": result.matched_registry_identifier,
+           "ein": "", "url": result.source_url, "location": address[:500],
+           "raw_status": result.raw_status_text, "status": result.status,
+           "expiration": first_date_near_label(detail_text, ["Expiration Date", "Expiration", "Expires"]),
+           "license_category": "PUBLIC CHARITY", "_identity_outcome": "possible"}
+    result._cc_identity_review = {"records": [row], "search_complete": False, "freshness": ""}
+    result.status = "Needs Review"
+    result.success = False
+    result.source_note = ("Connecticut returned an institutional name without Foundation and without a source EIN. "
+        "The shortened search is retrieval evidence, not confirmation that the institution and foundation are the same entity. "
+        "Use Accept or Reject match. Rejecting this candidate does not establish non-registration.")
+    return result
 
 
 def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> list[str]:
@@ -16206,7 +16302,8 @@ def search_ct_direct(org):
         max_queries=CT_NAME_VARIANT_LIMIT * 2,
     ))
     variants = reviewed_queries_first(original_name, org.ein,
-        list(dict.fromkeys([*equivalent_name_queries(original_name, org.ein, preserve_at=True), *variants])), limit=CT_NAME_VARIANT_LIMIT,
+        list(dict.fromkeys([*equivalent_name_queries(original_name, org.ein, preserve_at=True),
+                           *ct_shortened_institutional_queries(original_name, org.ein), *variants])), limit=CT_NAME_VARIANT_LIMIT,
         transform=lambda value: (equivalent_name_queries(value, "", preserve_at=True) or [value])[0])
     best_result = None
     best_score = -10000
@@ -16240,12 +16337,15 @@ def search_ct_direct(org):
             saw_zero_results = True
             continue
         has_charity_rows = False
+        shortened_review_rows = []
         for row_match in re.finditer(r"<tr\b[^>]*>.*?</tr>", body, re.I | re.S):
             row_html = row_match.group(0)
             if not re.search(r"\b(PUBLIC\s+CHARITY|CHR\.)\b", html_fragment_text(row_html), re.I):
                 continue
             has_charity_rows = True
             result, score = ct_direct_result_from_row(org, row_html, safe_targets, url, session=session)
+            if result and getattr(result, "_cc_identity_review", None):
+                shortened_review_rows.extend(result._cc_identity_review["records"])
             if result and (best_result is None or result.selection_rank > best_result.selection_rank):
                 best_result = result
                 best_score = score
@@ -16256,6 +16356,11 @@ def search_ct_direct(org):
             if result and (best_result is None or result.selection_rank > best_result.selection_rank):
                 best_result = result
                 best_score = score
+        if best_result and getattr(best_result, "_cc_identity_review", None) and shortened_review_rows:
+            # Preserve both institutional credentials rather than silently
+            # choosing a source row when neither identity is established.
+            best_result._cc_identity_review["records"] = list({
+                (r["name"], r["identifier"]): r for r in shortened_review_rows}.values())
         if best_result and public_status(best_result) not in {"Closed / Withdrawn / Canceled", "Revoked", "Suspended"}:
             best_result.queries_attempted = list(searched_variants)
             best_result.source_attempts = [
@@ -16331,7 +16436,11 @@ def search_ct(page, org):
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         max_queries=CT_NAME_VARIANT_LIMIT * 2,
-    ))[:CT_NAME_VARIANT_LIMIT]
+    ))
+    variants = reviewed_queries_first(original_name, org.ein,
+        [*equivalent_name_queries(original_name, org.ein, preserve_at=True),
+         *ct_shortened_institutional_queries(original_name, org.ein), *variants], limit=CT_NAME_VARIANT_LIMIT,
+        transform=lambda value: (equivalent_name_queries(value, "", preserve_at=True) or [value])[0])
     last_error = ""
     for variant in variants:
         if time.perf_counter() >= deadline:
@@ -16484,7 +16593,7 @@ def search_ct(page, org):
             ) or "Connecticut registry record found"
             result.source_note = "CT uses the selected public-registry detail record, including exemption, noncompliance, and expiration fields."
             result.success = True
-            return result
+            return ct_shortened_identity_review(org, result, detail_segment)
         except Exception as exc:
             last_error = f"CT error: {exc}"
             if best_result is not None:
@@ -35444,7 +35553,7 @@ def attach_identity_review(data, context):
         if snapshot_ref:
             clean['evidence_url'] = snapshot_ref['url']
         clean["suggested"] = row.get("suggested") is True
-        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA"}:
+        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT"}:
             # Keep the master interpretation of complete state evidence in the
             # signed snapshot. Identity acceptance cannot substitute a generic
             # Active label for a filing-history or charity-scope decision.
@@ -35493,7 +35602,7 @@ def identity_review_wi_status(row):
 
 
 def identity_review_state_status(state, row):
-    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA"}:
+    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT"}:
         status = row.get("interpreted_status")
         return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
             "Pending", "Suspended", "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",
