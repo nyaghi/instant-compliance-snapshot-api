@@ -166,6 +166,8 @@ def matching_reference(result, refs):
     candidates=[r for r in refs if r.get('ein')==ein and r.get('state')==state]
     if state=='GA':
         candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
+    if state=='NC':
+        candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
     if state=='NM' and re.fullmatch(r'\d{2}-?\d{7}',ident) and digits(ident)==ein:
         # The connector uses the nine-digit FEIN while the public result keeps
         # New Mexico's displayed hyphen. This is one already-bound credential.
@@ -385,6 +387,18 @@ def connector_archive(record,payload,query,evidence):
             if (source.hostname!='verify.sos.ga.gov' or source.path!='/verification/Details.aspx'
                     or len(keys)!=1
                     or not re.fullmatch(r'[a-f0-9-]{36}',keys[0])):return
+        if record['state']=='NC' and query.get('operation')=='detail':
+            fields=evidence.get('fields') if isinstance(evidence,dict) else None
+            identifier=str(query.get('identifier') or '')
+            profile=urlsplit(url)
+            application=re.fullmatch(r'NCAPP-(\d+)',identifier)
+            if (not isinstance(fields,dict) or url!=query.get('url')
+                    or profile.hostname!='www.sosnc.gov'
+                    or not re.fullmatch(r'/online_services/search/charities_profile/\d+',profile.path)
+                    or fields.get('profile_url')!=url
+                    or (application and (profile.path.rsplit('/',1)[-1]!=application[1] or fields.get('Registration #')))
+                    or (not application and fields.get('Registration #')!=identifier)):
+                return
         text=incoming.get('public_text','')
         if not isinstance(text,str) or len(text)>20000:return
         rows=[]
