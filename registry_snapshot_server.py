@@ -22411,7 +22411,11 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
             break
         source_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'FirmName': search_name, 'LicenseNumber': ''})}"
         if progress is not None and search_name not in progress["attempted"]: progress["attempted"].append(search_name)
-        result_text = wi_reader_text(source_url, no_cache=True, deadline=deadline)
+        result_text = __import__('deployment.search_observation',fromlist=['observed_text_call']).observed_text_call(
+            'WI',search_name,'Firm Name; retrieved through the existing public text reader; source matching filter not recorded',source_url,
+            lambda text:(bool(re.search(r'\|\s*\d+-800\s*\||There\s+are\s+no\s+query\s+results|No\s+query\s+results',text or '',re.I)),
+                         0 if re.search(r'There\s+are\s+no\s+query\s+results|No\s+query\s+results',text or '',re.I) else None),
+            wi_reader_text,source_url,no_cache=True,deadline=deadline)
         if re.search(r"\|\s*\d+-800\s*\||There\s+are\s+no\s+query\s+results|No\s+query\s+results", result_text or "", re.I):
             reader_reached = True
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match, original_name, ein)

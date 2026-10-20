@@ -161,3 +161,18 @@ def observed_named_call(state,name,label,url,call,*args,**kwargs):
         raise
     if receipt:receipt.complete(len(result) if isinstance(result,list) else None)
     return result
+
+def observed_text_call(state,name,label,url,validator,call,*args,**kwargs):
+    """Observe one existing public-reader call; retain its existing validator."""
+    receipt=begin_source_query(state,name,label,url)
+    try:result=call(*args,**kwargs)
+    except BaseException:
+        if receipt:receipt.incomplete()
+        raise
+    if receipt:
+        try:
+            complete,count=validator(result)
+            if complete:receipt.complete(count)
+            else:receipt.incomplete()
+        except Exception:receipt.incomplete()
+    return result

@@ -37,7 +37,7 @@ def complete_receipt(record,pending,evidence,now):
     """Call after the existing schema cleaner; no influence on lookup evidence."""
     if record.get('state') not in STATES or record.get('purpose')!='registration':return {}
     query=public_query(pending['query'],record['state'])
-    operation=query.get('operation','detail' if 'identifier' in query else 'search')
+    operation=query.get('operation','detail' if 'identifier' in query or query.get('orgID') else 'search')
     rows=evidence.get('rows') if isinstance(evidence,dict) else None
     total=len(rows) if isinstance(rows,list) else None
     digest=hashlib.sha256(json.dumps(query,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -77,7 +77,7 @@ def failed_receipt(record,payload,now):
     try:
         q=public_query(pending['query'],record['state']);reason=payload.get('reason','')
         reason=reason if isinstance(reason,str) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,100}',reason) else 'SOURCE_RETRIEVAL_INCOMPLETE'
-        receipt={'query_id':pending['query_id'],'query':q,'operation':q.get('operation','detail' if 'identifier' in q else 'search'),
+        receipt={'query_id':pending['query_id'],'query':q,'operation':q.get('operation','detail' if 'identifier' in q or q.get('orgID') else 'search'),
                  'issued_at':pending.get('history_issued_at'),'reported_at':now,'completed_at':None,
                  'outcome':'Completion not confirmed','reason':reason,'returned_rows':None}
         entries=record.setdefault('search_failed_receipts',[])
@@ -177,7 +177,7 @@ def stamp(value):
     return datetime.fromtimestamp(value,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if value is not None else 'Not recorded'
 
 def query_label(q,receipt=None):
-    if q.get('operation')=='detail' or 'identifier' in q:return 'Selected detail: '+(q.get('identifier') or q.get('url',''))
+    if q.get('operation')=='detail' or 'identifier' in q or q.get('orgID'):return 'Selected detail: '+(q.get('identifier') or q.get('orgID') or q.get('url',''))
     if q.get('ein'):return 'EIN: '+q['ein']
     name=q.get('orgName') or q.get('name','')
     if q['state']=='GA':return 'Names beginning with "'+name+'" (entered as '+name+'*)'
@@ -218,9 +218,10 @@ def render_pdf(doc,asset_root=None):
         story += [KeepTogether([table,Spacer(1,10)])]
     story += [Paragraph('Names supplied to CharityClarity',styles['Heading2']),p('These names were supplied for identity and search planning; they are not state registration matches. This list does not claim that each name was searched literally. The actual recorded requests are listed above.')]
     for n in doc['reviewed_names']:story.append(p(n))
-    story += [Spacer(1,8),Paragraph('Evidence limits',styles['Heading2'])]
-    if not doc.get('snapshot_url'):story.append(p('Original state-page snapshot unavailable for this run. This search history does not replace the missing original image.'))
-    story.append(p(doc['source_limitations']))
+    limits=[Paragraph('Evidence limits',styles['Heading2'])]
+    if not doc.get('snapshot_url'):limits.append(p('Original state-page snapshot unavailable for this run. This search history does not replace the missing original image.'))
+    limits.append(p(doc['source_limitations']))
+    story += [Spacer(1,8),KeepTogether(limits)]
     def footer(c,d):
         c.saveState();c.setFont('Helvetica',8);c.setFillColor(colors.HexColor('#475569'))
         c.drawString(42,25,'Compliance Express | www.compliance-express.com | info@compliance-express.com');c.drawRightString(570,25,str(d.page));c.restoreState()
@@ -318,7 +319,7 @@ def finish_worker_history(run,result):
     if not entries:return data
     issued=min(e['issued_at'] for e in entries)
     record={'state':run.state,'ein':run.ein,'organization_name':run.name,
-        'purpose':'registration','issued':issued,'alternate_names':[],
+        'purpose':'registration','issued':issued,'alternate_names':[n for n in dict.fromkeys(getattr(run,'known_names',[])) if n!=run.name],
         'source_archive_run_id':run.run_id,'history_order':'issued-sequence-v1','completed':[],'search_failed_receipts':[]}
     for entry in entries:
         entry=dict(entry);query=entry.pop('query')
