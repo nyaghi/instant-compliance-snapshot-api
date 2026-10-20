@@ -26636,7 +26636,16 @@ def ny_connector_request(payload, origin):
             except ValueError:
                 return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
             from deployment.state_snapshots import connector_archive
-            connector_archive(record,payload,pending['query'],rows)
+            archive_rows=rows
+            if record.get('state')=='GA' and 'identifier' in pending['query']:
+                # This body already passed the same selected-detail validator.
+                # Preserve its parsed identity for the original screenshot only.
+                try:
+                    parsed_detail=ga_charity_detail_html(rows['body'],pending['query']['identifier'],pending['query'].get('record_name',''))
+                    archive_rows={'rows':[parsed_detail]}
+                except (ValueError,TypeError,KeyError):
+                    pass  # Optional evidence preservation cannot change status.
+            connector_archive(record,payload,pending['query'],archive_rows)
             record["completed"].append({"query": pending["query"], "rows": rows})
             record["pending"] = None
     names = ({canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}

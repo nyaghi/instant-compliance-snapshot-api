@@ -164,6 +164,8 @@ def matching_reference(result, refs):
     name=str(result.get('matched_registry_name') or result.get('name') or '')
     ein=digits(result.get('ein',''));state=result.get('state')
     candidates=[r for r in refs if r.get('ein')==ein and r.get('state')==state]
+    if state=='GA':
+        candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
     if state=='NM' and re.fullmatch(r'\d{2}-?\d{7}',ident) and digits(ident)==ein:
         # The connector uses the nine-digit FEIN while the public result keeps
         # New Mexico's displayed hyphen. This is one already-bound credential.
@@ -376,6 +378,13 @@ def connector_archive(record,payload,query,evidence):
         url=public_url(incoming.get('source_url',''),record['state'])
         if record['state']=='NY' and query.get('orgID'):
             if urlsplit(url).path.rstrip('/')!='/RegistrySearch/'+query['orgID']:return
+        ga_detail=record['state']=='GA' and 'identifier' in query
+        if ga_detail:
+            source=urlsplit(url)
+            keys=[v for k,v in parse_qsl(source.query,keep_blank_values=True) if k=='result']
+            if (source.hostname!='verify.sos.ga.gov' or source.path!='/verification/Details.aspx'
+                    or len(keys)!=1 or keys[0]!=query.get('detail_key')
+                    or not re.fullmatch(r'[a-f0-9-]{36}',keys[0])):return
         text=incoming.get('public_text','')
         if not isinstance(text,str) or len(text)>20000:return
         rows=[]
@@ -427,7 +436,7 @@ def connector_archive(record,payload,query,evidence):
             # carry short references, never images or repeated source URLs.
             record.setdefault('source_snapshots',[]).append({
                 **{k:ref[k] for k in ('url','identifier','record_name','captured_at','ein','state')},
-                'operation':query.get('operation','')})
+                'operation':'detail' if ga_detail else query.get('operation','')})
         refs=record.get('source_snapshots',[])
         if record['state']=='TN':refs=sorted(refs,key=lambda r:r.get('operation')=='detail')
         record['source_snapshots']=refs[-24:]
