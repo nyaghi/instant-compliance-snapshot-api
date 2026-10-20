@@ -8826,6 +8826,8 @@ def final_four_connector_request(payload, origin):
         if action not in {"advance", "fail"}:
             return 400, {"error": "Invalid registry connector action."}
         if action == "fail":
+            from deployment.search_history import failed_receipt
+            failed_receipt(record,payload,time.time())
             reason = payload.get("reason")
             pending = record.get("pending")
             # One failed ordinary NC search may resume in a fresh owned tab.
@@ -8839,6 +8841,7 @@ def final_four_connector_request(payload, origin):
                                                   and reason == "NY_CONNECTOR_NC_SEARCH_NOT_STARTED" else 60)):
                 record["nc_search_recovery"] = {"attempt": 1, "reason": reason}
                 pending["query_id"] = secrets.token_urlsafe(18)
+                pending["history_issued_at"] = time.time()
                 return 200, {"phase": "search", **pending,
                              "recovery": {"action": "fresh_browser", "attempt": 1, "reason": reason},
                              "check_token": ny_connector_pack(record),
@@ -8877,7 +8880,8 @@ def final_four_connector_request(payload, origin):
         from deployment.state_snapshots import connector_archive
         connector_archive(record,payload,pending['query'],evidence)
         evidence = final_four_compact_search_evidence(record, evidence)
-        record["completed"].append({"query": pending["query"], "evidence": evidence})
+        from deployment.search_history import safe_complete_receipt
+        record["completed"].append({"query": pending["query"], "evidence": evidence, **safe_complete_receipt(record,pending,evidence,time.time())})
         record["pending"] = None
     names = {canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
     context = REVIEWED_NAME_CONTEXT.set(names)
@@ -8891,6 +8895,8 @@ def final_four_connector_request(payload, origin):
         REVIEWED_NAME_CONTEXT.reset(context)
         USER_IDENTITY_CONTEXT.reset(identity_context)
     if response["phase"] == "search":
+        from deployment.search_history import mark_issued
+        mark_issued(record,response,time.time())
         try:
             response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"]-time.time())),
                             lookup_remaining_ms=max(0, int((record["expires"]-time.time())*1000)))
@@ -8899,6 +8905,8 @@ def final_four_connector_request(payload, origin):
     if response.get('phase') == 'complete':
         from deployment.state_snapshots import attach_links
         response['result'] = attach_links(response['result'],record.get('source_snapshots',[]))
+        from deployment.search_history import attach as attach_search_history
+        response['result'] = attach_search_history(record,response['result'])
     return 200, response
 
 
@@ -26347,6 +26355,10 @@ NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
 def ny_connector_pack(record):
     # Public search evidence and check binding only; no passcode or state credential.
     body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 320000:
+        from deployment.search_history import discard_optional
+        if discard_optional(record):
+            body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     if len(body) > 320000 and record.get('source_snapshots'):
         # Optional PDF links cannot make otherwise valid source evidence exceed
         # the mature continuation limit. Preserve the original evidence/budget.
@@ -26646,7 +26658,8 @@ def ny_connector_request(payload, origin):
                 except (ValueError,TypeError,KeyError):
                     pass  # Optional evidence preservation cannot change status.
             connector_archive(record,payload,pending['query'],archive_rows)
-            record["completed"].append({"query": pending["query"], "rows": rows})
+            from deployment.search_history import safe_complete_receipt
+            record["completed"].append({"query": pending["query"], "rows": rows, **safe_complete_receipt(record,pending,archive_rows,time.time())})
             record["pending"] = None
     names = ({canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
              if "alternate_names" in record else {})
@@ -26667,6 +26680,8 @@ def ny_connector_request(payload, origin):
     if time.time() >= record["expires"]:
         return 410, {"error": "This New York browser check expired. Run the check again."}
     if response["phase"] == "search":
+        from deployment.search_history import mark_issued
+        mark_issued(record,response,time.time())
         try:
             response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"] - time.time())))
             if record.get("state") == "IL" and record.get("recovery_protocol") == "il-fresh-page-v1":
@@ -26678,6 +26693,8 @@ def ny_connector_request(payload, origin):
     if response.get('phase') == 'complete':
         from deployment.state_snapshots import attach_links
         response['result'] = attach_links(response['result'], record.get('source_snapshots', []))
+        from deployment.search_history import attach as attach_search_history
+        response['result'] = attach_search_history(record,response['result'])
     return 200, response
 
 

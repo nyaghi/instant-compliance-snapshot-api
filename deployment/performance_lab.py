@@ -428,6 +428,10 @@ def build_handler(master, key, capacity=None, durable=None):
                 if include_body:self.wfile.write(body)
                 return
             if not self.authorized(): return
+            if self.path.startswith('/state-evidence/'):
+                from deployment.search_history import serve as serve_search_evidence
+                serve_search_evidence(self,include_body)
+                return
             if self.path.startswith('/state-snapshots/'):
                 from deployment.state_snapshots import serve
                 serve(self,include_body)

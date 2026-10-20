@@ -5,8 +5,19 @@
     const el = document.createElement(tag); el.textContent = value; el.className = classes; parent.appendChild(el); return el;
   }
   function renderEvidence(parent, result) {
-    // Saved first-party archives only; never open a session-bound state URL.
-    if (!/^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(result.evidence_url || '')) {
+    const source = /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(result.evidence_url || '');
+    const bundle = /^\/state-evidence\/([a-f0-9]{64})\/evidence\.zip$/.exec(result.evidence_bundle_url || '');
+    const history = /^\/state-evidence\/([a-f0-9]{64})\/search-history\.pdf$/.exec(result.search_history_url || '');
+    const validHistory = history && (!result.evidence_bundle_url || bundle && bundle[1] === history[1]);
+    if (source && bundle && history && bundle[1] === history[1]) {
+      const pair = add(parent, 'a', 'Download Evidence (2 PDFs, ZIP)', 'mt-2 block text-xs underline whitespace-normal');
+      pair.href = result.evidence_bundle_url; pair.setAttribute('download','');
+    }
+    if (validHistory) {
+      const log = add(parent, 'a', 'View CharityClarity Search History (PDF)', 'mt-2 block text-xs underline whitespace-normal');
+      log.href = result.search_history_url; log.target = '_blank'; log.rel = 'noopener noreferrer';
+    }
+    if (!source) {
       if (result.evidence_capture === 'unavailable') add(parent,'p','State snapshot unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
       return;
     }
