@@ -2537,6 +2537,11 @@ def identity_discovery_fetch(url, deadline, *, stage, **kwargs):
 
 def identity_candidate(name, source, evidence_type, url, source_date="", historical=False):
     name = re.sub(r"\s+", " ", str(name or "")).strip()
+    # ProPublica can return this explicit placeholder for a same-EIN stub.
+    # Scope to its metadata field; legal state names and user edits remain.
+    if (source == "IRS via ProPublica" and evidence_type == "IRS organization record"
+            and name.casefold() == "unknown organization"):
+        return None
     if (not name or len(name) > 300 or not re.search(r"[A-Za-z]", name)
             or name.casefold() in {"n/a", "none", "not applicable", "unknown"}):
         return None
