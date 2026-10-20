@@ -11,7 +11,7 @@ function fixture(changes={}) {
     registryOrigin:()=> 'https://www.sosnc.gov',
     chrome:{tabs:{get:async()=>({url:state.url}),sendMessage:async(_tab,message)=>{
       if(message.action==='registry-snapshot-view'){calls.push(['view:'+message.view,{tabId:_tab}]);state.view=message.view;if(state.viewError)return {ok:false};return {ok:true};}
-      return {url:state.url,public_text:state.text,source_detail:state.sourceDetail!==false,source_fields_visible:state.sourceFieldsVisible!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{}),...(state.nvViews?{capture_views:state.sourceFieldsVisible===false?[]:state.nvViews}:{})};}},
+      return {url:state.url,public_text:state.text,source_detail:state.sourceDetail!==false,source_search_empty:state.sourceSearchEmpty===true,source_fields_visible:state.sourceFieldsVisible!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{}),...(state.nvViews?{capture_views:state.sourceFieldsVisible===false?[]:state.nvViews}:{})};}},
       debugger:{attach:async target=>{calls.push(['attach',target]);if(state.attachError)throw Error('refused');},
         sendCommand:async(target,command,params)=>{calls.push([command,target]);if(state.throwCommand)throw Error('capture error');
           if(state.mutate)job.generation++;
@@ -56,7 +56,16 @@ test('30 Nevada workflows use proven source sections, restore scroll and preserv
 });
 test('Nevada rejects missing identity and clipped fields while ordinary search never overrides viewport',async()=>{
  for(const option of [{sourceDetail:false},{sourceFieldsVisible:false}]){const h=nvFixture(option);assert.equal(await h.run(),null);assert.ok(!h.calls.some(c=>c[0]==='Page.captureScreenshot'));}
- const h=nvFixture({sourceDetail:false,sourceFieldsVisible:false});h.query.operation='search';assert.ok(await h.run());assert.ok(!h.calls.some(c=>c[0].startsWith('Emulation.')));
+ const h=nvFixture({sourceDetail:false,sourceFieldsVisible:false});h.query.operation='search';assert.equal(await h.run(),null);assert.ok(!h.calls.some(c=>c[0].startsWith('Emulation.')));
+});
+
+test('30 completed-empty NV captures preserve query binding, source sections and deadline',async()=>{
+ const orgs=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/oct19-cohort.json'))).slice(0,30);
+ for(const org of orgs){
+  const h=nvFixture({sourceDetail:false,sourceSearchEmpty:true,nvViews:['nv-0','nv-1'],text:org.name+' No records available'});
+  Object.assign(h.query,{operation:'search',name:org.name});delete h.query.identifier;
+  const expires=h.job.activeExpiresAt;const out=await h.run();assert.ok(out);assert.equal(out.images.length,2);assert.deepEqual(JSON.parse(JSON.stringify(out.query)),h.query);assert.equal(h.job.activeExpiresAt,expires);assert.equal(h.job.snapshotCaptures,1);assert.ok(!h.calls.some(c=>c[0].startsWith('Emulation.')));assert.equal(h.calls.at(-2)[0],'view:restore');
+ }
 });
 
 test('modal source failure is fail-soft and restores only its own source tab',async()=>{

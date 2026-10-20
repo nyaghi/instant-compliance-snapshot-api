@@ -6,7 +6,7 @@ function nvHandoffDiagnostic(job,message) {
   if(!P.TRIAL_ORIGIN || job?.registryState!=='NV' || typeof message.ok!=='boolean' || message.progress)return message;
   const operation=job.command?.query?.operation;
   return {...message,nv_readiness:{...message.nv_readiness,handoff:{
-    build:'nv-scroll-evidence-local-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
+    build:'nv-empty-source-local-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
     active:isActive(job),pending:!!job.pending,search_complete:job.finalFourSearchComplete===true,
     pending_matches_reply:job.pending===message.id,
     command_matches_reply:job.command?.id===message.id,

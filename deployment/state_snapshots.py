@@ -387,7 +387,8 @@ def connector_archive(record,payload,query,evidence):
                 bound_application=bool(application and query.get('url')==url and urlsplit(url).path=='/online_services/search/charities_profile/'+application[1])
                 if ident and ident not in text and ident not in url and not bound_application:continue
             images=incoming.get('images')
-            multiple=record['state'] in {'TN','NV'} and query.get('operation')=='detail' and isinstance(images,list) and 2<=len(images)<=3
+            multi_source=(record['state'] in {'TN','NV'} and query.get('operation')=='detail') or (record['state']=='NV' and query.get('operation')=='search' and ident=='@completed-search')
+            multiple=multi_source and isinstance(images,list) and 2<=len(images)<=3
             if 'images' in incoming and (not multiple or images[0]!=incoming.get('image')):raise ValueError('Invalid snapshot page binding')
             content=base64.b64encode(json.dumps(images).encode()).decode() if multiple else incoming['image']
             asset=dict(kind='image_pages' if multiple else 'image',state=record['state'],ein=record['ein'],run_id=run_id,

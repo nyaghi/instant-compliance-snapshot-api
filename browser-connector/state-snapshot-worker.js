@@ -24,6 +24,7 @@ async function captureStateSnapshot(job, query, commandId) {
           || /verify you are human|user validation required|just a moment|access denied/i.test(meta.public_text))return null;
       if(state==='NV'){observed.detail=meta?.source_detail===true;observed.fields_visible=meta?.source_fields_visible===true;observed.visible=meta?.source_visible===true;}
       observed.phase='identity';if(['TN','NV'].includes(state)&&query.operation==='detail'&&meta.source_detail!==true)return null;
+      if(state==='NV'&&query.operation==='search'&&meta.source_search_empty!==true)return null;
       observed.phase='attach';await chrome.debugger.attach({tabId},'1.3');attached=true;
       if(cancelled || !alive())return null;
       observed.phase='layout';let layout=await chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics');
@@ -50,10 +51,10 @@ async function captureStateSnapshot(job, query, commandId) {
         &&meta.capture_views.length>=2&&meta.capture_views.length<=3&&meta.capture_views[0]==='top'
         &&new Set(meta.capture_views).size===meta.capture_views.length
         &&meta.capture_views.every(view=>['top','expiration','financial'].includes(view));
-      const nvModal=state==='NV'&&query.operation==='detail'&&Array.isArray(meta.capture_views)
+      const nvModal=state==='NV'&&(query.operation==='detail'||meta.source_search_empty===true)&&Array.isArray(meta.capture_views)
         &&meta.capture_views.length>=1&&meta.capture_views.length<=3
         &&meta.capture_views.every((view,index)=>view==='nv-'+index);
-      if(state==='NV'&&query.operation==='detail'&&!nvModal)return null;
+      if(state==='NV'&&!nvModal)return null;
       const modal=tnModal||nvModal;
       const viewport=layout.cssLayoutViewport;
       if(modal&&(!viewport||viewport.clientWidth<=0||viewport.clientHeight<=0
@@ -81,6 +82,7 @@ async function captureStateSnapshot(job, query, commandId) {
           || afterMeta?.url!==meta.url || afterMeta?.public_text!==meta.public_text
           || (state==='TN'&&query.operation==='detail'&&afterMeta.source_detail!==true)
           || (state==='NV'&&query.operation==='detail'&&afterMeta.source_detail!==true)
+          || (state==='NV'&&query.operation==='search'&&afterMeta.source_search_empty!==true)
           )return null;
       observed.phase='image-validated';
       return {query:JSON.parse(JSON.stringify(query)),source_url:tab.url,public_text:meta.public_text,

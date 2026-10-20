@@ -1978,7 +1978,34 @@
     return {ok:snapshotDialog(m.query)===dialog&&inView};
   }
   let snapshotNvScroll=null;
+  function snapshotNvEmptyContext(query) {
+    if(!NV||query?.state!=='NV'||query.operation!=='search'||!nvLastSearch
+        ||JSON.stringify(query)!==JSON.stringify(nvLastSearch)
+        ||!location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business'))return null;
+    try {
+      const input=document.querySelector('input[id$="-entityName"]');
+      if(!input||input.value!==query.name||!nvSearchModeSelected(nvLastSearchMode)
+          ||document.querySelector('input[id$="-entityNumber"]')?.value!==''
+          ||document.querySelector('input[id$="-nvBusinessId"]')?.value!=='')return null;
+      const page=nvPage('Search Results',nvSearchHeaders);
+      if(page.total!==0||page.rows.length)return null;
+      const label=document.getElementById(input.getAttribute('aria-labelledby'));
+      const heading=[...page.table.querySelectorAll('h4')].find(el=>text(el)==='Search Results');
+      const empty=page.table.querySelector('.k-grid-norecords td');
+      if(!label||!heading||!empty||!/^No records available$/i.test(text(empty)))return null;
+      // Measure the original text node, not its tall empty-grid cell. No DOM
+      // changes: the screenshot still contains the actual state-rendered text.
+      const message=document.createRange();message.selectNodeContents(empty);
+      const panels=[...document.querySelectorAll('section.app-l-body')].filter(visible);
+      if(panels.length!==1)return null;
+      const panel=panels[0],r=panel.getBoundingClientRect(),footer=document.querySelector('footer');
+      const top=Math.max(0,r.top),bottom=Math.min(innerHeight,r.bottom,visible(footer)?footer.getBoundingClientRect().top:innerHeight);
+      if(bottom-top<60)return null;
+      return {panel,pairs:[[label,input],[heading],[message]],top,bottom,empty:true};
+    }catch{return null;}
+  }
   function snapshotNvContext(query) {
+    if(query?.operation==='search')return snapshotNvEmptyContext(query);
     if(!NV||query?.state!=='NV'||query.operation!=='detail')return null;
     try {
       const business=nvFields(query.identifier),fields=business||nvReservationFields(query.identifier);
@@ -2018,13 +2045,13 @@
     const context=snapshotNvContext(m.query);
     if(!context||typeof m.command_id!=='string'||!m.command_id||m.command_id.length>200)return {ok:false};
     if(m.view==='restore'){
-      if(snapshotNvScroll?.panel!==context.panel||snapshotNvScroll.command!==m.command_id||snapshotNvScroll.identifier!==m.query.identifier)return {ok:false};
+      if(snapshotNvScroll?.panel!==context.panel||snapshotNvScroll.command!==m.command_id||snapshotNvScroll.binding!==JSON.stringify(m.query))return {ok:false};
       context.panel.scrollTop=snapshotNvScroll.top;snapshotNvScroll=null;return {ok:true};
     }
     const groups=snapshotNvPlan(context),index=/^nv-[0-2]$/.test(m.view)?Number(m.view.slice(3)):-1;
     if(!groups||index<0||!groups[index])return {ok:false};
-    if(index===0)snapshotNvScroll={panel:context.panel,command:m.command_id,identifier:m.query.identifier,top:context.panel.scrollTop};
-    if(snapshotNvScroll?.panel!==context.panel||snapshotNvScroll.command!==m.command_id||snapshotNvScroll.identifier!==m.query.identifier)return {ok:false};
+    if(index===0)snapshotNvScroll={panel:context.panel,command:m.command_id,binding:JSON.stringify(m.query),top:context.panel.scrollTop};
+    if(snapshotNvScroll?.panel!==context.panel||snapshotNvScroll.command!==m.command_id||snapshotNvScroll.binding!==JSON.stringify(m.query))return {ok:false};
     const group=groups[index];context.panel.scrollTop+=group.top-context.top-2;
     await new Promise(resolve=>setTimeout(resolve,40));
     const current=snapshotNvContext(m.query);
@@ -2032,9 +2059,9 @@
     return {ok:full};
   }
   function snapshotNvVisibility(query) {
-    if(!NV||query?.state!=='NV'||query.operation!=='detail')return null;
+    if(!NV||query?.state!=='NV'||!['detail','search'].includes(query.operation))return null;
     const context=snapshotNvContext(query),plan=snapshotNvPlan(context);
-    return {source_detail:!!context,source_fields_visible:!!context&&context.pairs.flat().every(el=>{const r=el.getBoundingClientRect();return r.top>=context.top&&r.bottom<=context.bottom;}),capture_views:plan?plan.map((_,i)=>'nv-'+i):[]};
+    return {source_detail:!!context&&!context.empty,source_search_empty:!!context?.empty,source_fields_visible:!!context&&context.pairs.flat().every(el=>{const r=el.getBoundingClientRect();return r.top>=context.top&&r.bottom<=context.bottom;}),capture_views:plan?plan.map((_,i)=>'nv-'+i):[]};
   }
   function snapshotMetadata(query) {
     const dialog=snapshotDialog(query);
