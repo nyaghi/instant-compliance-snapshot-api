@@ -90,7 +90,7 @@ def validate_asset(asset, *, ein, state, run_id):
         pages=[raw]
         if kind=='image_pages':
             encoded=json.loads(raw)
-            if not isinstance(encoded,list) or not 2<=len(encoded)<=3 or any(not isinstance(v,str) for v in encoded):raise ValueError('Invalid source image pages')
+            if not isinstance(encoded,list) or not 2<=len(encoded)<=(8 if state=='NV' and asset.get('operation')=='detail' else 3) or any(not isinstance(v,str) for v in encoded):raise ValueError('Invalid source image pages')
             pages=[base64.b64decode(v,validate=True) for v in encoded]
         pixels=0
         for page in pages:
@@ -388,12 +388,12 @@ def connector_archive(record,payload,query,evidence):
                 if ident and ident not in text and ident not in url and not bound_application:continue
             images=incoming.get('images')
             multi_source=(record['state'] in {'TN','NV'} and query.get('operation')=='detail') or (record['state']=='NV' and query.get('operation')=='search' and ident=='@completed-search')
-            multiple=multi_source and isinstance(images,list) and 2<=len(images)<=3
+            multiple=multi_source and isinstance(images,list) and 2<=len(images)<=(8 if record['state']=='NV' and query.get('operation')=='detail' else 3)
             if 'images' in incoming and (not multiple or images[0]!=incoming.get('image')):raise ValueError('Invalid snapshot page binding')
             content=base64.b64encode(json.dumps(images).encode()).decode() if multiple else incoming['image']
             asset=dict(kind='image_pages' if multiple else 'image',state=record['state'],ein=record['ein'],run_id=run_id,
                 source_url=url,captured_at=incoming['captured_at'],content=content,
-                identifier=ident,record_name=name,organization_name=record['organization_name'],
+                identifier=ident,record_name=name,organization_name=record['organization_name'],operation=query.get('operation',''),
                 public_text=text,query_id=str(payload['query_id']))
             ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id)
             # The complete metadata stays in persistent storage. Continuations
