@@ -1774,21 +1774,38 @@ def search_pa(page, org: Organization, wait_for_ein=None) -> StateResult:
         if last_goto_error:
             raise last_goto_error
 
-        ein_input = None
-        for _ in range(3):
+        # The Angular form and its loading overlay can outlive document load.
+        # Share one readiness budget across field creation and normal actions.
+        form_deadline = time.monotonic() + 20.0
+        remaining_form_ms = lambda: max(1, int((form_deadline - time.monotonic()) * 1000))
+        try:
             ein_input = find_pa_ein_input(page)
-            if ein_input:
-                break
-            safe_wait_for_network_idle(page, timeout=5000)
-            fast_sleep(1)
-        if not ein_input:
-            result.error = "Could not find PA EIN input"
+            if not ein_input:
+                selectors = [
+                    'input[name="EIN"]', 'input[ng-model="search.ein"]',
+                    'input[placeholder*="EIN" i]', 'input[name*="ein" i]',
+                    'input[id*="ein" i]', 'input[name*="fein" i]',
+                    'input[id*="fein" i]', 'input[placeholder*="fein" i]',
+                ]
+                page.locator(", ".join(selector + ":visible" for selector in selectors)).first.wait_for(
+                    state="visible", timeout=remaining_form_ms())
+                ein_input = find_pa_ein_input(page)
+            if not ein_input:
+                raise PlaywrightTimeoutError("PA EIN field is not available")
+            # Reset stale filters only when the actual form accepts input.
+            page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.click(timeout=remaining_form_ms())
+            ein_input.fill("", timeout=remaining_form_ms())
+            ein_input.fill(ein, timeout=remaining_form_ms())
+        except PlaywrightTimeoutError as exc:
+            result.status = "Unable to Confirm"
+            result.reason_code = "PA_FORM_NOT_READY"
+            result.raw_status_text = "Pennsylvania EIN search form did not become ready"
+            result.source_note = (
+                "Pennsylvania's page opened, but its search form did not become usable within the readiness limit. "
+                "No EIN search was submitted; registration status remains unconfirmed."
+            )
+            result.lab_diagnostic = {"phase": "PA_FORM_READY", "limit_ms": 20000, "detail": str(exc)[:1200]}
             return result
-        # Returning to the same Angular route can retain the preceding name
-        # fallback. Reset every search filter before the EIN-only confirmation.
-        page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.click(timeout=1500)
-        ein_input.fill("")
-        ein_input.fill(ein)
 
         if not click_pa_search_button(page):
             result.error = "Could not click PA Search button"
