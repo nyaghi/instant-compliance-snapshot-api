@@ -392,6 +392,31 @@ def ga_completed_empty_grid_snapshot(record,query,evidence,url,text):
         and bool(re.search(r'(?:Full Name\s+License Number\s+Profession\s+License Type\s+License Status\s+City\s+State|Results\s+Full Name\s+License #\s+Profession\s+License Type\s+Status\s+Address)\s+1\s*\Z',text)))
 
 
+def ga_completed_results_snapshot(record,query,evidence,url,text):
+    """Keep a validated original GA results page for a negative lookup.
+
+    Returned unrelated rows do not turn it into an empty search or a positive
+    registration. The signed query/cleaner boundary remains authoritative.
+    """
+    if ga_completed_empty_grid_snapshot(record,query,evidence,url,text):return True
+    source=urlsplit(url)
+    if (record.get('state')!='GA' or query.get('state')!='GA' or 'identifier' in query
+        or not isinstance(query.get('orgName'),str) or not query['orgName'].strip()
+        or not isinstance(evidence,dict) or set(evidence)!={'rows'}
+        or not isinstance(evidence['rows'],list) or not 0<len(evidence['rows'])<=100
+        or source.scheme!='https' or source.hostname!='verify.sos.ga.gov'
+        or source.path!='/verification/SearchResults.aspx' or source.query or source.fragment
+        or not isinstance(text,str) or not text.strip().startswith('Search Results')
+        or re.search(r'verify you are human|user validation required|just a moment|access denied',text,re.I)):
+        return False
+    if not re.search(r'Full Name\s+License (?:#\s+Profession\s+License Type\s+Status\s+Address|Number\s+Profession\s+License Type\s+License Status\s+City\s+State)',text):return False
+    return any(isinstance(row,dict) and isinstance(row.get('name'),str) and row['name'].strip()
+        and isinstance(row.get('identifier'),str) and row['identifier'].strip()
+        and key(row['name']) in key(text)
+        and re.search(r'(?<![\w])'+re.escape(row['identifier'])+r'(?![\w])',text,re.I)
+        for row in evidence['rows'])
+
+
 def nc_completed_empty_snapshot(record,query,evidence,url,text):
     """Require this issued query's original NC zero-result heading."""
     source=urlsplit(url)
@@ -507,6 +532,10 @@ def connector_archive(record,payload,query,evidence):
             # Archive once as search evidence. This marker cannot be selected
             # as a positive credential or used to manufacture a zero count.
             rows=[('@completed-search',record['organization_name']),*rows]
+        if ga_completed_results_snapshot(record,query,evidence,url,text):
+            # Search-only evidence must never compete with a numberless positive
+            # registration by organization name. It is selected only for NR.
+            rows=[('@completed-search',''),*rows]
         identifier=str(query.get('identifier') or query.get('orgID') or '')
         if identifier and rows:rows=[(identifier,rows[0][1])]
         for ident,name in rows[:12]:
