@@ -367,6 +367,43 @@ def nm_detail_snapshot_bound(record,query,evidence,url,text,identifier):
             and re.search(r'(?<!\d)'+identifier[:2]+r'-?'+identifier[2:]+r'(?!\d)',text) is not None)
 
 
+
+def ga_completed_empty_grid_snapshot(record,query,evidence,url,text):
+    """The existing cleaner has already verified complete GA search pagination."""
+    source=urlsplit(url)
+    return (record.get('state')=='GA' and query.get('state')=='GA'
+        and 'identifier' not in query and isinstance(query.get('orgName'),str)
+        and bool(query['orgName'].strip()) and evidence=={'rows':[]}
+        and source.scheme=='https' and source.hostname=='verify.sos.ga.gov'
+        and source.path=='/verification/SearchResults.aspx' and not source.query
+        and not source.fragment and isinstance(text,str)
+        and text.strip().startswith('Search Results')
+        and bool(re.search(r'Full Name\s+License Number\s+Profession\s+License Type\s+License Status\s+City\s+State\s+1\s*\Z',text)))
+
+
+def nc_completed_empty_snapshot(record,query,evidence,url,text):
+    """Require this issued query's original NC zero-result heading."""
+    source=urlsplit(url)
+    if (record.get('state')!='NC' or query.get('state')!='NC'
+        or query.get('operation')!='search' or not isinstance(evidence,dict)
+        or evidence.get('query')!=query or evidence.get('complete') is not True
+        or evidence.get('state')!='NC' or evidence.get('verification_pending') is not False
+        or type(evidence.get('total')) is not int or evidence['total']!=0
+        or evidence.get('rows')!=[] or not isinstance(query.get('name'),str)
+        or not query['name'].strip() or not isinstance(text,str)
+        or source.scheme!='https' or source.hostname!='www.sosnc.gov'
+        or source.path!='/online_services/search/Charities_Results'
+        or source.query or source.fragment
+        or re.search(r'verify you are human|user validation required|just a moment|access denied',text,re.I)):
+        return False
+    mode={None:'Starting With','STARTS_WITH':'Starting With',
+          'ALL_WORDS':'All Words','EXACT_MATCH':'Exact'}.get(query.get('search_mode'))
+    if mode is None:return False
+    observed=' '.join(text.split())
+    expected='Words: '+mode+' Organization Name '+' '.join(query['name'].split())+' Search Time '
+    return bool(re.search(r'\bRecords Found:\s*0(?:\s|$)',observed)
+                and expected.casefold() in observed.casefold())
+
 def connector_archive(record,payload,query,evidence):
     """Called only after the original query ID and source schema were validated."""
     incoming=payload.get('state_snapshot')
@@ -421,7 +458,9 @@ def connector_archive(record,payload,query,evidence):
                 if isinstance(cells,list) and len(cells)==len(headers):walk(dict(zip(headers,cells)))
         if (not rows and isinstance(evidence,dict) and evidence.get('complete') is True
                 and evidence.get('total')==0 and evidence.get('rows')==[]
-                and re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I)):
+                and re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I)
+                or not rows and ga_completed_empty_grid_snapshot(record,query,evidence,url,text)
+                or not rows and nc_completed_empty_snapshot(record,query,evidence,url,text)):
             rows=[('@completed-search',record['organization_name'])]
         identifier=str(query.get('identifier') or query.get('orgID') or '')
         if identifier and rows:rows=[(identifier,rows[0][1])]
