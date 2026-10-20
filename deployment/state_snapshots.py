@@ -378,7 +378,7 @@ def ga_completed_empty_grid_snapshot(record,query,evidence,url,text):
         and source.path=='/verification/SearchResults.aspx' and not source.query
         and not source.fragment and isinstance(text,str)
         and text.strip().startswith('Search Results')
-        and bool(re.search(r'Full Name\s+License Number\s+Profession\s+License Type\s+License Status\s+City\s+State\s+1\s*\Z',text)))
+        and bool(re.search(r'(?:Full Name\s+License Number\s+Profession\s+License Type\s+License Status\s+City\s+State|Results\s+Full Name\s+License #\s+Profession\s+License Type\s+Status\s+Address)\s+1\s*\Z',text)))
 
 
 def nc_completed_empty_snapshot(record,query,evidence,url,text):
