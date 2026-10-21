@@ -16,20 +16,20 @@
     for (const respond of task.responders) try { respond(response); } catch { /* Previous worker has exited. */ }
   }
   window.addEventListener("message", event => {
-    if(event.source===window && event.origin===NY && event.data?.channel==='cc-ny-page-v1'
+    if(event.source===window && event.origin===NY && event.data?.channel==='cc-final-four-ny-page-v1'
         && event.data.direction==='diagnostic' && pending && event.data.id===pending.id) {
       // The worker revalidates sender ownership and sanitizes this payload.
       if(Array.isArray(event.data.ny_diagnostics))chrome.runtime.sendMessage({action:'ny-diagnostic',
         id:pending.id,ny_diagnostics:event.data.ny_diagnostics.slice(-1)}).catch(()=>{});
       return;
     }
-    if (event.source !== window || event.origin !== NY || event.data?.channel !== "cc-ny-page-v1" || event.data.direction !== "response") return;
+    if (event.source !== window || event.origin !== NY || event.data?.channel !== "cc-final-four-ny-page-v1" || event.data.direction !== "response") return;
     if (!pending || event.data.id !== pending.id) return;
     finish(pending, { ...(event.data.ok ? { ok: true, evidence: event.data.evidence } : { ok: false, reason: event.data.reason }), verificationRetryUsed: event.data.verificationRetryUsed === true, ...(Array.isArray(event.data.ny_diagnostics) ? {ny_diagnostics:event.data.ny_diagnostics.slice(-32)} : {}) });
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return false;
-    if (message?.action === 'registry-snapshot-metadata') {
+    if(message?.action==='registry-snapshot-metadata') {
       respond({url:location.href,public_text:(document.body?.innerText||'').slice(0,20000)});return false;
     }
     if (message?.action === "ready") {
@@ -63,7 +63,7 @@
     const task = { id: message.id, attempt: message.attempt, action: message.action, query: message.query, responders: [respond], timer: null };
     task.timer = setTimeout(() => { if (pending === task) finish(task, { ok: false, reason: "NY_CONNECTOR_RELAY_TIMEOUT" }); }, 140000);
     pending = task;
-    window.postMessage({ channel: "cc-ny-page-v1", direction: "request", id: message.id, action: message.action, query: message.query, verificationRetryUsed: message.verificationRetryUsed === true }, NY);
+    window.postMessage({ channel: "cc-final-four-ny-page-v1", direction: "request", id: message.id, action: message.action, query: message.query, verificationRetryUsed: message.verificationRetryUsed === true }, NY);
     return true;
   });
 })();

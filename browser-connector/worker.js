@@ -6,7 +6,7 @@ function nvHandoffDiagnostic(job,message) {
   if(!P.TRIAL_ORIGIN || job?.registryState!=='NV' || typeof message.ok!=='boolean' || message.progress)return message;
   const operation=job.command?.query?.operation;
   return {...message,nv_readiness:{...message.nv_readiness,handoff:{
-    build:'nv-empty-source-local-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
+    build:'final-evidence-preview-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
     active:isActive(job),pending:!!job.pending,search_complete:job.finalFourSearchComplete===true,
     pending_matches_reply:job.pending===message.id,
     command_matches_reply:job.command?.id===message.id,
@@ -65,7 +65,7 @@ function diagnostic(type, job, detail = "") {
   const at=Date.now(), summary=String(detail).slice(0,180);
   diagnostics.push({ at, type, id: job?.lookupId || "", phase: job?.pending ? "search" : isActive(job) ? "active" : "queued", detail: summary });
   if (diagnostics.length > 80) diagnostics.shift();
-  if(P.TRIAL_ORIGIN && job && ["GA","MS","NC","TN","NV"].includes(job.registryState)) {
+  if(P.TRIAL_ORIGIN && job && ["GA","MS","NC","TN","NV","AL","IL"].includes(job.registryState)) {
     job.trialDiagnostics ||= [];
     job.trialDiagnostics.push({at,type,detail:String(detail).slice(0,600)});
     if(job.trialDiagnostics.length>120)job.trialDiagnostics.shift();
@@ -88,7 +88,7 @@ function collectNyDiagnostics(job, response) {
   if(P.TRIAL_ORIGIN && job.registryState === "NY")
     job.nyDiagnostics=P.nyDiagnostics([...(job.nyDiagnostics||[]),...P.nyDiagnostics(response?.ny_diagnostics)]);
 }
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : withoutSourcePixels(j.lastResponse), snapshotCaptures: j.snapshotCaptures || 0, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : withoutSourcePixels(j.lastResponse), snapshotCaptures: j.snapshotCaptures || 0, ...(P.TRIAL_ORIGIN&&j.registryState==='AL'?{alEmptySnapshotSaved:j.alEmptySnapshotSaved===true}:{}), queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 function withoutSourcePixels(value) { if(!value)return value; const {state_snapshot,...rest}=value; return rest; }
 function saveRuntime() {
   keepAlive();
@@ -191,7 +191,7 @@ function allowedSender(sender) {
 }
 function post(job, message) {
   message=nvHandoffDiagnostic(job,message);
-  if(P.TRIAL_ORIGIN && ["GA","MS","NC","TN"].includes(job.registryState)
+  if(P.TRIAL_ORIGIN && ["GA","MS","NC","TN","AL","IL"].includes(job.registryState)
       && (message.action==="closed" || (typeof message.ok==="boolean" && !message.progress)))
     message={...message,trial_diagnostics:[...(job.trialDiagnostics||[])]};
   try { job.port.postMessage(message); } catch {}
@@ -606,15 +606,41 @@ async function performSearch(job, query, id) {
     response = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : "NY_CONNECTOR_INCOMPLETE", ...(error.nvSequence?{nv_readiness:error.nvSequence}:{}) };
   }
   if (job.closed) return;
+  // This optional local metadata is never forwarded or persisted as a reply
+  // field; capture independently validates its command, age, URL and document.
+  const preparedNvMetadata=response?.nv_snapshot_metadata;
+  if(response&&Object.hasOwn(response,'nv_snapshot_metadata')) {
+    const {nv_snapshot_metadata,...publicResponse}=response;response=publicResponse;
+  }
   // NV positive searches need the observed detail, not an offscreen result
   // list. Reserve the original four-capture allowance for those detail pages.
   const nvPositiveSearch=P.TRIAL_ORIGIN&&job.registryState==='NV'&&query.operation==='search'
     &&response.ok===true&&response.evidence?.complete===true&&response.evidence.total>0
     &&Array.isArray(response.evidence.rows)&&response.evidence.rows.length>0;
   if(nvPositiveSearch)diagnostic('source-snapshot-phase',job,JSON.stringify({operation:'search',phase:'positive-search-detail-required'}));
-  if (response.ok && !nvPositiveSearch && typeof captureStateSnapshot === 'function') {
-    const snapshot=await captureStateSnapshot(job,query,id);
-    if(snapshot)response.state_snapshot=snapshot;
+  // AL verification replies are not completed public registry evidence.
+  // Never take or forward a state screenshot of a verification challenge.
+  const alCompletedSource=job.registryState!=='AL'||(response.evidence?.complete===true
+    &&response.evidence.verification_pending===false
+    &&P.sameQuery(response.evidence.query,{state:'AL',operation:'search',name:query.name}));
+  // One original empty AL search is enough when paired with the full query
+  // history. Preserve the existing four slots for records found by later names.
+  const alEmptySource=job.registryState==='AL'&&alCompletedSource
+    &&response.evidence.total===0&&Array.isArray(response.evidence.rows)&&response.evidence.rows.length===0;
+  const alRepeatedEmpty=alEmptySource&&job.alEmptySnapshotSaved===true;
+  if (response.ok && alCompletedSource && !alRepeatedEmpty && !nvPositiveSearch && typeof captureStateSnapshot === 'function') {
+    const preparedNc=job.ncProfileSnapshot;
+    delete job.ncProfileSnapshot;
+    const useNc=job.registryState==='NC' && query.operation==='detail' && preparedNc
+      && preparedNc.commandId===id && preparedNc.generation===job.generation
+      && P.sameQuery(preparedNc.query,query) && !job.closed && isActive(job)
+      && job.pending===id && job.command?.id===id && Date.now()<job.activeExpiresAt;
+    // A failed profile capture is not retried against the later filings page.
+    const snapshot=useNc?preparedNc.snapshot:await captureStateSnapshot(job,query,id,preparedNvMetadata);
+    if(snapshot){
+      response.state_snapshot=snapshot;
+      if(alEmptySource)job.alEmptySnapshotSaved=true;
+    }
   }
   if (job.closed) return;
   job.pending = null;

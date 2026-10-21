@@ -20,7 +20,20 @@ async function registryTnCheckboxMessage(message,sender){
         || !Number.isInteger(message.controls) || message.controls<0 || message.controls>9)return {allowed:false};
     job.tnCheckboxObservationCount=(job.tnCheckboxObservationCount||0)+1;
     diagnostic('tn-verification',job,JSON.stringify({phase:'frame-observed',visible:message.visible,
-      controls:message.controls,actionable:message.actionable}));
+      controls:message.controls,actionable:message.actionable,
+      ...(typeof message.shadow_api==='boolean'&&typeof message.scan_complete==='boolean'
+        &&Number.isInteger(message.shadow_roots)&&message.shadow_roots>=0&&message.shadow_roots<=8
+        &&Number.isInteger(message.shadow_controls)&&message.shadow_controls>=0&&message.shadow_controls<=9
+        ?{shadow_api:message.shadow_api,shadow_roots:message.shadow_roots,
+          shadow_controls:message.shadow_controls,scan_complete:message.scan_complete}:{}),
+      ...(Number.isFinite(message.scan_ms)&&message.scan_ms>=0&&message.scan_ms<=60000
+        &&Number.isFinite(message.script_age_ms)&&message.script_age_ms>=0&&message.script_age_ms<=60000
+        ?{scan_ms:message.scan_ms,script_age_ms:message.script_age_ms}:{}),
+      ...(['frame_nav_ms','frame_response_end_ms','frame_dom_interactive_ms','frame_dom_ready_ms','frame_load_end_ms']
+        .every(k=>Number.isFinite(message[k])&&message[k]>=0&&message[k]<=600000)
+        ?{frame_nav_ms:message.frame_nav_ms,frame_response_end_ms:message.frame_response_end_ms,
+          frame_dom_interactive_ms:message.frame_dom_interactive_ms,
+          frame_dom_ready_ms:message.frame_dom_ready_ms,frame_load_end_ms:message.frame_load_end_ms}:{})}));
     return {allowed:false};
   }
   if(Date.now()>=Math.min(job.activeExpiresAt,job.tnVerificationExpiresAt||0))return {allowed:false};
@@ -456,9 +469,56 @@ async function registryMessage(job, message) {
     await saveRuntime();
   }
   const send=async()=>{
+    const gaTimed = P.TRIAL_ORIGIN && job.registryState==='GA' && (message.action?.startsWith('registry-ga-') || message.action==='registry-ready');
+    const tnTimed=P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-tn'||message.action==='registry-ready');
+    const tnSentAt=tnTimed?Date.now():0;
+    const gaSentAt = gaTimed ? Date.now() : 0;
     const tab = await chrome.tabs.get(job.tab);
+    const gaTabAt = gaTimed ? Date.now() : 0;
+    const tnTabAt=tnTimed?Date.now():0;
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
-    return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,skipHistory:message.query?.operation==='detail' && !/^E\d{7,14}-\d$/.test(message.query.identifier)}:{})}, {frameId:0});
+    const response = await chrome.tabs.sendMessage(job.tab, {...message,...(tnTimed?{tnTiming:true}:{}),...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,includeSnapshotMetadata:message.query?.operation==='detail',captureDeadline:job.activeExpiresAt,skipHistory:message.query?.operation==='detail' && !/^E\d{7,14}-\d$/.test(message.query.identifier)}:{})}, {frameId:0});
+    if(tnTimed){
+      const at=Date.now(),t=response?.tn_transport;
+      if((message.action==='registry-tn'||at-tnTabAt>=1000)&&(job.tnTransportCount||0)<32){
+        job.tnTransportCount=(job.tnTransportCount||0)+1;
+        diagnostic('tn-transport',job,JSON.stringify({action:message.action,operation:message.query?.operation||'',
+          tab_ms:tnTabAt-tnSentAt,roundtrip_ms:at-tnTabAt,
+          received_after_ms:Number.isFinite(t?.started_at)?t.started_at-tnTabAt:null,
+          content_ms:Number.isFinite(t?.finished_at)&&Number.isFinite(t?.started_at)?t.finished_at-t.started_at:null,
+          reply_after_ms:Number.isFinite(t?.finished_at)?at-t.finished_at:null,
+          visibility:['hidden','visible'].includes(t?.visibility)?t.visibility:'unknown',content_observed:!!t,
+          build:'nc-denied-row-1'}));
+      }
+      if(t){const {tn_transport,...clean}=response;return clean;}
+    }
+    if (gaTimed) {
+      const at=Date.now(), t=response?.ga_transport;
+      if(message.action!=='registry-ready' || at-gaTabAt>=1000)diagnostic('ga-transport',job,JSON.stringify({action:message.action,
+        tab_ms:gaTabAt-gaSentAt,roundtrip_ms:at-gaTabAt,
+        received_after_ms:Number.isFinite(t?.started_at)?t.started_at-gaTabAt:null,
+        content_ms:Number.isFinite(t?.finished_at)&&Number.isFinite(t?.started_at)?t.finished_at-t.started_at:null,
+        reply_after_ms:Number.isFinite(t?.finished_at)?at-t.finished_at:null,
+        visibility:['hidden','visible'].includes(t?.visibility)?t.visibility:'unknown',
+        content_observed:!!t,build:'nc-denied-row-1'}));
+      if (t) {const {ga_transport,...clean}=response;
+        if(message.action==='registry-ready') {
+          const n=t.navigation;
+          const sample={ready:response.ready===true,path:new URL(response.url).pathname,
+            changed_document:job.gaTraceDocument!==response.documentId,
+            transport_ms:at-gaTabAt,delivery_ms:Number.isFinite(t.started_at)?t.started_at-gaTabAt:null};
+          if(n)for(const key of ['request_start','response_start','response_end','dom_interactive','dom_complete','load_end','age_ms'])
+            if(Number.isFinite(n[key])&&n[key]>=0)sample[key]=Math.round(n[key]);
+          if(n&&['loading','interactive','complete'].includes(n.ready_state))sample.ready_state=n.ready_state;
+          const signature=JSON.stringify({...sample,age_ms:0,transport_ms:0,delivery_ms:0});
+          if(signature!==job.gaTraceSignature || sample.transport_ms>=1000 || sample.delivery_ms>=1000) {
+            diagnostic('ga-readiness',job,JSON.stringify(sample));job.gaTraceSignature=signature;
+          }
+          job.gaTraceDocument=response.documentId;
+        }
+        return clean;}
+    }
+    return response;
   };
   if(P.TRIAL_ORIGIN && job.registryState==='MS' && message.action==='registry-ms'
       && message.requireFreshGrid===true && Number.isFinite(message.budgetMs)) {
@@ -676,6 +736,31 @@ async function registryNorthCarolinaVisibility(job) {
   if (!['NC','TN'].includes(job.registryState) || job.closed || !owned.has(job.tab)) return null;
   try {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
+    // TN's separate window can be occluded while its tab remains active.
+    // Expose only this job's sole owned source tab; preserve its geometry,
+    // document, verification limit, requests and original deadline.
+    if(P.TRIAL_ORIGIN && job.registryState==='TN' && !job.tnWindowVisibilityAttempted
+        && tab.active && tab.windowId!==source.windowId && tab.url===registryStart('TN')
+        && new URL(source.url).origin===P.TRIAL_ORIGIN && Date.now()<job.activeExpiresAt) {
+      const focus=await chrome.windows.getLastFocused();
+      const prior=(await chrome.tabs.query({active:true,windowId:focus.id}))[0];
+      if(focus.focused && focus.id===tab.windowId || !registryNevadaOwnedForeground(prior,source))return null;
+      const siblings=await chrome.tabs.query({windowId:tab.windowId});
+      const window=await chrome.windows.get(tab.windowId);
+      if(siblings.length!==1 || siblings[0].id!==tab.id || window.state==='minimized')return null;
+      const latest=await chrome.tabs.get(tab.id),currentSource=await chrome.tabs.get(source.id);
+      const latestFocus=await chrome.windows.getLastFocused();
+      const active=(await chrome.tabs.query({active:true,windowId:focus.id}))[0];
+      if(latest.windowId!==tab.windowId || latest.url!==tab.url || !latest.active
+          || currentSource.windowId!==source.windowId || currentSource.url!==source.url
+          || latestFocus.id!==focus.id || latestFocus.focused!==focus.focused
+          || active?.id!==prior.id || active.url!==prior.url || !owned.has(tab.id)
+          || job.closed || Date.now()>=job.activeExpiresAt)return null;
+      job.tnWindowVisibilityAttempted=true;
+      await chrome.windows.update(tab.windowId,{focused:true});
+      diagnostic('tn-verification',job,'owned separate window; unchanged geometry/document/deadline');
+      return null;
+    }
     if(P.TRIAL_ORIGIN && job.registryState==='NC' && !job.ncWindowVisibilityAttempted && tab.active && tab.windowId!==source.windowId
         && new URL(source.url).origin===P.TRIAL_ORIGIN && new URL(tab.url).origin===registryOrigin('NC')
         && new URL(tab.url).pathname.startsWith('/online_services/search/') && Date.now()<job.activeExpiresAt) {
@@ -799,7 +884,7 @@ async function registryIllinoisVerification(job, collect) {
 function registryNvSequenceFailure(job, query, guard) {
   const response={ok:false,reason:'NY_CONNECTOR_INVALID_SEQUENCE'};
   if(P.TRIAL_ORIGIN && job?.registryState==='NV')response.nv_readiness={sequence:{
-    build:'functional-recovery-fh-1',guard,active:isActive(job),pending:!!job.pending,
+    build:'nc-denied-row-1',guard,active:isActive(job),pending:!!job.pending,
     pending_matches_request:job.pending===job.command?.id,
     pending_operation:['search','detail'].includes(job.command?.query?.operation)?job.command.query.operation:'none',
     operation:['search','detail'].includes(query?.operation)?query.operation:'other',
@@ -985,6 +1070,20 @@ async function performRegistryQuery(job, query) {
         diagnostic('tn-dom',job,JSON.stringify(sample));
       }
     }
+    if(P.TRIAL_ORIGIN && query.state==='TN' && query.operation==='detail' && response?.ok===true && response.evidence?.fields) {
+      const fields=response.evidence.fields;
+      for(const key of ['Name','CO Number','Status','Registration Date','Expiration Date','Address']) {
+        const raw=fields[key];
+        diagnostic('tn-detail-field',job,JSON.stringify({identifier:query.identifier,key,
+          type:typeof raw,value:typeof raw==='string'?raw.slice(0,350):null,
+          truncated:typeof raw==='string'&&raw.length>350}));
+      }
+      const periods=fields.financial_periods;
+      diagnostic('tn-detail-history',job,JSON.stringify({identifier:query.identifier,
+        financial_count:fields.financial_count,financial_history_absent:fields.financial_history_absent,
+        periods_type:Array.isArray(periods)?'array':typeof periods,
+        periods:Array.isArray(periods)?periods.slice(0,20):null,truncated:Array.isArray(periods)&&periods.length>20}));
+    }
     if (P.TRIAL_ORIGIN && query.state==='NV' && query.operation==='search'
         && ['NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED','NY_CONNECTOR_REGISTRY_NV_FORM_NOT_SETTLED'].includes(response?.reason)
         && !job.nvModeRecoveryUsed && job.activeExpiresAt-Date.now()>8000) {
@@ -1106,6 +1205,19 @@ async function registryNorthCarolinaQuery(job,query) {
   phase(`profile-${profile?.ok?'complete':profile?.reason||'incomplete'}`);
   if(!profile?.ok)return profile;
   const expected=query.url.replace('/charities_profile/','/charities_filings/');
+  const needsFilings=!/^NCAPP-\d+$/.test(query.identifier)&&profile.filings_url===expected;
+  // Save the selected original profile while it is still on screen. The
+  // following optional filings navigation must not replace its source pixels.
+  if(P.TRIAL_ORIGIN && job.command?.id && typeof captureStateSnapshot==='function') {
+    const commandId=job.command.id,generation=job.generation;
+    // Leave the original maximum8s history read plus its1s completion reserve
+    // intact alongside the NC3s capture allowance. Near expiry, preserve status work and omit optional pixels.
+    const snapshot=(!needsFilings||job.activeExpiresAt-Date.now()>12000)
+      ?await captureStateSnapshot(job,query,commandId):null;
+    if(job.command?.id===commandId && job.generation===generation)
+      job.ncProfileSnapshot={commandId,generation,query:JSON.parse(JSON.stringify(query)),snapshot};
+  }
+
   if(!/^NCAPP-\d+$/.test(query.identifier)&&profile.filings_url===expected) {
     profile.evidence.filings={url:expected,complete:false,rows:[]};
     if(job.activeExpiresAt-Date.now()>5000) {

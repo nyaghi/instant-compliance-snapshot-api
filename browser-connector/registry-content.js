@@ -1512,7 +1512,7 @@
     // those rows for master identity review; blank numbers are not duplicate
     // licenses. Repeated numbered credentials or identical rows still fail.
     const numbered=rows.filter(r=>r[1]).map(r=>r[1]);
-    if (rows.length!==page.total || new Set(numbered).size!==numbered.length
+    if (rows.length!==page.total || (() => {const cores=new Map();return rows.some(r=>{if(!r[1])return false;const core=JSON.stringify(r.slice(0,6));if(cores.has(r[1])&&cores.get(r[1])!==core)return true;cores.set(r[1],core);return false;});})()
         || new Set(rows.map(r=>JSON.stringify(r))).size!==rows.length) throw new Error('REGISTRY_TOTAL_CHANGED');
     return {state:'AL',query,complete:true,verification_pending:false,headers:page.headers,rows,total:page.total};
   }
@@ -1872,7 +1872,13 @@
       nvDiagnosticId=typeof m.diagnosticId==='string' && /^[a-zA-Z0-9_-]{16,80}$/.test(m.diagnosticId)?m.diagnosticId:null;
       try {
         const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline,{skipHistory:m.skipHistory===true});
-        return {ok:true,evidence};
+        // Piggyback only this completed detail's metadata. Failure to collect
+        // optional pixels must never change the successful registry evidence.
+        let nv_snapshot_metadata;
+        if(m.includeSnapshotMetadata===true&&m.query?.operation==='detail'&&nvDiagnosticId&&evidence?.complete===true) {
+          try {nv_snapshot_metadata=await snapshotNvAfterVisualReady(m.query,nvDiagnosticId,deadline,m.captureDeadline);} catch {}
+        }
+        return {ok:true,evidence,...(nv_snapshot_metadata?{nv_snapshot_metadata}:{})};
       } finally {nvDiagnosticId=null;}
     }
     if (m.action === "registry-il" && IL) {
@@ -1935,7 +1941,9 @@
   }
   let snapshotScroll=null;
   function snapshotDialog(query) {
-    if(!TN||query?.state!=='TN'||query.operation!=='detail'||!/^CO\d+$/.test(query.identifier||''))return null;
+    const tn=TN&&query?.state==='TN'&&query.operation==='detail'&&/^CO\d+$/.test(query.identifier||'');
+    const il=IL&&query?.state==='IL'&&/^\d{8}$/.test(query.identifier||'');
+    if(!tn&&!il)return null;
     const dialog=document.querySelector('#KendoWindowLevel1');
     if(!visible(dialog)||![...dialog.querySelectorAll('h4')].some(el=>text(el)==='CO Number: '+query.identifier))return null;
     return dialog;
@@ -1972,8 +1980,17 @@
     dialog.scrollTop=target?dialog.scrollTop+target.getBoundingClientRect().top-dialog.getBoundingClientRect().top-16:0;
     await new Promise(resolve=>setTimeout(resolve,40));
     const viewportTop=Math.max(0,dialog.getBoundingClientRect().top),viewportBottom=Math.min(innerHeight,dialog.getBoundingClientRect().top+dialog.clientHeight);
-    const targets=m.view==='expiration'?[...dialog.querySelectorAll('h4')].filter(el=>/^(Status|CO Number|Registration Date|Expiration Date):/.test(text(el))):
+    const targets=m.view==='expiration'?[...dialog.querySelectorAll('h4')].filter(el=>(IL?/^(Status|CO Number|Registration Date|Annual Report Due Date|FEIN):/:/^(Status|CO Number|Registration Date|Expiration Date):/).test(text(el))):
       financial?(showHeader?[header,financial]:[financial]):target?[target]:[];
+    if(IL&&m.view==='top') {
+      const title=dialog.querySelector('h2');
+      if(!visible(title))return {ok:false};
+      targets.push(title);
+      if(dialog.scrollHeight<=dialog.clientHeight+1) {
+        targets.push(...[...dialog.querySelectorAll('h4')].filter(el=>/^(Status|CO Number|Registration Date|Annual Report Due Date|FEIN):/.test(text(el))));
+        const latest=snapshotFinancialCell(dialog);if(latest)targets.push(latest);
+      }
+    }
     const inView=targets.every(el=>el.getBoundingClientRect().top>=viewportTop&&el.getBoundingClientRect().bottom<=viewportBottom);
     return {ok:snapshotDialog(m.query)===dialog&&inView};
   }
@@ -2039,23 +2056,34 @@
       if(!group||Math.max(group.bottom,row.bottom)-group.top>height){group={top:row.top,bottom:row.bottom,elements:[]};groups.push(group);}
       group.bottom=Math.max(group.bottom,row.bottom);group.elements.push(...row.elements);
     }
-    return groups.length<=3?groups:null;
+    return groups.length<=(context.empty?3:8)?groups:null;
+  }
+  function snapshotNvBinding(query) {
+    if(!NV||query?.state!=='NV'||query.operation!=='detail')return '';
+    if(/verify you are human|user validation required|just a moment|access denied/i.test(document.body?.innerText||''))return '';
+    const fields=nvFields(query.identifier)||nvReservationFields(query.identifier);
+    return fields?JSON.stringify({identifier:query.identifier,fields:Object.entries(fields).sort((a,b)=>a[0].localeCompare(b[0]))}):'';
   }
   async function snapshotNvView(m) {
     const context=snapshotNvContext(m.query);
-    if(!context||typeof m.command_id!=='string'||!m.command_id||m.command_id.length>200)return {ok:false};
+    const recordBinding=m.query?.operation==='detail'?snapshotNvBinding(m.query):'';
+    if(!context||typeof m.command_id!=='string'||!m.command_id||m.command_id.length>200
+      ||m.query?.operation==='detail'&&(!recordBinding||(m.source_binding!==undefined&&m.source_binding!==recordBinding)))return {ok:false};
+    if(m.view!=='nv-0'&&m.query?.operation==='detail'&&snapshotNvScroll?.recordBinding!==recordBinding)return {ok:false};
     if(m.view==='restore'){
       if(snapshotNvScroll?.panel!==context.panel||snapshotNvScroll.command!==m.command_id||snapshotNvScroll.binding!==JSON.stringify(m.query))return {ok:false};
-      context.panel.scrollTop=snapshotNvScroll.top;snapshotNvScroll=null;return {ok:true};
+      context.panel.scrollTop=snapshotNvScroll.top;snapshotNvScroll=null;
+      return {ok:true,...(m.returnMetadata===true&&m.query?.operation==='detail'
+        ?{snapshot_metadata:snapshotMetadata(m.query)}:{})};
     }
-    const groups=snapshotNvPlan(context),index=/^nv-[0-2]$/.test(m.view)?Number(m.view.slice(3)):-1;
+    const groups=snapshotNvPlan(context),index=/^nv-[0-7]$/.test(m.view)?Number(m.view.slice(3)):-1;
     if(!groups||index<0||!groups[index])return {ok:false};
-    if(index===0)snapshotNvScroll={panel:context.panel,command:m.command_id,binding:JSON.stringify(m.query),top:context.panel.scrollTop};
+    if(index===0)snapshotNvScroll={panel:context.panel,command:m.command_id,binding:JSON.stringify(m.query),recordBinding,top:context.panel.scrollTop};
     if(snapshotNvScroll?.panel!==context.panel||snapshotNvScroll.command!==m.command_id||snapshotNvScroll.binding!==JSON.stringify(m.query))return {ok:false};
     const group=groups[index];context.panel.scrollTop+=group.top-context.top-2;
     await new Promise(resolve=>setTimeout(resolve,40));
     const current=snapshotNvContext(m.query);
-    const full=!!current&&current.panel===context.panel&&group.elements.every(el=>{const r=el.getBoundingClientRect();return visible(el)&&r.top>=current.top&&r.bottom<=current.bottom&&r.left>=0&&r.right<=innerWidth;});
+    const full=!!current&&(!NV||m.query?.operation!=='detail'||!snapshotNvPaintedLoader())&&current.panel===context.panel&&group.elements.every(el=>{const r=el.getBoundingClientRect();return visible(el)&&r.top>=current.top&&r.bottom<=current.bottom&&r.left>=0&&r.right<=innerWidth;});
     return {ok:full};
   }
   function snapshotNvVisibility(query) {
@@ -2063,13 +2091,48 @@
     const context=snapshotNvContext(query),plan=snapshotNvPlan(context);
     return {source_detail:!!context&&!context.empty,source_search_empty:!!context?.empty,source_fields_visible:!!context&&context.pairs.flat().every(el=>{const r=el.getBoundingClientRect();return r.top>=context.top&&r.bottom<=context.bottom;}),capture_views:plan?plan.map((_,i)=>'nv-'+i):[]};
   }
+  function snapshotNvPaintedLoader() {
+    if(!NV)return false;
+    if(typeof getComputedStyle!=='function'||!(innerWidth>0&&innerHeight>0))return true;
+    const painted=el=>{
+      if(!el||!el.getClientRects().length)return false;
+      const own=getComputedStyle(el);
+      if(own.visibility==='hidden'||own.visibility==='collapse')return false;
+      for(let node=el;node;node=node.parentElement) {
+        const style=getComputedStyle(node);
+        if(style.display==='none'||Number(style.opacity)===0)return false;
+      }
+      const r=el.getBoundingClientRect();
+      return r.width>0&&r.height>0&&r.right>0&&r.bottom>0&&r.left<innerWidth&&r.top<innerHeight;
+    };
+    return [...document.querySelectorAll('.app-loader-pane')].some(pane=>{
+      const style=getComputedStyle(pane),color=style.backgroundColor;
+      const background=!!color&&color!=='transparent'&&!/^rgba\(.*?,\s*0(?:\.0*)?\s*\)$/.test(color);
+      return painted(pane)&&(background||style.backgroundImage&&style.backgroundImage!=='none')
+        ||[...pane.querySelectorAll('.circle-loader')].some(painted);
+    });
+  }
+  async function snapshotNvAfterVisualReady(query,commandId,sourceDeadline,captureDeadline) {
+    const started=Date.now();
+    // Registry identity/status may already be usable behind ORION's loader.
+    // Optional pixels wait for its natural removal, preserving the original
+    // absolute state/source deadlines and six seconds for capture/completion.
+    const end=Math.min(sourceDeadline,Number.isFinite(captureDeadline)?captureDeadline:started)-6000;
+    if(snapshotNvPaintedLoader()&&end>Date.now()) {
+      try {await wait(()=>!snapshotNvPaintedLoader(),Math.max(1,end-Date.now()));} catch {}
+    }
+    const metadata=snapshotMetadata(query);
+    return {command_id:commandId,query:JSON.parse(JSON.stringify(query)),observed_at:Date.now(),document_id:documentId,metadata,
+      paint_readiness:{wait_ms:Math.max(0,Date.now()-started),clear:metadata.source_loading_visible===false}};
+  }
   function snapshotMetadata(query) {
     const dialog=snapshotDialog(query);
     const capture_views=dialog&&dialog.scrollHeight>dialog.clientHeight+1?['top',
       ...([...dialog.querySelectorAll('h4')].some(el=>/^Status:/.test(text(el)))?['expiration']:[]),
-      ...(snapshotFinancialCell(dialog)?['financial']:[])]:null;
-    return {url:location.href,public_text:(document.body?.innerText||'').slice(0,20000),
-      ...(TN&&query?.operation==='detail'?{source_detail:!!dialog}:{}),...(snapshotNvVisibility(query)||{}),...(NV?{source_visible:document.visibilityState==='visible'}:{}),...(capture_views?{capture_views}:{})};
+      ...(snapshotFinancialCell(dialog)?['financial']:[])]:IL&&dialog?['top']:null;
+    return {url:location.href,public_text:(IL&&dialog?dialog.innerText:document.body?.innerText||'').slice(0,20000),
+      ...(NV?{document_id:documentId,...(query?.operation==='detail'?{source_binding:snapshotNvBinding(query)}:{})}:{}),
+      ...((TN&&query?.operation==='detail'||IL&&query?.state==='IL'&&Object.hasOwn(query,'identifier'))?{source_detail:!!dialog}:{}),...(snapshotNvVisibility(query)||{}),...(NV?{source_visible:document.visibilityState==='visible',...(query?.operation==='detail'?{source_loading_visible:snapshotNvPaintedLoader()}:{})}:{}),...(capture_views?{capture_views}:{})};
   }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;

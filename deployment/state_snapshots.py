@@ -175,6 +175,9 @@ def matching_reference(result, refs):
                      if re.fullmatch(r'\d{2}-?\d{7}',str(r.get('identifier','')))
                      and digits(r['identifier'])==ein
                      and (not name or key(r.get('record_name'))==key(name))),None)
+    if state=='IL' and ident:
+        # A results list cannot substantiate the selected record's dates.
+        candidates=[r for r in candidates if r.get('operation')=='detail']
     if state=='TN':
         # Later alias searches must not replace a captured detail for the same
         # selected registration. Stable order retains latest-within-kind rules.
@@ -211,14 +214,22 @@ def attach_links(result, refs):
     data['evidence_capture']='saved' if ref else ('candidate_only' if review and any(r.get('evidence_url') for r in data['identity_review']['candidates']) else 'unavailable')
     return data
 
+def persist_history_timed(data,job,history,refs,store):
+    from deployment.search_history import persist_worker_history
+    started=time.perf_counter()
+    out=persist_worker_history(data,job,history,refs,store=store)
+    if isinstance(out.get('evidence_metrics'),dict):
+        out['evidence_metrics']={**out['evidence_metrics'],'history_archive_ms':round((time.perf_counter()-started)*1000,2)}
+    return out
+
 def persist_worker_result(queue,result,job,store=None):
     """Supervisor only, after reaping. Never give child processes DB access."""
     if not isinstance(result,dict):return result
     data=dict(result);assets=data.pop('_worker_source_archives',[])
+    if isinstance(data.get('evidence_metrics'),dict):data['evidence_metrics']={**data['evidence_metrics'],'archive_ms':0}
     history=data.pop('_worker_search_history',None)
     if not assets:
-        from deployment.search_history import persist_worker_history
-        return persist_worker_history(data,job,history,[],store=store or (PostgresStore(queue.pool) if history and queue else None))
+        return persist_history_timed(data,job,history,[],store or (PostgresStore(queue.pool) if history and queue else None))
     data['evidence_url']=''
     refs=[];started=time.perf_counter()
     if (not isinstance(assets,list) or len(assets)>12
@@ -234,6 +245,7 @@ def persist_worker_result(queue,result,job,store=None):
         data['evidence_capture']='partial' if refs else 'unavailable'
     data=attach_links(data,refs)
     data['evidence_archive_ms']=round((time.perf_counter()-started)*1000,2)
+    if isinstance(data.get('evidence_metrics'),dict):data['evidence_metrics'].update(archive_ms=data['evidence_archive_ms'],archived_assets=len(refs),row_link=bool(data.get('evidence_url')))
     context=data.get('_worker_identity_review')
     if context:
         context={**context,'records':[dict(r) for r in context['records']]}
@@ -241,8 +253,7 @@ def persist_worker_result(queue,result,job,store=None):
             ref=matching_reference({**row,'ein':data['ein'],'state':data['state']},refs)
             if ref:row['evidence_url']=ref['url']
         data['_worker_identity_review']=context
-    from deployment.search_history import persist_worker_history
-    return persist_worker_history(data,job,history,refs,store=store)
+    return persist_history_timed(data,job,history,refs,store)
 
 def persist_inline_result(master,result):
     """API-owned continuation: archive now, never expose private image bytes."""
@@ -268,11 +279,53 @@ def persist_inline_result(master,result):
         pass  # Preserve the original signed choice and status if unavailable.
     return data
 
+def ak_empty_controls(page,run,text):
+    """Read original public form criteria; never fill or reconstruct the page."""
+    if run.state!='AK' or 'There are no charitable organizations.' not in text:return None
+    if not page.get_by_text('There are no charitable organizations.',exact=True).is_visible():return None
+    category=page.locator('select[id$="-8"]:visible option:checked').inner_text(timeout=300).strip()
+    year=page.locator('select[id$="-9"]:visible option:checked').inner_text(timeout=300).strip()
+    name=page.locator('input[id$="-a"]:visible').input_value(timeout=300).strip()
+    fein=page.locator('input[id$="-b"]:visible').input_value(timeout=300).strip()
+    if category!='Charitable Organization' or not re.fullmatch(r'20[0-9]{2}',year):return None
+    if fein and digits(fein)!=run.ein:return None
+    known={key(n) for n in [run.name,*getattr(run,'known_names',[])] if n}
+    if name and key(name) not in known:return None
+    if not fein and not name:return None
+    return dict(category=category,year=year,name=name,ein=fein)
+
+
 class CaptureRun:
     def __init__(self,name,ein,state):
         self.name,self.ein,self.state=name,digits(ein),state
         self.run_id=secrets.token_hex(16);self.documents=[];self.errors=[];self.capture_ms=0
-        self.provenance={}
+        self.provenance={};self.source_detail_hints={};self.source_search_hint=None;self.validated_negative_visual_urls=set();self.visual_adapter_facts=[];self.lookup_started=time.perf_counter();self.source_clock_calls=0;self.source_wall_ms=0;self.source_only_ms=0;self.source_pdf_extract_ms=0
+    def remember_detail(self,identifier,name,url):
+        try:
+            if not identifier or not name or len(self.source_detail_hints)>=12:return
+            self.source_detail_hints[str(identifier)]={'name':str(name),'url':public_url(url,self.state)}
+        except (ValueError,UnicodeError):return
+    def remember_search(self,name,url):
+        try:
+            approved=public_url(url,self.state)
+            u=urlsplit(approved);pairs=parse_qsl(u.query,keep_blank_values=True)
+            values=dict(pairs)
+            if (self.state!='WI' or u.path!='/ice/berg/Registration/OrgCredentialSearchResults.aspx'
+                or len(pairs)!=3 or set(values)!={'CredentialType','FirmName','LicenseNumber'}
+                or values['CredentialType']!='800' or values['LicenseNumber'] or values['FirmName']!=name):return
+            self.source_search_hint={'name':str(name),'url':approved}
+        except (ValueError,UnicodeError):return
+    def source_clock(self):
+        return (time.perf_counter(),self.capture_ms,
+                sum(f.get('total_ms',0) for f in self.visual_adapter_facts),
+                sum(f.get('capture_ms',0) for f in self.visual_adapter_facts))
+    def source_done(self,mark):
+        wall=(time.perf_counter()-mark[0])*1000
+        adapter=sum(f.get('total_ms',0) for f in self.visual_adapter_facts)-mark[2]
+        adapter_pixels=sum(f.get('capture_ms',0) for f in self.visual_adapter_facts)-mark[3]
+        other_capture=max(0,self.capture_ms-mark[1]-adapter_pixels)
+        self.source_clock_calls+=1;self.source_wall_ms+=wall
+        self.source_only_ms+=max(0,wall-adapter-other_capture)
     def __enter__(self):self.token=CURRENT.set(self);return self
     def __exit__(self,*args):CURRENT.reset(self.token)
     def document(self,url,raw,kind='source_text',public_text='',note=''):
@@ -289,16 +342,34 @@ class CaptureRun:
         try:
             if time.monotonic()+3>=DEADLINE.get():
                 self.errors.append('capture_skipped_near_task_deadline');return
-            url=public_url(page.url,self.state)
+            if self.state=='AK':
+                # Wait for the original site's view transition, never hide it.
+                try:
+                    page.wait_for_function("""async()=>{
+                        const url=location.href,text=document.body.innerText;
+                        await new Promise(resolve=>setTimeout(resolve,200));
+                        return location.href===url && document.body.innerText===text;
+                    }""",timeout=700)
+                except Exception:
+                    self.errors.append('source_view_not_stable');return
+            original_url=page.url
+            url=public_url(original_url,self.state)
             text=page.inner_text('body',timeout=400)[:20000]
+            ak_empty=ak_empty_controls(page,self,text) if self.state=='AK' else None
             size=page.locator('body').evaluate(
                 '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=300)
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
                 self.errors.append('source_page_exceeds_capture_bound');return
             raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=1000)
-            if page.url!=url or page.inner_text('body',timeout=400)[:20000]!=text:
+            if page.url!=original_url or page.inner_text('body',timeout=400)[:20000]!=text:
                 self.errors.append('source_page_changed_during_capture');return
-            self.document(url,raw,'image',text)
+            if ak_empty is not None:
+                if ak_empty_controls(page,self,text)!=ak_empty:
+                    self.errors.append('AK_empty_criteria_changed_during_capture');return
+                bindings=getattr(self,'ak_empty_image_bindings',None)
+                if bindings is None:self.ak_empty_image_bindings={}
+                self.ak_empty_image_bindings[hashlib.sha256(raw).hexdigest()]=ak_empty
+            self.document(url,raw,'image',text,note=('Original Alaska empty search view for displayed year '+ak_empty['year']+'. This one image does not by itself establish all yearly/name searches.' if ak_empty else ''))
         except Exception:self.errors.append('source_page_capture_unavailable')
         finally:self.capture_ms+=(time.perf_counter()-started)*1000
     def finish(self,result):
@@ -310,13 +381,24 @@ class CaptureRun:
             name=str(row.get('matched_registry_name') or row.get('name') or '')
             negative=row.get('status')=='Not Registered' and row.get('success') is True
             # Only source visuals are eligible; no text/JSON substitute is permitted.
-            ordered=sorted((d for d in self.documents if d[2] in {'image','source_pdf'}),key=lambda d:({'image':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
+            ordered=sorted((d for d in self.documents if d[2] in {'image','image_pages','source_pdf'}),key=lambda d:({'image':3,'image_pages':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
                 if negative:
                     matched=bool(re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I))
+                    if self.state=='WA':matched='No Value Found' in text and url=='https://ccfs.sos.wa.gov/#/cftSearch'
+                    if self.state=='AK':matched='There are no charitable organizations.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'ak_empty_image_bindings',{})
+                    if self.state=='CA':matched=bool(re.search(r'\bNo Data\b',text)) and hashlib.sha256(raw).hexdigest() in getattr(self,'ca_validated_empty_images',set())
+                    if self.state=='VA':matched='No Data' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'va_validated_empty_images',set())
+                    if self.state=='NJ':matched='No records to show' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'nj_validated_empty_images',set())
+                    if self.state=='WI' and url in self.validated_negative_visual_urls:matched=bool(re.search(r'(?:There are )?no query results',text,re.I))
+                    if self.state=='CT' and url in self.validated_negative_visual_urls:matched=bool(re.search(r'Showing\s+0\s+result\(s\)\.',text,re.I))
+                    if self.state=='HI' and url in self.validated_negative_visual_urls:matched='The charitable organization you entered is not registered in our system.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'hi_validated_empty_images',set())
+                    if self.state=='FL':matched=url in self.validated_negative_visual_urls and ('No result found for '+self.name) in text and hashlib.sha256(raw).hexdigest() in getattr(self,'fl_validated_empty_images',set())
+                    if self.state=='OH':matched='No organizations found' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'oh_validated_empty_images',set())
+                    if self.state=='RI':matched=url in self.validated_negative_visual_urls and 'No search results were found. Please refine your search criteria and try again.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'ri_validated_empty_images',set())
                 if re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):continue
                 if not matched:continue
                 asset=asset_for(raw,kind=kind,state=self.state,ein=self.ein,run_id=self.run_id,source_url=url,
@@ -326,6 +408,19 @@ class CaptureRun:
         if assets:data['_worker_source_archives']=assets
         data['evidence_capture_ms']=round(self.capture_ms,2)
         data['evidence_capture']='captured' if assets else 'unavailable'
+        visual_ms=sum(f.get('total_ms',0) for f in self.visual_adapter_facts)
+        data['evidence_metrics']={
+            'lookup_and_visual_ms':round((time.perf_counter()-self.lookup_started)*1000,2),
+            'capture_ms':round(self.capture_ms,2),'visual_adapter_ms':round(visual_ms,2),
+            'status_lookup_excluding_inline_visual_ms':round(self.source_only_ms,2) if self.source_clock_calls else None,
+            'source_call_wall_ms':round(self.source_wall_ms,2) if self.source_clock_calls else None,
+            'source_pdf_extract_ms':round(self.source_pdf_extract_ms,2),
+            'archive_ms':0,'documents_collected':len(self.documents),
+            'visual_documents':sum(d[2] in {'image','image_pages','source_pdf'} for d in self.documents),
+            'bound_original_assets':len(assets),'capture_errors':list(dict.fromkeys(self.errors))[:12],
+            'visual_adapters':[dict(f) for f in self.visual_adapter_facts[:2]],
+            'missing_stage':('' if assets else 'record_binding' if any(d[2] in {'image','image_pages','source_pdf'} for d in self.documents)
+                else 'capture' if self.errors else 'source_visual_not_collected')}
         from deployment.search_history import finish_worker_history
         return finish_worker_history(self,data)
 
@@ -344,6 +439,12 @@ class ContextCaptureProxy:
             try:
                 for page in self._context.pages[:3]:run.page(page)
             except Exception:run.errors.append('source_context_capture_unavailable')
+            # AK's route hash can change from the previous result view during
+            # its first photograph. One fresh read/capture only, no re-search.
+            if run.state=='AK' and run.errors and run.errors[-1]=='source_page_changed_during_capture':
+                try:
+                    if self._context.pages:run.page(self._context.pages[0])
+                except Exception:run.errors.append('source_context_recapture_unavailable')
     def close(self,*args,**kwargs):
         self.capture()
         value=self._context.close(*args,**kwargs);self._closed=True
@@ -470,6 +571,32 @@ def nc_completed_results_snapshot(record,query,evidence,url,text):
         and key(row.get('name') or row.get('CSL Legal Name') or row.get('Organization Name')) in key(text)
         for row in evidence['rows'])
 
+def il_selected_detail_snapshot(query,evidence,url,text):
+    """Bind the validated detail body to its original photographed IL modal."""
+    try:
+        source=urlsplit(url)
+        identifier=query.get('identifier','')
+        body=evidence.get('body')
+        if (source.hostname!='charitable.illinoisattorneygeneral.gov' or source.path!='/search'
+                or source.query or source.fragment or not re.fullmatch(r'\d{8}',identifier)
+                or not isinstance(body,str) or not 1<=len(body)<=60000
+                or not isinstance(text,str) or len(text)>20000):return None
+        lines=[' '.join(line.split()) for line in body.splitlines() if line.strip()]
+        shown=[' '.join(line.split()) for line in text.splitlines() if line.strip()]
+        if not lines or re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):return None
+        fields={}
+        for label in ['CO Number:','FEIN:','Status:','Registration Date:','Annual Report Due Date:']:
+            values=[line for line in lines if line.startswith(label)]
+            if len(values)>1 or (label!='Annual Report Due Date:' and len(values)!=1):return None
+            if values:
+                if shown.count(values[0])!=1:return None
+                fields[label]=values[0][len(label):].strip()
+        if (fields['CO Number:']!=identifier or len(digits(fields['FEIN:']))!=9
+                or not fields['Status:'] or shown.count(lines[0])!=1):return None
+        return identifier,lines[0]
+    except (AttributeError,TypeError,ValueError,KeyError):return None
+
+
 def connector_archive(record,payload,query,evidence):
     """Called only after the original query ID and source schema were validated."""
     incoming=payload.get('state_snapshot')
@@ -483,6 +610,7 @@ def connector_archive(record,payload,query,evidence):
         url=public_url(incoming.get('source_url',''),record['state'])
         if record['state']=='NY' and query.get('orgID'):
             if urlsplit(url).path.rstrip('/')!='/RegistrySearch/'+query['orgID']:return
+        il_detail=record['state']=='IL' and 'identifier' in query
         ga_detail=record['state']=='GA' and 'identifier' in query
         if ga_detail:
             source=urlsplit(url)
@@ -518,6 +646,10 @@ def connector_archive(record,payload,query,evidence):
                     # they must not hide an explicit completed empty receipt.
                     if field!='query' and isinstance(item,(dict,list)):walk(item)
         walk(evidence)
+        if il_detail:
+            selected=il_selected_detail_snapshot(query,evidence,url,text)
+            if selected is None:return
+            rows=[selected]
         if record['state']=='AL' and isinstance(evidence,dict):
             headers=evidence.get('headers',[])
             for cells in evidence.get('rows',[]):
@@ -550,20 +682,20 @@ def connector_archive(record,payload,query,evidence):
                 if nm_detail and not bound_nm:continue
                 if ident and ident not in text and ident not in url and not bound_application and not bound_nm:continue
             images=incoming.get('images')
-            multi_source=(record['state'] in {'TN','NV'} and query.get('operation')=='detail') or (record['state']=='NV' and query.get('operation')=='search' and ident=='@completed-search')
+            multi_source=il_detail or (record['state'] in {'TN','NV'} and query.get('operation')=='detail') or (record['state']=='NV' and query.get('operation')=='search' and ident=='@completed-search')
             multiple=multi_source and isinstance(images,list) and 2<=len(images)<=(8 if record['state']=='NV' and query.get('operation')=='detail' else 3)
             if 'images' in incoming and (not multiple or images[0]!=incoming.get('image')):raise ValueError('Invalid snapshot page binding')
             content=base64.b64encode(json.dumps(images).encode()).decode() if multiple else incoming['image']
             asset=dict(kind='image_pages' if multiple else 'image',state=record['state'],ein=record['ein'],run_id=run_id,
                 source_url=url,captured_at=incoming['captured_at'],content=content,
-                identifier=ident,record_name=name,organization_name=record['organization_name'],operation=query.get('operation',''),
+                identifier=ident,record_name=name,organization_name=record['organization_name'],operation='detail' if il_detail else query.get('operation',''),
                 public_text=text,query_id=str(payload['query_id']))
             ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id)
             # The complete metadata stays in persistent storage. Continuations
             # carry short references, never images or repeated source URLs.
             record.setdefault('source_snapshots',[]).append({
                 **{k:ref[k] for k in ('url','identifier','record_name','captured_at','ein','state')},
-                'operation':'detail' if ga_detail else query.get('operation','')})
+                'operation':'detail' if ga_detail or il_detail else query.get('operation','')})
         refs=record.get('source_snapshots',[])
         if record['state']=='TN':refs=sorted(refs,key=lambda r:r.get('operation')=='detail')
         record['source_snapshots']=refs[-24:]

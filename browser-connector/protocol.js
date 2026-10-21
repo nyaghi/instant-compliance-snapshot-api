@@ -4,10 +4,11 @@
   const STAGING = "https://staging.compliance-express.com";
   // Only the isolated trial packager may populate this exact HTTPS origin.
   // The installed/staging connector retains no final-four capability.
-  const TRIAL_ORIGIN = "";
-  const APP_ORIGINS = Object.freeze([STAGING, "https://www.compliance-express.com", "https://compliance-express.com", ...(TRIAL_ORIGIN ? [TRIAL_ORIGIN] : [])]);
+  const TRIAL_ORIGIN = "https://charityclarity-final-four-29-2.onrender.com";
+  const APP_ORIGINS = Object.freeze([TRIAL_ORIGIN]);
   function allowedOrigin(origin) { return APP_ORIGINS.includes(origin); }
   function registryAllowed(state, origin) {
+    if (origin !== TRIAL_ORIGIN) return false;
     if (["AL", "NC", "NV", "TN", "NM", "MS"].includes(state)) return !!TRIAL_ORIGIN && origin === TRIAL_ORIGIN;
     if (["IL", "GA"].includes(state)) return origin === STAGING || (!!TRIAL_ORIGIN && origin === TRIAL_ORIGIN);
     return state === "NY" && allowedOrigin(origin);

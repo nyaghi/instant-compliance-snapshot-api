@@ -127,7 +127,7 @@ def final_four_asset(name, text):
         # Trial-only, in-memory diagnostics for incomplete public browser
         # lookups. This does not change registry requests or results.
         replace('            onProgress: (message) => {', '''            onProgress: (message, detail) => {
-              if (detail && ["AL", "NM", "MS", "IL", "NV", "GA", "NC", "TN"].includes(detail.state)) {
+              if (detail && ["NY", "AL", "NM", "MS", "IL", "NV", "GA", "NC", "TN"].includes(detail.state)) {
                 const events = window.__CCLabStateTrace ||= [];
                 events.push({at: Date.now(), state: detail.state, stage: detail.stage || "",
                   action: detail.action || "", operation: detail.query?.operation || "",
@@ -135,6 +135,13 @@ def final_four_asset(name, text):
                   ny_phase: detail.ny_phase || "", http_status: detail.http_status ?? null,
                   phase: detail.phase || "", diagnostic: detail.diagnostic || null,
                   page_visibility: detail.page_visibility || "",
+                  ny_diagnostics: Array.isArray(detail.ny_diagnostics) ? detail.ny_diagnostics.slice(-32).map(e => ({
+                    stage:["verify","search","detail"].includes(e?.stage)?e.stage:"unknown",
+                    event:["click","response","network_error","timeout","reuse"].includes(e?.event)?e.event:"unknown",
+                    elapsed_ms:Number.isFinite(e?.elapsed_ms)?Math.max(0,Math.min(300000,Math.round(e.elapsed_ms))):null,
+                    http_status:Number.isInteger(e?.http_status)&&e.http_status>=0&&e.http_status<=599?e.http_status:null,
+                    visibility:["visible","hidden"].includes(e?.visibility)?e.visibility:"unknown"
+                  })) : null,
                   trial_diagnostics: Array.isArray(detail.trial_diagnostics)
                     ? detail.trial_diagnostics.slice(-120) : null,
                   il_dom: Array.isArray(detail.il_dom) ? detail.il_dom : null,
@@ -300,6 +307,12 @@ def insight_asset(name, text):
 
 def lab_asset(path):
     path = unquote(urlparse(path).path)
+    if path.startswith('/assets/pdfjs/'):
+        root=(ROOT/'web-staging/assets/pdfjs').resolve()
+        file=(root/path.removeprefix('/assets/pdfjs/')).resolve()
+        types={'.mjs':'text/javascript','.js':'text/javascript','.wasm':'application/wasm','.bcmap':'application/octet-stream','.ttf':'font/ttf','.pfb':'application/octet-stream'}
+        if not file.is_relative_to(root) or file.suffix.lower() not in types or not file.is_file():return None
+        return file.read_bytes(),types[file.suffix.lower()]
     if path in ('/head-start', '/head-start/'):
         path = '/head-start/index.html'
     if path.startswith('/head-start/') or path in ('/head-start-bridge.js', '/sales-extract.js'):

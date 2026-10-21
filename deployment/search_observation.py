@@ -6,7 +6,7 @@ Only explicit source validators may supply a validated row count.
 import json
 import re
 from contextlib import contextmanager
-from urllib.parse import urlsplit, parse_qsl
+from urllib.parse import urlsplit, parse_qsl, parse_qs
 
 from deployment.state_snapshots import CURRENT, OFFICIAL_HOSTS
 from deployment.search_history import begin_source_query, SourceQueryReceipt
@@ -153,13 +153,27 @@ def dataset_scope(names):
 def observed_dataset_call(call,names,*args,**kwargs):
     with dataset_scope(names):return call(*args,**kwargs)
 
+def complete_public_rows(receipt,count,rows=None):
+    """Optional row reporting must never replace a successful source result.
+
+    Preserve counts with older receipt implementations or failed row metadata.
+    This compatibility fallback does not retry the registry request.
+    """
+    if receipt is None:return
+    try:receipt.complete(count,rows=rows)
+    except Exception:
+        try:receipt.complete(count)
+        except Exception:
+            try:receipt.incomplete()
+            except Exception:pass
+
 def observed_named_call(state,name,label,url,call,*args,**kwargs):
     receipt=begin_source_query(state,name,label,url)
     try:result=call(*args,**kwargs)
     except BaseException:
         if receipt:receipt.incomplete()
         raise
-    if receipt:receipt.complete(len(result) if isinstance(result,list) else None)
+    if receipt:complete_public_rows(receipt,len(result) if isinstance(result,list) else None,rows=result if isinstance(result,list) else None)
     return result
 
 def observed_text_call(state,name,label,url,validator,call,*args,**kwargs):
@@ -172,7 +186,82 @@ def observed_text_call(state,name,label,url,validator,call,*args,**kwargs):
     if receipt:
         try:
             complete,count=validator(result)
-            if complete:receipt.complete(count)
+            if complete:
+                # Observe the already-returned WI reader table. No new request,
+                # no candidate ranking, and no change to source validation.
+                rows=None
+                if state=='WI':
+                    try:
+                        from deployment.history_returned_rows import wi_text_records
+                        rows=wi_text_records(result)
+                    except Exception:pass
+                if isinstance(rows,list) and (count is None or count==len(rows)):
+                    complete_public_rows(receipt,len(rows),rows=rows)
+                else:complete_public_rows(receipt,count)
             else:receipt.incomplete()
         except Exception:receipt.incomplete()
     return result
+
+
+from contextlib import contextmanager
+
+@contextmanager
+def ak_query_observation(page,ein,button):
+    """Observe one real Search submission and its matching EventOccurred reply.
+
+    Does not wait, submit, retry or change the source result. Source callbacks
+    are removed on exit so late replies cannot become another year's proof.
+    """
+    receipt=None;listener=None
+    try:
+        run=CURRENT.get()
+        if run is not None and run.state=='AK':
+            category=page.locator('select[id$="-8"]:visible option:checked').inner_text(timeout=300).strip()
+            year=page.locator('select[id$="-9"]:visible option:checked').inner_text(timeout=300).strip()
+            name=page.locator('input[id$="-a"]:visible').input_value(timeout=300).strip()
+            fein=page.locator('input[id$="-b"]:visible').input_value(timeout=300).strip()
+            event_id=button.get_attribute('id')
+            if (category=='Charitable Organization' and re.fullmatch(r'20[0-9]{2}',year)
+                and (name or fein) and (not fein or re.sub(r'\D','',fein)==re.sub(r'\D','',ein))
+                and event_id):
+                receipt=begin_source_query('AK',name or fein,'Displayed submission type: '+category+'; Displayed Year: '+year+'; '+('Name and FEIN fields' if name and fein else 'Name field' if name else 'FEIN field')+'; no name matching-mode selector',page.url)
+                if receipt:
+                    if not name:receipt.query.pop('name',None)
+                    if fein:receipt.query['ein']=fein
+                    def listener(response):
+                        try:
+                            u=urlsplit(response.url)
+                            submitted=parse_qs(response.request.post_data or '')
+                            if (u.scheme!='https' or u.hostname!='online-registrations-law.alaska.gov'
+                                or not u.path.endswith('/EventOccurred') or response.request.method!='POST'
+                                or submitted.get('EVENT__')!=[event_id]):return
+                            # The submitted public fields take priority over a
+                            # preceding DOM read when the state rerenders a view.
+                            fields={}
+                            for key,values in submitted.items():
+                                match=re.fullmatch(r'D[a-zA-Z0-9]+-([89ab])',key)
+                                if match and len(values)==1:fields.setdefault(match.group(1),[]).append(values[0])
+                            if (all(len(values)==1 for values in fields.values())
+                                and fields.get('8')==['CharOrg'] and re.fullmatch(r'20[0-9]{2}',fields.get('9',[''])[0])
+                                and (fields.get('a',[''])[0] or fields.get('b',[''])[0])):
+                                actual_name=fields.get('a',[''])[0];actual_ein=fields.get('b',[''])[0]
+                                receipt.query.pop('name',None);receipt.query.pop('ein',None)
+                                if actual_name:receipt.query['name']=actual_name
+                                if actual_ein:receipt.query['ein']=actual_ein
+                                receipt.query['filter_label']='Submitted type: Charitable Organization; Submitted Year: '+fields['9'][0]+'; '+('Name and FEIN fields' if actual_name and actual_ein else 'Name field' if actual_name else 'FEIN field')+'; no name matching-mode selector'
+                            if 200<=response.status<300:
+                                body=response.text()
+                                count=0 if 'There are no charitable organizations' in body else None
+                                complete_public_rows(receipt,count)
+                            else:receipt.incomplete()
+                        except Exception:pass
+                    page.on('response',listener)
+    except Exception:pass
+    try:yield
+    finally:
+        if listener is not None:
+            try:page.remove_listener('response',listener)
+            except Exception:pass
+        if receipt is not None:
+            try:receipt.incomplete()
+            except Exception:pass

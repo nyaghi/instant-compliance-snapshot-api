@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Saved PDF preview — CharityClarity</title>
+<style>
+:root{font-family:Arial,sans-serif;color:#172b4d;background:#eef1f5}body{margin:0}header{position:sticky;top:0;z-index:1;background:white;border-bottom:1px solid #d9dee6;padding:14px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}h1{font-size:18px;margin:0 auto 0 0}button{font:inherit;border:1px solid #aab6c7;border-radius:6px;background:white;color:#172b4d;padding:8px 14px;cursor:pointer}button:disabled{opacity:.45;cursor:default}#status{padding:14px 20px;margin:0}#controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}#pageNumber{min-width:100px;text-align:center}main{padding:0 20px 30px;text-align:center}canvas{display:block;margin:0 auto;background:white;max-width:100%;height:auto;box-shadow:0 2px 8px #172b4d22}#printPages{display:none}@media print{body{background:white}header,#status,main{display:none!important}#printPages{display:block}#printPages article{break-after:page;overflow:hidden}#printPages article:last-child{break-after:auto}#printPages canvas{margin:0;box-shadow:none;width:100%;height:100%;object-fit:contain}}
+</style></head><body>
+<header><h1 id="title">Saved PDF preview</h1><div id="controls"><button id="previous" disabled aria-label="Previous page">Previous</button><span id="pageNumber" aria-live="polite">—</span><button id="next" disabled aria-label="Next page">Next</button><button id="download" disabled>Download</button><button id="print" disabled>Print</button></div></header>
+<p id="status" role="status">Opening saved PDF…</p><main><canvas id="page" aria-label="Saved PDF page"></canvas></main><div id="printPages"></div>
+<script type="module" src="/evidence-preview.js"></script></body></html>

@@ -9942,7 +9942,7 @@ def dc_charity_records(org, deadline):
                 "initial": (dc_source_date(raw.get("INITIALISSUEDATE")) or ""), "initial_label": "Initial Issue Date",
                 "renewal": (dc_source_date(raw.get("LICENSESTARTDATE")) or ""), "renewal_label": "License Start Date",
                 "renewal_type": "current_effective_date", "url": DC_LICENSE_API + "?" + urlencode({"where": "CUSTOMERNUMBER='"+identifier.replace("'", "''")+"'", "outFields": "*", "returnGeometry": "false", "f": "pjson"})})
-        if history_receipt:history_receipt.complete(len(raw_rows))
+        if history_receipt:__import__('deployment.search_observation',fromlist=['complete_public_rows']).complete_public_rows(history_receipt,len(raw_rows),rows=raw_rows)
         return rows, f"Data freshness: DC's public business-license extract was refreshed {refreshed.isoformat()}. It may lag the licensing portal; confirm time-sensitive decisions in DC's BOSS license search (https://boss.dc.gov/business/business-license-search)."
     finally:
         if history_receipt:history_receipt.incomplete()
@@ -9977,7 +9977,7 @@ def ri_charity_search(query, deadline, headers):
             rows.extend(batch)
             if len({r["id"] for r in rows}) != len(rows): raise ValueError("Rhode Island pagination repeated a record")
             if len(rows) == expected:
-                if history_receipt:history_receipt.complete(len(rows))
+                if history_receipt:__import__('deployment.search_observation',fromlist=['complete_public_rows']).complete_public_rows(history_receipt,len(rows),rows=rows)
                 return rows
             if not batch or len(rows) > expected: raise ValueError("Rhode Island search page was incomplete")
             start += len(batch)
@@ -18081,6 +18081,11 @@ def search_oh(page, org):
                 page.locator("#ddlEINFilterCriteriaList").select_option(value="Equals")
             except Exception:
                 pass
+        try:
+            from deployment.state_snapshots import CURRENT
+            from deployment.source_visual_adapters import capture_owned_oh_prepare
+            _cc_oh_visual=capture_owned_oh_prepare(CURRENT.get(),page,ein_digits)
+        except Exception:pass
         page.locator("#OnSubmit").click(timeout=10000)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -18095,6 +18100,11 @@ def search_oh(page, org):
             result.raw_status_text = "No matching EIN result"
             result.source_note = "Ohio EIN search returned no matching record."
             result.success = True
+            try:
+                from deployment.state_snapshots import CURRENT,DEADLINE
+                from deployment.source_visual_adapters import capture_owned_oh_empty
+                capture_owned_oh_empty(CURRENT.get(),page,_cc_oh_visual,DEADLINE.get())
+            except Exception:pass
             return result
         detail_refs = page.evaluate(
             """
@@ -18368,19 +18378,6 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
     except Exception:
         pass
     time.sleep(0.08)
-    year_select = page.locator("#Dq-9")
-    if year_select.count() == 0:
-        year_select = page.get_by_label(re.compile(r"Year", re.I)).first
-    year_select.wait_for(state="visible", timeout=ak_remaining_action_ms(page, 8000))
-    try:
-        year_select.select_option(label=str(year))
-    except Exception:
-        year_select.select_option(value=str(year))
-    try:
-        year_select.dispatch_event("change")
-    except Exception:
-        pass
-    time.sleep(0.08)
     name_input = page.locator("#Dq-a")
     if name_input.count() == 0:
         name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
@@ -18400,6 +18397,19 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
     except Exception:
         pass
     time.sleep(0.08)
+    year_select = page.locator("#Dq-9")
+    if year_select.count() == 0:
+        year_select = page.get_by_label(re.compile(r"Year", re.I)).first
+    year_select.wait_for(state="visible", timeout=ak_remaining_action_ms(page, 8000))
+    try:
+        year_select.select_option(label=str(year))
+    except Exception:
+        year_select.select_option(value=str(year))
+    try:
+        year_select.dispatch_event("change")
+    except Exception:
+        pass
+    time.sleep(0.08)
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
@@ -18409,24 +18419,31 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
     except Exception:
         pass
     event_id = search_button.get_attribute("id")
-    with page.expect_response(
-        lambda response: response.request.method == "POST"
-        and response.url.endswith("/EventOccurred")
-        and parse_qs(response.request.post_data or "").get("EVENT__") == [event_id],
-        timeout=ak_remaining_action_ms(page, 8000),
-    ) as submitted:
-        search_button.click(timeout=ak_remaining_action_ms(page, AK_ACTION_TIMEOUT_MS), force=True)
-    response = submitted.value
-    if not response.ok:
-        raise TimeoutError(f"Alaska search response HTTP {response.status}")
-    completed_no_rows = "There are no charitable organizations" in response.text()
-    wait_ak_search_results(
-        page,
-        expected_year=year,
-        expected_ein=checker.format_ein_with_dash(org.ein),
-        previous_text=previous_text,
-        completed_no_rows=completed_no_rows,
-    )
+    try:
+        from deployment.search_observation import ak_query_observation
+        observation=ak_query_observation(page,org.ein,search_button)
+    except Exception:
+        from contextlib import nullcontext
+        observation=nullcontext()
+    with observation:
+        with page.expect_response(
+            lambda response: response.request.method == "POST"
+            and response.url.endswith("/EventOccurred")
+            and parse_qs(response.request.post_data or "").get("EVENT__") == [event_id],
+            timeout=ak_remaining_action_ms(page, 8000),
+        ) as submitted:
+            search_button.click(timeout=ak_remaining_action_ms(page, AK_ACTION_TIMEOUT_MS), force=True)
+        response = submitted.value
+        if not response.ok:
+            raise TimeoutError(f"Alaska search response HTTP {response.status}")
+        completed_no_rows = "There are no charitable organizations" in response.text()
+        wait_ak_search_results(
+            page,
+            expected_year=year,
+            expected_ein=checker.format_ein_with_dash(org.ein),
+            previous_text=previous_text,
+            completed_no_rows=completed_no_rows,
+        )
 
 
 def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
@@ -18440,6 +18457,25 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
     except Exception:
         pass
     time.sleep(0.08)
+    name_input = page.locator("#Dq-a")
+    if name_input.count() == 0:
+        name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
+    name_input.wait_for(state="visible", timeout=8000)
+    name_input.fill("")
+    name_input.type(variant, delay=25)
+    try:
+        name_input.dispatch_event("input")
+        name_input.dispatch_event("change")
+    except Exception:
+        pass
+    time.sleep(0.08)
+    fein_input = page.locator("#Dq-b")
+    if fein_input.count() == 0:
+        fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
+    try:
+        fein_input.fill("")
+    except Exception:
+        pass
     year_select = page.locator("#Dq-9")
     if year_select.count() == 0:
         year_select = page.get_by_label(re.compile(r"Year", re.I)).first
@@ -18464,25 +18500,6 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
     except Exception:
         pass
     time.sleep(0.08)
-    name_input = page.locator("#Dq-a")
-    if name_input.count() == 0:
-        name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
-    name_input.wait_for(state="visible", timeout=8000)
-    name_input.fill("")
-    name_input.type(variant, delay=25)
-    try:
-        name_input.dispatch_event("input")
-        name_input.dispatch_event("change")
-    except Exception:
-        pass
-    time.sleep(0.08)
-    fein_input = page.locator("#Dq-b")
-    if fein_input.count() == 0:
-        fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
-    try:
-        fein_input.fill("")
-    except Exception:
-        pass
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
@@ -18491,13 +18508,20 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
         previous_text = page.locator("#Dv-l").inner_text(timeout=600)
     except Exception:
         pass
-    search_button.click(timeout=AK_ACTION_TIMEOUT_MS, force=True)
-    wait_ak_search_results(
-        page,
-        expected_year=year,
-        expected_name=variant,
-        previous_text=previous_text,
-    )
+    try:
+        from deployment.search_observation import ak_query_observation
+        observation=ak_query_observation(page,org.ein,search_button)
+    except Exception:
+        from contextlib import nullcontext
+        observation=nullcontext()
+    with observation:
+        search_button.click(timeout=AK_ACTION_TIMEOUT_MS, force=True)
+        wait_ak_search_results(
+            page,
+            expected_year=year,
+            expected_name=variant,
+            previous_text=previous_text,
+        )
 
 
 def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
@@ -20285,6 +20309,7 @@ def hi_submit_completed_search(page, name, fein, deadline):
         try:
             page.locator("#name").fill(name, timeout=remaining_ms())
             page.locator("#fein").fill(fein, timeout=remaining_ms())
+            _cc_hi_visual_issued=time.time()
             with page.expect_response(is_submitted_response, timeout=remaining_ms()) as pending:
                 page.locator("#trigger-organization-search").click(timeout=remaining_ms())
             response = pending.value
@@ -20298,6 +20323,11 @@ def hi_submit_completed_search(page, name, fein, deadline):
                     jQuery('#orgWarning').text().trim() === message.trim() &&
                     !jQuery('#org-results-container').is(':visible')""",
                     arg=data['message'], timeout=remaining_ms())
+                try:
+                    from deployment.state_snapshots import CURRENT
+                    from deployment.source_visual_adapters import capture_owned_hi_empty
+                    capture_owned_hi_empty(CURRENT.get(),name,fein,page,deadline-time.perf_counter(),_cc_hi_visual_issued)
+                except Exception:pass
                 return rows
             page.wait_for_function("""expected => {
                 if (!window.jQuery || !jQuery('#org-results-container').is(':visible')) return false;
@@ -22478,6 +22508,11 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             if wi_result_html_requires_verification(result_html) or not wi_has_complete_results(result_html):
                 continue
             http_reached = True
+            try:
+                from deployment.state_snapshots import CURRENT
+                visual_run=CURRENT.get()
+                if visual_run is not None and visual_run.state=='WI' and visual_run.ein==canonical_ein_digits(ein):visual_run.remember_search(search_name,direct_url)
+            except Exception:pass
             best_match = wi_best_match_from_html(result_html, target_names, best_match, original_name, ein)
             if progress is not None: progress["completed"].add(search_name)
             if best_match and not best_match.get("identity_conflict") and best_match.get("unique_full_identity") and best_match.get("expiration_date"):
@@ -22648,6 +22683,12 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
         if best_match.get("identity_conflict") and best_match.get("identity_review_evidence"):
             remaining = max(0, progress.get("deadline", started + WI_LOOKUP_MAX_SECONDS) - time.perf_counter())
             best_match = wi_confirm_cross_state_credential(best_match, original_name, ein, time.monotonic() + remaining)
+        try:
+            from deployment.state_snapshots import CURRENT
+            visual_run=CURRENT.get()
+            if visual_run is not None and visual_run.state=='WI' and visual_run.ein==canonical_ein_digits(org.ein) and best_match.get('detail_href'):
+                visual_run.remember_detail(best_match.get('license_number'),best_match.get('registry_name'),urljoin(WI_SEARCH_URL,html.unescape(best_match['detail_href'])))
+        except Exception:pass
         if best_match.get("reviewed_identity_evidence"):
             result.wi_reviewed_identity_evidence = best_match["reviewed_identity_evidence"]
             result.source_url = result.wi_reviewed_identity_evidence["detail_url"]
@@ -24787,6 +24828,12 @@ def search_nj_public_details(org):
             # Preserve the same EIN identity anchor as the browser result. Both
             # the unique row and its selected detail have confirmed this EIN.
             result.matched_registry_identifier = ein
+            try:
+                from deployment.state_snapshots import CURRENT
+                visual_run=CURRENT.get()
+                if visual_run is not None and visual_run.state=='NJ' and visual_run.ein==ein:
+                    visual_run.remember_detail(ein,name,base+'/CHR-Public-Details-Page/?'+urlencode(dict(zip(('id','rid'),identifiers))))
+            except Exception:pass
             return nj_result_from_body(None, org, result, body, ein), body
     except Exception:
         return None
@@ -26392,6 +26439,10 @@ NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
 def ny_connector_pack(record):
     # Public search evidence and check binding only; no passcode or state credential.
     body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 320000:
+        from deployment.history_returned_rows import drop_returned_details
+        if drop_returned_details(record):
+            body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     if len(body) > 320000:
         from deployment.search_history import discard_optional
         if discard_optional(record):
@@ -32676,6 +32727,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 name_input.fill(query_name, timeout=action_timeout(3000))
                 searched_queries.append(query_name)
 
+                _cc_wv_visual_issued=time.time()
                 page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=action_timeout(4000))
                 safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
                 page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
@@ -32689,6 +32741,12 @@ def search_wv_precise(page, org, *, public_lookup=None):
             ]))
             if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
                 completed_queries.append(query_name)
+                if public_lookup is None:
+                    try:
+                        from deployment.state_snapshots import CURRENT
+                        from deployment.source_visual_adapters import capture_owned_wv_empty
+                        capture_owned_wv_empty(CURRENT.get(),query_name,page,body,deadline-time.perf_counter(),_cc_wv_visual_issued)
+                    except Exception:pass
                 continue
 
             if public_lookup is None:
@@ -33176,12 +33234,13 @@ def search_wa_nm_state(org, state: str):
     module = load_wa_nm_module()
     external_org = module.Organization(organization_name=org.organization_name, ein=org.ein)
     if state == "WA":
+        from deployment.source_visual_adapters import search_wa_with_source_capture
         external_result = lab_wa_public_detail(org, module)
         if external_result is None:
             if lab_wa_readiness_waits_only():
-                external_result = module.search_wa(external_org, show_process=False, readiness_waits_only=True)
+                external_result = search_wa_with_source_capture(module,external_org, show_process=False, readiness_waits_only=True)
             else:
-                external_result = module.search_wa(external_org, show_process=False)
+                external_result = search_wa_with_source_capture(module,external_org, show_process=False)
         wa_raw = " ".join([
             getattr(external_result, "raw_status_text", "") or "",
             getattr(external_result, "source_note", "") or "",
@@ -33921,15 +33980,33 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     if (shared_capture is not None and getattr(shared_capture,'semantic_history_scope',False)
             and shared_capture.state==(state or '').upper() and shared_capture.ein==digits(ein)
             and shared_capture.name==organization_name):
+        source_run=CURRENT.get()
+        source_mark=source_run.source_clock()
         data=_run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
-        from deployment.state_snapshots import downloaded_record
+        source_run.source_done(source_mark)
+        from deployment.state_snapshots import downloaded_record,DEADLINE
+        try:
+            from deployment.source_visual_adapters import capture_result_visuals
+            capture_result_visuals(sys.modules[__name__],data,CURRENT.get(),DEADLINE.get())
+        except Exception:CURRENT.get().errors.append('source_visual_adapter_unavailable')
+        source_extract_started=time.perf_counter()
         downloaded_record(sys.modules[__name__],data)
+        CURRENT.get().source_pdf_extract_ms+=(time.perf_counter()-source_extract_started)*1000
         return data
     with CaptureRun(organization_name,ein,state) as capture:
         capture.known_names=[organization_name,*known_names_for_ein(ein)]
+        source_run=CURRENT.get()
+        source_mark=source_run.source_clock()
         data=_run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
-        from deployment.state_snapshots import downloaded_record
+        source_run.source_done(source_mark)
+        from deployment.state_snapshots import downloaded_record,DEADLINE
+        try:
+            from deployment.source_visual_adapters import capture_result_visuals
+            capture_result_visuals(sys.modules[__name__],data,CURRENT.get(),DEADLINE.get())
+        except Exception:CURRENT.get().errors.append('source_visual_adapter_unavailable')
+        source_extract_started=time.perf_counter()
         downloaded_record(sys.modules[__name__],data)
+        CURRENT.get().source_pdf_extract_ms+=(time.perf_counter()-source_extract_started)*1000
         try:
             data=capture.finish(data)
             if os.environ.get('CE_FINAL_FOUR_CHILD') != '1':
@@ -34075,6 +34152,12 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
         # neither filing evidence nor dates.
         try:
             result = search_ca_master(None, org) if state == "CA" else search_va_direct(org)
+            try:
+                from deployment.state_snapshots import CURRENT
+                from deployment.source_visual_adapters import remember_ca_selected,remember_va_selected
+                if state=='CA':remember_ca_selected(CURRENT.get(),result)
+                elif state=='VA':remember_va_selected(CURRENT.get(),result)
+            except Exception:pass
             body = "" if state == "CA" else " ".join(filter(None, [result.raw_status_text, result.source_note,
                                           result.matched_registry_name, result.matched_registry_identifier]))
         except Exception as exc:
@@ -34261,6 +34344,19 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 else:
                     body = md_no_results_body(page)
                 result = repair_md_current_from_fiscal_due(result, org, md_body)
+                try:
+                    import copy
+                    md_visual_result=copy.copy(result)
+                    md_registry_match_from_entries(md_visual_result,body,org)
+                    from deployment.state_snapshots import CURRENT,DEADLINE
+                    from deployment.source_visual_adapters import capture_owned_md_page,remember_md_selected
+                    remember_md_selected(sys.modules[__name__],CURRENT.get(),md_visual_result,body,org)
+                    capture_owned_md_page(CURRENT.get(),{
+                        'state':'MD','ein':ein,'status':public_status(md_visual_result),'success':md_visual_result.success,
+                        'matched_registry_name':md_visual_result.matched_registry_name,
+                        'matched_registry_identifier':md_visual_result.matched_registry_identifier,
+                        'source_url':md_visual_result.source_url},page,context,DEADLINE.get())
+                except Exception:pass
             elif state == "CO":
                 result = search_co_with_name_fallback(page, org)
                 body = registry_page_body(page)
@@ -34304,6 +34400,15 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     result.matched_registry_name or "",
                     result.matched_registry_identifier or "",
                 ]).strip()
+                try:
+                    from deployment.state_snapshots import CURRENT,DEADLINE
+                    from deployment.source_visual_adapters import capture_owned_fl_page
+                    capture_owned_fl_page(sys.modules[__name__],CURRENT.get(),{
+                        'state':'FL','ein':ein,'status':public_status(result),'success':result.success,
+                        'matched_registry_name':result.matched_registry_name,
+                        'matched_registry_identifier':result.matched_registry_identifier,
+                        'source_url':result.source_url},page,context,DEADLINE.get())
+                except Exception:pass
             elif state == "NJ":
                 result = search_nj_with_name_fallback(page, org)
                 if public_status(result) != "Not Registered":
@@ -34561,6 +34666,15 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 else:
                     body = me_detail_body(page, org)
                     enrich_me_result_from_body(result, body)
+                try:
+                    from deployment.state_snapshots import CURRENT,DEADLINE
+                    from deployment.source_visual_adapters import capture_owned_me_page
+                    capture_owned_me_page(CURRENT.get(),{
+                        'state':'ME','ein':ein,'status':public_status(result),'success':result.success,
+                        'matched_registry_name':result.matched_registry_name,
+                        'matched_registry_identifier':result.matched_registry_identifier,
+                        'source_url':result.source_url},page,context,DEADLINE.get())
+                except Exception:pass
             elif state == "ND":
                 result = search_nd_completed(page, org)
                 body = getattr(result, "_cc_detail_body", "")

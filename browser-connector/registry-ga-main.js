@@ -1,7 +1,7 @@
 /* Activate only the public GA pager link in its own page context. No data API. */
 (() => {
   'use strict';
-  const origin='https://verify.sos.ga.gov', channel='cc-ga-public-pager-v1';
+  const origin='https://verify.sos.ga.gov', channel='cc-final-four-ga-pager-v1';
   if(window!==window.top || location.origin!==origin || location.pathname!=='/verification/SearchResults.aspx')return;
   window.addEventListener('message',event=>{
     const m=event.data;

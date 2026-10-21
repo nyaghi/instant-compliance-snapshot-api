@@ -60,8 +60,12 @@
         // the caller can start the next job before onDisconnect is delivered.
         if (message.id === job.finishId) dispose(job);
         const response=P.TRIAL_ORIGIN && job.registryState==='NV'
-          ? {...message,nv_readiness:{...message.nv_readiness,bridge:{build:'nv-empty-source-local-1',extension_id:chrome.runtime.id}}}
+          ? {...message,nv_readiness:{...message.nv_readiness,bridge:{build:'ga-detail-reserve-1',extension_id:chrome.runtime.id}}}
           : message;
+        if(P.TRIAL_ORIGIN && job.registryState==='AL' && Array.isArray(message.trial_diagnostics))try {
+          const capture=message.trial_diagnostics.filter(x=>['source-snapshot-phase','source-snapshot'].includes(x.type)).slice(-8).map(x=>({at:x.at,type:x.type,detail:String(x.detail).slice(0,600)}));
+          if(capture.length)console.info('CC_AL_CAPTURE_OBSERVATION_V2 '+JSON.stringify(capture));
+        } catch {}
         reply(message.id, response);
       }
     });

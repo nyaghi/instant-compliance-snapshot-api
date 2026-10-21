@@ -5,9 +5,12 @@ Inputs come only from query-ID-validated, cleaner-accepted continuations.
 """
 import hashlib,io,json,re,secrets,time,zipfile
 from datetime import datetime,timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
+
+from deployment.history_returned_rows import returned_record_details,validate_returned_details,drop_returned_details,public_field_column
 
 SCHEMA='cc-search-history-v1'
 # Capability boundary, not a claim that every route is instrumented.
@@ -51,6 +54,7 @@ def complete_receipt(record,pending,evidence,now):
         if mode=='STARTS_WITH' and broad is not None:raise ValueError('NV contradictory filters')
         receipt['observed_search_mode']=mode
         if broad is not None:receipt['broad_result_count']=broad
+    if operation=='search' and total is not None:receipt.update(returned_record_details(evidence))
     issued=pending.get('history_issued_at')
     if isinstance(issued,(int,float)) and issued<=now:receipt['issued_at']=issued
     return {'search_receipt':receipt}
@@ -86,14 +90,27 @@ def failed_receipt(record,payload,now):
             else:record['search_history_overflow']=True
     except (ValueError,KeyError,TypeError):pass
 
+def reportable_result(result):
+    """Report the existing outcome, including an explicitly incomplete check."""
+    return (isinstance(result,dict) and isinstance(result.get('status'),str)
+            and 1<=len(result['status'])<=100 and type(result.get('success')) is bool)
+
+
 def manifest(record,result,snapshot,now):
     from deployment.state_snapshots import digits
     state=record.get('state');ein=digits(record.get('ein',''))
     if record.get('search_history_overflow'):raise ValueError('Optional history exceeded continuation bound')
     if state not in STATES or result.get('state')!=state or digits(result.get('ein',''))!=ein:raise ValueError('Wrong result binding')
-    if result.get('status')!='Not Registered' or result.get('success') is not True:raise ValueError('Not a completed negative result')
-    if snapshot and (snapshot.get('ein')!=ein or snapshot.get('state')!=state or snapshot.get('identifier')!='@completed-search'
-        or not re.fullmatch(r'/state-snapshots/[a-f0-9]{64}\.pdf',snapshot.get('url',''))):raise ValueError('No bound negative source snapshot')
+    if not reportable_result(result):raise ValueError('No final result to report')
+    if snapshot:
+        from deployment.state_snapshots import matching_reference
+        if (snapshot.get('ein')!=ein or snapshot.get('state')!=state
+            or not re.fullmatch(r'/state-snapshots/[a-f0-9]{64}\.pdf',snapshot.get('url',''))):raise ValueError('Wrong source snapshot binding')
+        if result.get('status')=='Not Registered' and result.get('success') is True:
+            if snapshot.get('identifier')!='@completed-search':raise ValueError('No bound negative source snapshot')
+        elif (matching_reference(result,[snapshot])!=snapshot
+              or snapshot.get('run_id')!=record.get('source_archive_run_id')):
+            raise ValueError('No bound selected-record snapshot')
     entries=[]
     for item in record.get('completed',[]):
         receipt=item.get('search_receipt')
@@ -114,6 +131,7 @@ def manifest(record,result,snapshot,now):
             if mode not in {'STARTS_WITH','EXACT_MATCH'}:raise ValueError('NV filter receipt missing')
             if mode=='EXACT_MATCH' and (query.get('exact_above')!=20 or type(broad) is not int or not 20<broad<=10000):raise ValueError('NV filter receipt changed')
             if mode=='STARTS_WITH' and broad is not None:raise ValueError('NV filter receipt contradicted')
+        validate_returned_details(receipt)
         entries.append({**receipt,'sequence':len(entries)+1})
     failed=record.get('search_failed_receipts',[])
     if not isinstance(failed,list) or len(failed)>(150 if record.get('history_order')=='issued-sequence-v1' else 10):raise ValueError('Invalid incomplete attempts')
@@ -139,19 +157,21 @@ def manifest(record,result,snapshot,now):
             'run_id':record.setdefault('source_archive_run_id',secrets.token_hex(16)),'started_at':record['issued'],'completed_at':now,
             'result_at_completion':result['status'],'snapshot_url':snapshot.get('url',''),
             'reviewed_names':list(dict.fromkeys([name]+reviewed)),
-            'queries':entries,'source_limitations':'When available, the state image contains original source pixels. This separate document is CharityClarity\'s search history, not a state-issued certificate. A completed negative search does not prove that an organization was never registered.'}
+            'queries':entries,'source_limitations':'When available, the state image contains original source pixels. This separate document is CharityClarity\'s search history, not a state-issued certificate. Recorded searches do not establish an identity match by themselves. Attempts without confirmed completion remain explicitly incomplete.'}
 
 def attach(record,result,store=None,now=None):
     """Optional paired output; preserve every original status/identity field."""
     from deployment import state_snapshots as ss
     data=dict(result)
-    if record.get('state') not in STATES or record.get('purpose')!='registration' or result.get('status')!='Not Registered' or result.get('success') is not True:return data
+    if record.get('state') not in STATES or record.get('purpose')!='registration' or not reportable_result(result):return data
     store=store or ss.STORE
     if store is None:return data
     try:
         snapshot=ss.matching_reference(result,record.get('source_snapshots',[]))
         doc=manifest(record,result,snapshot or {},time.time() if now is None else now)
         raw=json.dumps(doc,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+        if len(raw)>150000 and drop_returned_details(doc):
+            raw=json.dumps(doc,ensure_ascii=False,separators=(',',':')).encode('utf-8')
         if len(raw)>150000:raise ValueError('History exceeds bound')
         meta={'kind':'search_history','state':doc['state'],'ein':doc['ein'],'run_id':doc['run_id'],
               'source_sha256':hashlib.sha256(raw).hexdigest(),'captured_at':doc['completed_at']}
@@ -174,11 +194,11 @@ def loaded(ident,store):
     return meta,doc,cached
 
 def stamp(value):
-    return datetime.fromtimestamp(value,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if value is not None else 'Not recorded'
+    return datetime.fromtimestamp(value,ZoneInfo('America/New_York')).strftime('%Y-%m-%d %I:%M:%S %p %Z') if value is not None else 'Not recorded'
 
 def query_label(q,receipt=None):
     if q.get('operation')=='detail' or 'identifier' in q or q.get('orgID'):return 'Selected detail: '+(q.get('identifier') or q.get('orgID') or q.get('url',''))
-    if q.get('ein'):return 'EIN: '+q['ein']
+    if q.get('ein'):return 'EIN: '+q['ein']+(' | Name: '+(q.get('name') or q.get('orgName')) if q.get('name') or q.get('orgName') else '')+(' | '+q['filter_label'] if q.get('filter_label') else '')
     name=q.get('orgName') or q.get('name','')
     if q['state']=='GA':return 'Names beginning with "'+name+'" (entered as '+name+'*)'
     if q['state'] not in {'GA','NC'}:
@@ -187,7 +207,7 @@ def query_label(q,receipt=None):
             mode=(receipt or {}).get('observed_search_mode')
             if mode=='STARTS_WITH':return prefix+'Name: '+name+' | Starting With'
             if mode=='EXACT_MATCH':return prefix+'Name: '+name+' | Starting With returned '+str(receipt['broad_result_count'])+' rows, then Exact Match'
-        return prefix+('Name: '+name+' | '+q.get('filter_label','Filter not recorded'))
+        return prefix+('Name: '+name+' | '+q.get('filter_label', 'No filter available (name-matching mode)' if q['state']=='AL' else 'Search method not captured'))
     mode={'STARTS_WITH':'Starting With','ALL_WORDS':'All Words','EXACT_MATCH':'Exact'}.get(q.get('search_mode'),'Starting With')
     return name+' | '+mode
 
@@ -216,6 +236,24 @@ def render_pdf(doc,asset_root=None):
         if e.get('reason'):cells.append([p('Incomplete: '+e['reason']),p('Reported: '+stamp(e['reported_at']))])
         table=Table(cells,colWidths=[280,230],hAlign='LEFT');table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#edf3f7')),('BOX',(0,0),(-1,-1),.4,colors.HexColor('#ccd6df')),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8)]))
         story += [KeepTogether([table,Spacer(1,10)])]
+        if e.get('returned_rows',0):
+            story.append(p('Returned source records (not confirmed identity matches):'))
+            records=e.get('returned_records')
+            if records is None:story.append(p('Returned-record details were not captured in this saved history.'))
+            else:
+                if records:
+                    rows=[[p('Record / organization'),p('Status and dates'),p('Address')]]
+                    for record in records:
+                        groups=[['Record '+str(record['row_number'])],[],[]]
+                        for label,value in record['fields']:
+                            key=re.sub(r'[^a-z0-9]','',label.casefold())
+                            column=public_field_column(label)
+                            groups[column].append(label+': '+(value if value else '(blank in source)'))
+                        rows.append([Paragraph('<br/>'.join(escape(x) for x in group) if group else 'Not captured',styles['CCSmall']) for group in groups])
+                    details=Table(rows,colWidths=[185,135,190],hAlign='LEFT',repeatRows=1)
+                    details.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#edf3f7')),('GRID',(0,0),(-1,-1),.4,colors.HexColor('#ccd6df')),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
+                    story += [details,Spacer(1,8)]
+                if e.get('returned_records_not_listed'):story.append(p(str(e['returned_records_not_listed'])+' returned records are not listed: supported field or size limit.'))
     story += [Paragraph('Names supplied to CharityClarity',styles['Heading2']),p('These names were supplied for identity and search planning; they are not state registration matches. This list does not claim that each name was searched literally. The actual recorded requests are listed above.')]
     for n in doc['reviewed_names']:story.append(p(n))
     limits=[Paragraph('Evidence limits',styles['Heading2'])]
@@ -258,11 +296,11 @@ def serve(handler,include_body=True,store=None):
         meta,doc,pdf=item
         if match[2]=='evidence.zip':body=bundle(match[1],store);mime='application/zip'
         else:
-            body=pdf or render_pdf(doc);mime='application/pdf'
+            body=render_pdf(doc);mime='application/pdf'
             if pdf is None:store.cache_pdf(match[1],body)
     except Exception:handler._send_json(503,{'error':'Saved evidence is unavailable. No registry search was run.'});return
     handler.send_response(200)
-    for k,v in [('Content-Type',mime),('Content-Length',str(len(body))),('Content-Disposition','attachment; filename="'+doc['state']+'-'+match[2]+'"'),('Cache-Control','private, max-age=86400'),('X-Content-Type-Options','nosniff')]:handler.send_header(k,v)
+    for k,v in [('Content-Type',mime),('Content-Length',str(len(body))),('Content-Disposition',('inline' if mime=='application/pdf' else 'attachment')+'; filename="'+doc['state']+'-'+match[2]+'"'),('Cache-Control','no-store' if mime=='application/pdf' else 'private, max-age=86400'),('X-Content-Type-Options','nosniff')]:handler.send_header(k,v)
     handler.end_headers()
     if include_body:handler.wfile.write(body)
 
@@ -274,10 +312,11 @@ class SourceQueryReceipt:
         run.search_history_sequence=getattr(run,'search_history_sequence',0)+1
         self.sequence=run.search_history_sequence
         self.issued=time.time();self.query_id=secrets.token_hex(12);self.saved=False
-    def complete(self,row_count=None):
+    def complete(self,row_count=None,rows=None,headers=None):
         if row_count is not None and (type(row_count) is not int or not 0<=row_count<=10000):
             self.run.search_history_overflow=True;return
-        self._save('Completed official dataset evaluation' if self.query.get('source_kind')=='official_dataset' else 'Completed source response',time.time(),row_count)
+        details=returned_record_details({'rows':rows,'headers':headers}) if isinstance(rows,list) and row_count==len(rows) else {}
+        self._save('Completed official dataset evaluation' if self.query.get('source_kind')=='official_dataset' else 'Completed source response',time.time(),row_count,**details)
     def received(self,status):
         self._save('Transport response received; source validation not recorded',time.time(),None,observation_kind='transport_response',http_status=status)
     def incomplete(self):
@@ -313,7 +352,7 @@ def finish_worker_history(run,result):
             for receipt in receipts:receipt.incomplete()
         pending.clear()
     data=dict(result);entries=getattr(run,'search_history_receipts',[])
-    if data.get('status')!='Not Registered' or data.get('success') is not True:return data
+    if not reportable_result(data):return data
     if getattr(run,'search_history_overflow',False):
         data['search_history_capture']='unavailable';return data
     if not entries:return data
@@ -332,6 +371,7 @@ def finish_worker_history(run,result):
             entry.update(query=query,operation=query['operation'],reason='SOURCE_RETRIEVAL_INCOMPLETE')
             record['search_failed_receipts'].append(entry)
     # No private identity tokens, credentials, source bodies or page images.
+    if len(json.dumps(record).encode())>150000:drop_returned_details(record)
     if len(json.dumps(record).encode())>150000:
         data['search_history_capture']='unavailable';return data
     data['_worker_search_history']=record
