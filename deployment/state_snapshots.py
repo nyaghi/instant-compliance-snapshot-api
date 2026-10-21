@@ -352,6 +352,12 @@ class CaptureRun:
                     }""",timeout=700)
                 except Exception:
                     self.errors.append('source_view_not_stable');return
+            if self.state=='WA':
+                try:
+                    if not wa_painted_result_ready(page):
+                        self.errors.append('WA_source_overlay_visible');return
+                except Exception:
+                    self.errors.append('WA_source_overlay_not_cleared');return
             original_url=page.url
             url=public_url(original_url,self.state)
             text=page.inner_text('body',timeout=400)[:20000]
@@ -361,6 +367,8 @@ class CaptureRun:
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
                 self.errors.append('source_page_exceeds_capture_bound');return
             raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=1000)
+            if self.state=='WA' and page.locator('#loaderDiv').is_visible():
+                self.errors.append('WA_source_overlay_returned_during_capture');return
             if page.url!=original_url or page.inner_text('body',timeout=400)[:20000]!=text:
                 self.errors.append('source_page_changed_during_capture');return
             if ak_empty is not None:
@@ -794,3 +802,9 @@ def serve(handler,include_body=True,store=None):
     handler.end_headers()
     if include_body:handler.wfile.write(pdf)
     return True
+
+
+def wa_painted_result_ready(page, timeout_ms=1000):
+    """The source removes its own animated overlay; never alter original pixels."""
+    page.locator('#loaderDiv').wait_for(state='hidden',timeout=timeout_ms)
+    return not page.locator('#loaderDiv').is_visible()

@@ -417,9 +417,14 @@ def capture_selected_wa_source(master,result,run,deadline):
     if height<100 or height>1800:fact['outcome']='summary_exceeds_viewport';return
     fact['detail_ms']=round((time.perf_counter()-begin)*1000,2)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
+    from deployment.state_snapshots import wa_painted_result_ready
+    fact['phase']='painted_result_ready';begin=time.perf_counter()
+    if not wa_painted_result_ready(page,max(1,int(min(1,stop-time.monotonic()-2)*1000))):fact['outcome']='source_overlay_visible';return
+    fact['painted_result_ready_ms']=round((time.perf_counter()-begin)*1000,2)
+    if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
     fact['phase']='capture';begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=80,clip={'x':0,'y':0,'width':1280,'height':height},timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
     fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
-    if page.url!='https://ccfs.sos.wa.gov/#/organization' or wa_summary_core(page.inner_text('body',timeout=400))!=core:fact['outcome']='source_changed_during_capture';return
+    if page.url!='https://ccfs.sos.wa.gov/#/organization' or page.locator('#loaderDiv').is_visible() or wa_summary_core(page.inner_text('body',timeout=400))!=core:fact['outcome']='source_changed_during_capture';return
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
     before=len(run.documents);run.document(page.url,raw,'image',core[:20000],note='Original organization summary and state header through renewal date; lower financial history is outside this view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
