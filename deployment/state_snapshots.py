@@ -494,6 +494,23 @@ def nm_detail_snapshot_bound(record,query,evidence,url,text,identifier):
 
 
 
+def il_completed_empty_snapshot(record,query,evidence,url,text):
+    """Called after the unchanged IL cleaner has certified pagination."""
+    source=urlsplit(url)
+    if (record.get('state')!='IL' or query.get('state')!='IL'
+        or set(query) not in ({'state','ein'},{'state','orgName'})
+        or not (query.get('ein') or str(query.get('orgName') or '').strip())
+        or evidence!={'rows':[]} or source.scheme!='https'
+        or source.hostname!='charitable.illinoisattorneygeneral.gov'
+        or source.path!='/search' or source.query or source.fragment
+        or not isinstance(text,str)
+        or re.search(r'verify you are human|user validation required|just a moment|access denied',text,re.I)):
+        return False
+    observed=' '.join(text.split())
+    return ('Charities Search' in observed and bool(re.search(
+        r'CO #\s+Name\s+Address\s+City\s+State\s+Zip\s+No Records Available\s+0\s+No items to display(?:\s|$)',observed)))
+
+
 def ga_completed_empty_grid_snapshot(record,query,evidence,url,text):
     """The existing cleaner has already verified complete GA search pagination."""
     source=urlsplit(url)
@@ -671,6 +688,7 @@ def connector_archive(record,payload,query,evidence):
         if (not rows and isinstance(evidence,dict) and evidence.get('complete') is True
                 and evidence.get('total')==0 and evidence.get('rows')==[]
                 and re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I)
+                or not rows and il_completed_empty_snapshot(record,query,evidence,url,text)
                 or not rows and ga_completed_empty_grid_snapshot(record,query,evidence,url,text)
                 or not rows and nc_completed_empty_snapshot(record,query,evidence,url,text)):
             rows=[('@completed-search',record['organization_name'])]
