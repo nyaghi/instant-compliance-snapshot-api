@@ -9,7 +9,7 @@
     const bundle = /^\/state-evidence\/([a-f0-9]{64})\/evidence\.zip$/.exec(result.evidence_bundle_url || '');
     const history = /^\/state-evidence\/([a-f0-9]{64})\/search-history\.pdf$/.exec(result.search_history_url || '');
     const validHistory = history && (!result.evidence_bundle_url || bundle && bundle[1] === history[1]);
-    if (validHistory && result.success === true && result.status === 'Not Registered') {
+    if (validHistory && result.success === true && (result.status === 'Not Registered' || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant')) {
       const log = add(parent, 'a', 'View Names Searched (PDF)', 'mt-2 block text-xs underline whitespace-normal');
       log.href = '/evidence-preview.html?document=' + encodeURIComponent(result.search_history_url); log.target = '_blank'; log.rel = 'noopener noreferrer';
     }

@@ -158,6 +158,12 @@ def archive(asset, *, ein, state, run_id, store=None):
             'source_url':meta['source_url'],'captured_at':meta['captured_at'],
             'kind':meta['kind'],'run_id':run_id,'ein':meta['ein'],'state':state}
 
+def completed_negative_result(result):
+    """Illinois absence has an explicitly qualified public label."""
+    return (isinstance(result,dict) and result.get('success') is True
+            and (result.get('status')=='Not Registered'
+                 or result.get('state')=='IL' and result.get('status')=='Not Registered / Non-Compliant'))
+
 def matching_reference(result, refs):
     """Never offer another candidate's screenshot for a selected registration."""
     ident=str(result.get('matched_registry_identifier') or result.get('identifier') or '')
@@ -196,7 +202,7 @@ def matching_reference(result, refs):
         # selected credential, an ambiguous collection must offer no row link.
         if len({r.get('identifier','') for r in named})!=1:return None
         return named[-1] if named else None
-    if result.get('status')=='Not Registered' and result.get('success') is True:
+    if completed_negative_result(result):
         return next((r for r in reversed(candidates) if r.get('identifier')=='@completed-search'),None)
     return None
 
@@ -387,7 +393,7 @@ class CaptureRun:
         for row in records[:12]:
             identifier=str(row.get('matched_registry_identifier') or row.get('identifier') or '')
             name=str(row.get('matched_registry_name') or row.get('name') or '')
-            negative=row.get('status')=='Not Registered' and row.get('success') is True
+            negative=completed_negative_result(row)
             # Only source visuals are eligible; no text/JSON substitute is permitted.
             ordered=sorted((d for d in self.documents if d[2] in {'image','image_pages','source_pdf'}),key=lambda d:({'image':3,'image_pages':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
             for url,raw,kind,public_text,stamp,source_note in ordered:

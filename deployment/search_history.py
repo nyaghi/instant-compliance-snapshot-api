@@ -14,7 +14,7 @@ from deployment.history_returned_rows import returned_record_details,validate_re
 
 SCHEMA='cc-search-history-v1'
 # Capability boundary, not a claim that every route is instrumented.
-from deployment.state_snapshots import OFFICIAL_HOSTS
+from deployment.state_snapshots import OFFICIAL_HOSTS,completed_negative_result
 STATES=frozenset(OFFICIAL_HOSTS)
 FIELDS={'state','operation','orgName','name','ein','search_mode','identifier','orgID','url','exact_above','source_kind','filter_label'}
 
@@ -98,7 +98,7 @@ def reportable_result(result):
 
 def needs_search_history(result):
     """User-facing search account is required only for completed negatives."""
-    return reportable_result(result) and result.get('success') is True and result.get('status')=='Not Registered'
+    return reportable_result(result) and completed_negative_result(result)
 
 
 def manifest(record,result,snapshot,now):
@@ -111,7 +111,7 @@ def manifest(record,result,snapshot,now):
         from deployment.state_snapshots import matching_reference
         if (snapshot.get('ein')!=ein or snapshot.get('state')!=state
             or not re.fullmatch(r'/state-snapshots/[a-f0-9]{64}\.pdf',snapshot.get('url',''))):raise ValueError('Wrong source snapshot binding')
-        if result.get('status')=='Not Registered' and result.get('success') is True:
+        if completed_negative_result(result):
             if snapshot.get('identifier')!='@completed-search':raise ValueError('No bound negative source snapshot')
         elif (matching_reference(result,[snapshot])!=snapshot
               or snapshot.get('run_id')!=record.get('source_archive_run_id')):
