@@ -551,7 +551,7 @@ def capture_selected_ct_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return
-  stop=time.monotonic()+min(8.0,remaining)
+  stop=time.monotonic()+min(20.0,remaining)
   held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return
   with master.checker.sync_playwright() as p:
@@ -579,11 +579,12 @@ def capture_selected_ct_source(master,result,run,deadline):
     if (u.scheme!='https' or u.hostname!='www.elicense.ct.gov' or u.port not in (None,443)
         or u.username or u.password or u.fragment or u.path.lower()!='/lookup/licensedetail.aspx'
         or len(pairs)!=1 or pairs[0][0]!='id' or not 1<=len(pairs[0][1])<=1000):fact['outcome']='source_detail_link_changed';return
-    # Follow the actual fresh link in the same public session. The ordinary
-    # iframe crops the header/name; an original standalone page keeps it clear.
-    detail=context.new_page();response=detail.goto(url,referer=page.url,wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    fact['visual_detail_navigation_attempts']=2
-    if response is None or response.status!=200 or detail.url!=url:fact['outcome']='source_detail_navigation_rejected';return
+    # The selected detail is already loading in this source-owned iframe.
+    # Reopening its URL adds a second detail request and can outlast the budget.
+    frame.wait_for(state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    detail=frame.element_handle().content_frame()
+    if detail is None:fact['outcome']='source_detail_frame_missing';return
+    fact['visual_detail_navigation_attempts']=1
     heading=detail.get_by_text('Registration Information',exact=True);heading.wait_for(state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     text=detail.inner_text('body',timeout=400);core=ct_primary_registration_text(text)
     if (norm(result['matched_registry_name']) not in norm(core)
@@ -599,14 +600,22 @@ def capture_selected_ct_source(master,result,run,deadline):
     bounds=panel.bounding_box()
     if not bounds or bounds['height']<=0 or bounds['width']<=0:fact['outcome']='primary_panel_not_visible';return
     import math
-    height=math.ceil(bounds['y']+bounds['height']+20)
-    if height<100 or height>1400:fact['outcome']='primary_panel_exceeds_viewport';return
+    frame_bounds=frame.bounding_box()
+    if not frame_bounds:fact['outcome']='detail_frame_not_visible';return
+    height=math.ceil(bounds['y']+bounds['height']-frame_bounds['y']+8)
+    if (height<100 or height>frame_bounds['height'] or frame_bounds['width']<600
+        or frame_bounds['x']<0 or frame_bounds['y']<0
+        or detail.locator('body').evaluate('(el)=>el.ownerDocument.defaultView.scrollY')!=0):
+     fact['outcome']='primary_panel_outside_visible_frame';return
+    if detail.url!=url:fact['outcome']='selected_frame_url_changed';return
     fact['detail_ms']=round((time.perf_counter()-begin)*1000,2)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
-    begin=time.perf_counter();fact['phase']='capture';raw=detail.screenshot(type='jpeg',quality=80,clip={'x':0,'y':0,'width':1600,'height':height},timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
+    clip={'x':frame_bounds['x'],'y':frame_bounds['y'],'width':frame_bounds['width'],'height':height}
+    begin=time.perf_counter();fact['phase']='capture';raw=page.screenshot(type='jpeg',quality=80,clip=clip,timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
     fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
+    if frame.bounding_box()!=frame_bounds:fact['outcome']='source_frame_moved_during_capture';return
     if detail.url!=url or ct_primary_registration_text(detail.inner_text('body',timeout=400))!=core:fact['outcome']='source_changed_during_capture';return
-    before=len(run.documents);run.document(url,raw,'image',core[:20000],note='Original fresh source-issued selected license detail and state header through primary registration dates; solicitor campaign records outside this view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
+    before=len(run.documents);run.document(url,raw,'image',core[:20000],note='Original selected source iframe and state header through primary registration dates; no duplicate detail navigation; solicitor campaign records outside this view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
     if context is not None:context._captured=True;context.close()
     if browser is not None:browser.close()
