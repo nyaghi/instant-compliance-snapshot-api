@@ -1154,7 +1154,7 @@ def completed_visual_name_receipt(run,name,url,issued,label,count):
  from deployment.search_history import SourceQueryReceipt
  receipt=SourceQueryReceipt(run,{'state':run.state,'operation':'search','name':name,'filter_label':label,'source_kind':'state_portal','url':url});receipt.issued=issued;receipt.complete(count)
 
-def capture_owned_hi_empty(run,name,fein,page,remaining,issued):
+def capture_owned_hi_empty(run,name,fein,page,remaining,issued,response=None):
  """Original completed HI warning, during the existing validated response."""
  if (run is None or run.state!='HI' or remaining<5 or not isinstance(name,str) or not isinstance(fein,str)
      or page.url!='https://charity.ehawaii.gov/charity/search.html'):return
@@ -1172,14 +1172,18 @@ def capture_owned_hi_empty(run,name,fein,page,remaining,issued):
   label='Contains; '+('FEIN '+fein if fein else 'FEIN blank')+'; other search filters blank'
   query={'state':'HI','operation':'search','filter_label':label,'source_kind':'state_portal','url':'https://charity.ehawaii.gov/charity/search-charity.json'}
   query.update({'name':name} if name else {'ein':digits(fein)})
-  # Upgrade only the actual name transport receipt issued by this same action.
-  # EIN-only searches have no passive name receipt; retain their actual issue clock.
-  found=[r for r in getattr(run,'search_history_receipts',[]) if r.get('issued_at',0)>=issued and r.get('query',{}).get('name','')==name and (name or r.get('query',{}).get('ein')==digits(fein)) and urlsplit(r.get('query',{}).get('url','')).hostname=='charity.ehawaii.gov']
-  if found:
-   entry=found[-1];entry['query'].update(query);entry.update(outcome='Completed source response',completed_at=time.time(),reported_at=time.time(),returned_rows=0,observation_kind='validated_visual_response')
+  if response is not None:
+   from deployment.search_observation import complete_hi_empty_receipt
+   complete_hi_empty_receipt(run,response,name,fein,issued)
   else:
-   from deployment.search_history import SourceQueryReceipt
-   receipt=SourceQueryReceipt(run,query);receipt.issued=issued;receipt.complete(0)
+   # Upgrade only the actual name transport receipt issued by this same action.
+   # EIN-only searches have no passive name receipt; retain their actual issue clock.
+   found=[r for r in getattr(run,'search_history_receipts',[]) if r.get('issued_at',0)>=issued and r.get('query',{}).get('name','')==name and (name or r.get('query',{}).get('ein')==digits(fein)) and urlsplit(r.get('query',{}).get('url','')).hostname=='charity.ehawaii.gov']
+   if found:
+    entry=found[-1];entry['query'].update(query);entry.update(outcome='Completed source response',completed_at=time.time(),reported_at=time.time(),returned_rows=0,observation_kind='validated_visual_response')
+   else:
+    from deployment.search_history import SourceQueryReceipt
+    receipt=SourceQueryReceipt(run,query);receipt.issued=issued;receipt.complete(0)
   if getattr(run,'hi_empty_original_saved',False):fact['outcome']='receipt_validated_original_already_saved';return
   before=len(run.documents);begin=time.perf_counter();run.page(page);fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
   if len(run.documents)>before:
@@ -1765,7 +1769,8 @@ def capture_negative_nj_source(master,result,run,deadline):
     grid=page.locator('.public-search-grid');grid.get_by_text('No records to show',exact=True).wait_for(state='visible',timeout=timeout())
     if box.input_value(timeout=300)!=run.ein or grid.locator('tbody tr[data-id]').count():fact['outcome']='displayed_query_rejected';return
     fact['query_ms']=round((time.perf_counter()-begin)*1000,2)
-    if receipt:receipt.complete(0,rows=[])
+    from deployment.search_observation import complete_browser_query
+    complete_browser_query(receipt,pending.value,0,rows=[])
     text=page.inner_text('body',timeout=400);grid_text=grid.inner_text(timeout=400)
     if re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):fact['outcome']='source_verification_pending';return
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return

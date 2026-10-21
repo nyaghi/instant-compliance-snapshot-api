@@ -20326,7 +20326,7 @@ def hi_submit_completed_search(page, name, fein, deadline):
                 try:
                     from deployment.state_snapshots import CURRENT
                     from deployment.source_visual_adapters import capture_owned_hi_empty
-                    capture_owned_hi_empty(CURRENT.get(),name,fein,page,deadline-time.perf_counter(),_cc_hi_visual_issued)
+                    capture_owned_hi_empty(CURRENT.get(),name,fein,page,deadline-time.perf_counter(),_cc_hi_visual_issued,response=response)
                 except Exception:pass
                 return rows
             page.wait_for_function("""expected => {

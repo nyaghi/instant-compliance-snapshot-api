@@ -139,7 +139,13 @@ def observe_browser_context(context,run):
     def request(req):
         try:
             receipts=start_transport(req.url,req.post_data,run=run)
-            if receipts:pending[id(req)]=receipts
+            if receipts:
+                pending[id(req)]=receipts
+                # Retain bounded Request identity, not time/query similarity.
+                # Explicit source validators can refine this same request.
+                observed_requests=getattr(run,'search_history_transport_requests',None)
+                if observed_requests is None:observed_requests=run.search_history_transport_requests={}
+                if len(observed_requests)<150:observed_requests[req]=receipts
         except Exception:run.search_history_overflow=True
     def response(resp):
         try:received(pending.pop(id(resp.request),[]),resp.status)
@@ -294,3 +300,71 @@ def ak_query_observation(page,ein,button):
         if receipt is not None:
             try:receipt.incomplete()
             except Exception:pass
+
+
+def complete_browser_query(receipt,response,count,rows=None):
+    """Refine only the exact observed Request; preserve repeated submissions."""
+    if receipt is None:return
+    complete_public_rows(receipt,count,rows)
+    try:
+        run=receipt.run
+        entries=getattr(run,'search_history_receipts',[])
+        validated=next((e for e in entries if e['query_id']==receipt.query_id and e['outcome']=='Completed source response' and e['returned_rows']==count),None)
+        if validated is None:return
+        observations=getattr(run,'search_history_transport_requests',{}).get(response.request,[])
+        duplicates=[]
+        for old in observations:
+            q=old.query;expected=receipt.query
+            if old is receipt or q.get('state')!=expected.get('state') or q.get('operation')!=expected.get('operation'):continue
+            if urlsplit(q.get('url','')).netloc!=urlsplit(expected.get('url','')).netloc:continue
+            criteria={k:q[k] for k in ['ein','name'] if k in q}
+            wanted={k:expected[k] for k in ['ein','name'] if k in expected}
+            if not criteria or criteria!=wanted:continue
+            existing=next((e for e in entries if e['query_id']==old.query_id),None)
+            if existing and existing.get('observation_kind')!='transport_response':continue
+            old.saved=True;duplicates.append(old.query_id)
+        if duplicates:
+            run.search_history_receipts=[e for e in entries if e['query_id'] not in duplicates]
+    except Exception:
+        # Optional reporting refinement must not replace the source result.
+        return
+
+
+def complete_hi_empty_receipt(run,response,name,fein,issued):
+    """One validated HI request, with its actual posted name/EIN formatting."""
+    try:
+        if run is None or run.state!='HI' or response is None or response.status!=200:return False
+        request=response.request;u=urlsplit(response.url)
+        if (u.scheme!='https' or u.hostname!='charity.ehawaii.gov'
+            or u.path!='/charity/search-charity.json' or request.method!='POST'):return False
+        fields=parse_qs(request.post_data or '',keep_blank_values=True)
+        if fields.get('name')!=[name] or len(fields.get('fein',[]))!=1:return False
+        actual=fields['fein'][0];digits=lambda x:re.sub(r'\D','',x)
+        if actual and (not re.fullmatch(r'\d{9}|\d{2}-\d{7}',actual) or digits(actual)!=digits(fein) or digits(actual)!=run.ein):return False
+        if not actual and fein or not (actual or name):return False
+        query={'state':'HI','operation':'search','source_kind':'state_portal',
+               'url':'https://charity.ehawaii.gov/charity/search-charity.json',
+               'filter_label':'Contains; '+('FEIN '+actual if actual else 'FEIN blank')+'; other search filters blank'}
+        if name:query['name']=name
+        if actual:query['ein']=actual
+        observations=getattr(run,'search_history_transport_requests',{}).get(request,[])
+        validated=getattr(run,'hi_validated_request_receipts',None)
+        if validated is None:validated=run.hi_validated_request_receipts={}
+        if request in validated:return validated[request]==query
+        if len(validated)>=150:return False
+        receipt=SourceQueryReceipt(run,query);receipt.issued=issued;receipt.complete(0,rows=[])
+        entries=getattr(run,'search_history_receipts',[])
+        if not any(e['query_id']==receipt.query_id and e['returned_rows']==0 for e in entries):return False
+        duplicate_ids=[]
+        for old in observations:
+            q=old.query;criteria={k:q[k] for k in ('name','ein') if q.get(k)}
+            if (q.get('state')!='HI' or q.get('operation')!='search'
+                or urlsplit(q.get('url','')).hostname!='charity.ehawaii.gov'
+                or not criteria or any(query.get(k)!=value for k,value in criteria.items())):continue
+            entry=next((e for e in entries if e['query_id']==old.query_id),None)
+            if entry and entry.get('observation_kind')!='transport_response':continue
+            old.saved=True;duplicate_ids.append(old.query_id)
+        run.search_history_receipts=[e for e in entries if e['query_id'] not in duplicate_ids]
+        validated[request]=query
+        return True
+    except Exception:return False
