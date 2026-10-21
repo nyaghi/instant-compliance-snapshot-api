@@ -1333,7 +1333,7 @@ def capture_negative_ca_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return
-  stop=time.monotonic()+min(12,remaining);held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
+  stop=time.monotonic()+min(18,remaining);held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return
   criterion=run.ein[:2]+'-'+run.ein[2:]
   with master.checker.sync_playwright() as pw:
@@ -1570,7 +1570,7 @@ def capture_selected_nj_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return
-  stop=time.monotonic()+min(8.0,remaining)
+  stop=time.monotonic()+min(15.0,remaining)
   held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return
   fact['phase']='playwright_start';begin=time.perf_counter()
@@ -1731,7 +1731,7 @@ def capture_negative_nj_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return
-  stop=time.monotonic()+min(12.0,remaining);timeout=lambda:max(1,int((stop-time.monotonic()-1)*1000))
+  stop=time.monotonic()+min(18.0,remaining);timeout=lambda:max(1,int((stop-time.monotonic()-1)*1000))
   held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return
   with master.checker.sync_playwright() as pw:

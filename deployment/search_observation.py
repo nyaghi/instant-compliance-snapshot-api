@@ -51,13 +51,40 @@ def criteria(url, body=None, params=None, known_names=()):
                      and any(tokens(value) and tokens(value)<=k for k in known))
         if explicit or generic:
             label='Organization / DBA name' if field.endswith('tbDBA_Contact') else 'Organization name'
-            result.append((value,label+'; source matching filter not recorded'))
+            result.append((value,label+'; search method not captured'))
         elif leaf.lower() in {'where','filter','filters'}:
             # SQL/OData name filters: retain the actual quoted pattern only.
             for match in re.finditer(r"(?:\b(?:[A-Z_]*NAME[A-Z_]*|[A-Z_]*ORG[A-Z_]*)\b)\s+(?:LIKE|ILIKE|=)\s*'((?:''|[^'])*)'",value,re.I):
                 pattern=match.group(1).replace("''", "'")
                 if pattern and len(pattern)<=1000:result.append((pattern,'Name pattern submitted to the public source'))
     return list(dict.fromkeys(result))[:20]
+
+def ein_criteria(url,body=None,params=None,known_ein=''):
+    """Record only submitted EIN fields or an exact known EIN in a search field."""
+    pairs=list(parse_qsl(urlsplit(str(url)).query,keep_blank_values=True))
+    if isinstance(params,dict):pairs+=list(params.items())
+    if isinstance(body,bytes):body=body.decode('utf-8','replace')
+    if isinstance(body,str) and len(body)<=200000:
+        try:body=json.loads(body)
+        except (ValueError,TypeError):pairs+=parse_qsl(body,keep_blank_values=True);body=None
+    if isinstance(body,(dict,list)):pairs+=_pairs(body)
+    for field,value in list(pairs):
+        if isinstance(value,str) and value.lstrip().startswith(('{','[')) and len(value)<=200000:
+            try:pairs+=_pairs(json.loads(value),str(field))
+            except (ValueError,TypeError):pass
+    result=[]
+    for field,value in pairs[:600]:
+        field=str(field);value=str(value).strip()
+        if PRIVATE_FIELD.search(field) or CONTROL_FIELD.search(field):continue
+        if not re.fullmatch(r'(?:[0-9]{9}|[0-9]{2}-[0-9]{7})',value):continue
+        leaf=re.split(r'[.$]',field)[-1]
+        explicit=bool(re.search(r'(?:^|[^a-z])(?:f?ein)(?:[^a-z]|$)|(?:federal|tax).*id|federal.*ein$|f?ein(?:number|no|searchfield)$',field,re.I))
+        generic=bool(GENERIC_FIELD.fullmatch(leaf) and value.replace('-','')==known_ein)
+        if explicit or generic:
+            label='Federal EIN field' if explicit else 'Public search field; EIN entered'
+            result.append((value,label))
+    return list(dict.fromkeys(result))[:20]
+
 
 def start_transport(url,body=None,params=None,run=None):
     run=run or CURRENT.get()
@@ -71,9 +98,11 @@ def start_transport(url,body=None,params=None,run=None):
         public=u._replace(query='',fragment='').geturl()
         # Playwright dispatches callbacks in its own greenlet context. Bind the
         # already-owned run explicitly instead of reading a different ContextVar.
-        return [SourceQueryReceipt(run,{'state':run.state,'operation':'search','name':name,
+        observed=[('name',value,label) for value,label in criteria(url,body,params,getattr(run,'known_names',[run.name]))]
+        observed += [('ein',value,label) for value,label in ein_criteria(url,body,params,getattr(run,'ein',''))]
+        return [SourceQueryReceipt(run,{'state':run.state,'operation':'search',kind:value,
                     'filter_label':label,'source_kind':'state_portal','url':public})
-                for name,label in criteria(url,body,params,getattr(run,'known_names',[run.name]))]
+                for kind,value,label in observed]
     except Exception:
         run.search_history_overflow=True;return []
 
