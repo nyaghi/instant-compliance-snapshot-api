@@ -61,6 +61,9 @@ def selected_url(run,result):
 
 def capture_selected_source(master,result,run,deadline):
  """Best-effort, isolated visual work. Failure never modifies lookup result."""
+ if run is not None and run.state=='KS':
+  from deployment.kansas_row_evidence import capture_selected_kansas
+  return capture_selected_kansas(master,result,run,deadline)
  if run is not None and run.state=='CA':return capture_selected_ca_source(master,result,run,deadline)
  if run is not None and run.state=='SC':return capture_selected_sc_source(master,result,run,deadline)
  if run is not None and run.state=='WA':return capture_selected_wa_source(master,result,run,deadline)
