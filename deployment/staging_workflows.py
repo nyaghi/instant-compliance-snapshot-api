@@ -131,6 +131,12 @@ def public_result(master, job, record):
         master.attach_identity_review(data, context)
     if hasattr(master, 'confirmation_result_for_public'):
         master.confirmation_result_for_public(data)
+    if job['state']=='WI':
+        try:
+            from deployment.desktop_source_evidence import describe
+            request=describe(result)
+            if request:data['desktop_evidence_request']=request
+        except Exception:pass
     return data
 
 

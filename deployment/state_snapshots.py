@@ -234,6 +234,8 @@ def persist_worker_result(queue,result,job,store=None):
     data=dict(result);assets=data.pop('_worker_source_archives',[])
     if isinstance(data.get('evidence_metrics'),dict):data['evidence_metrics']={**data['evidence_metrics'],'archive_ms':0}
     history=data.pop('_worker_search_history',None)
+    if data.get('_worker_desktop_evidence',{}).get('operation')=='empty_search' and isinstance(history,dict):
+        data['_worker_desktop_history']=history
     if not assets:
         return persist_history_timed(data,job,history,[],store or (PostgresStore(queue.pool) if history and queue else None))
     data['evidence_url']=''
@@ -435,6 +437,12 @@ class CaptureRun:
             'visual_adapters':[dict(f) for f in self.visual_adapter_facts[:2]],
             'missing_stage':('' if assets else 'record_binding' if any(d[2] in {'image','image_pages','source_pdf'} for d in self.documents)
                 else 'capture' if self.errors else 'source_visual_not_collected')}
+        if self.state=='WI' and not assets:
+            try:
+                from deployment.desktop_source_evidence import retained_request
+                request=retained_request(self,data)
+                if request:data['_worker_desktop_evidence']=request
+            except Exception:self.errors.append('desktop_evidence_request_unavailable')
         from deployment.search_history import finish_worker_history
         return finish_worker_history(self,data)
 
