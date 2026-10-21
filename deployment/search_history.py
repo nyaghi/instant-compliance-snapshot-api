@@ -96,6 +96,11 @@ def reportable_result(result):
             and 1<=len(result['status'])<=100 and type(result.get('success')) is bool)
 
 
+def needs_search_history(result):
+    """User-facing search account is required only for completed negatives."""
+    return reportable_result(result) and result.get('success') is True and result.get('status')=='Not Registered'
+
+
 def manifest(record,result,snapshot,now):
     from deployment.state_snapshots import digits
     state=record.get('state');ein=digits(record.get('ein',''))
@@ -163,7 +168,7 @@ def attach(record,result,store=None,now=None):
     """Optional paired output; preserve every original status/identity field."""
     from deployment import state_snapshots as ss
     data=dict(result)
-    if record.get('state') not in STATES or record.get('purpose')!='registration' or not reportable_result(result):return data
+    if record.get('state') not in STATES or record.get('purpose')!='registration' or not needs_search_history(result):return data
     store=store or ss.STORE
     if store is None:return data
     try:
@@ -352,7 +357,7 @@ def finish_worker_history(run,result):
             for receipt in receipts:receipt.incomplete()
         pending.clear()
     data=dict(result);entries=getattr(run,'search_history_receipts',[])
-    if not reportable_result(data):return data
+    if not needs_search_history(data):return data
     if getattr(run,'search_history_overflow',False):
         data['search_history_capture']='unavailable';return data
     if not entries:return data
