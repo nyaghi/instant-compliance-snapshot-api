@@ -8795,6 +8795,8 @@ def final_four_connector_request(payload, origin):
                   "issued": now, "expires": now + (cutoff if mode == "sales" else NY_CONNECTOR_TTL_SECONDS),
                   "version": APP_VERSION, "completed": [], "pending": None,
                   "alternate_names": alternate_names, "protocol": "final-four-public-v1"}
+        if state == "AL" and payload.get("evidence_protocol") == "al-final-empty-v1":
+            record["al_evidence_protocol"] = "al-final-empty-v1"
         if payload.get("identity_review_token"):
             try:
                 prior = identity_review_unpack(payload["identity_review_token"], email, device)
@@ -8823,6 +8825,9 @@ def final_four_connector_request(payload, origin):
                 raise ValueError("Wrong continuation scope")
         except (ValueError, TypeError, KeyError, UnicodeError):
             return 410, {"error": "This registry check expired or changed. Run the state check again."}
+        if action == "capture_empty":
+            from deployment.al_final_empty import complete
+            return complete(sys.modules[__name__],record,payload)
         if action == "cancel":
             return 200, {"phase": "canceled"}
         if action not in {"advance", "fail"}:
@@ -8912,6 +8917,8 @@ def final_four_connector_request(payload, origin):
         response['result'] = attach_links(response['result'],record.get('source_snapshots',[]))
         from deployment.search_history import attach as attach_search_history
         response['result'] = attach_search_history(record,response['result'])
+    from deployment.al_final_empty import prepare
+    response = prepare(sys.modules[__name__],record,response)
     return 200, response
 
 

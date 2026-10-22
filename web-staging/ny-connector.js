@@ -31,18 +31,18 @@
     NY_CONNECTOR_INTERRUPTED: "The browser connection was interrupted. Retry the New York check when the connector is connected."
   }[reason] || "The New York connection could not be refreshed. Your other state results are unchanged.") +
     (Number.isFinite(retryAt) && retryAt > Date.now() ? ` You can refresh again at ${new Date(retryAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "");
-  function bridge(action, query, lookupId, onProgress, intent, signal) {
+  function bridge(action, query, lookupId, onProgress, intent, signal, evidenceProtocol) {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
       const id = crypto.randomUUID().replaceAll("-", "");
       const abort = () => { waiting.delete(id); clearTimeout(timer); reject(signal.reason); };
       const complete = value => { signal?.removeEventListener('abort', abort); resolve(value); };
       // Allow a delayed readiness reply before declaring the connector unavailable.
-      const duration = action === "ping" ? 5000 : action === "acquire" ? 1205000 : ["search", "refresh"].includes(action) ? 290000 : action === "finish" ? 15000 : 1500;
+      const duration = action === "ping" ? 5000 : action === "acquire" ? 1205000 : ["search", "refresh"].includes(action) ? 290000 : ["finish","capture_empty"].includes(action) ? 15000 : 1500;
       const timer = setTimeout(() => { waiting.delete(id); complete({ ok: false, reason: action === "ping" ? "NY_CONNECTOR_UNAVAILABLE" : action === "acquire" ? "NY_CONNECTOR_QUEUE_TIMEOUT" : "NY_CONNECTOR_TIMEOUT" }); }, duration);
       waiting.set(id, { resolve: complete, timer, onProgress });
       signal?.addEventListener('abort', abort, {once:true});
-      window.postMessage({ channel: "cc-ny-staging-v1", direction: "request", id, action, ...(query ? { query } : {}), ...(lookupId ? { lookup_id: lookupId } : {}), ...(intent ? { intent } : {}) }, ORIGIN);
+      window.postMessage({ channel: "cc-ny-staging-v1", direction: "request", id, action, ...(query ? { query } : {}), ...(lookupId ? { lookup_id: lookupId } : {}), ...(intent ? { intent } : {}), ...(action === "acquire" && evidenceProtocol === "al-final-empty-v1" ? {evidence_protocol:evidenceProtocol}: {}) }, ORIGIN);
     });
   }
   async function setup() {
@@ -117,13 +117,14 @@
     if (refreshButton) refreshButton.disabled = true;
     const credentials = { email, admin_passcode, device_id };
     let checkToken = "";
+    let alEvidenceDeadline = 0;
     let lookupId = crypto.randomUUID().replaceAll("-", "");
     let connected = false, recoveryUsed = false;
     async function api(fields, cleanup = false) {
       const timeout = AbortSignal.timeout(45000);
       const response = await fetch(API + "/api/ny-connector", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        signal: signal && !cleanup ? AbortSignal.any([signal, timeout]) : timeout, body: JSON.stringify({ ...credentials, ...fields })
+        signal: fields.action === "capture_empty" ? AbortSignal.any([...(signal ? [signal] : []),timeout,AbortSignal.timeout(Math.max(1,alEvidenceDeadline-Date.now()))]) : signal && !cleanup ? AbortSignal.any([signal, timeout]) : timeout, body: JSON.stringify({ ...credentials, ...fields })
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || `The ${label} browser check could not be completed.`);
@@ -136,15 +137,16 @@
       if (!connection.ok && connection.reason === "NY_CONNECTOR_UNAVAILABLE") {
         connection = await bridge("ping", null, null, null, null, signal);
       }
+      const alEvidenceProtocol = registryState === "AL" && connection.capabilities?.includes("al-final-empty-v1") ? "al-final-empty-v1" : null;
       let acquired = connection;
       if (supported(connection)) {
         connected = true;
         onProgress?.(`${label}: waiting for the browser connector. Other states can continue.`);
-        acquired = await bridge("acquire", null, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and keeping your place in the queue. Other states can continue.` : `${label}: waiting in the browser queue (position ${progress.position}). Other states can continue.`), registryState === "NY" ? null : registryState, signal);
+        acquired = await bridge("acquire", null, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and keeping your place in the queue. Other states can continue.` : `${label}: waiting in the browser queue (position ${progress.position}). Other states can continue.`), registryState === "NY" ? null : registryState, signal, alEvidenceProtocol);
       }
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
-      let state = await api({ action: "start", state: registryState, organization_name, ein, purpose, ...(officeEvidence ? {office_evidence:officeEvidence} : {}), ...(identity_review_token ? {identity_review_token} : {}), recovery_protocol: "il-fresh-page-v1", ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
+      let state = await api({ action: "start", state: registryState, ...(alEvidenceProtocol ? {evidence_protocol:alEvidenceProtocol}:{}), organization_name, ein, purpose, ...(officeEvidence ? {office_evidence:officeEvidence} : {}), ...(identity_review_token ? {identity_review_token} : {}), recovery_protocol: "il-fresh-page-v1", ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
       checkToken = state.check_token || "";
       if (!supported(connection) && state.phase === "search") {
         state = await api({ action: "fail", check_token: checkToken, reason: connection.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE" });
@@ -215,6 +217,24 @@
         state = completed.ok
           ? await api({ action: "advance", check_token: checkToken, query_id: state.query_id, evidence: completed.evidence, state_snapshot: completed.state_snapshot })
           : await api({ action: "fail", check_token: checkToken, query_id: state.query_id, reason: completed.reason });
+      }
+      if (registryState === "AL" && alEvidenceProtocol && state.phase === "capture_empty" && state.result?.state === "AL") {
+        const settled = state.result;
+        alEvidenceDeadline = lookupDeadline;
+        checkToken = state.check_token;
+        const captureStarted = Date.now();
+        onProgress?.("Alabama: saving the completed state result.",{state:registryState,stage:"evidence capture started"});
+        try {
+          const left = Math.max(1,Math.min(15000,lookupDeadline-Date.now(),Number(state.lookup_remaining_ms)||1));
+          const captureSignal = AbortSignal.any([...(signal ? [signal] : []),AbortSignal.timeout(left)]);
+          const captured = await bridge("capture_empty",state.query,lookupId,null,null,captureSignal);
+          onProgress?.("Alabama: state evidence capture returned.",{state:registryState,stage:"evidence capture returned",elapsed_ms:Date.now()-captureStarted,ok:captured.ok===true,has_snapshot:!!captured.state_snapshot,...(Array.isArray(captured.trial_diagnostics)?{trial_diagnostics:captured.trial_diagnostics}:{})});
+          state = await api({action:"capture_empty",check_token:checkToken,query_id:state.query_id,...(captured.ok && captured.state_snapshot ? {state_snapshot:captured.state_snapshot}:{})});
+        } catch(error) {
+          signal?.throwIfAborted();
+          onProgress?.("Alabama: original result retained; optional evidence unavailable.",{state:registryState,stage:"evidence capture incomplete",elapsed_ms:Date.now()-captureStarted});
+          state = {phase:"complete",result:settled};
+        }
       }
       if (state.phase !== "complete" || !state.result || state.result.state !== registryState) throw new Error(`${label} did not return a complete result.`);
       return state.result;
