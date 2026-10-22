@@ -22511,7 +22511,10 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             try:
                 from deployment.state_snapshots import CURRENT
                 visual_run=CURRENT.get()
-                if visual_run is not None and visual_run.state=='WI' and visual_run.ein==canonical_ein_digits(ein):visual_run.remember_search(search_name,direct_url)
+                if (visual_run is not None and visual_run.state=='WI' and visual_run.ein==canonical_ein_digits(ein)
+                    and re.search(r'There\s+are\s+no\s+query\s+results|No\s+query\s+results', result_html, re.I)
+                    and not re.search(r'<td\b[^>]*>\s*\d+-800\s*</td>', result_html, re.I)):
+                    visual_run.remember_search(search_name,direct_url)
             except Exception:pass
             best_match = wi_best_match_from_html(result_html, target_names, best_match, original_name, ein)
             if progress is not None: progress["completed"].add(search_name)
