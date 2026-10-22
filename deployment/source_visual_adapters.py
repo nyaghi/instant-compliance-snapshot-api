@@ -1902,11 +1902,11 @@ def capture_negative_va_source(master,result,run,deadline):
      or result.get('status')!='Not Registered' or result.get('success') is not True
      or getattr(run,'negative_visual_attempted',False)):return
  run.negative_visual_attempted=True;started=time.perf_counter();held=False;browser=context=None;receipt=None
- fact={'adapter':'VA-original-completed-empty-global-search','phase':'admission','outcome':'not_started','extra_registry_queries':0,'navigation_ms':0,'query_ms':0,'capture_ms':0,'total_ms':0};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'VA-original-completed-empty-global-search','phase':'admission','outcome':'not_started','extra_registry_queries':0,'local_visual_budget_ms':16000,'navigation_ms':0,'query_ms':0,'capture_ms':0,'total_ms':0};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return
-  stop=time.monotonic()+min(12,remaining);held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
+  stop=time.monotonic()+min(16,remaining);held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return
   criterion=run.ein[:2]+'-'+run.ein[2:]
   with master.checker.sync_playwright() as pw:
@@ -1936,8 +1936,10 @@ def capture_negative_va_source(master,result,run,deadline):
     if receipt:receipt.complete(0,rows=[])
     text=page.inner_text('body',timeout=400)
     if field.input_value(timeout=300)!=criterion or page.locator('.ag-row').count()!=0 or 'Virginia Department of Agriculture and Consumer Services' not in text:fact['outcome']='displayed_criteria_rejected';return
+    if time.monotonic()+1.5>=stop:fact['outcome']='capture_reserve';return
     begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1000,timeout()))
     if page.url!=VA_FINAL_SEARCH or field.input_value(timeout=300)!=criterion or page.inner_text('body',timeout=400)!=text:fact['outcome']='source_changed_during_capture';return
+    if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
     before=len(run.documents);run.document(VA_FINAL_SEARCH,raw,'image',text,note='Original Virginia empty public global-search view for displayed FEIN term '+criterion+'. The separate history records this additional visual query; this image alone does not establish all name searches.')
     if len(run.documents)>before:
      run.va_validated_empty_images=getattr(run,'va_validated_empty_images',set());run.va_validated_empty_images.add(hashlib.sha256(raw).hexdigest());fact['outcome']='captured'
