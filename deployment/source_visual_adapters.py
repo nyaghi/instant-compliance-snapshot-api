@@ -2229,8 +2229,9 @@ def capture_va_unregistered_entity(master,result,run,deadline):
      return fields,text
     before=read_bound();fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
     if before is None:fact['outcome']='entity_not_bound';return
-    if time.monotonic()+1.5>=stop:fact['outcome']='capture_reserve';return
-    fact['phase']='capture';begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1000,timeout()))
+    remaining_capture=stop-time.monotonic()-.5
+    if remaining_capture<.25:fact['outcome']='capture_reserve';return
+    fact['phase']='capture';begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1000,max(1,int(remaining_capture*1000))))
     after=read_bound()
     if after is None or after!=before:fact['outcome']='source_changed_during_capture';return
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
