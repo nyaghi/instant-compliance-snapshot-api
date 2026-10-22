@@ -2103,12 +2103,12 @@ def capture_owned_mi_empty(run,result,context,deadline):
         or result.get('source_url')!='https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx'
         or getattr(run,'negative_visual_attempted',False)):return
     run.negative_visual_attempted=True;run.mi_negative_visual_guard=True;start=time.perf_counter();owned=None;receipt=None;detach_observer=lambda:None
-    fact={'adapter':'MI-owned-original-empty-EIN','phase':'admission','outcome':'not_started','visual_EIN_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':12000}
+    fact={'adapter':'MI-owned-original-empty-EIN','phase':'admission','outcome':'not_started','visual_EIN_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':16000}
     run.visual_adapter_facts.append(fact)
     try:
         remaining=deadline-time.monotonic()-1
         if remaining<3:fact['outcome']='deadline_reserve';return
-        stop=time.monotonic()+min(12,remaining)
+        stop=time.monotonic()+min(16,remaining)
         def allowance(reserve=1):return max(1,int((stop-time.monotonic()-reserve)*1000))
         detail=next((p for p in list(context.pages) if mi_empty_values(p,run.ein)),None)
         if detail is None:
