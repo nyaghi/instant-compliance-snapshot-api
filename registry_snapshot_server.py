@@ -34588,6 +34588,16 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         result.source_note = "Michigan's registry search page loaded, but the results/detail frame did not load on two attempts."
                         result.success = False
                 body = registry_page_body(page)
+                try:
+                    from deployment.state_snapshots import CURRENT,DEADLINE
+                    from deployment.source_visual_adapters import capture_owned_mi_page
+                    capture_owned_mi_page(CURRENT.get(),{
+                        'state':'MI','ein':ein,'status':public_status(result),'success':result.success,
+                        'matched_registry_name':result.matched_registry_name,
+                        'matched_registry_identifier':result.matched_registry_identifier,
+                        'raw_status_text':result.raw_status_text,
+                        'source_url':result.source_url},page,context,DEADLINE.get())
+                except Exception:pass
             elif state == "MN":
                 result = search_mn(page, org)
                 body = registry_page_body(page)

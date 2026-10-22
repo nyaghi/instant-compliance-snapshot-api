@@ -1905,3 +1905,103 @@ def search_wa_with_source_capture(module,org,**kwargs):
  search=FunctionType(original.__code__,{**original.__globals__,'launch_context':owned_context},original.__name__,original.__defaults__,original.__closure__)
  search.__kwdefaults__=original.__kwdefaults__
  return search(org,**kwargs)
+
+
+"""LOCAL ONLY: original Michigan detail after the retained selected-file lookup."""
+import re,time
+from urllib.parse import urlsplit
+
+MI_DETAIL_PREFIX='#ctl00_MainContent_fvCSForm_'
+def mi_detail_values(page):
+    return {key:page.locator(MI_DETAIL_PREFIX+suffix).inner_text(timeout=400).strip() for key,suffix in {
+        'identifier':'lblFileNo','name':'lblLegalName','ein':'lblEIN',
+        'standing':'lblSolicitationRegistrationStatus'}.items()}
+
+def mi_values_bound(values,result,ein):
+    norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
+    if (values.get('identifier')!=str(result.get('matched_registry_identifier'))
+        or norm(values.get('name'))!=norm(result.get('matched_registry_name'))
+        or re.sub(r'\D','',values.get('ein',''))!=ein
+        or not values.get('standing')):return False
+    expected=re.search(r'(?:License / Registration Expiration|Expiration Date):\s*(\d{1,2})/(\d{1,2})/(\d{4})',result.get('raw_status_text',''),re.I)
+    if expected:
+        actual=re.search(r'Expiration Date:\s*(\d{1,2})/(\d{1,2})/(\d{4})',values['standing'],re.I)
+        if not actual or tuple(map(int,actual.groups()))!=tuple(map(int,expected.groups())):return False
+    if re.search(r'Registration Pending',result.get('raw_status_text',''),re.I) and not re.search(r'Registration Pending',values['standing'],re.I):return False
+    return True
+
+def capture_owned_mi_page(run,result,page,context,deadline):
+    """One selected-file visual query, original popup pixels, no status mutation."""
+    identifier=str(result.get('matched_registry_identifier') or '')
+    if (run is None or run.state!='MI' or result.get('state')!='MI'
+        or re.sub(r'\D','',str(result.get('ein','')))!=run.ein
+        or result.get('success') is not True
+        or result.get('status') in {'Not Registered','Unable to Confirm','Unable to Verify','Site Not Reachable'}
+        or not re.fullmatch(r'\d{3,8}',identifier) or not result.get('matched_registry_name')
+        or result.get('source_url')!='https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx'
+        or getattr(run,'selected_visual_attempted',False)):return
+    run.selected_visual_attempted=True
+    start=time.perf_counter();owned=[]
+    fact={'adapter':'MI-owned-selected-file-detail','phase':'admission','outcome':'not_started',
+          'visual_file_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':12000}
+    run.visual_adapter_facts.append(fact)
+    def official(p):
+        u=urlsplit(p.url)
+        return (u.scheme=='https' and u.hostname=='www.ag.state.mi.us' and u.port in (None,443)
+                and not u.username and not u.password and not u.query and not u.fragment
+                and u.path=='/CharitableTrust/frmSearchResults.aspx')
+    try:
+        remaining=deadline-time.monotonic()-1
+        if remaining<3:fact['outcome']='deadline_reserve';return
+        stop=time.monotonic()+min(12,remaining)
+        def allowance(reserve=1):return max(1,int((stop-time.monotonic()-reserve)*1000))
+        detail=None
+        # Reuse a selected detail already produced by the normal browser path.
+        for existing in list(context.pages):
+            if official(existing) and existing.locator(MI_DETAIL_PREFIX+'lblFileNo').count()==1:
+                if mi_values_bound(mi_detail_values(existing),result,run.ein):detail=existing;break
+        if detail is None:
+            fact['phase']='visual_file_search';search=context.new_page();owned.append(search)
+            search.goto(result['source_url'],wait_until='domcontentloaded',timeout=allowance())
+            u=urlsplit(search.url)
+            if u.scheme!='https' or u.hostname!='www.ag.state.mi.us' or u.path not in {'/CharitableTrust/frmDisclaimer.aspx','/CharitableTrust/frmDefault.aspx'}:
+                fact['outcome']='search_navigation_rejected';return
+            if u.path.endswith('/frmDisclaimer.aspx'):
+                search.locator('#ctl00_MainContent_lblYes').click(timeout=allowance())
+            field=search.locator('#ctl00_MainContent_txtFileNo')
+            field.fill(identifier,timeout=allowance())
+            search.locator('#ctl00_MainContent_btnIdSearch').click(timeout=allowance())
+            fact['visual_file_queries']=1
+            grid=search.locator('#ctl00_MainContent_GridView1')
+            grid.wait_for(state='visible',timeout=allowance())
+            links=grid.get_by_role('link',name=result['matched_registry_name'],exact=True)
+            if links.count()!=1 or not re.search(r'(?<!\d)'+re.escape(identifier)+r'(?!\d)',grid.inner_text(timeout=400)):
+                fact['outcome']='selected_result_not_unique';return
+            fact['phase']='selected_popup'
+            with search.expect_popup(timeout=allowance()) as popup:
+                links.click(timeout=allowance())
+            detail=popup.value;owned.append(detail)
+        fact['phase']='detail_binding'
+        detail.locator(MI_DETAIL_PREFIX+'lblSolicitationRegistrationStatus').wait_for(state='visible',timeout=allowance())
+        values=mi_detail_values(detail)
+        if not official(detail) or not mi_values_bound(values,result,run.ein):fact['outcome']='selected_detail_not_bound';return
+        text=detail.inner_text('body',timeout=400)
+        if re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):fact['outcome']='verification_pending';return
+        size=detail.locator('body').evaluate('(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=400)
+        if not size or min(size.values())<=0 or size['width']*size['height']>20000000:fact['outcome']='image_size_rejected';return
+        if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
+        fact['phase']='capture';begin=time.perf_counter();url=detail.url
+        raw=detail.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1500,allowance(.5)))
+        fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
+        if detail.url!=url or mi_detail_values(detail)!=values:fact['outcome']='record_changed_during_capture';return
+        if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
+        before=len(run.documents)
+        run.document(url,raw,'image',text,note='Original selected Michigan detail, including EIN, solicitation standing and financial period. Retrieved by the already selected AG file number; not a reconstructed report.')
+        fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
+    except Exception as exc:
+        fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
+    finally:
+        for target in reversed(owned):
+            try:target.close()
+            except Exception:pass
+        run.capture_ms+=fact['capture_ms'];fact['total_ms']=round((time.perf_counter()-start)*1000,2)
