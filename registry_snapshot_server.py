@@ -22485,6 +22485,7 @@ def wi_confirm_clean_no_results_page(org, max_seconds: float = 14.0, progress: d
 
 def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, original_name: str = "", ein: str = "", progress: dict | None = None) -> tuple[dict | None, bool]:
     from deployment.search_observation import observed_http_call as _history_http_call
+    from deployment.wi_query_history import read_wi_response
     best_match = None
     http_reached = False
     opener = wi_request_opener()
@@ -22503,8 +22504,7 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             if progress is not None and search_name not in progress["attempted"]: progress["attempted"].append(search_name)
             direct_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'LicenseNumber': '', 'FirmName': search_name})}"
             request = urllib.request.Request(direct_url, headers=wi_request_headers())
-            with _history_http_call(opener.open, request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
-                result_html = response.read().decode("utf-8", errors="replace")
+            result_html = read_wi_response(opener.open, request, timeout=WI_HTTP_TIMEOUT_SECONDS)
             if wi_result_html_requires_verification(result_html) or not wi_has_complete_results(result_html):
                 continue
             http_reached = True
@@ -22541,8 +22541,7 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
                 },
                 method="POST",
             )
-            with _history_http_call(opener.open, request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
-                result_html = response.read().decode("utf-8", errors="replace")
+            result_html = read_wi_response(opener.open, request, timeout=WI_HTTP_TIMEOUT_SECONDS)
             if wi_result_html_requires_verification(result_html) or not wi_has_complete_results(result_html):
                 continue
             http_reached = True
