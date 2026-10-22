@@ -610,6 +610,40 @@ def nc_completed_results_snapshot(record,query,evidence,url,text):
         and key(row.get('name') or row.get('CSL Legal Name') or row.get('Organization Name')) in key(text)
         for row in evidence['rows'])
 
+def al_completed_results_snapshot(record,query,evidence,url,text):
+    """Preserve an actual complete AL results grid for a settled negative.
+
+    Rows may be unrelated. This marker is search evidence, never an empty-grid
+    assertion or a positive identity. Existing query/capture binding still applies.
+    """
+    if (record.get('state')!='AL' or query.get('state')!='AL'
+        or query.get('operation')!='search' or set(query)!={'state','operation','name'}
+        or not isinstance(query.get('name'),str) or not query['name'].strip()
+        or not isinstance(evidence,dict) or evidence.get('state')!='AL'
+        or evidence.get('query')!=query or evidence.get('complete') is not True
+        or evidence.get('verification_pending') is not False
+        or type(evidence.get('total')) is not int or not 0<evidence['total']<=50
+        or not isinstance(evidence.get('rows'),list) or len(evidence['rows'])!=evidence['total']
+        or not isinstance(text,str) or len(text)>20000):return False
+    source=urlsplit(url)
+    if (source.scheme!='https' or source.hostname!='ago.igovsolution.net'
+        or source.path!='/online/Lookups/Business.aspx' or source.query or source.fragment
+        or re.search(r'no records found|verification failed|invalid verification|user validation required|access denied',text,re.I)):
+        return False
+    headers=['Name','License/Registration#','Status','Registration Type','Issued Date','Expiration Date','Address','City','State','Zip','Print']
+    if evidence.get('headers')!=headers:return False
+    normalized=' '.join(text.split())
+    if ('Business Lookup Search' not in normalized
+        or not re.search(r'Records\s*:\s*1\s+to\s+'+str(evidence['total'])+r'\s+of\s+'+str(evidence['total'])+r'\b',normalized)):
+        return False
+    for row in evidence['rows']:
+        if (not isinstance(row,list) or len(row)!=len(headers)
+            or not all(isinstance(cell,str) for cell in row)
+            or not row[0].strip() or not re.fullmatch(r'(?:AL\d{2}-\d+|EC-\d+)',row[1])
+            or key(row[0]) not in key(text) or row[1] not in text):return False
+    return True
+
+
 def il_selected_detail_snapshot(query,evidence,url,text):
     """Bind the validated detail body to its original photographed IL modal."""
     try:
@@ -704,6 +738,8 @@ def connector_archive(record,payload,query,evidence):
             # Archive once as search evidence. This marker cannot be selected
             # as a positive credential or used to manufacture a zero count.
             rows=[('@completed-search',record['organization_name']),*rows]
+        if al_completed_results_snapshot(record,query,evidence,url,text):
+            rows=[('@completed-search',''),*rows]
         if ga_completed_results_snapshot(record,query,evidence,url,text):
             # Search-only evidence must never compete with a numberless positive
             # registration by organization name. It is selected only for NR.
