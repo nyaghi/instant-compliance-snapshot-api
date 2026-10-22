@@ -34605,6 +34605,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     from deployment.source_visual_adapters import capture_owned_mi_page
                     capture_owned_mi_page(CURRENT.get(),{
                         'state':'MI','ein':ein,'status':public_status(result),'success':result.success,
+                        'completed_exact_ein_empty':getattr(mi_probe_result,'_cc_mi_completed_exact_ein_empty',None)==(org.organization_name,canonical_ein_digits(org.ein)),
                         'matched_registry_name':result.matched_registry_name,
                         'matched_registry_identifier':result.matched_registry_identifier,
                         'raw_status_text':result.raw_status_text,

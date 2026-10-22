@@ -414,6 +414,7 @@ class CaptureRun:
                     if self.state=='HI' and url in self.validated_negative_visual_urls:matched='The charitable organization you entered is not registered in our system.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'hi_validated_empty_images',set())
                     if self.state=='FL':matched=url in self.validated_negative_visual_urls and ('No result found for '+self.name) in text and hashlib.sha256(raw).hexdigest() in getattr(self,'fl_validated_empty_images',set())
                     if self.state=='OH':matched='No organizations found' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'oh_validated_empty_images',set())
+                    if self.state=='MI' and getattr(self,'mi_negative_visual_guard',False):matched='No records found for your search criteria' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'mi_validated_empty_images',set())
                     if self.state=='RI':matched=url in self.validated_negative_visual_urls and 'No search results were found. Please refine your search criteria and try again.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'ri_validated_empty_images',set())
                 if re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):continue
                 if not matched:continue
