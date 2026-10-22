@@ -2004,7 +2004,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
         or result.get('source_url')!='https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx'
         or getattr(run,'selected_visual_attempted',False)):return
     run.selected_visual_attempted=True
-    start=time.perf_counter();owned=[]
+    start=time.perf_counter();owned=[];detach_observer=lambda:None
     fact={'adapter':'MI-owned-selected-file-detail','phase':'admission','outcome':'not_started',
           'visual_file_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':12000}
     run.visual_adapter_facts.append(fact)
@@ -2024,27 +2024,31 @@ def capture_owned_mi_page(run,result,page,context,deadline):
             if official(existing) and existing.locator(MI_DETAIL_PREFIX+'lblFileNo').count()==1:
                 if mi_values_bound(mi_detail_values(existing),result,run.ein):detail=existing;break
         if detail is None:
-            fact['phase']='visual_file_search';search=context.new_page();owned.append(search)
+            fact['phase']='visual_file_search';search=context.new_page();owned.append(search);detach_observer=observe_visual_readiness(search,fact);fact['waiting_for']='search_document_domcontentloaded'
             search.goto(result['source_url'],wait_until='domcontentloaded',timeout=allowance())
             u=urlsplit(search.url)
             if u.scheme!='https' or u.hostname!='www.ag.state.mi.us' or u.path not in {'/CharitableTrust/frmDisclaimer.aspx','/CharitableTrust/frmDefault.aspx'}:
                 fact['outcome']='search_navigation_rejected';return
             if u.path.endswith('/frmDisclaimer.aspx'):
+                fact['waiting_for']='disclaimer_accept'
                 search.locator('#ctl00_MainContent_lblYes').click(timeout=allowance())
             field=search.locator('#ctl00_MainContent_txtFileNo')
+            fact['waiting_for']='file_number_field'
             field.fill(identifier,timeout=allowance())
+            fact['waiting_for']='file_search_click'
             search.locator('#ctl00_MainContent_btnIdSearch').click(timeout=allowance())
             fact['visual_file_queries']=1
             grid=search.locator('#ctl00_MainContent_GridView1')
+            fact['waiting_for']='file_search_grid'
             grid.wait_for(state='visible',timeout=allowance())
             links=grid.get_by_role('link',name=result['matched_registry_name'],exact=True)
             if links.count()!=1 or not re.search(r'(?<!\d)'+re.escape(identifier)+r'(?!\d)',grid.inner_text(timeout=400)):
                 fact['outcome']='selected_result_not_unique';return
-            fact['phase']='selected_popup'
+            fact['phase']='selected_popup';fact['waiting_for']='selected_link_popup'
             with search.expect_popup(timeout=allowance()) as popup:
                 links.click(timeout=allowance())
             detail=popup.value;owned.append(detail)
-        fact['phase']='detail_binding'
+        fact['phase']='detail_binding';fact['waiting_for']='selected_status_field'
         detail.locator(MI_DETAIL_PREFIX+'lblSolicitationRegistrationStatus').wait_for(state='visible',timeout=allowance())
         values=mi_detail_values(detail)
         if not official(detail) or not mi_values_bound(values,result,run.ein):fact['outcome']='selected_detail_not_bound';return
@@ -2053,10 +2057,10 @@ def capture_owned_mi_page(run,result,page,context,deadline):
         size=detail.locator('body').evaluate('(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=400)
         if not size or min(size.values())<=0 or size['width']*size['height']>20000000:fact['outcome']='image_size_rejected';return
         if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
-        fact['phase']='original_image_readiness'
+        fact['phase']='original_image_readiness';fact['waiting_for']='original_images'
         detail.wait_for_function("() => Array.from(document.images).every(i => i.complete && i.naturalWidth > 0)",timeout=allowance(1))
         if time.monotonic()+1>=stop:fact['outcome']='image_readiness_reserve';return
-        fact['phase']='capture';begin=time.perf_counter();url=detail.url
+        fact['phase']='capture';fact['waiting_for']='';begin=time.perf_counter();url=detail.url
         raw=detail.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1500,allowance(.5)))
         fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
         if detail.url!=url or mi_detail_values(detail)!=values:fact['outcome']='record_changed_during_capture';return
@@ -2067,6 +2071,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
     except Exception as exc:
         fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
     finally:
+        detach_observer()
         for target in reversed(owned):
             try:target.close()
             except Exception:pass
@@ -2097,7 +2102,7 @@ def capture_owned_mi_empty(run,result,context,deadline):
         or result.get('matched_registry_name') or result.get('matched_registry_identifier')
         or result.get('source_url')!='https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx'
         or getattr(run,'negative_visual_attempted',False)):return
-    run.negative_visual_attempted=True;run.mi_negative_visual_guard=True;start=time.perf_counter();owned=None;receipt=None
+    run.negative_visual_attempted=True;run.mi_negative_visual_guard=True;start=time.perf_counter();owned=None;receipt=None;detach_observer=lambda:None
     fact={'adapter':'MI-owned-original-empty-EIN','phase':'admission','outcome':'not_started','visual_EIN_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':12000}
     run.visual_adapter_facts.append(fact)
     try:
@@ -2107,18 +2112,22 @@ def capture_owned_mi_empty(run,result,context,deadline):
         def allowance(reserve=1):return max(1,int((stop-time.monotonic()-reserve)*1000))
         detail=next((p for p in list(context.pages) if mi_empty_values(p,run.ein)),None)
         if detail is None:
-            fact['phase']='visual_EIN_search';owned=context.new_page();detail=owned
+            fact['phase']='visual_EIN_search';owned=context.new_page();detail=owned;detach_observer=observe_visual_readiness(detail,fact);fact['waiting_for']='search_document_domcontentloaded'
             detail.goto(result['source_url'],wait_until='domcontentloaded',timeout=allowance())
             if detail.url=='https://www.ag.state.mi.us/CharitableTrust/frmDisclaimer.aspx':
+                fact['waiting_for']='disclaimer_accept'
                 detail.locator('#ctl00_MainContent_lblYes').click(timeout=allowance())
             if detail.url!=result['source_url']:fact['outcome']='search_navigation_rejected';return
+            fact['waiting_for']='EIN_field'
             detail.locator('#ctl00_MainContent_txtEIN').fill(run.ein[:2]+'-'+run.ein[2:],timeout=allowance())
             from deployment.search_history import SourceQueryReceipt
             receipt=SourceQueryReceipt(run,{'state':'MI','operation':'search','ein':run.ein[:2]+'-'+run.ein[2:],'filter_label':'Exact EIN; original public results view','source_kind':'state_portal','url':result['source_url']})
             fact['visual_EIN_queries']=1
+            fact['waiting_for']='EIN_search_click_and_response'
             with detail.expect_response(lambda response: response.request.method=='POST' and response.request.url==result['source_url'],timeout=allowance()) as observed_response:
                 detail.locator('#ctl00_MainContent_btnTextSearch').click(timeout=allowance())
             query_response=observed_response.value
+            fact['waiting_for']='EIN_result_grid'
             detail.locator('#ctl00_MainContent_GridView1').wait_for(state='visible',timeout=allowance())
         fact['phase']='empty_binding';values=mi_empty_values(detail,run.ein)
         if not values:
@@ -2127,12 +2136,12 @@ def capture_owned_mi_empty(run,result,context,deadline):
         if receipt:
             from deployment.search_observation import complete_browser_query
             complete_browser_query(receipt,query_response,0,[]);receipt=None
-        fact['phase']='original_image_readiness'
+        fact['phase']='original_image_readiness';fact['waiting_for']='original_images'
         detail.wait_for_function("() => Array.from(document.images).every(i => i.complete && i.naturalWidth > 0)",timeout=allowance())
         text=detail.inner_text('body',timeout=400)
         if re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):fact['outcome']='verification_pending';return
         if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
-        fact['phase']='capture';begin=time.perf_counter()
+        fact['phase']='capture';fact['waiting_for']='';begin=time.perf_counter()
         raw=detail.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1500,allowance(.5)))
         fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
         if mi_empty_values(detail,run.ein)!=values or detail.inner_text('body',timeout=400)!=text:fact['outcome']='source_changed_during_capture';return
@@ -2146,6 +2155,7 @@ def capture_owned_mi_empty(run,result,context,deadline):
         if receipt:receipt.incomplete()
         fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
     finally:
+        detach_observer()
         if owned is not None:
             try:owned.close()
             except Exception:fact['owned_page_close_error']=True
