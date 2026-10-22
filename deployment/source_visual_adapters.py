@@ -771,7 +771,7 @@ def capture_owned_md_page(run,result,page,context,deadline):
  if result.get('status')=='Not Registered':return capture_owned_md_empty(run,result,context,deadline)
  if selected_url(run,result) is None or getattr(run,'selected_visual_attempted',False):return
  run.selected_visual_attempted=True;start=time.perf_counter();detail=None;detach_observer=lambda:None
- fact={'adapter':'MD-owned-selected-detail-pair','outcome':'not_started','navigation_ms':0,'general_ms':0,'financial_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':14000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'MD-owned-selected-detail-pair','outcome':'not_started','navigation_ms':0,'general_ms':0,'financial_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':20000};run.visual_adapter_facts.append(fact)
  identifier=str(result['matched_registry_identifier']);hint=run.source_detail_hints.get(identifier);norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if not hint or norm(hint.get('name'))!=norm(result['matched_registry_name']) or not isinstance(hint.get('source_fields'),dict):fact['outcome']='selected_source_proof_missing';return
  expected=hint['source_fields'];u=urlsplit(hint['url'])
@@ -780,7 +780,7 @@ def capture_owned_md_page(run,result,page,context,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return
-  stop=time.monotonic()+min(14.0,remaining)
+  stop=time.monotonic()+min(20.0,remaining)
   detail=context.new_page();detach_observer=observe_visual_readiness(detail,fact);detail.set_extra_http_headers({});begin=time.perf_counter();fact['phase']='navigation';fact['waiting_for']='document_domcontentloaded'
   response=detail.goto(hint['url'],referer=result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
   fact['waiting_for']=''
