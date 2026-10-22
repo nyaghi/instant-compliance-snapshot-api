@@ -99,6 +99,16 @@ def start_transport(url,body=None,params=None,run=None):
         # Playwright dispatches callbacks in its own greenlet context. Bind the
         # already-owned run explicitly instead of reading a different ContextVar.
         observed=[('name',value,label) for value,label in criteria(url,body,params,getattr(run,'known_names',[run.name]))]
+        if (run.state=='MI' and u.netloc=='www.ag.state.mi.us'
+            and u.path=='/CharitableTrust/frmDefault.aspx' and not u.query and not u.fragment):
+            # MI uses txtName, which the generic public-field detector does not
+            # recognize. Record only the actual form field and submitted modes.
+            fields=body if isinstance(body,dict) else dict(parse_qsl(body.decode('utf8') if isinstance(body,bytes) else body or '',keep_blank_values=True))
+            name=fields.get('ctl00$MainContent$txtName','')
+            first=fields.get('ctl00$MainContent$ddlName1','');second=fields.get('ctl00$MainContent$ddlName2','')
+            if isinstance(name,str) and name.strip() and len(name)<=1000:
+                label=(first+'; '+second if first in {'Includes','Starts with'} and second in {'All words','At least one word'} else 'Michigan name field; search method not captured')
+                if not any(kind=='name' and value==name.strip() for kind,value,_ in observed):observed.append(('name',name.strip(),label))
         observed += [('ein',value,label) for value,label in ein_criteria(url,body,params,getattr(run,'ein',''))]
         return [SourceQueryReceipt(run,{'state':run.state,'operation':'search',kind:value,
                     'filter_label':label,'source_kind':'state_portal','url':public})

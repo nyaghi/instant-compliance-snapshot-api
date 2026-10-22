@@ -1945,6 +1945,8 @@ def mi_values_bound(values,result,ein):
 
 def capture_owned_mi_page(run,result,page,context,deadline):
     """One selected-file visual query, original popup pixels, no status mutation."""
+    if result.get('status')=='Not Registered':
+        return capture_owned_mi_empty(run,result,context,deadline)
     identifier=str(result.get('matched_registry_identifier') or '')
     if (run is None or run.state!='MI' or result.get('state')!='MI'
         or re.sub(r'\D','',str(result.get('ein','')))!=run.ein
@@ -2020,4 +2022,83 @@ def capture_owned_mi_page(run,result,page,context,deadline):
         for target in reversed(owned):
             try:target.close()
             except Exception:pass
+        run.capture_ms+=fact['capture_ms'];fact['total_ms']=round((time.perf_counter()-start)*1000,2)
+
+def mi_empty_values(page,ein):
+    """Bind the original completed grid to the displayed exact EIN criterion."""
+    u=urlsplit(page.url)
+    if (u.scheme!='https' or u.hostname!='www.ag.state.mi.us' or u.port not in (None,443)
+        or u.username or u.password or u.query or u.fragment
+        or u.path!='/CharitableTrust/frmSearchResults.aspx'):return None
+    echo=page.locator('#ctl00_MainContent_lblSearchResults')
+    grid=page.locator('#ctl00_MainContent_GridView1')
+    heading=page.locator('#searchResults')
+    if echo.count()!=1 or grid.count()!=1 or heading.count()!=1:return None
+    clean=lambda s:re.sub(r'\s+',' ',s).strip()
+    formatted=ein[:2]+'-'+ein[2:]
+    expected='Results for the following input: Organization Type: Charity or Public Safety Organization EIN: '+formatted+'; 0 record(s) found'
+    values=(clean(echo.inner_text(timeout=400)),clean(grid.inner_text(timeout=400)),clean(heading.inner_text(timeout=400)))
+    return values if values==(expected,'No records found for your search criteria','Search Results') else None
+
+def capture_owned_mi_empty(run,result,context,deadline):
+    """Capture one actual EIN result after independently completed status lookup."""
+    if (run is None or run.state!='MI' or result.get('state')!='MI'
+        or result.get('status')!='Not Registered' or result.get('success') is not True
+        or re.sub(r'\D','',str(result.get('ein','')))!=run.ein
+        or result.get('completed_exact_ein_empty') is not True
+        or result.get('matched_registry_name') or result.get('matched_registry_identifier')
+        or result.get('source_url')!='https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx'
+        or getattr(run,'negative_visual_attempted',False)):return
+    run.negative_visual_attempted=True;run.mi_negative_visual_guard=True;start=time.perf_counter();owned=None;receipt=None
+    fact={'adapter':'MI-owned-original-empty-EIN','phase':'admission','outcome':'not_started','visual_EIN_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':12000}
+    run.visual_adapter_facts.append(fact)
+    try:
+        remaining=deadline-time.monotonic()-1
+        if remaining<3:fact['outcome']='deadline_reserve';return
+        stop=time.monotonic()+min(12,remaining)
+        def allowance(reserve=1):return max(1,int((stop-time.monotonic()-reserve)*1000))
+        detail=next((p for p in list(context.pages) if mi_empty_values(p,run.ein)),None)
+        if detail is None:
+            fact['phase']='visual_EIN_search';owned=context.new_page();detail=owned
+            detail.goto(result['source_url'],wait_until='domcontentloaded',timeout=allowance())
+            if detail.url=='https://www.ag.state.mi.us/CharitableTrust/frmDisclaimer.aspx':
+                detail.locator('#ctl00_MainContent_lblYes').click(timeout=allowance())
+            if detail.url!=result['source_url']:fact['outcome']='search_navigation_rejected';return
+            detail.locator('#ctl00_MainContent_txtEIN').fill(run.ein[:2]+'-'+run.ein[2:],timeout=allowance())
+            from deployment.search_history import SourceQueryReceipt
+            receipt=SourceQueryReceipt(run,{'state':'MI','operation':'search','ein':run.ein[:2]+'-'+run.ein[2:],'filter_label':'Exact EIN; original public results view','source_kind':'state_portal','url':result['source_url']})
+            fact['visual_EIN_queries']=1
+            with detail.expect_response(lambda response: response.request.method=='POST' and response.request.url==result['source_url'],timeout=allowance()) as observed_response:
+                detail.locator('#ctl00_MainContent_btnTextSearch').click(timeout=allowance())
+            query_response=observed_response.value
+            detail.locator('#ctl00_MainContent_GridView1').wait_for(state='visible',timeout=allowance())
+        fact['phase']='empty_binding';values=mi_empty_values(detail,run.ein)
+        if not values:
+            if receipt:receipt.incomplete();receipt=None
+            fact['outcome']='empty_source_not_bound';return
+        if receipt:
+            from deployment.search_observation import complete_browser_query
+            complete_browser_query(receipt,query_response,0,[]);receipt=None
+        fact['phase']='original_image_readiness'
+        detail.wait_for_function("() => Array.from(document.images).every(i => i.complete && i.naturalWidth > 0)",timeout=allowance())
+        text=detail.inner_text('body',timeout=400)
+        if re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):fact['outcome']='verification_pending';return
+        if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
+        fact['phase']='capture';begin=time.perf_counter()
+        raw=detail.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1500,allowance(.5)))
+        fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
+        if mi_empty_values(detail,run.ein)!=values or detail.inner_text('body',timeout=400)!=text:fact['outcome']='source_changed_during_capture';return
+        if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
+        import hashlib
+        if not hasattr(run,'mi_validated_empty_images'):run.mi_validated_empty_images=set()
+        run.mi_validated_empty_images.add(hashlib.sha256(raw).hexdigest())
+        before=len(run.documents);run.document(detail.url,raw,'image',text,note='Original completed Michigan exact-EIN result. This image documents this search only; the separate search history lists the other submitted queries.')
+        fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
+    except Exception as exc:
+        if receipt:receipt.incomplete()
+        fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
+    finally:
+        if owned is not None:
+            try:owned.close()
+            except Exception:fact['owned_page_close_error']=True
         run.capture_ms+=fact['capture_ms'];fact['total_ms']=round((time.perf_counter()-start)*1000,2)
