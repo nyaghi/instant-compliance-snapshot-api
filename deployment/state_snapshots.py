@@ -874,7 +874,20 @@ def downloaded_record(master,result):
                         if len(texts)>=3:break
                 if texts:
                     out=io.BytesIO();writer.write(out)
-                    run.document(source_url,out.getvalue(),'source_pdf','\n'.join(texts)[:20000])
+                    original=out.getvalue()
+                    if run.state in {'KY','NH'}:
+                        # Excerpt only original publisher pixels. Any uncertain
+                        # identity/layout or exhausted reserve keeps the full page.
+                        try:
+                            from deployment.original_table_excerpt import original_row_excerpt
+                            excerpt=original_row_excerpt(original,run.state,identifier,name,min(DEADLINE.get()-1,time.monotonic()+3))
+                            if excerpt:
+                                original,facts=excerpt
+                                run.visual_adapter_facts.append({'adapter':run.state+'-original-row-excerpt','outcome':'captured','total_ms':round(facts['processing_seconds']*1000,2),'record_identifier':identifier})
+                            else:run.visual_adapter_facts.append({'adapter':run.state+'-original-row-excerpt','outcome':'original_full_page_retained'})
+                        except Exception as exc:
+                            run.visual_adapter_facts.append({'adapter':run.state+'-original-row-excerpt','outcome':'original_full_page_retained','error_type':type(exc).__name__})
+                    run.document(source_url,original,'source_pdf','\n'.join(texts)[:20000])
     except Exception:run.errors.append('downloaded_source_capture_unavailable')
 
 def render_pdf(meta,raw):
