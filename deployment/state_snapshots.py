@@ -194,6 +194,15 @@ def matching_reference(result, refs):
         if observed:
             return next((r for r in reversed(candidates) if r.get('identifier')==observed[1]
                          and (not name or key(r.get('record_name'))==key(name))),None)
+    if state=='VA' and completed_negative_result(result) and re.fullmatch(r'\d{1,12}',ident):
+        proof=result.get('va_entity_evidence')
+        if (isinstance(proof,dict) and proof.get('ein')==ein and proof.get('id')==ident
+                and proof.get('entity_id')==ident and bool(name) and key(proof.get('name'))==key(name)
+                and proof.get('status')=='Unregistered' and type(proof.get('registration_count')) is int
+                and proof['registration_count']==0):
+            return next((r for r in reversed(candidates) if r.get('identifier')=='@completed-search'
+                         and r.get('source_url')=='https://vdacs.evokeplatform.com/app/publicPortal/entity/'+ident
+                         and key(r.get('record_name'))==key(name)),None)
     if ident:return next((r for r in reversed(candidates) if r.get('identifier')==ident
                          and (not name or key(r.get('record_name'))==key(name))),None)
     if name:

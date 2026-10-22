@@ -1896,6 +1896,8 @@ def va_empty_response_bound(response,criterion):
  except (ValueError,KeyError,TypeError,AttributeError):return False
 
 def capture_negative_va_source(master,result,run,deadline):
+ if isinstance(result,dict) and result.get('va_entity_evidence'):
+  return capture_va_unregistered_entity(master,result,run,deadline)
  """One original VA global-search view, with a separately recorded EIN term."""
  if (run is None or run.state!='VA' or result.get('state')!='VA'
      or re.sub(r'\D','',str(result.get('ein','')))!=run.ein
@@ -2171,3 +2173,78 @@ def capture_owned_mi_empty(run,result,context,deadline):
             try:owned.close()
             except Exception:fact['owned_page_close_error']=True
         run.capture_ms+=fact['capture_ms'];fact['total_ms']=round((time.perf_counter()-start)*1000,2)
+
+
+def capture_va_unregistered_entity(master,result,run,deadline):
+ """Photograph the proven entity, not an empty global search, without changing status."""
+ if (run is None or run.state!='VA' or result.get('state')!='VA'
+     or result.get('success') is not True or result.get('status')!='Not Registered'
+     or re.sub(r'\D','',str(result.get('ein','')))!=run.ein
+     or getattr(run,'negative_visual_attempted',False)):return
+ proof=result.get('va_entity_evidence');identifier=str(result.get('matched_registry_identifier') or '')
+ norm=lambda v:re.sub(r'[^a-z0-9]','',str(v).lower())
+ if (not isinstance(proof,dict) or not re.fullmatch(r'\d{1,12}',identifier)
+     or proof.get('ein')!=run.ein or proof.get('id')!=identifier or proof.get('entity_id')!=identifier
+     or not result.get('matched_registry_name') or norm(proof.get('name'))!=norm(result['matched_registry_name'])
+     or proof.get('status')!='Unregistered' or type(proof.get('registration_count')) is not int
+     or proof['registration_count']!=0 or result.get('source_url')!=VA_FINAL_SEARCH):return
+ run.negative_visual_attempted=True;started=time.perf_counter();held=False;browser=context=None
+ url='https://vdacs.evokeplatform.com/app/publicPortal/entity/'+identifier
+ fact={'adapter':'VA-original-unregistered-entity','phase':'admission','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'extra_registry_queries':0,'visual_detail_requests':0,'local_visual_budget_ms':16000};run.visual_adapter_facts.append(fact)
+ try:
+  remaining=deadline-time.monotonic()-1
+  if remaining<3:fact['outcome']='deadline_reserve';return
+  stop=time.monotonic()+min(16,remaining);held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
+  if not held:fact['outcome']='browser_capacity_unavailable';return
+  with master.checker.sync_playwright() as pw:
+   browser=master.launch_lookup_browser(pw,headless=True)
+   try:
+    options={'viewport':{'width':1600,'height':1400},'locale':'en-US'}
+    if getattr(master,'BROWSER_USER_AGENT',None):options['user_agent']=master.BROWSER_USER_AGENT
+    context=browser.new_context(**options);page=context.new_page();timeout=lambda:max(1,int((stop-time.monotonic()-1)*1000))
+    begin=time.perf_counter();fact['phase']='entity_navigation';response=page.goto(url,wait_until='commit',timeout=timeout());fact['visual_detail_requests']=1
+    fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
+    if response is None or response.status!=200 or page.url!=url:fact['outcome']='navigation_rejected';return
+    fact['phase']='entity_fields_ready';begin=time.perf_counter()
+    page.get_by_role('heading',name='Entity Information',exact=True).wait_for(state='visible',timeout=timeout())
+    panel=page.locator('.formio-form');tab=page.get_by_role('tab',name='Registrations',exact=True)
+    empty=page.get_by_text('No Data',exact=True)
+    empty.wait_for(state='visible',timeout=timeout())
+    def read_bound():
+     if (page.url!=url or panel.count()!=1 or tab.count()!=1 or tab.get_attribute('aria-selected')!='true'
+         or empty.count()!=1 or not empty.is_visible() or page.locator('.ag-center-cols-container .ag-row').count()!=0
+         or page.locator('.ag-overlay-loading-center:visible').count()!=0):return None
+     fields={}
+     for key,label in [('fullName','Name'),('status','Status'),('ein','FEIN')]:
+      el=panel.locator('.formio-component-'+key)
+      if el.count()!=1 or not el.is_visible():return None
+      lines=[line.strip() for line in el.inner_text(timeout=400).splitlines() if line.strip()]
+      if len(lines)<2 or lines[0]!=label:return None
+      fields[key]=' '.join(lines[1:])
+     if (norm(fields['fullName'])!=norm(proof['name']) or fields['status']!='Unregistered'
+         or re.sub(r'\D','',fields['ein'])!=run.ein):return None
+     text=page.inner_text('body',timeout=400)
+     if ('Registration Type' not in text or 'Registration ID' not in text or 'Expiration Date' not in text
+         or re.search('verify you are human|user validation required|access denied|just a moment',text,re.I)):return None
+     return fields,text
+    before=read_bound();fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
+    if before is None:fact['outcome']='entity_not_bound';return
+    if time.monotonic()+1.5>=stop:fact['outcome']='capture_reserve';return
+    fact['phase']='capture';begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1000,timeout()))
+    after=read_bound()
+    if after is None or after!=before:fact['outcome']='source_changed_during_capture';return
+    if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
+    count=len(run.documents);run.document(url,raw,'image',before[1],note='Original selected Virginia entity page: explicit Unregistered standing and empty Registrations table. Same-run exact-EIN lookup confirmed zero registrations; this is not an empty organization search.')
+    if len(run.documents)>count:
+     digest=hashlib.sha256(raw).hexdigest()
+     run.va_validated_empty_images=getattr(run,'va_validated_empty_images',set());run.va_validated_empty_images.add(digest)
+     fact['outcome']='captured'
+    else:fact['outcome']='image_admission_rejected'
+    fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
+   finally:
+    if context is not None:context._captured=True;context.close()
+    if browser is not None:browser.close()
+ except Exception as exc:fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:200]
+ finally:
+  if held:master.BROWSER_LOOKUP_SEMAPHORE.release()
+  fact['total_ms']=round((time.perf_counter()-started)*1000,2)
