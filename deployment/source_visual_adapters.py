@@ -486,11 +486,14 @@ def observe_visual_readiness(page,fact):
    if resource not in {'','document','script','stylesheet','xhr','fetch'}:return
    key=kind+(':'+resource if resource else '')
    counts=observation['counts'];counts[key]=min(999,counts.get(key,0)+1)
-   if len(observation['events'])>=24:return
+   keep_tail=fact.get('adapter')=='VA-selected-original-registration'
+   if len(observation['events'])>=24 and not keep_tail:return
    item={'event':kind,'seconds':round(time.perf_counter()-started,3)}
    if resource:item['resource']=resource
    if type(status) is int and 100<=status<=599:item['status']=status
-   observation['events'].append(item)
+   if len(observation['events'])<24:observation['events'].append(item)
+   if keep_tail:
+    tail=observation.setdefault('last_events',[]);tail.append(item);del tail[:-24]
   except Exception:pass
  def request_event(kind,r):
   try:record(kind,r.resource_type)
@@ -984,12 +987,12 @@ def capture_owned_fl_page(master,run,result,page,context,deadline):
  if run is None or run.state!='FL' or selected_url(run,result) is None:return
  if getattr(run,'selected_visual_attempted',False):return
  run.selected_visual_attempted=True
- start=time.perf_counter();transport=None;fact={'adapter':'FL-owned-selected-license','outcome':'not_started','navigation_ms':0,'credential_view_ms':0,'capture_ms':0,'total_ms':0};run.visual_adapter_facts.append(fact)
+ start=time.perf_counter();transport=None;fact={'adapter':'FL-owned-selected-license','outcome':'not_started','phase':'admission','navigation_ms':0,'credential_view_ms':0,'capture_ms':0,'total_ms':0};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return
   stop=time.monotonic()+min(6.0,remaining)
-  begin=time.perf_counter()
+  begin=time.perf_counter();fact['phase']='navigation'
   try:response=page.goto(result['source_url'],wait_until='domcontentloaded',timeout=max(1,int(min(3,stop-time.monotonic()-1)*1000)))
   except Exception as exc:
    if 'ERR_CERT_AUTHORITY_INVALID' not in str(exc):raise
@@ -1000,22 +1003,27 @@ def capture_owned_fl_page(master,run,result,page,context,deadline):
   fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
   if response is None or response.status!=200 or page.url!=result['source_url']:fact['outcome']='navigation_rejected';return
   begin=time.perf_counter();field=page.locator('#cpMainContent_LicenseTb')
+  fact['phase']='license_field'
   field.fill(result['matched_registry_identifier'],timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+  fact['phase']='search_click'
   page.locator('#cpMainContent_SingleSearchBt').click(timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+  fact['phase']='credential_ready'
   page.wait_for_function('''({name,id})=>{
    const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9]/g,'');
    const text=document.body.innerText;
    return norm(text).includes(norm(name)) && text.includes(id)
     && /Charitable Organization/i.test(text) && /Expires/i.test(text);
   }''',arg={'name':result['matched_registry_name'],'id':result['matched_registry_identifier']},timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+  fact['phase']='credential_binding'
   rows=master.fl_business_candidate_rows(page.content());norm=lambda value:re.sub(r'[^a-z0-9]','',value.lower())
   bound=[r for r in rows if r.get('business_evidence',{}).get('identifier')==result['matched_registry_identifier'] and norm(r['business_evidence']['name'])==norm(result['matched_registry_name'])]
   fact['credential_view_ms']=round((time.perf_counter()-begin)*1000,2)
   if len(bound)!=1:fact['outcome']='credential_binding_failed';return
   if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
+  fact['phase']='capture'
   before=len(run.documents);begin=time.perf_counter();context.capture();fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
   fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
- except Exception:fact['outcome']='owned_visual_unavailable'
+ except Exception as exc:fact['outcome']='owned_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
  finally:
   if transport is not None:transport.close()
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
