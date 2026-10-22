@@ -26,8 +26,13 @@ def _selected_url(run,result):
   if (u.hostname!='charity.ehawaii.gov' or u.path!='/charity/'+run.ein+'/details.html'
       or u.query or re.sub(r'\D','',identifier)!=run.ein):return None
  elif run.state=='OH':
-  if (u.hostname!='charitableregistration.ohioago.gov' or u.path!='/Charities/OrganizationDetails'
-      or not re.fullmatch(r'\d+',identifier) or parse_qsl(u.query,keep_blank_values=True)!=[('Id',identifier)]):return None
+  params=parse_qsl(u.query,keep_blank_values=True)
+  ordinary=(u.path=='/Charities/OrganizationDetails' and params==[('Id',identifier)])
+  exempt=(u.path=='/Charities/PartiallyExemptOrganization'
+      and params in [[('Id',identifier),('ExemptionStatus','109')],
+                     [('Id',identifier),('ExemptionStatus','1716')]])
+  if (u.hostname!='charitableregistration.ohioago.gov' or not re.fullmatch(r'\d+',identifier)
+      or not (ordinary or exempt)):return None
  elif run.state=='ME':
   params=parse_qsl(u.query,keep_blank_values=True)
   if (u.hostname!='www.pfr.maine.gov' or u.path!='/ALMSOnline/ALMSQuery/ShowDetail.aspx'
