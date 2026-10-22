@@ -1990,6 +1990,9 @@ def capture_owned_mi_page(run,result,page,context,deadline):
         size=detail.locator('body').evaluate('(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=400)
         if not size or min(size.values())<=0 or size['width']*size['height']>20000000:fact['outcome']='image_size_rejected';return
         if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
+        fact['phase']='original_image_readiness'
+        detail.wait_for_function("() => Array.from(document.images).every(i => i.complete && i.naturalWidth > 0)",timeout=allowance(1))
+        if time.monotonic()+1>=stop:fact['outcome']='image_readiness_reserve';return
         fact['phase']='capture';begin=time.perf_counter();url=detail.url
         raw=detail.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1500,allowance(.5)))
         fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)

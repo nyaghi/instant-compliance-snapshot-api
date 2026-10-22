@@ -754,9 +754,21 @@ def configure_browser_context(context) -> None:
     if not BLOCK_HEAVY_BROWSER_RESOURCES:
         return
 
+    from deployment.state_snapshots import CURRENT
+    capture_run = CURRENT.get()
+    mi_original_images = bool(capture_run is not None and capture_run.state == "MI")
+    mi_image_urls = {
+        "https://www.ag.state.mi.us/CharitableTrust/Images/ctbanner_590x80.jpg",
+        "https://www.ag.state.mi.us/CharitableTrust/Images/michigan.gov_150x80.jpg",
+        "https://www.ag.state.mi.us/CharitableTrust/Images/help.gif",
+    }
+
     def route_handler(route):
         try:
             if route.request.resource_type in {"image", "media", "font"}:
+                if mi_original_images and route.request.resource_type == "image" and route.request.url in mi_image_urls:
+                    route.continue_()
+                    return
                 route.abort()
                 return
         except Exception:
