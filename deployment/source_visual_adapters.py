@@ -756,6 +756,8 @@ def capture_owned_md_page(run,result,page,context,deadline):
   if dismiss.count()==1 and dismiss.is_visible():
    dismiss.click(timeout=400);dismiss.wait_for(state='hidden',timeout=500)
   general_text=detail.inner_text('body',timeout=400)
+  general_fields=tuple(general.locator('.dvce-model-property').all_inner_texts())
+  if not general_fields:fact['outcome']='general_fields_missing';return
   if re.search('verify you are human|user validation required|access denied|just a moment',general_text,re.I):fact['outcome']='source_verification_pending';return
   if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
   def shot():
@@ -763,7 +765,11 @@ def capture_owned_md_page(run,result,page,context,deadline):
    try:return detail.screenshot(type='jpeg',quality=80,full_page=True,timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
    finally:fact['capture_ms']+=round((time.perf_counter()-begin_shot)*1000,2)
   fact['phase']='general_capture';images=[shot()]
-  if not same_record() or detail.inner_text('body',timeout=400)!=general_text:fact['outcome']='general_changed_during_capture';return
+  after_general=detail.inner_text('body',timeout=400)
+  if (not same_record() or tuple(general.locator('.dvce-model-property').all_inner_texts())!=general_fields
+      or re.search('verify you are human|user validation required|access denied|just a moment',after_general,re.I)):
+   fact['outcome']='general_changed_during_capture';return
+  fact['general_other_text_changed']=after_general!=general_text
   fact['general_ms']=round((time.perf_counter()-begin)*1000,2);texts=[general_text]
   if expected.get('year') is not None:
    begin=time.perf_counter();fact['phase']='financial_information'
@@ -772,9 +778,16 @@ def capture_owned_md_page(run,result,page,context,deadline):
    if (not same_record() or value(financial,'Most Recent Fiscal Year')!=expected['year']
        or norm(result['matched_registry_name']) not in norm(detail.inner_text('body',timeout=400))):fact['outcome']='financial_source_fields_not_bound';return
    financial_text=detail.inner_text('body',timeout=400)
+   financial_fields=tuple(financial.locator('.dvce-model-property').all_inner_texts())
+   if not financial_fields:fact['outcome']='financial_fields_missing';return
    if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
    fact['phase']='financial_capture';images.append(shot())
-   if not same_record() or detail.inner_text('body',timeout=400)!=financial_text:fact['outcome']='financial_changed_during_capture';return
+   after_financial=detail.inner_text('body',timeout=400)
+   if (not same_record() or tuple(financial.locator('.dvce-model-property').all_inner_texts())!=financial_fields
+       or norm(result['matched_registry_name']) not in norm(after_financial)
+       or re.search('verify you are human|user validation required|access denied|just a moment',after_financial,re.I)):
+    fact['outcome']='financial_changed_during_capture';return
+   fact['financial_other_text_changed']=after_financial!=financial_text
    texts.append(financial_text);fact['financial_ms']=round((time.perf_counter()-begin)*1000,2)
   raw=images[0] if len(images)==1 else json.dumps([base64.b64encode(raw).decode('ascii') for raw in images]).encode('utf8')
   if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
