@@ -476,6 +476,43 @@ def remember_va_selected(run,result):
 def va_registration_core(text):
  return re.split(r'\nSubmissions\n',text,maxsplit=1)[0]
 
+def observe_visual_readiness(page,fact):
+ """Bounded event metadata only: no URLs, response bodies, requests or waits."""
+ started=time.perf_counter();attached=[]
+ observation={'events':[],'counts':{}}
+ fact['readiness_observation']=observation
+ def record(kind,resource='',status=None):
+  try:
+   if resource not in {'','document','script','stylesheet','xhr','fetch'}:return
+   key=kind+(':'+resource if resource else '')
+   counts=observation['counts'];counts[key]=min(999,counts.get(key,0)+1)
+   if len(observation['events'])>=24:return
+   item={'event':kind,'seconds':round(time.perf_counter()-started,3)}
+   if resource:item['resource']=resource
+   if type(status) is int and 100<=status<=599:item['status']=status
+   observation['events'].append(item)
+  except Exception:pass
+ def request_event(kind,r):
+  try:record(kind,r.resource_type)
+  except Exception:pass
+ def response_event(r):
+  try:record('response',r.request.resource_type,r.status)
+  except Exception:pass
+ callbacks=[('request',lambda r:request_event('request',r)),
+  ('response',response_event),
+  ('requestfailed',lambda r:request_event('request_failed',r)),
+  ('domcontentloaded',lambda *args:record('dom_ready')),
+  ('load',lambda *args:record('load_ready')),
+  ('pageerror',lambda *args:record('page_error'))]
+ for event,callback in callbacks:
+  try:page.on(event,callback);attached.append((event,callback))
+  except Exception:pass
+ def detach():
+  for event,callback in attached:
+   try:page.remove_listener(event,callback)
+   except Exception:pass
+ return detach
+
 def capture_selected_va_source(master,result,run,deadline):
  """Original selected VA registration: standing, initial/current/expiry dates."""
  if (result.get('state')!='VA' or re.sub(r'\D','',str(result.get('ein','')))!=run.ein
@@ -485,7 +522,7 @@ def capture_selected_va_source(master,result,run,deadline):
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if (not re.fullmatch(r'\d+',identifier) or not hint or norm(hint.get('name'))!=norm(result['matched_registry_name'])
      or hint.get('url')!='https://vdacs.evokeplatform.com/app/publicPortal/registration/'+identifier):return
- run.selected_visual_attempted=True;start=time.perf_counter();held=False;browser=context=None
+ run.selected_visual_attempted=True;start=time.perf_counter();held=False;browser=context=None;detach_observer=lambda:None
  fact={'adapter':'VA-selected-original-registration','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':12000};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
@@ -498,14 +535,17 @@ def capture_selected_va_source(master,result,run,deadline):
    try:
     options={'viewport':{'width':1600,'height':1400},'locale':'en-US'}
     if getattr(master,'BROWSER_USER_AGENT',None):options['user_agent']=master.BROWSER_USER_AGENT
-    context=browser.new_context(**options);page=context.new_page();begin=time.perf_counter();fact['phase']='navigation'
+    context=browser.new_context(**options);page=context.new_page();detach_observer=observe_visual_readiness(page,fact);begin=time.perf_counter();fact['phase']='navigation';fact['waiting_for']='document_commit'
     response=page.goto(hint['url'],wait_until='commit',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=hint['url']:fact['outcome']='navigation_rejected';return
     begin=time.perf_counter();fact['phase']='selected_fields_ready'
+    fact['waiting_for']='Registration Information heading'
     page.get_by_role('heading',name='Registration Information',exact=True).wait_for(state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     for label in ['Registration ID','Initial Registration Date','Current Registration Date','Expiration Date']:
+     fact['waiting_for']=label
      page.get_by_text(label,exact=True).wait_for(state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    fact['waiting_for']=''
     fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
     text=page.inner_text('body',timeout=400);core=va_registration_core(text)
     if (not re.search(r'Registration ID:\s*'+re.escape(identifier)+r'(?!\d)',core)
@@ -534,6 +574,7 @@ def capture_selected_va_source(master,result,run,deadline):
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
     before=len(run.documents);run.document(hint['url'],raw,'image',core[:20000],note='Original selected registration fields and state header; lower optional submissions grid outside captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
+    detach_observer()
     if context is not None:context._captured=True;context.close()
     if browser is not None:browser.close()
  except Exception as exc:fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
@@ -729,7 +770,7 @@ def capture_owned_md_page(run,result,page,context,deadline):
  context._captured=True
  if result.get('status')=='Not Registered':return capture_owned_md_empty(run,result,context,deadline)
  if selected_url(run,result) is None or getattr(run,'selected_visual_attempted',False):return
- run.selected_visual_attempted=True;start=time.perf_counter();detail=None
+ run.selected_visual_attempted=True;start=time.perf_counter();detail=None;detach_observer=lambda:None
  fact={'adapter':'MD-owned-selected-detail-pair','outcome':'not_started','navigation_ms':0,'general_ms':0,'financial_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':14000};run.visual_adapter_facts.append(fact)
  identifier=str(result['matched_registry_identifier']);hint=run.source_detail_hints.get(identifier);norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if not hint or norm(hint.get('name'))!=norm(result['matched_registry_name']) or not isinstance(hint.get('source_fields'),dict):fact['outcome']='selected_source_proof_missing';return
@@ -740,8 +781,9 @@ def capture_owned_md_page(run,result,page,context,deadline):
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return
   stop=time.monotonic()+min(14.0,remaining)
-  detail=context.new_page();detail.set_extra_http_headers({});begin=time.perf_counter();fact['phase']='navigation'
+  detail=context.new_page();detach_observer=observe_visual_readiness(detail,fact);detail.set_extra_http_headers({});begin=time.perf_counter();fact['phase']='navigation';fact['waiting_for']='document_domcontentloaded'
   response=detail.goto(hint['url'],referer=result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+  fact['waiting_for']=''
   fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
   if response is None or response.status!=200:fact['outcome']='detail_navigation_rejected';return
   def same_record():
@@ -800,6 +842,7 @@ def capture_owned_md_page(run,result,page,context,deadline):
   fact['original_views']=len(images);fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
  except Exception as exc:fact['outcome']='owned_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
  finally:
+  detach_observer()
   run.capture_ms+=fact['capture_ms']
   if detail is not None:
    try:detail.close()
