@@ -8929,6 +8929,8 @@ def final_four_connector_request(payload, origin):
         response['result'] = attach_links(response['result'],record.get('source_snapshots',[]))
         from deployment.search_history import attach as attach_search_history
         response['result'] = attach_search_history(record,response['result'])
+        from deployment.identity_evidence import bind as bind_review_evidence
+        response['result'] = bind_review_evidence(sys.modules[__name__],response['result'])
     from deployment.al_final_empty import prepare
     response = prepare(sys.modules[__name__],record,response)
     return 200, response
@@ -26804,6 +26806,8 @@ def ny_connector_request(payload, origin):
         response['result'] = attach_links(response['result'], record.get('source_snapshots', []))
         from deployment.search_history import attach as attach_search_history
         response['result'] = attach_search_history(record,response['result'])
+        from deployment.identity_evidence import bind as bind_review_evidence
+        response['result'] = bind_review_evidence(sys.modules[__name__],response['result'])
     return 200, response
 
 
@@ -34605,7 +34609,6 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     from deployment.source_visual_adapters import capture_owned_mi_page
                     capture_owned_mi_page(CURRENT.get(),{
                         'state':'MI','ein':ein,'status':public_status(result),'success':result.success,
-                        'completed_exact_ein_empty':getattr(mi_probe_result,'_cc_mi_completed_exact_ein_empty',None)==(org.organization_name,canonical_ein_digits(org.ein)),
                         'matched_registry_name':result.matched_registry_name,
                         'matched_registry_identifier':result.matched_registry_identifier,
                         'raw_status_text':result.raw_status_text,
@@ -36014,6 +36017,9 @@ def resolve_identity_review(payload, email, device):
         if row['identifier'] == data.get('matched_registry_identifier') and row['name'] == data.get('matched_registry_name')), '')
     if not fresh_state_lookup:
         data['evidence_url'] = selected_snapshot
+    from deployment.identity_evidence import resolve as resolve_review_evidence, bind as bind_review_evidence
+    data = resolve_review_evidence(record,data,fresh_state_lookup)
+    data = bind_review_evidence(sys.modules[__name__],data)
     # Preserve a newly found candidate's token after continued Wisconsin search.
     if "identity_review" not in data: data["identity_review"] = identity_review_view(record)
     log_event(f"Identity review {base['state']} {base['ein']} {selected['identifier']}: {action} by {email}; result {data['status']}")

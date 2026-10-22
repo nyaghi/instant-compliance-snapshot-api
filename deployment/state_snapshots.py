@@ -282,6 +282,7 @@ def persist_inline_result(master,result):
         for row in record['records']:
             if by_id.get(row['id']):row['evidence_url']=by_id[row['id']]
         record['base']['evidence_url']=data.get('evidence_url','')
+        if data.get('review_evidence_context'):record['base']['review_evidence_context']=data['review_evidence_context']
         data['identity_review']=master.identity_review_view(record)
     except Exception:
         pass  # Preserve the original signed choice and status if unavailable.
@@ -391,7 +392,10 @@ class CaptureRun:
     def finish(self,result):
         if not isinstance(result,dict):return result
         data=dict(result);assets=[]
-        records=[data]+[{**row,'state':self.state,'ein':self.ein} for row in (data.get('_worker_identity_review') or {}).get('records',[])]
+        review_rows=(data.get('_worker_identity_review') or {}).get('records',[])
+        if not review_rows:
+            review_rows=(data.get('identity_review') or {}).get('candidates',[])
+        records=[data]+[{**row,'state':self.state,'ein':self.ein} for row in review_rows]
         for row in records[:12]:
             identifier=str(row.get('matched_registry_identifier') or row.get('identifier') or '')
             name=str(row.get('matched_registry_name') or row.get('name') or '')
@@ -414,7 +418,6 @@ class CaptureRun:
                     if self.state=='HI' and url in self.validated_negative_visual_urls:matched='The charitable organization you entered is not registered in our system.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'hi_validated_empty_images',set())
                     if self.state=='FL':matched=url in self.validated_negative_visual_urls and ('No result found for '+self.name) in text and hashlib.sha256(raw).hexdigest() in getattr(self,'fl_validated_empty_images',set())
                     if self.state=='OH':matched='No organizations found' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'oh_validated_empty_images',set())
-                    if self.state=='MI' and getattr(self,'mi_negative_visual_guard',False):matched='No records found for your search criteria' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'mi_validated_empty_images',set())
                     if self.state=='RI':matched=url in self.validated_negative_visual_urls and 'No search results were found. Please refine your search criteria and try again.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'ri_validated_empty_images',set())
                 if re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):continue
                 if not matched:continue
