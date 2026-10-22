@@ -304,6 +304,58 @@ def ak_empty_controls(page,run,text):
     return dict(category=category,year=year,name=name,ein=fein)
 
 
+
+def capture_ma_formpc(run, page, evidence):
+    """Retain an existing validated MA popup; no navigation or extra query."""
+    if (run is None or run.state!='MA' or not isinstance(evidence,dict)
+        or evidence.get('filing_status')!='Submitted'
+        or not re.fullmatch(r'\d+',str(evidence.get('ago_account','')))
+        or not re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}',str(evidence.get('period_end','')))
+        or evidence.get('source_url')!=page.url):return
+    u=urlsplit(page.url)
+    if (u.scheme!='https' or u.netloc!='masscharities.my.site.com'
+        or not re.fullmatch(r'/FilingSearch/s/detail/[A-Za-z0-9]{15,18}',u.path)
+        or u.query or u.fragment):return
+    before=len(run.documents)
+    run.page(page)
+    if len(run.documents)<=before:return
+    document=run.documents[-1]
+    if document[0]!=page.url or document[2]!='image':return
+    bindings=getattr(run,'ma_formpc_bindings',None)
+    if bindings is None:run.ma_formpc_bindings={};bindings=run.ma_formpc_bindings
+    bindings[hashlib.sha256(document[1]).hexdigest()]=dict(evidence)
+
+def ma_selected_originals(run, ordered, row):
+    """Pair the final selected submitted Form PC with the original filing list."""
+    if run.state!='MA':return ordered
+    evidence=row.get('ma_filing_evidence') or {}
+    url=row.get('source_url','');identifier=str(row.get('matched_registry_identifier') or '')
+    if (row.get('state')!='MA' or digits(row.get('ein',''))!=run.ein
+        or row.get('success') is not True or row.get('status') in {'Not Registered','Unable to Confirm','Site Not Reachable','Unable to Verify'}
+        or evidence.get('filing_status')!='Submitted' or not identifier
+        or evidence.get('ago_account')!=identifier or evidence.get('source_url')!=url):return ordered
+    bindings=getattr(run,'ma_formpc_bindings',{})
+    for detail in ordered:
+        binding=bindings.get(hashlib.sha256(detail[1]).hexdigest(),{})
+        if (detail[2]!='image' or detail[0]!=url or not binding
+            or any(binding.get(k)!=evidence.get(k) for k in ('ago_account','filing_status','period_start','period_end','source_url'))
+            or not source_name_present(row.get('matched_registry_name',''),detail[3],'MA')
+            or not re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',detail[3])):continue
+        for listing in ordered:
+            u=urlsplit(listing[0])
+            if (listing[2]!='image' or u.netloc!='masscharities.my.site.com' or u.path!='/FilingSearch/s/'
+                or u.query or u.fragment or run.ein not in digits(listing[3])
+                or not source_name_present(row.get('matched_registry_name',''),listing[3],'MA')
+                or not re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',listing[3])):continue
+            raw=json.dumps([base64.b64encode(d[1]).decode('ascii') for d in (listing,detail)]).encode('utf8')
+            if len(raw)>MAX_BYTES:break
+            paired=(detail[0],raw,'image_pages',(listing[3]+'\n\n'+detail[3])[:20000],detail[4],
+                'Original filing list and the selected submitted Form PC detail used to interpret the fiscal period. No new search or reconstructed source content.')
+            return [paired,*ordered]
+        return [detail,*[d for d in ordered if d is not detail]]
+    run.errors.append('MA_selected_form_pc_original_unavailable')
+    return ordered
+
 class CaptureRun:
     def __init__(self,name,ein,state):
         self.name,self.ein,self.state=name,digits(ein),state
@@ -402,6 +454,7 @@ class CaptureRun:
             negative=completed_negative_result(row)
             # Only source visuals are eligible; no text/JSON substitute is permitted.
             ordered=sorted((d for d in self.documents if d[2] in {'image','image_pages','source_pdf'}),key=lambda d:({'image':3,'image_pages':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
+            if self.state=='MA' and not negative:ordered=ma_selected_originals(self,ordered,row)
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))

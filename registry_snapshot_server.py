@@ -20120,6 +20120,13 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
                 if not evidence:
                     return context
                 evidence["source_url"] = detail.url
+                # Photograph the already validated original before its popup closes.
+                # This does not issue a search or change the selected fiscal period.
+                try:
+                    from deployment.state_snapshots import CURRENT, capture_ma_formpc
+                    capture_ma_formpc(CURRENT.get(), detail, evidence)
+                except Exception:
+                    pass
                 forms.append(evidence)
             finally:
                 if detail is not None:
