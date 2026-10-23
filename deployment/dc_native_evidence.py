@@ -83,7 +83,7 @@ def capture_dc(master,org,result,rows,deadline):
     fact={'adapter':'DC-native-original','outcome':'not_started','total_ms':0,'capture_ms':0,'records_requested':len(targets),'records_captured':0}
     run.visual_adapter_facts.append(fact)
     try:
-        stop=min(deadline,DEADLINE.get(),time.monotonic()+20)-1
+        stop=min(deadline,DEADLINE.get(),time.monotonic()+(30 if targets else 20))-1
         if stop-time.monotonic()<3:fact['outcome']='deadline_reserve';return
         held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
         if not held:fact['outcome']='browser_capacity_unavailable';return

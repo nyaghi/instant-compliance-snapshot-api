@@ -1706,7 +1706,7 @@ def capture_selected_nj_source(master,result,run,deadline):
     if context is not None:context._captured=True;context.close()
     if browser is not None:browser.close()
  except Exception as exc:
-  fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__
+  fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc)[:800]
   if fact['phase']=='navigation':fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
  finally:
   if held:master.BROWSER_LOOKUP_SEMAPHORE.release()

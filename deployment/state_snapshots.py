@@ -415,6 +415,14 @@ class CaptureRun:
     def page(self,page):
         """Capture before its existing context closes; do not navigate or scroll."""
         started=time.perf_counter()
+        observation=None
+        if self.state=='SC':
+            facts=[f for f in self.visual_adapter_facts if f.get('adapter')=='SC-selected-original-detail' and f.get('phase')=='capture']
+            if facts:
+                observation={'phase':'admission','outcome':'pending'}
+                facts[-1].setdefault('page_capture_observations',[]).append(observation)
+        def observed(phase):
+            if observation is not None:observation.update(phase=phase,elapsed_seconds=round(time.perf_counter()-started,6))
         try:
             if time.monotonic()+3>=DEADLINE.get():
                 self.errors.append('capture_skipped_near_task_deadline');return
@@ -434,17 +442,22 @@ class CaptureRun:
                         self.errors.append('WA_source_overlay_visible');return
                 except Exception:
                     self.errors.append('WA_source_overlay_not_cleared');return
+            observed('public_url')
             original_url=page.url
             url=public_url(original_url,self.state)
+            observed('read_text')
             text=page.inner_text('body',timeout=400)[:20000]
             ak_empty=ak_empty_controls(page,self,text) if self.state=='AK' else None
+            observed('read_dimensions')
             size=page.locator('body').evaluate(
                 '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=300)
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
                 self.errors.append('source_page_exceeds_capture_bound');return
+            observed('screenshot')
             raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=1000)
             if self.state=='WA' and page.locator('#loaderDiv').is_visible():
                 self.errors.append('WA_source_overlay_returned_during_capture');return
+            observed('post_capture_binding')
             if page.url!=original_url or page.inner_text('body',timeout=400)[:20000]!=text:
                 self.errors.append('source_page_changed_during_capture');return
             if ak_empty is not None:
@@ -454,8 +467,14 @@ class CaptureRun:
                 if bindings is None:self.ak_empty_image_bindings={}
                 self.ak_empty_image_bindings[hashlib.sha256(raw).hexdigest()]=ak_empty
             self.document(url,raw,'image',text,note=('Original Alaska empty search view for displayed year '+ak_empty['year']+'. This one image does not by itself establish all yearly/name searches.' if ak_empty else ''))
-        except Exception:self.errors.append('source_page_capture_unavailable')
-        finally:self.capture_ms+=(time.perf_counter()-started)*1000
+        except Exception as exc:
+            self.errors.append('source_page_capture_unavailable')
+            if observation is not None:observation.update(outcome='failed',error_type=type(exc).__name__,error_summary=str(exc)[:800])
+        finally:
+            elapsed=time.perf_counter()-started;self.capture_ms+=elapsed*1000
+            if observation is not None:
+                observation['total_seconds']=round(elapsed,6)
+                if observation['outcome']=='pending':observation['outcome']='returned'
     def finish(self,result):
         if not isinstance(result,dict):return result
         data=dict(result);assets=[]
