@@ -6,6 +6,7 @@ treated as sharing a resource. Durations are nested, not additive.
 from contextvars import ContextVar
 from contextlib import contextmanager
 from functools import wraps
+from collections.abc import Mapping
 import math
 import json
 import os
@@ -41,11 +42,20 @@ class Observation:
             event = dict(seq=self.sequence, at_seconds=round(time.perf_counter()-self.started,6),
                          stage=stage, outcome=outcome, parent=PARENT.get(),
                          deadline_remaining_seconds=self.remaining(), **fields)
+            # Validate before retention, not only when the journal is written.
+            # A diagnostic object must never poison the worker's result JSON.
+            try:
+                json.dumps(event, allow_nan=False)
+            except (TypeError, ValueError, OverflowError):
+                event = dict(seq=self.sequence,
+                             at_seconds=round(time.perf_counter()-self.started,6),
+                             stage='observer.invalid_event', outcome='rejected',
+                             error_type='NonJSONDiagnostic')
             if len(self.events)<self.cap:self.events.append(event)
             else:self.dropped += 1
             sink=SINK.get()
             if sink is not None:sink.write(self.run_id,self.state,event)
-            if outcome in ('exception','ownership_conflict','rejected'):
+            if event['outcome'] in ('exception','ownership_conflict','rejected'):
                 if len(self.failures)>=100:self.failures.pop(0);self.failures_dropped+=1
                 self.failures.append(event)
             return self.sequence
@@ -133,8 +143,12 @@ def trace_return(stage,value):
 def workflow_call(stage, function, scope, *args, **kwargs):
     trace=ACTIVE.get()
     if trace is None:return function(*args,**kwargs)
-    started=time.perf_counter()
     receiver=getattr(function,'__self__',None)
+    # In-memory dictionary/context reads are not workflow operations. Recording
+    # every get exhausts the bounded trace before the source/capture steps.
+    if getattr(function,'__name__','')=='get' and isinstance(receiver,(Mapping,ContextVar)):
+        return function(*args,**kwargs)
+    started=time.perf_counter()
     entry=trace.resource(receiver)
     resource_id=None
     if entry:
@@ -241,7 +255,7 @@ def observe_context(context,trace):
         trace.resource(page,owner=trace.run_id)
         trace.emit('browser.page','created',page_id=id(page),context_id=id(context))
         for event in ('domcontentloaded','load','close','crash'):
-            page.on(event,lambda event=event:trace.emit('browser.page',event,page_id=id(page),context_id=id(context)))
+            page.on(event,lambda *args,event=event:trace.emit('browser.page',event,page_id=id(page),context_id=id(context)))
     try:
         context.on('request',request);context.on('response',response)
         context.on('requestfinished',ended);context.on('requestfailed',lambda req:ended(req,True))
