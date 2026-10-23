@@ -609,7 +609,7 @@ def il_completed_empty_snapshot(record,query,evidence,url,text):
         return False
     observed=' '.join(text.split())
     return ('Charities Search' in observed and bool(re.search(
-        r'CO #\s+Name\s+Address\s+City\s+State\s+Zip\s+No Records Available\s+0\s+No items to display(?:\s|$)',observed)))
+        r'CO #\s+Name\s+Address\s+City\s+State\s+Zip\s+No Records Available\s+(?:0\s+)?No items to display(?:\s|$)',observed)))
 
 
 def ga_completed_empty_grid_snapshot(record,query,evidence,url,text):
