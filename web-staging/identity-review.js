@@ -14,7 +14,10 @@
       log.href = '/evidence-preview.html?document=' + encodeURIComponent(result.search_history_url); log.target = '_blank'; log.rel = 'noopener noreferrer';
     }
     if (!source) {
-      if (result.evidence_capture === 'unavailable') add(parent,'p','State snapshot unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
+      const candidateSnapshots = result.state === 'DC' && result.identity_review?.candidates?.length
+        && result.identity_review.candidates.every(candidate => /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(candidate.evidence_url || ''));
+      if (candidateSnapshots) add(parent,'p','View the state snapshots in the candidate records below.','mt-2 text-xs text-slate-500 whitespace-normal');
+      else if (result.evidence_capture === 'unavailable') add(parent,'p','State snapshot unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
       return;
     }
     const link = add(parent, 'a', 'View State Snapshot (PDF)', 'mt-2 block text-xs underline whitespace-normal');

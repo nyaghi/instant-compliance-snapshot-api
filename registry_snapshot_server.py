@@ -9971,7 +9971,7 @@ def dc_charity_records(org, deadline):
             if evidence_run is not None and evidence_run.state=='DC':
                 evidence_run.dc_completed_query={'complete':True,'where':where,'row_count':len(raw_rows),
                     'query_name':' OR '.join(dc_license_query_patterns(required + generated)),
-                    'raw_rows':raw_rows if len(raw_rows)<=8 else []}
+                    'raw_rows':raw_rows if len(raw_rows)<=32 else []}
         except Exception:pass
         return rows, f"Data freshness: DC's public business-license extract was refreshed {refreshed.isoformat()}. It may lag the licensing portal; confirm time-sensitive decisions in DC's BOSS license search (https://boss.dc.gov/business/business-license-search)."
     finally:

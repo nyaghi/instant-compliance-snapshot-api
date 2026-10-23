@@ -4,6 +4,7 @@ from urllib.parse import urlencode,urlsplit,parse_qsl
 from deployment.dc_native_capture import SOURCE,VIEWER,expected_record,navigate_and_capture
 
 API=SOURCE+'/query'
+LARGE_RESULT_FIELDS='CUSTOMERNUMBER,ENTITYNAME,ENTITYTRADENAME,LICENSESTATUS,BUSINESSACTIVITY,LICENSEENDDATE'
 NOTE="Original DC published-license extract used by this lookup. It may lag BOSS; the result's source freshness limitation still applies."
 
 def selected_records(result,rows):
@@ -21,14 +22,14 @@ def selected_records(result,rows):
 def negative_url(hint):
     if not isinstance(hint,dict) or hint.get('complete') is not True:return None
     count=hint.get('row_count');rows=hint.get('raw_rows',[])
-    if type(count) is not int or not 0<=count<=8 or not isinstance(rows,list) or len(rows)!=count:return None
+    if type(count) is not int or not 0<=count<=32 or not isinstance(rows,list) or len(rows)!=count:return None
     if any(not isinstance(r,dict) or not re.fullmatch(r'\d{5,16}',str(r.get('CUSTOMERNUMBER',''))) or not r.get('ENTITYNAME') or not r.get('LICENSESTATUS') for r in rows):return None
     where=hint.get('where','')
     # Only the exact generated charity/name clauses from the completed lookup.
     clause=r"UPPER\((?:ENTITYNAME|ENTITYTRADENAME)\) LIKE '%[A-Z0-9%]+'"
     if not re.fullmatch(r"UPPER\(BUSINESSACTIVITY\) LIKE '%CHARITABLE%' AND \("+clause+r"(?: OR "+clause+r")*\)",where):return None
     if len(where)>3600:return None
-    return API+'?'+urlencode({'where':where,'outFields':'*','returnGeometry':'false','f':'html'})
+    return API+'?'+urlencode({'where':where,'outFields':LARGE_RESULT_FIELDS if count>8 else '*','returnGeometry':'false','f':'html'})
 
 def empty_values(page,url,where,rows=()):
     if page.url!=url:return None
@@ -47,16 +48,17 @@ def empty_values(page,url,where,rows=()):
             candidates=[r for r in rows if str(r['CUSTOMERNUMBER'])==number]
             if len(candidates)!=1 or number in seen:return None
             seen.add(number);row=candidates[0]
-            for field in ('ENTITYNAME','LICENSESTATUS','BUSINESSACTIVITY','LICENSEENDDATE'):
+            for field in (('ENTITYNAME','ENTITYTRADENAME','LICENSESTATUS','BUSINESSACTIVITY','LICENSEENDDATE') if len(rows)>8 else ('ENTITYNAME','LICENSESTATUS','BUSINESSACTIVITY','LICENSEENDDATE')):
                 values=re.findall(r'(?:^|\n)'+field+r':\s*([^\n]+)',block)
                 expected='null' if row.get(field) is None else str(row[field])
                 if values!=[expected]:return None
-    if page.locator('#outFields').input_value(timeout=400)!='*':return None
+    if page.locator('#outFields').input_value(timeout=400)!=(LARGE_RESULT_FIELDS if len(rows)>8 else '*'):return None
     return value,text
 
 def capture_empty(page,hint,deadline,receipt=None):
     url=negative_url(hint)
     if not url or deadline-time.monotonic()<2:return None
+    if hint['row_count']>8:page.set_viewport_size({'width':1280,'height':1000})
     response=page.goto(url,wait_until='domcontentloaded',timeout=max(1,int((deadline-time.monotonic()-1)*1000)))
     if response is None or response.status!=200:return None
     before=empty_values(page,url,hint['where'],hint.get('raw_rows',[]))
