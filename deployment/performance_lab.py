@@ -95,6 +95,59 @@ def install_http_egress_guard():
     sys.addaudithook(audit)
 
 
+
+
+def bind_il_replies(text):
+    replacements = [('  const waiting = new Map();',
+      '  const waiting = new Map();\n'
+      '  const ilReplyOwners = new Map();\n'
+      '  const validIlTransport = (m, task) => {\n'
+      '    const t=m.il_transport;\n'
+      "    return t?.protocol==='il-bound-replies-v1'\n"
+      "      && /^[a-p]{32}$/.test(t.extension_id||'')\n"
+      '      && t.lookup_id===task.ilLookup\n'
+      '      && (!task.ilOwner || t.extension_id===task.ilOwner);\n'
+      '  };',
+      1),
+     ('    if (m.progress) { task.onProgress?.(m); return; }',
+      '    if (task.ilBound && !validIlTransport(m,task)) return;\n'
+      '    if (m.progress) { task.onProgress?.(m); return; }',
+      1),
+     ('      waiting.set(id, { resolve: complete, timer, onProgress });',
+      "      const ilBound = intent==='IL' || query?.state==='IL' || ilReplyOwners.has(lookupId);\n"
+      '      waiting.set(id, {resolve:complete,timer,onProgress,ilBound,\n'
+      '        ilLookup:lookupId || null,ilOwner:ilReplyOwners.get(lookupId) || null});',
+      1),
+     ('      let connection = await bridge("ping", null, null, null, null, signal);',
+      '      let connection = await bridge("ping", null, null, null, registryState === "IL" ? "IL" : null, '
+      'signal);',
+      1),
+     ('        connection = await bridge("ping", null, null, null, null, signal);',
+      '        connection = await bridge("ping", null, null, null, registryState === "IL" ? "IL" : null, '
+      'signal);',
+      1),
+     ('      let acquired = connection;',
+      "      if (registryState === 'IL' && connection.ok)\n"
+      '        ilReplyOwners.set(lookupId,connection.il_transport.extension_id);\n'
+      '      let acquired = connection;',
+      1),
+     ('          connected = false;',
+      '          ilReplyOwners.delete(lookupId);\n          connected = false;',
+      1),
+     ('          lookupId = crypto.randomUUID().replaceAll("-", "");',
+      '          lookupId = crypto.randomUUID().replaceAll("-", "");\n'
+      "          if (registryState === 'IL') ilReplyOwners.set(lookupId,connection.il_transport.extension_id);",
+      1),
+     ('      if (connected) await bridge("finish", null, lookupId);',
+      '      if (connected) await bridge("finish", null, lookupId);\n      ilReplyOwners.delete(lookupId);',
+      1)]
+    for before, after, count in replacements:
+        if text.count(before) != count:
+            raise RuntimeError("IL reply binding source changed")
+        text = text.replace(before, after)
+    return text
+
+
 def final_four_asset(name, text):
     """Trial-only presentation/transport assembly; no registry interpretation."""
     identity = trial_identity()
@@ -215,6 +268,7 @@ def final_four_asset(name, text):
         replace('Staging · Sales Mode ${VERSION}', environment_label+' · Sales Mode ${VERSION}')
         replace('{signal:controller.signal}', '{signal:controller.signal,mode:"sales"}', 2)
     elif name == 'ny-connector.js':
+        text = bind_il_replies(text)
         diagnostic_source = (Path(__file__).resolve().parents[1]/'browser-connector'/'protocol.js').read_text(encoding='utf-8')
         diagnostic_source = diagnostic_source.split('// BEGIN NY_DIAGNOSTICS:',1)[1].split('\n',1)[1].split('// END NY_DIAGNOSTICS',1)[0]
         text = diagnostic_source + '\n' + text
@@ -247,8 +301,8 @@ def final_four_asset(name, text):
     };
     async function api(fields, cleanup = false) {
       if (!cleanup) trace("master request", null, {action:fields.action});''')
-        replace('      let connection = await bridge("ping", null, null, null, null, signal);',
-                '      trace("connector handshake started");\n      let connection = await bridge("ping", null, null, null, null, signal);')
+        replace('      let connection = await bridge("ping", null, null, null, registryState === "IL" ? "IL" : null, signal);',
+                '      trace("connector handshake started");\n      let connection = await bridge("ping", null, null, null, registryState === "IL" ? "IL" : null, signal);')
         replace('      let acquired = connection;',
                 '      trace("connector handshake returned",null,{ok:connection.ok===true,reason:connection.reason||""});\n      let acquired = connection;')
         replace('        acquired = await bridge("acquire", null, lookupId,',
