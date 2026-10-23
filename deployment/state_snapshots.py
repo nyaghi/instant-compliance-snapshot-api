@@ -419,6 +419,9 @@ class CaptureRun:
         """Capture before its existing context closes; do not navigate or scroll."""
         started=time.perf_counter()
         observation=None
+        if self.state=='CO':
+            observation={'phase':'admission','outcome':'pending'}
+            self.visual_adapter_facts.append({'adapter':'CO-existing-page-observation','page_capture_observations':[observation]})
         if self.state=='SC':
             facts=[f for f in self.visual_adapter_facts if f.get('adapter')=='SC-selected-original-detail' and f.get('phase')=='capture']
             if facts:

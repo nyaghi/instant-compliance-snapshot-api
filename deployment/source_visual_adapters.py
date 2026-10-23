@@ -260,7 +260,13 @@ def capture_selected_ca_source(master,result,run,deadline):
     # Source CSP disallows wait_for_function's eval. Visible source locators
     # preserve that policy; no CSP bypass or security setting is used.
     for label in ['Registration Number','Registration Type','Registration Status','Initial Registration Date','Current Expiration Date']:
-     page.get_by_text(label,exact=True).wait_for(state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+     fact['waiting_for_label']=label
+     label_started=time.perf_counter()
+     try:
+      page.get_by_text(label,exact=True).wait_for(state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+     finally:
+      fact.setdefault('label_wait_seconds',{})[label]=round(time.perf_counter()-label_started,6)
+    fact['waiting_for_label']=''
     fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
     text=page.inner_text('body',timeout=400)
     core=ca_registration_core(text)
