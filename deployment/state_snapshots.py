@@ -191,9 +191,12 @@ def matching_reference(result, refs):
         # A results list cannot substantiate the selected record's dates.
         candidates=[r for r in candidates if r.get('operation')=='detail']
     if state=='TN':
-        # Later alias searches must not replace a captured detail for the same
-        # selected registration. Stable order retains latest-within-kind rules.
-        candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
+        # A selected record's dates require its detail page. A matching name
+        # in a search list is useful context, not a substitute for that page.
+        if (ident or name) and not completed_negative_result(result):
+            candidates=[r for r in candidates if r.get('operation')=='detail']
+        else:
+            candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
     if state=='NY':
         path=urlsplit(result.get('source_url') or result.get('url') or '').path
         observed=re.fullmatch(r'/RegistrySearch/(\d{2}-\d{2}-\d{2})/?',path)
