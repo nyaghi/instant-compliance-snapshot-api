@@ -75,7 +75,7 @@ def capture_ready(page,expected,deadline):
  before=bound_values(page.url,page.evaluate(READ_ROW),expected)
  if before is None or deadline-time.monotonic()<1:return None
  started=time.perf_counter()
- raw=page.screenshot(type='png',full_page=True,timeout=max(1,int(min(1.5,deadline-time.monotonic()-.5)*1000)))
+ raw=page.screenshot(type='png',full_page=True,timeout=max(1,int((deadline-time.monotonic()-.5)*1000)))
  after=bound_values(page.url,page.evaluate(READ_ROW),expected)
  if after!=before or time.monotonic()>=deadline:return None
  return {'source_url':page.url,'bytes':raw,'fields':dict(zip(LABELS,before)),'capture_ms':round((time.perf_counter()-started)*1000,2),
@@ -102,7 +102,14 @@ def navigate_and_capture(page,record,deadline,on_query=None,metrics=None):
  page.get_by_role('button',name='Customer Number',exact=True).wait_for(state='visible',timeout=allowance())
  # Default native operator must be exact; never submit a broadened condition.
  operator=page.get_by_role('combobox',name='Operator',exact=True)
- if operator.count()!=1 or operator.input_value(timeout=allowance())!='is':return None
+ # ArcGIS renders the select before asynchronously supplying its native options.
+ # Observe completion within the existing deadline; never select a different mode.
+ measured('operator_visible',lambda:operator.wait_for(state='visible',timeout=allowance()))
+ if operator.count()!=1:return None
+ measured('operator_options_ready',lambda:operator.locator('option[value="is"]').wait_for(state='attached',timeout=allowance()))
+ metrics['operator_count']=operator.count()
+ metrics['operator_value']=operator.input_value(timeout=allowance())
+ if metrics['operator_count']!=1 or metrics['operator_value']!='is':return None
  page.get_by_role('textbox',name='Value',exact=True).fill(expected['identifier'],timeout=allowance())
  if on_query:on_query()
  measured('exact_query_submit',lambda:page.get_by_role('button',name='Save',exact=True).click(timeout=allowance()))
