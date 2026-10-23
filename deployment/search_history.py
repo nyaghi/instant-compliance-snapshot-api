@@ -241,11 +241,14 @@ def render_pdf(doc,asset_root=None):
         for item in doc['identity_decisions']:
             story.append(p(item['name']+' ('+item['identifier']+'): rejected at '+stamp(item['reviewed_at'])))
         story.append(p('The state returned these candidate records; the user rejected their identities. This is not a zero-results state response.'))
-    story += [Paragraph('Recorded source requests',styles['Heading2']),p('Completed responses and attempts without confirmed completion are labeled separately. Row counts are the rows returned to CharityClarity before identity evaluation. An unrelated record does not establish a match.')]
+    story += [Paragraph('Recorded source requests',styles['Heading2']),p('Completed responses and attempts without confirmed completion are labeled separately. Portal counts show rows returned by the state. Dataset counts show rows matching each name filter in the downloaded state list. Neither count confirms identity. A missing count is not zero.')]
     for e in doc['queries']:
         timing_label='Response received: ' if e.get('observation_kind')=='transport_response' else 'Completed: '
         cells=[[p(str(e['sequence'])+'. '+query_label(e['query'],e)),p(e['outcome'])],[p('Issued: '+stamp(e.get('issued_at'))),p(timing_label+stamp(e['completed_at']))]]
-        if e.get('returned_rows') is not None:cells.append([p('Rows returned: '+str(e['returned_rows'])),p('Query receipt: '+e['query_id'])])
+        dataset=e['query'].get('source_kind')=='official_dataset'
+        count_label='Dataset rows matching this name: ' if dataset else 'Rows returned: '
+        count_value=str(e['returned_rows']) if e.get('returned_rows') is not None else 'not captured'
+        cells.append([p(count_label+count_value),p('Query receipt: '+e['query_id'])])
         if e.get('reason'):cells.append([p('Incomplete: '+e['reason']),p('Reported: '+stamp(e['reported_at']))])
         table=Table(cells,colWidths=[280,230],hAlign='LEFT');table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#edf3f7')),('BOX',(0,0),(-1,-1),.4,colors.HexColor('#ccd6df')),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8)]))
         story += [KeepTogether([table,Spacer(1,10)])]

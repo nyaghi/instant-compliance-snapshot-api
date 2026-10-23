@@ -13621,7 +13621,7 @@ def la_record_program_services(record: dict[str, str]) -> str:
 def la_find_export_match(records: list[dict[str, str]], org) -> dict[str, str] | None:
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     from deployment.search_observation import dataset_scope as _history_dataset_scope
-    with _history_dataset_scope(target_names):
+    with _history_dataset_scope(target_names, records=records, record_name=la_record_name, name_score=target_name_score):
         best = None
         for record in records:
             candidate_name = la_record_name(record)

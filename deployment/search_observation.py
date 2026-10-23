@@ -182,18 +182,31 @@ def dataset_evaluation(names,source_url=''):
         if receipt:receipt.complete(None)
 
 @contextmanager
-def dataset_scope(names):
+def dataset_scope(names, *, records=None, record_name=None, name_score=None):
     run=CURRENT.get();receipts=[]
     if run:
         for name in dict.fromkeys(names):
-            receipt=begin_source_query(run.state,name,'Safe-name evaluation of official dataset','','official_dataset')
+            label='Name filter in downloaded state list; identity reviewed separately' if records is not None else 'Safe-name evaluation of official dataset'
+            receipt=begin_source_query(run.state,name,label,'','official_dataset')
             if receipt:receipts.append(receipt)
     try:yield
     except BaseException:
         for receipt in receipts:receipt.incomplete()
         raise
     else:
-        for receipt in receipts:receipt.complete(None)
+        for receipt in receipts:
+            if records is None:
+                receipt.complete(None)
+                continue
+            # Observe a real local name filter over the loaded original rows.
+            # Keep unrelated candidates visible; this does not accept identity.
+            # Never invent zero from the overall Not Registered decision.
+            try:
+                matching=[row for row in records if record_name(row)
+                          and name_score(record_name(row),[receipt.query['name']])>=450]
+                complete_public_rows(receipt,len(matching),rows=matching)
+            except Exception:
+                receipt.complete(None)
 
 def observed_dataset_call(call,names,*args,**kwargs):
     with dataset_scope(names):return call(*args,**kwargs)
