@@ -109,7 +109,7 @@ def capture_selected_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1.0
   if remaining<3.0:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:110:54:return',None)
-  stop=time.monotonic()+min(8.0,remaining)
+  stop=time.monotonic()+min(16.0 if run.state=='RI' else 8.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:112:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:113:61:return',None)
   runtime_started=time.perf_counter();runtime_close_started=None
@@ -126,7 +126,7 @@ def capture_selected_source(master,result,run,deadline):
     page=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:125:9:new_page',context.new_page,locals())
     fact['context_start_ms']=round((time.perf_counter()-context_started)*1000,2)
     nav=time.perf_counter()
-    response=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:128:13:goto',page.goto,locals(), url,wait_until='commit' if run.state=='OR' else 'domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1 if run.state=='OR' else min(5.0,stop-time.monotonic()))*1000)))
+    response=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:128:13:goto',page.goto,locals(), url,wait_until='commit' if run.state=='OR' else 'domcontentloaded',timeout=max(1,int((stop-time.monotonic()-3 if run.state=='RI' else (stop-time.monotonic()-1 if run.state=='OR' else min(5.0,stop-time.monotonic())))*1000)))
     fact['navigation_ms']=round((time.perf_counter()-nav)*1000,2)
     fact['http_status']=response.status if response else None
     fact['url_stable']=page.url==url
@@ -533,11 +533,11 @@ def capture_selected_va_source(master,result,run,deadline):
  if (not re.fullmatch(r'\d+',identifier) or not hint or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:532:61:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name'])
      or workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:533:8:get',hint.get,locals(), 'url')!='https://vdacs.evokeplatform.com/app/publicPortal/registration/'+identifier):return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:533:102:return',None)
  run.selected_visual_attempted=True;start=time.perf_counter();held=False;browser=context=None;detach_observer=lambda:None
- fact={'adapter':'VA-selected-original-registration','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':16000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'VA-selected-original-registration','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':22000};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:538:52:return',None)
-  stop=time.monotonic()+min(16.0,remaining)
+  stop=time.monotonic()+min(22.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:540:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:541:61:return',None)
   with master.checker.sync_playwright() as p:
@@ -578,7 +578,7 @@ def capture_selected_va_source(master,result,run,deadline):
     height=math.ceil(bounds['y']+bounds['height']+20);width=min(1600,math.ceil(bounds['x']+bounds['width']+20))
     if height<100 or height>1400 or width<100:fact['outcome']='source_panel_exceeds_viewport';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:578:94:return',None)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:579:66:return',None)
-    begin=time.perf_counter();fact['phase']='capture';raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:580:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':width,'height':height},timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
+    begin=time.perf_counter();fact['phase']='capture';raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:580:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':width,'height':height},timeout=max(1,int(min(5.0,stop-time.monotonic()-1)*1000)))
     fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
     if page.url!=hint['url'] or va_registration_core(workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:582:53:inner_text',page.inner_text,locals(), 'body',timeout=400))!=core:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:582:144:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:583:78:return',None)
