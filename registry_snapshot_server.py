@@ -25443,9 +25443,11 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
     # response when the optimized observer is supplied. A loaded empty result
     # remains distinct from a request which did not complete.
     if completion_wait is not None and request_offset is not None:
+        from deployment.state_snapshots import DEADLINE
         initial_offset = request_offset()
         result = completion_guard(checker.search_pa(page, org, wait_for_ein=lambda ein:
-            completion_wait("", initial_offset, time.monotonic() + 12.0, ein=ein)))
+            completion_wait("", initial_offset,
+                min(time.monotonic() + 30.0, DEADLINE.get() - 1.0), ein=ein)))
     else:
         result = completion_guard(checker.search_pa(page, org))
     if public_status(result) != "Not Registered": return result

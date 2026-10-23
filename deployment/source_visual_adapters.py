@@ -237,14 +237,14 @@ def capture_selected_ca_source(master,result,run,deadline):
  except (ValueError,TypeError,KeyError):return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:236:40:return',None)
  run.selected_visual_attempted=True
  start=time.perf_counter();held=False;browser=context=None
- fact={'adapter':'CA-selected-registration-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':16000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'CA-selected-registration-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':22000};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:242:52:return',None)
-  # HO showed selected fields still pending at the 12-second visual cap.
-  # Allow four more seconds only when the existing state deadline permits.
-  # Live capture recovery and whole-run speed still require validation.
-  stop=time.monotonic()+min(16.0,remaining)
+  # Allow loaded selected fields enough time for original-pixel capture.
+  # Keep this evidence work inside the existing state deadline.
+  # Full38 live recovery and timing remain required.
+  stop=time.monotonic()+min(22.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:247:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:248:61:return',None)
   with master.checker.sync_playwright() as p:
@@ -290,7 +290,7 @@ def capture_selected_ca_source(master,result,run,deadline):
     height=math.ceil(bounds['y']+bounds['height']+20)
     if height<100 or height>1000:fact['outcome']='source_panel_exceeds_viewport';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:290:81:return',None)
     fact['phase']='capture';begin=time.perf_counter()
-    raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:292:8:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':1600,'height':height},timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
+    raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:292:8:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':1600,'height':height},timeout=max(1,int(min(5.0,stop-time.monotonic()-1)*1000)))
     fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
     import io
     from PIL import Image
@@ -775,13 +775,13 @@ def remember_md_selected(master,run,result,body,org):
  except (ValueError,TypeError,KeyError,AttributeError):return
 
 def capture_owned_md_page(run,result,page,context,deadline):
- """Original General/Financial tabs in a separate owned source page."""
+ """Original General Information page in a separate owned source page."""
  if run is None or run.state!='MD':return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:778:35:return',None)
  context._captured=True
  if workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:780:4:get',result.get,locals(), 'status')=='Not Registered':return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:780:43:return',(workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:780:50:capture_owned_md_empty',capture_owned_md_empty,locals(), run,result,context,deadline)))
  if selected_url(run,result) is None or getattr(run,'selected_visual_attempted',False):return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:781:87:return',None)
  run.selected_visual_attempted=True;start=time.perf_counter();detail=None;detach_observer=lambda:None
- fact={'adapter':'MD-owned-selected-detail-pair','outcome':'not_started','navigation_ms':0,'general_ms':0,'financial_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':20000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'MD-owned-selected-general','outcome':'not_started','navigation_ms':0,'general_ms':0,'financial_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':20000};run.visual_adapter_facts.append(fact)
  identifier=str(result['matched_registry_identifier']);hint=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:784:60:get',run.source_detail_hints.get,locals(), identifier);norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if not hint or norm(workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:785:21:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name']) or not isinstance(workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:785:96:get',hint.get,locals(), 'source_fields'),dict):fact['outcome']='selected_source_proof_missing';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:785:176:return',None)
  expected=hint['source_fields'];u=urlsplit(hint['url'])
@@ -828,27 +828,9 @@ def capture_owned_md_page(run,result,page,context,deadline):
    fact['outcome']='general_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:827:52:return',None)
   fact['general_other_text_changed']=after_general!=general_text
   fact['general_ms']=round((time.perf_counter()-begin)*1000,2);texts=[general_text]
-  if workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:830:5:get',expected.get,locals(), 'year') is not None:
-   begin=time.perf_counter();fact['phase']='financial_information'
-   workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:832:3:click',detail.get_by_role('tab',name=re.compile(r'^Financial Informati')).click,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-   financial=detail.get_by_role('tabpanel',name=re.compile(r'^Financial Informati'));workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:833:85:wait_for',financial.wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-   if (not same_record() or value(financial,'Most Recent Fiscal Year')!=expected['year']
-       or norm(result['matched_registry_name']) not in norm(workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:835:60:inner_text',detail.inner_text,locals(), 'body',timeout=400))):fact['outcome']='financial_source_fields_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:835:152:return',None)
-   financial_text=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:836:18:inner_text',detail.inner_text,locals(), 'body',timeout=400)
-   financial_fields=tuple(financial.locator('.dvce-model-property').all_inner_texts())
-   if not financial_fields:fact['outcome']='financial_fields_missing';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:838:70:return',None)
-   if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:839:65:return',None)
-   fact['phase']='financial_capture';images.append(shot())
-   after_financial=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:841:19:inner_text',detail.inner_text,locals(), 'body',timeout=400)
-   if (not same_record() or tuple(financial.locator('.dvce-model-property').all_inner_texts())!=financial_fields
-       or norm(result['matched_registry_name']) not in norm(after_financial)
-       or re.search('verify you are human|user validation required|access denied|just a moment',after_financial,re.I)):
-    fact['outcome']='financial_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:845:55:return',None)
-   fact['financial_other_text_changed']=after_financial!=financial_text
-   texts.append(financial_text);fact['financial_ms']=round((time.perf_counter()-begin)*1000,2)
   raw=images[0] if len(images)==1 else json.dumps([base64.b64encode(raw).decode('ascii') for raw in images]).encode('utf8')
   if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:849:76:return',None)
-  before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:850:28:document',run.document,locals(), detail.url,raw,'image' if len(images)==1 else 'image_pages','\n\n'.join(texts)[:20000],note='Original selected public record General Information and, when a reported year exists, Financial Information. Source standing/year match retained lookup fields. No source reconstruction.')
+  before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:850:28:document',run.document,locals(), detail.url,raw,'image' if len(images)==1 else 'image_pages','\n\n'.join(texts)[:20000],note='Original selected public record General Information. Organization, identifier and standing match retained lookup fields. All visible source fields retained; no financial-tab navigation or source reconstruction.')
   fact['original_views']=len(images);fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
  except Exception as exc:fact['outcome']='owned_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
  finally:
@@ -968,24 +950,27 @@ def capture_owned_me_page(run,result,page,context,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_me_page:969:52:return',None)
-  stop=time.monotonic()+min(5.0,remaining)
-  begin=time.perf_counter();response=workflow_call('deployment/source_visual_adapters.py:capture_owned_me_page:971:37:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int(min(3,stop-time.monotonic()-1)*1000)))
+  stop=time.monotonic()+min(15.0,remaining)
+  begin=time.perf_counter();response=workflow_call('deployment/source_visual_adapters.py:capture_owned_me_page:971:37:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int(min(10,stop-time.monotonic()-5)*1000)))
   fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
   current=urlsplit(page.url)
   if (response is None or response.status!=200 or current.scheme!='https' or current.hostname!='www.pfr.maine.gov'
       or current.path!='/ALMSOnline/ALMSQuery/ShowDetail.aspx'):
    fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_owned_me_page:976:41:return',None)
-  text=workflow_call('deployment/source_visual_adapters.py:capture_owned_me_page:977:7:inner_text',page.inner_text,locals(), 'body',timeout=400)
+  text=workflow_call('deployment/source_visual_adapters.py:capture_owned_me_page:977:7:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int(min(1,stop-time.monotonic()-4)*1000)))
   norm=lambda value:re.sub(r'[^a-z0-9]','',value.lower())
   if (norm(result['matched_registry_name']) not in norm(text)
       or not re.search(r'License\s+Number:\s*'+re.escape(result['matched_registry_identifier'])+r'(?!\w)',text,re.I)
       or re.search('verify you are human|user validation required|access denied|just a moment',text,re.I)):
    fact['outcome']='record_binding_failed';return trace_return('deployment/source_visual_adapters.py:capture_owned_me_page:982:43:return',None)
   if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_me_page:983:64:return',None)
+  run.page_capture_stop=stop
   before=len(run.documents);begin=time.perf_counter();workflow_call('deployment/source_visual_adapters.py:capture_owned_me_page:984:54:capture',context.capture,locals());fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
   fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
  except Exception:fact['outcome']='owned_visual_unavailable'
- finally:fact['total_ms']=round((time.perf_counter()-start)*1000,2)
+ finally:
+  if hasattr(run,'page_capture_stop'):del run.page_capture_stop
+  fact['total_ms']=round((time.perf_counter()-start)*1000,2)
 
 def capture_owned_fl_page(master,run,result,page,context,deadline):
  """Photograph the already-selected FL license in the existing owned browser."""
