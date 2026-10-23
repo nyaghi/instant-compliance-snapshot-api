@@ -1689,14 +1689,14 @@ def capture_selected_nj_source(master,result,run,deadline):
         or not re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}',fields['crsm_fiscalyearenddate_datepicker_description'])):
      fact['outcome']='record_binding_failed';return
     if page.evaluate(NJ_VISIBLE_GEOMETRY) is not True:fact['outcome']='selected_fields_overlap';return
-    text=page.inner_text('body',timeout=400)
+    text=page.inner_text('body',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     if re.search('verify you are human|user validation required|access denied|just a moment',text,re.I):fact['outcome']='source_verification_pending';return
     size=page.locator('body').evaluate('(el)=>({width:el.scrollWidth,height:el.scrollHeight})')
     if size['width']<=0 or size['height']<=0 or size['width']*size['height']>20000000:fact['outcome']='source_size_rejected';return
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
     fact['phase']='capture';begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=75,full_page=True,timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
     fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
-    if page.url!=hint['url'] or page.evaluate(NJ_VISIBLE_FIELDS)!=fields or page.evaluate(NJ_VISIBLE_GEOMETRY) is not True or page.inner_text('body',timeout=400)!=text:fact['outcome']='source_changed_during_capture';return
+    if page.url!=hint['url'] or page.evaluate(NJ_VISIBLE_FIELDS)!=fields or page.evaluate(NJ_VISIBLE_GEOMETRY) is not True or page.inner_text('body',timeout=max(1,int((stop-time.monotonic()-.5)*1000)))!=text:fact['outcome']='source_changed_during_capture';return
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
     # Metadata describes visible original values; source pixels are never redrawn.
     bound_text=text+'\n'+'\n'.join(key+': '+value for key,value in fields.items())
