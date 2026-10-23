@@ -98,7 +98,10 @@ def install_http_egress_guard():
 
 
 def bind_il_replies(text):
-    replacements = [('  const waiting = new Map();',
+    replacements = [('  function bridge(action, query, lookupId, onProgress, intent, signal, evidenceProtocol) {',
+      '  function bridge(action, query, lookupId, onProgress, intent, signal, evidenceProtocol) {\n'
+      "    if (action === 'finish' && ilReplyOwners.has(lookupId)) intent = 'IL';\n", 1),
+     ('  const waiting = new Map();',
       '  const waiting = new Map();\n'
       '  const ilReplyOwners = new Map();\n'
       '  const validIlTransport = (m, task) => {\n'
