@@ -100,7 +100,7 @@ def install_http_egress_guard():
 def bind_il_replies(text):
     replacements = [('  function bridge(action, query, lookupId, onProgress, intent, signal, evidenceProtocol) {',
       '  function bridge(action, query, lookupId, onProgress, intent, signal, evidenceProtocol) {\n'
-      "    if (action === 'finish' && ilReplyOwners.has(lookupId)) intent = ilReplyIntents.get(lookupId) || 'IL';\n", 1),
+      "    if (['acquire','finish'].includes(action) && ilReplyOwners.has(lookupId)) intent = ilReplyIntents.get(lookupId) || 'IL';\n", 1),
      ('  const waiting = new Map();',
       '  const waiting = new Map();\n'
       '  const ilReplyOwners = new Map(); const ilReplyIntents = new Map();\n'
@@ -117,20 +117,20 @@ def bind_il_replies(text):
       '    if (m.progress) { task.onProgress?.(m); return; }',
       1),
      ('      waiting.set(id, { resolve: complete, timer, onProgress });',
-      "      const ilBound = ['IL','TN'].includes(intent) || ['IL','TN'].includes(query?.state) || ilReplyOwners.has(lookupId);\n"
+      "      const ilBound = ['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(intent) || ['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(query?.state) || ilReplyOwners.has(lookupId);\n"
       '      waiting.set(id, {resolve:complete,timer,onProgress,ilBound,\n'
       '        ilLookup:lookupId || null,ilOwner:ilReplyOwners.get(lookupId) || null});',
       1),
      ('      let connection = await bridge("ping", null, null, null, null, signal);',
-      '      let connection = await bridge("ping", null, null, null, ["IL","TN"].includes(registryState) ? registryState : null, '
+      '      let connection = await bridge("ping", null, null, null, ["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(registryState) ? registryState : null, '
       'signal);',
       1),
      ('        connection = await bridge("ping", null, null, null, null, signal);',
-      '        connection = await bridge("ping", null, null, null, ["IL","TN"].includes(registryState) ? registryState : null, '
+      '        connection = await bridge("ping", null, null, null, ["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(registryState) ? registryState : null, '
       'signal);',
       1),
      ('      let acquired = connection;',
-      "      if (['IL','TN'].includes(registryState) && connection.ok)\n"
+      "      if (['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(registryState) && connection.ok)\n"
       '        (ilReplyOwners.set(lookupId,connection.il_transport.extension_id), ilReplyIntents.set(lookupId,registryState));\n'
       '      let acquired = connection;',
       1),
@@ -139,7 +139,7 @@ def bind_il_replies(text):
       1),
      ('          lookupId = crypto.randomUUID().replaceAll("-", "");',
       '          lookupId = crypto.randomUUID().replaceAll("-", "");\n'
-      "          if (['IL','TN'].includes(registryState)) (ilReplyOwners.set(lookupId,connection.il_transport.extension_id), ilReplyIntents.set(lookupId,registryState));",
+      "          if (['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(registryState)) (ilReplyOwners.set(lookupId,connection.il_transport.extension_id), ilReplyIntents.set(lookupId,registryState));",
       1),
      ('      if (connected) await bridge("finish", null, lookupId);',
       '      if (connected) await bridge("finish", null, lookupId);\n      ilReplyOwners.delete(lookupId); ilReplyIntents.delete(lookupId);',
@@ -304,8 +304,8 @@ def final_four_asset(name, text):
     };
     async function api(fields, cleanup = false) {
       if (!cleanup) trace("master request", null, {action:fields.action});''')
-        replace('      let connection = await bridge("ping", null, null, null, ["IL","TN"].includes(registryState) ? registryState : null, signal);',
-                '      trace("connector handshake started");\n      let connection = await bridge("ping", null, null, null, ["IL","TN"].includes(registryState) ? registryState : null, signal);')
+        replace('      let connection = await bridge("ping", null, null, null, ["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(registryState) ? registryState : null, signal);',
+                '      trace("connector handshake started");\n      let connection = await bridge("ping", null, null, null, ["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(registryState) ? registryState : null, signal);')
         replace('      let acquired = connection;',
                 '      trace("connector handshake returned",null,{ok:connection.ok===true,reason:connection.reason||""});\n      let acquired = connection;')
         replace('        acquired = await bridge("acquire", null, lookupId,',
