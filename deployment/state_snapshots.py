@@ -54,7 +54,13 @@ OFFICIAL_HOSTS = {
 def public_url(value, state):
     if not isinstance(value,str) or len(value)>5000:raise ValueError('Invalid source URL')
     u = urlsplit(str(value))
-    if (u.scheme != 'https' or u.hostname not in OFFICIAL_HOSTS.get(state, set())
+    # The exact native viewer linked by DC's official layer, not arbitrary ArcGIS.
+    dc_viewer=False
+    if state=='DC' and u.hostname=='www.arcgis.com':
+        from deployment.dc_native_capture import valid_viewer
+        dc_viewer=valid_viewer(value)
+        if not dc_viewer:raise ValueError('Unbound DC viewer URL')
+    if (u.scheme != 'https' or (u.hostname not in OFFICIAL_HOSTS.get(state, set()) and not dc_viewer)
             or u.username or u.password or u.port not in (None,443)
             or re.search(r'(?:/auth/|/logout|/login|/signin|challenge-platform)',u.path,re.I)):
         raise ValueError('Snapshot must originate at this state public registry')
@@ -470,6 +476,7 @@ class CaptureRun:
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
                 if negative:
                     matched=bool(re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I))
+                    if self.state=='DC':matched=hashlib.sha256(raw).hexdigest() in getattr(self,'dc_validated_empty_images',set())
                     if self.state=='WA':matched='No Value Found' in text and url=='https://ccfs.sos.wa.gov/#/cftSearch'
                     if self.state=='AK':matched='There are no charitable organizations.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'ak_empty_image_bindings',{})
                     if self.state=='CA':matched=bool(re.search(r'\bNo Data\b',text)) and hashlib.sha256(raw).hexdigest() in getattr(self,'ca_validated_empty_images',set())

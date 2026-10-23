@@ -9964,6 +9964,15 @@ def dc_charity_records(org, deadline):
                 "renewal": (dc_source_date(raw.get("LICENSESTARTDATE")) or ""), "renewal_label": "License Start Date",
                 "renewal_type": "current_effective_date", "url": DC_LICENSE_API + "?" + urlencode({"where": "CUSTOMERNUMBER='"+identifier.replace("'", "''")+"'", "outFields": "*", "returnGeometry": "false", "f": "pjson"})})
         if history_receipt:__import__('deployment.search_observation',fromlist=['complete_public_rows']).complete_public_rows(history_receipt,len(raw_rows),rows=raw_rows)
+        # Retain only this completed, freshness-validated query for original evidence.
+        try:
+            from deployment.state_snapshots import CURRENT
+            evidence_run=CURRENT.get()
+            if evidence_run is not None and evidence_run.state=='DC':
+                evidence_run.dc_completed_query={'complete':True,'where':where,'row_count':len(raw_rows),
+                    'query_name':' OR '.join(dc_license_query_patterns(required + generated)),
+                    'raw_rows':raw_rows if len(raw_rows)<=8 else []}
+        except Exception:pass
         return rows, f"Data freshness: DC's public business-license extract was refreshed {refreshed.isoformat()}. It may lag the licensing portal; confirm time-sensitive decisions in DC's BOSS license search (https://boss.dc.gov/business/business-license-search)."
     finally:
         if history_receipt:history_receipt.incomplete()
@@ -9973,7 +9982,12 @@ def search_dc(org):
     deadline = time.monotonic() + 75
     try:
         rows, freshness = dc_charity_records(org, deadline)
-        return licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
+        result=licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
+        try:
+            from deployment.dc_native_evidence import capture_dc
+            capture_dc(sys.modules[__name__],org,result,rows,deadline)
+        except Exception:pass  # Evidence failure must never replace a completed status.
+        return result
     except Exception as exc:
         return licensed_charity_failure(org, "DC", DC_LICENSE_API, exc)
 
