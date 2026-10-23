@@ -763,7 +763,7 @@ def il_selected_detail_snapshot(query,evidence,url,text):
     except (AttributeError,TypeError,ValueError,KeyError):return None
 
 
-def connector_archive(record,payload,query,evidence):
+def _connector_archive(record,payload,query,evidence):
     """Called only after the original query ID and source schema were validated."""
     incoming=payload.get('state_snapshot')
     if not incoming or STORE is None:return
@@ -872,6 +872,44 @@ def connector_archive(record,payload,query,evidence):
         record['snapshot_capture_unavailable']=True
     finally:
         record['source_archive_ms']=round(record.get('source_archive_ms',0)+(time.perf_counter()-started)*1000,2)
+
+
+def connector_archive(record,payload,query,evidence):
+    """Passive, bounded IL empty-receipt observation; archive decisions unchanged."""
+    observe=(isinstance(record,dict) and record.get('state')=='IL'
+        and isinstance(query,dict) and query.get('state')=='IL'
+        and 'identifier' not in query and evidence=={'rows':[]})
+    if not observe:return _connector_archive(record,payload,query,evidence)
+    before=len(record.get('source_snapshots',[]))
+    try:
+        return _connector_archive(record,payload,query,evidence)
+    finally:
+        try:
+            incoming=payload.get('state_snapshot')
+            detail={'build':'il-empty-archive-observation-1','query_id':str(payload.get('query_id',''))[:100],
+                'ein':digits(record.get('ein','')),'store_ready':STORE is not None,
+                'snapshot_present':isinstance(incoming,dict),'references_before':before,
+                'references_after':len(record.get('source_snapshots',[])),
+                'archive_exception':record.get('snapshot_capture_unavailable') is True}
+            if isinstance(incoming,dict):
+                text=incoming.get('public_text');stamp=incoming.get('captured_at')
+                detail.update(query_same=incoming.get('query')==query,
+                    stamp_valid=type(stamp) in (int,float) and record['issued']-60<=stamp<=time.time()+60,
+                    text_length=len(text) if isinstance(text,str) else None,
+                    image_characters=len(incoming.get('image','')) if isinstance(incoming.get('image'),str) else None,
+                    image_pages=len(incoming['images']) if isinstance(incoming.get('images'),list) else None)
+                try:
+                    url=public_url(incoming.get('source_url',''),'IL')
+                    detail.update(source_url=url,empty_guard=il_completed_empty_snapshot(record,query,evidence,url,text))
+                    # Public registry text only; never image bytes, tokens or request credentials.
+                    if incoming.get('query')==query and isinstance(text,str):
+                        detail['public_text_sha256']=hashlib.sha256(text.encode()).hexdigest()
+                        detail['public_text_excerpt']=text[:2600]
+                except (TypeError,ValueError):detail['source_url_valid']=False
+            print('CC_IL_EMPTY_ARCHIVE '+json.dumps(detail,separators=(',',':')),flush=True)
+        except Exception:
+            pass  # Observation cannot change optional evidence or registry outcomes.
+
 
 def downloaded_record(master,result):
     """Preserve original matching PDF pages; spreadsheets are not screenshots."""
