@@ -563,7 +563,9 @@ def run_job(job, output, supervisor_pid=None, warmed=None):
     # The child has a private result file. Logs never mix into the result payload.
     execution_started, cpu_started = time.monotonic(), time.process_time()
     progress = DiscoveryProgress(output, job) if job['state'] == '@discovery' else None
-    result = execute(master, job, progress, Path(output).with_suffix('.trace.json'))
+    from deployment.workflow_observation import observation_sink
+    with observation_sink(Path(output).with_suffix('.workflow.ndjson')):
+        result = execute(master, job, progress, Path(output).with_suffix('.trace.json'))
     result['lab_task_metrics'] = {'import_seconds': import_seconds, 'import_cpu_seconds': import_cpu,
         'execution_seconds': time.monotonic()-execution_started, 'execution_cpu_seconds': time.process_time()-cpu_started}
     result['lab_task_metrics']['engine_preloaded'] = warmed is not None

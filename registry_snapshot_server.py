@@ -1,4 +1,6 @@
 from __future__ import annotations
+from deployment.workflow_observation import workflow_call, trace_return, workflow_stage
+
 
 import base64
 import calendar
@@ -738,16 +740,16 @@ def evidence_url(state: str, org_name: str, ein: str = "") -> str:
 
 def launch_lookup_browser(playwright, **kwargs):
     """Lab-only startup reuse; private launch remains the default and fallback."""
-    if os.environ.get("CE_LAB_BROWSER_POOL_CONFIG"):
+    if workflow_call('registry_snapshot_server.py:launch_lookup_browser:741:7:get',os.environ.get,locals(), "CE_LAB_BROWSER_POOL_CONFIG"):
         from deployment.browser_pool import leased_browser
         browser = leased_browser(playwright, kwargs)
         if browser is not None:
             launch_lookup_browser.lab_reused = True
             from deployment.state_snapshots import CURRENT, BrowserCaptureProxy
-            return BrowserCaptureProxy(browser) if CURRENT.get() is not None else browser
-    browser = playwright.chromium.launch(**kwargs)
+            return trace_return('registry_snapshot_server.py:launch_lookup_browser:747:12:return',(BrowserCaptureProxy(browser) if workflow_call('registry_snapshot_server.py:launch_lookup_browser:747:51:get',CURRENT.get,locals()) is not None else browser))
+    browser = workflow_call('registry_snapshot_server.py:launch_lookup_browser:748:14:launch',playwright.chromium.launch,locals(), **kwargs)
     from deployment.state_snapshots import CURRENT, BrowserCaptureProxy
-    return BrowserCaptureProxy(browser) if CURRENT.get() is not None else browser
+    return trace_return('registry_snapshot_server.py:launch_lookup_browser:750:4:return',(BrowserCaptureProxy(browser) if workflow_call('registry_snapshot_server.py:launch_lookup_browser:750:43:get',CURRENT.get,locals()) is not None else browser))
 
 
 def configure_browser_context(context) -> None:
@@ -34020,47 +34022,47 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
 
 def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None, me_progress: dict | None = None, wi_progress: dict | None = None) -> dict:
     if not trial_identity():
-        return _run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
+        return trace_return('registry_snapshot_server.py:run_state_lookup:34023:8:return',(workflow_call('registry_snapshot_server.py:run_state_lookup:34023:15:_run_state_lookup_source',_run_state_lookup_source,locals(), organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)))
     from deployment.state_snapshots import CaptureRun, CURRENT, digits
-    shared_capture=CURRENT.get()
+    shared_capture=workflow_call('registry_snapshot_server.py:run_state_lookup:34025:19:get',CURRENT.get,locals())
     if (shared_capture is not None and getattr(shared_capture,'semantic_history_scope',False)
             and shared_capture.state==(state or '').upper() and shared_capture.ein==digits(ein)
             and shared_capture.name==organization_name):
-        source_run=CURRENT.get()
+        source_run=workflow_call('registry_snapshot_server.py:run_state_lookup:34029:19:get',CURRENT.get,locals())
         source_mark=source_run.source_clock()
-        data=_run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
+        data=workflow_call('registry_snapshot_server.py:run_state_lookup:34031:13:_run_state_lookup_source',_run_state_lookup_source,locals(), organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
         source_run.source_done(source_mark)
         from deployment.state_snapshots import downloaded_record,DEADLINE
         try:
             from deployment.source_visual_adapters import capture_result_visuals
-            capture_result_visuals(sys.modules[__name__],data,CURRENT.get(),DEADLINE.get())
-        except Exception:CURRENT.get().errors.append('source_visual_adapter_unavailable')
+            workflow_call('registry_snapshot_server.py:run_state_lookup:34036:12:capture_result_visuals',capture_result_visuals,locals(), sys.modules[__name__],data,workflow_call('registry_snapshot_server.py:run_state_lookup:34036:62:get',CURRENT.get,locals()),workflow_call('registry_snapshot_server.py:run_state_lookup:34036:76:get',DEADLINE.get,locals()))
+        except Exception:workflow_call('registry_snapshot_server.py:run_state_lookup:34037:25:get',CURRENT.get,locals()).errors.append('source_visual_adapter_unavailable')
         source_extract_started=time.perf_counter()
         downloaded_record(sys.modules[__name__],data)
-        CURRENT.get().source_pdf_extract_ms+=(time.perf_counter()-source_extract_started)*1000
-        return data
+        workflow_call('registry_snapshot_server.py:run_state_lookup:34040:8:get',CURRENT.get,locals()).source_pdf_extract_ms+=(time.perf_counter()-source_extract_started)*1000
+        return trace_return('registry_snapshot_server.py:run_state_lookup:34041:8:return',(data))
     with CaptureRun(organization_name,ein,state) as capture:
         capture.known_names=[organization_name,*known_names_for_ein(ein)]
-        source_run=CURRENT.get()
+        source_run=workflow_call('registry_snapshot_server.py:run_state_lookup:34044:19:get',CURRENT.get,locals())
         source_mark=source_run.source_clock()
-        data=_run_state_lookup_source(organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
+        data=workflow_call('registry_snapshot_server.py:run_state_lookup:34046:13:_run_state_lookup_source',_run_state_lookup_source,locals(), organization_name,ein,state,capture_source_snapshot,confirm_single_no_match,mi_progress,me_progress,wi_progress)
         source_run.source_done(source_mark)
         from deployment.state_snapshots import downloaded_record,DEADLINE
         try:
             from deployment.source_visual_adapters import capture_result_visuals
-            capture_result_visuals(sys.modules[__name__],data,CURRENT.get(),DEADLINE.get())
-        except Exception:CURRENT.get().errors.append('source_visual_adapter_unavailable')
+            workflow_call('registry_snapshot_server.py:run_state_lookup:34051:12:capture_result_visuals',capture_result_visuals,locals(), sys.modules[__name__],data,workflow_call('registry_snapshot_server.py:run_state_lookup:34051:62:get',CURRENT.get,locals()),workflow_call('registry_snapshot_server.py:run_state_lookup:34051:76:get',DEADLINE.get,locals()))
+        except Exception:workflow_call('registry_snapshot_server.py:run_state_lookup:34052:25:get',CURRENT.get,locals()).errors.append('source_visual_adapter_unavailable')
         source_extract_started=time.perf_counter()
         downloaded_record(sys.modules[__name__],data)
-        CURRENT.get().source_pdf_extract_ms+=(time.perf_counter()-source_extract_started)*1000
+        workflow_call('registry_snapshot_server.py:run_state_lookup:34055:8:get',CURRENT.get,locals()).source_pdf_extract_ms+=(time.perf_counter()-source_extract_started)*1000
         try:
             data=capture.finish(data)
-            if os.environ.get('CE_FINAL_FOUR_CHILD') != '1':
+            if workflow_call('registry_snapshot_server.py:run_state_lookup:34058:15:get',os.environ.get,locals(), 'CE_FINAL_FOUR_CHILD') != '1':
                 from deployment.state_snapshots import persist_inline_result
                 data=persist_inline_result(sys.modules[__name__],data)
-            return data
+            return trace_return('registry_snapshot_server.py:run_state_lookup:34061:12:return',(data))
         except Exception:
-            return {**data, 'evidence_capture': 'unavailable'}
+            return trace_return('registry_snapshot_server.py:run_state_lookup:34063:12:return',({**data, 'evidence_capture': 'unavailable'}))
 
 
 def _run_state_lookup_source(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None, me_progress: dict | None = None, wi_progress: dict | None = None) -> dict:
@@ -34075,15 +34077,15 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
     body = ""
     proof_url = None
     if state in IL_GA_SOURCES:
-        return il_ga_connector_failure({"state": state, "organization_name": org.organization_name, "ein": org.ein})
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34078:8:return',(il_ga_connector_failure({"state": state, "organization_name": org.organization_name, "ein": org.ein})))
     if state in {"DC", "RI"}:
         result = search_dc(org) if state == "DC" else search_ri(org)
-        return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34081:8:return',(response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)))
     if state == "NY":
         result = search_ny_verified(org)
         body = " ".join(filter(None, [result.raw_status_text, result.source_note,
                                       result.matched_registry_name, result.matched_registry_identifier]))
-        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34086:8:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
         wi_progress = wi_progress if wi_progress is not None else {"attempted": [], "completed": set()}
@@ -34160,15 +34162,15 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
             result.matched_registry_name or "",
             result.matched_registry_identifier or "",
         ])
-        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34163:8:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
     if state in {"NH", "KS", "KY", "WA", "NM"}:
         result = None
         lookup_started = time.perf_counter()
-        browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
+        browser_admitted = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34168:27:acquire',BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
         if not browser_admitted:
             result = browser_capacity_busy_result(organization_name, ein, state)
-            return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)
+            return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34171:12:return',(response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)))
         try:
             if state in {"WA", "NM"}:
                 result = search_wa_nm_state(org, state)
@@ -34189,8 +34191,8 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
             result.success = False
         finally:
             if browser_admitted:
-                BROWSER_LOOKUP_SEMAPHORE.release()
-        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+                workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34192:16:release',BROWSER_LOOKUP_SEMAPHORE.release,locals())
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34193:8:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
     if state in {"CA", "VA"} and not capture_source_snapshot:
         # These existing paths use HTTP exclusively. CA retains its selected
@@ -34201,8 +34203,8 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
             try:
                 from deployment.state_snapshots import CURRENT
                 from deployment.source_visual_adapters import remember_ca_selected,remember_va_selected
-                if state=='CA':remember_ca_selected(CURRENT.get(),result)
-                elif state=='VA':remember_va_selected(CURRENT.get(),result)
+                if state=='CA':remember_ca_selected(workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34204:52:get',CURRENT.get,locals()),result)
+                elif state=='VA':remember_va_selected(workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34205:54:get',CURRENT.get,locals()),result)
             except Exception:pass
             body = "" if state == "CA" else " ".join(filter(None, [result.raw_status_text, result.source_note,
                                           result.matched_registry_name, result.matched_registry_identifier]))
@@ -34214,20 +34216,20 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
             result.error = str(exc)
             result.success = False
         result = ensure_state_result(result, org, state)
-        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34217:8:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
     if state == "NJ" and not capture_source_snapshot:
         direct = search_nj_public_details(org)
         if direct is not None:
             result, body = direct
-            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+            return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34223:12:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
     if state in {"HI", "OH", "WV"} and not capture_source_snapshot:
         direct = (search_hi_direct_details(org) if state == "HI" else
                   search_oh_direct_details(org) if state == "OH" else search_wv_public_details(org))
         if direct is not None:
             result, body = direct
-            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+            return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34230:12:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
     sc_official_checked = state == "SC" and not capture_source_snapshot
     sc_official_result = None
@@ -34243,7 +34245,7 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
     if sc_official_result and (public_status(sc_official_result) != "Not Registered"
             or (sc_official_result.success and (getattr(sc_official_result, "_sc_unrelated_alias_excluded", False)
                  or getattr(sc_official_result, "_sc_filing_ein_conflict_excluded", False)))):
-        return response_data_for_lookup(sc_official_result, "", org, organization_name, ein, state, lookup_started)
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34246:8:return',(response_data_for_lookup(sc_official_result, "", org, organization_name, ein, state, lookup_started)))
 
     if state == "LA" and not capture_source_snapshot and weekly_asset("LA", "downloadable-data/LA.xlsx") is not None:
         # A verified local export needs neither a browser nor a network request.
@@ -34253,7 +34255,7 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
         if result.success:
             body = " ".join(filter(None, [result.raw_status_text, result.source_note,
                                           result.matched_registry_name, result.matched_registry_identifier]))
-            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+            return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34256:12:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
     if state == "CT":
         lookup_started = time.perf_counter()
@@ -34272,7 +34274,7 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
             result.matched_registry_name or "",
             result.matched_registry_identifier or "",
         ]).strip()
-        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34275:8:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
     if state == "OR":
         lookup_started = time.perf_counter()
@@ -34285,14 +34287,14 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
                 result.matched_registry_name or "",
                 result.matched_registry_identifier or "",
             ]).strip()
-            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+            return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34288:12:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
     result = None
     lookup_started = time.perf_counter()
-    browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
+    browser_admitted = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34292:23:acquire',BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
     if not browser_admitted:
         result = browser_capacity_busy_result(organization_name, ein, state)
-        return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)
+        return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34295:8:return',(response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)))
     with checker.sync_playwright() as p:
         browser = None
         context = None
@@ -34305,7 +34307,7 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                 ]
-            browser = launch_lookup_browser(p, headless=True, **launch_kwargs)
+            browser = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34308:22:launch_lookup_browser',launch_lookup_browser,locals(), p, headless=True, **launch_kwargs)
             if state == "AK":
                 result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
                 if public_status(result) not in {"Not Registered", "Site Not Reachable"} and not (result.matched_registry_name or "").strip():
@@ -34331,7 +34333,7 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
                 if state == "LA":
                     context_kwargs["accept_downloads"] = True
                 context_kwargs.update(lab_fl_form_context_options(state, org))
-                context = browser.new_context(**context_kwargs)
+                context = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34334:26:new_context',browser.new_context,locals(), **context_kwargs)
                 if state == "AR":
                     context.add_init_script(
                         """
@@ -34343,7 +34345,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     )
                 if state not in {"MA", "AR"}:
                     configure_browser_context(context)
-                page = context.new_page()
+                page = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34346:23:new_page',context.new_page,locals())
             if state == "AK":
                 pass
             elif state == "CA":
@@ -34396,12 +34398,12 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     md_registry_match_from_entries(md_visual_result,body,org)
                     from deployment.state_snapshots import CURRENT,DEADLINE
                     from deployment.source_visual_adapters import capture_owned_md_page,remember_md_selected
-                    remember_md_selected(sys.modules[__name__],CURRENT.get(),md_visual_result,body,org)
-                    capture_owned_md_page(CURRENT.get(),{
+                    remember_md_selected(sys.modules[__name__],workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34399:63:get',CURRENT.get,locals()),md_visual_result,body,org)
+                    workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34400:20:capture_owned_md_page',capture_owned_md_page,locals(), workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34400:42:get',CURRENT.get,locals()),{
                         'state':'MD','ein':ein,'status':public_status(md_visual_result),'success':md_visual_result.success,
                         'matched_registry_name':md_visual_result.matched_registry_name,
                         'matched_registry_identifier':md_visual_result.matched_registry_identifier,
-                        'source_url':md_visual_result.source_url},page,context,DEADLINE.get())
+                        'source_url':md_visual_result.source_url},page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34404:79:get',DEADLINE.get,locals()))
                 except Exception:pass
             elif state == "CO":
                 result = search_co_with_name_fallback(page, org)
@@ -34414,7 +34416,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 result = search_ct(page, org)
                 body = registry_page_body(page)
             elif state == "FL":
-                acquired_fl_lane = FL_LOOKUP_SEMAPHORE.acquire(timeout=FL_LOOKUP_ACQUIRE_SECONDS)
+                acquired_fl_lane = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34417:35:acquire',FL_LOOKUP_SEMAPHORE.acquire,locals(), timeout=FL_LOOKUP_ACQUIRE_SECONDS)
                 if not acquired_fl_lane:
                     result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), "FL", "Site Not Reachable", "")
                     result.raw_status_text = "Florida lookup lanes were busy"
@@ -34439,7 +34441,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                                 ]).strip()
                                 result = confirmed_result
                     finally:
-                        FL_LOOKUP_SEMAPHORE.release()
+                        workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34442:24:release',FL_LOOKUP_SEMAPHORE.release,locals())
                 body = " ".join(part for part in [
                     result.raw_status_text or "",
                     result.source_note or "",
@@ -34449,17 +34451,17 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 try:
                     from deployment.state_snapshots import CURRENT,DEADLINE
                     from deployment.source_visual_adapters import capture_owned_fl_page
-                    capture_owned_fl_page(sys.modules[__name__],CURRENT.get(),{
+                    workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34452:20:capture_owned_fl_page',capture_owned_fl_page,locals(), sys.modules[__name__],workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34452:64:get',CURRENT.get,locals()),{
                         'state':'FL','ein':ein,'status':public_status(result),'success':result.success,
                         'matched_registry_name':result.matched_registry_name,
                         'matched_registry_identifier':result.matched_registry_identifier,
-                        'source_url':result.source_url},page,context,DEADLINE.get())
+                        'source_url':result.source_url},page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34456:69:get',DEADLINE.get,locals()))
                 except Exception:pass
             elif state == "NJ":
                 result = search_nj_with_name_fallback(page, org)
                 if public_status(result) != "Not Registered":
                     body = nj_detail_body(page, org)
-                    if nj_missing_period_result(result) and not nj_filing_context_from_body(body).get("computed_due_date"):
+                    if nj_missing_period_result(result) and not workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34462:64:get',nj_filing_context_from_body(body).get,locals(), "computed_due_date"):
                         recovered_body = nj_reload_detail_body(page, org)
                         if recovered_body:
                             body = "\n".join([body, recovered_body])
@@ -34468,7 +34470,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         ]
                     if public_status(result) == "Unable to Verify" or nj_missing_period_result(result):
                         nj_context = nj_filing_context_from_body(body)
-                        nj_due_date = nj_context.get("computed_due_date")
+                        nj_due_date = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34471:38:get',nj_context.get,locals(), "computed_due_date")
                         if nj_due_date:
                             result.status = status_from_calendar_date(nj_due_date)
                             existing_raw = re.sub(
@@ -34479,19 +34481,19 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                             ).strip()
                             existing_raw = re.sub(r"\s*\|\s*Next Filing Due:\s*\d{1,2}/\d{1,2}/\d{4}\b", "", existing_raw, flags=re.I).strip()
                             result.raw_status_text = f"{existing_raw or 'Status not found'} | Next Filing Due: {format_date(nj_due_date)}"
-                            if nj_context.get("last_year_on_record"):
+                            if workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34482:31:get',nj_context.get,locals(), "last_year_on_record"):
                                 result.last_year_on_record = nj_context["last_year_on_record"]
-                            fiscal_end = nj_context.get("fiscal_year_end")
+                            fiscal_end = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34484:41:get',nj_context.get,locals(), "fiscal_year_end")
                             if fiscal_end:
                                 result.fiscal_year_end = f"{fiscal_end[0]}/{fiscal_end[1]}"
-                            if nj_context.get("next_required_period"):
+                            if workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34487:31:get',nj_context.get,locals(), "next_required_period"):
                                 result.next_required_period = format_date(nj_context["next_required_period"])
                             result.computed_due_date = format_date(nj_due_date)
                             result.status_reason = "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD"
                             result.source_confidence = ""
                             result.source_note = "New Jersey detail modal fiscal-period evidence was parsed after scrolling/loading the detail frame."
                             result.source_attempts = [*(getattr(result, "source_attempts", None) or []),
-                                nj_context.get("source_evidence", "NJ registry filing-period evidence parsed.")]
+                                workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34494:32:get',nj_context.get,locals(), "source_evidence", "NJ registry filing-period evidence parsed.")]
             elif state == "PA":
                 result = search_pa_with_name_fallback(page, org)
                 elapsed_before_confirmation = time.perf_counter() - lookup_started
@@ -34530,9 +34532,9 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 mi_deadline = lookup_started + MI_LOOKUP_MAX_SECONDS
                 # This dictionary belongs only to this bounded MI check. A retry
                 # resumes completed zero-result searches for the identical input.
-                progress = mi_progress if isinstance(mi_progress, dict) and mi_progress.get("identity") == (
+                progress = mi_progress if isinstance(mi_progress, dict) and workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34533:76:get',mi_progress.get,locals(), "identity") == (
                     org.organization_name, canonical_ein_digits(org.ein)) else {}
-                mi_probe_result = progress.get("completed_empty_ein_result")
+                mi_probe_result = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34535:34:get',progress.get,locals(), "completed_empty_ein_result")
                 if mi_probe_result is None:
                     mi_probe_result = search_mi_http_completion_probe(org, lookup_deadline=mi_deadline)
                     if (mi_probe_result is not None and mi_probe_result.success
@@ -34580,7 +34582,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
                         progress["http_completed_empty_name_queries"] = list(completed_names)
                         progress["completed_empty_name_queries"] = list(dict.fromkeys([
-                            *progress.get("completed_empty_name_queries", []), *completed_names]))
+                            *workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34583:29:get',progress.get,locals(), "completed_empty_name_queries", []), *completed_names]))
                     completed_unmatched = getattr(mi_probe_result, "_cc_mi_completed_unmatched_names", [])
                     if trial_identity() and completed_unmatched:
                         progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
@@ -34628,13 +34630,13 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 try:
                     from deployment.state_snapshots import CURRENT,DEADLINE
                     from deployment.source_visual_adapters import capture_owned_mi_page
-                    capture_owned_mi_page(CURRENT.get(),{
+                    workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34631:20:capture_owned_mi_page',capture_owned_mi_page,locals(), workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34631:42:get',CURRENT.get,locals()),{
                         'state':'MI','ein':ein,'status':public_status(result),'success':result.success,
                         'completed_exact_ein_empty':getattr(mi_probe_result,'_cc_mi_completed_exact_ein_empty',None)==(org.organization_name,canonical_ein_digits(org.ein)),
                         'matched_registry_name':result.matched_registry_name,
                         'matched_registry_identifier':result.matched_registry_identifier,
                         'raw_status_text':result.raw_status_text,
-                        'source_url':result.source_url},page,context,DEADLINE.get())
+                        'source_url':result.source_url},page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34637:69:get',DEADLINE.get,locals()))
                 except Exception:pass
             elif state == "MN":
                 result = search_mn(page, org)
@@ -34695,7 +34697,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         break
                     result = retried_result
                     elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
-                confirm_wv_no_match = os.environ.get("CE_WV_CONFIRM_SINGLE_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
+                confirm_wv_no_match = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34698:38:get',os.environ.get,locals(), "CE_WV_CONFIRM_SINGLE_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
                 if confirm_single_no_match and confirm_wv_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 40.0:
                     time.sleep(2.0)
                     confirmed_result = search_wv_precise(page, org)
@@ -34726,11 +34728,11 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 try:
                     from deployment.state_snapshots import CURRENT,DEADLINE
                     from deployment.source_visual_adapters import capture_owned_me_page
-                    capture_owned_me_page(CURRENT.get(),{
+                    workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34729:20:capture_owned_me_page',capture_owned_me_page,locals(), workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34729:42:get',CURRENT.get,locals()),{
                         'state':'ME','ein':ein,'status':public_status(result),'success':result.success,
                         'matched_registry_name':result.matched_registry_name,
                         'matched_registry_identifier':result.matched_registry_identifier,
-                        'source_url':result.source_url},page,context,DEADLINE.get())
+                        'source_url':result.source_url},page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34733:69:get',DEADLINE.get,locals()))
                 except Exception:pass
             elif state == "ND":
                 result = search_nd_completed(page, org)
@@ -34794,14 +34796,14 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             result.success = False
         finally:
             if context:
-                context.close()
+                workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34797:16:close',context.close,locals())
             if browser:
-                browser.close()
+                workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34799:16:close',browser.close,locals())
             if browser_admitted:
-                BROWSER_LOOKUP_SEMAPHORE.release()
+                workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34801:16:release',BROWSER_LOOKUP_SEMAPHORE.release,locals())
 
     result = ensure_state_result(result, org, state)
-    return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+    return trace_return('registry_snapshot_server.py:_run_state_lookup_source:34804:4:return',(response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)))
 
 
 def fragile_batch_result_needs_confirmation(result: dict) -> bool:

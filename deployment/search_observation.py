@@ -131,7 +131,8 @@ def observed_http_call(call,*args,**kwargs):
         receipts=start_transport(url,body,kwargs.get('params'))
     except Exception:pass
     try:
-        response=call(*args,**kwargs)
+        from deployment.workflow_observation import workflow_call
+        response=workflow_call('source.http',call,{},*args,**kwargs)
     except BaseException:
         for receipt in receipts:receipt.incomplete()
         raise

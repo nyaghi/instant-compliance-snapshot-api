@@ -283,6 +283,8 @@ def warm_task_engine(version, settings):
 
 def log_failure_trace(r, error):
     """Keep bounded passive FL step evidence after task cleanup, never secrets."""
+    from deployment.workflow_observation import recover_failed_trace
+    recover_failed_trace(r,error)
     log_transport_failure(r, error)
     log_browser_failure(r,error)
     if not error or r['job']['state']!='FL':return

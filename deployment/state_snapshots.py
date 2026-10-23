@@ -1,3 +1,4 @@
+from deployment.workflow_observation import workflow_call, trace_return, workflow_stage
 """Immutable source archives. Reading a PDF never performs a registry lookup.
 
 Archive bytes are kept outside result payloads and identity-review tokens.
@@ -159,10 +160,10 @@ def archive(asset, *, ein, state, run_id, store=None):
     store=store or STORE
     if store is None:raise RuntimeError('Persistent source archive is not configured')
     meta,raw=validate_asset(asset,ein=ein,state=state,run_id=run_id)
-    return {'url':snapshot_link(store.save(meta,raw)),'identifier':meta['identifier'],
+    return trace_return('deployment/state_snapshots.py:archive:162:4:return',({'url':snapshot_link(store.save(meta,raw)),'identifier':meta['identifier'],
             'record_name':meta['record_name'],'source_sha256':meta['source_sha256'],
             'source_url':meta['source_url'],'captured_at':meta['captured_at'],
-            'kind':meta['kind'],'run_id':run_id,'ein':meta['ein'],'state':state}
+            'kind':meta['kind'],'run_id':run_id,'ein':meta['ein'],'state':state}))
 
 def completed_negative_result(result):
     """Illinois absence has an explicitly qualified public label."""
@@ -172,71 +173,71 @@ def completed_negative_result(result):
 
 def matching_reference(result, refs):
     """Never offer another candidate's screenshot for a selected registration."""
-    ident=str(result.get('matched_registry_identifier') or result.get('identifier') or '')
-    name=str(result.get('matched_registry_name') or result.get('name') or '')
-    ein=digits(result.get('ein',''));state=result.get('state')
-    candidates=[r for r in refs if r.get('ein')==ein and r.get('state')==state]
+    ident=str(workflow_call('deployment/state_snapshots.py:matching_reference:175:14:get',result.get,locals(), 'matched_registry_identifier') or workflow_call('deployment/state_snapshots.py:matching_reference:175:59:get',result.get,locals(), 'identifier') or '')
+    name=str(workflow_call('deployment/state_snapshots.py:matching_reference:176:13:get',result.get,locals(), 'matched_registry_name') or workflow_call('deployment/state_snapshots.py:matching_reference:176:52:get',result.get,locals(), 'name') or '')
+    ein=digits(workflow_call('deployment/state_snapshots.py:matching_reference:177:15:get',result.get,locals(), 'ein',''));state=workflow_call('deployment/state_snapshots.py:matching_reference:177:43:get',result.get,locals(), 'state')
+    candidates=[r for r in refs if workflow_call('deployment/state_snapshots.py:matching_reference:178:35:get',r.get,locals(), 'ein')==ein and workflow_call('deployment/state_snapshots.py:matching_reference:178:57:get',r.get,locals(), 'state')==state]
     if state=='GA':
-        candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
+        candidates=sorted(candidates,key=lambda r:workflow_call('deployment/state_snapshots.py:matching_reference:180:50:get',r.get,locals(), 'operation')=='detail')
     if state=='NC':
-        candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
+        candidates=sorted(candidates,key=lambda r:workflow_call('deployment/state_snapshots.py:matching_reference:182:50:get',r.get,locals(), 'operation')=='detail')
     if state=='NM' and re.fullmatch(r'\d{2}-?\d{7}',ident) and digits(ident)==ein:
         # The connector uses the nine-digit FEIN while the public result keeps
         # New Mexico's displayed hyphen. This is one already-bound credential.
-        return next((r for r in reversed(candidates)
-                     if re.fullmatch(r'\d{2}-?\d{7}',str(r.get('identifier','')))
+        return trace_return('deployment/state_snapshots.py:matching_reference:186:8:return',(next((r for r in reversed(candidates)
+                     if re.fullmatch(r'\d{2}-?\d{7}',str(workflow_call('deployment/state_snapshots.py:matching_reference:187:57:get',r.get,locals(), 'identifier','')))
                      and digits(r['identifier'])==ein
-                     and (not name or key(r.get('record_name'))==key(name))),None)
+                     and (not name or key(workflow_call('deployment/state_snapshots.py:matching_reference:189:42:get',r.get,locals(), 'record_name'))==key(name))),None)))
     if state=='IL' and ident:
         # A results list cannot substantiate the selected record's dates.
-        candidates=[r for r in candidates if r.get('operation')=='detail']
+        candidates=[r for r in candidates if workflow_call('deployment/state_snapshots.py:matching_reference:192:45:get',r.get,locals(), 'operation')=='detail']
     if state=='TN':
         # A selected record's dates require its detail page. A matching name
         # in a search list is useful context, not a substitute for that page.
         if (ident or name) and not completed_negative_result(result):
-            candidates=[r for r in candidates if r.get('operation')=='detail']
+            candidates=[r for r in candidates if workflow_call('deployment/state_snapshots.py:matching_reference:197:49:get',r.get,locals(), 'operation')=='detail']
         else:
-            candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
+            candidates=sorted(candidates,key=lambda r:workflow_call('deployment/state_snapshots.py:matching_reference:199:54:get',r.get,locals(), 'operation')=='detail')
     if state=='NY':
-        path=urlsplit(result.get('source_url') or result.get('url') or '').path
+        path=urlsplit(workflow_call('deployment/state_snapshots.py:matching_reference:201:22:get',result.get,locals(), 'source_url') or workflow_call('deployment/state_snapshots.py:matching_reference:201:50:get',result.get,locals(), 'url') or '').path
         observed=re.fullmatch(r'/RegistrySearch/(\d{2}-\d{2}-\d{2})/?',path)
         if observed:
-            return next((r for r in reversed(candidates) if r.get('identifier')==observed[1]
-                         and (not name or key(r.get('record_name'))==key(name))),None)
+            return trace_return('deployment/state_snapshots.py:matching_reference:204:12:return',(next((r for r in reversed(candidates) if workflow_call('deployment/state_snapshots.py:matching_reference:204:60:get',r.get,locals(), 'identifier')==observed[1]
+                         and (not name or key(workflow_call('deployment/state_snapshots.py:matching_reference:205:46:get',r.get,locals(), 'record_name'))==key(name))),None)))
     if state=='VA' and completed_negative_result(result) and re.fullmatch(r'\d{1,12}',ident):
-        proof=result.get('va_entity_evidence')
-        if (isinstance(proof,dict) and proof.get('ein')==ein and proof.get('id')==ident
-                and proof.get('entity_id')==ident and bool(name) and key(proof.get('name'))==key(name)
-                and proof.get('status')=='Unregistered' and type(proof.get('registration_count')) is int
+        proof=workflow_call('deployment/state_snapshots.py:matching_reference:207:14:get',result.get,locals(), 'va_entity_evidence')
+        if (isinstance(proof,dict) and workflow_call('deployment/state_snapshots.py:matching_reference:208:39:get',proof.get,locals(), 'ein')==ein and workflow_call('deployment/state_snapshots.py:matching_reference:208:65:get',proof.get,locals(), 'id')==ident
+                and workflow_call('deployment/state_snapshots.py:matching_reference:209:20:get',proof.get,locals(), 'entity_id')==ident and bool(name) and key(workflow_call('deployment/state_snapshots.py:matching_reference:209:73:get',proof.get,locals(), 'name'))==key(name)
+                and workflow_call('deployment/state_snapshots.py:matching_reference:210:20:get',proof.get,locals(), 'status')=='Unregistered' and type(workflow_call('deployment/state_snapshots.py:matching_reference:210:65:get',proof.get,locals(), 'registration_count')) is int
                 and proof['registration_count']==0):
-            return next((r for r in reversed(candidates) if r.get('identifier')=='@completed-search'
-                         and r.get('source_url')=='https://vdacs.evokeplatform.com/app/publicPortal/entity/'+ident
-                         and key(r.get('record_name'))==key(name)),None)
-    if ident:return next((r for r in reversed(candidates) if r.get('identifier')==ident
-                         and (not name or key(r.get('record_name'))==key(name))),None)
+            return trace_return('deployment/state_snapshots.py:matching_reference:212:12:return',(next((r for r in reversed(candidates) if workflow_call('deployment/state_snapshots.py:matching_reference:212:60:get',r.get,locals(), 'identifier')=='@completed-search'
+                         and workflow_call('deployment/state_snapshots.py:matching_reference:213:29:get',r.get,locals(), 'source_url')=='https://vdacs.evokeplatform.com/app/publicPortal/entity/'+ident
+                         and key(workflow_call('deployment/state_snapshots.py:matching_reference:214:33:get',r.get,locals(), 'record_name'))==key(name)),None)))
+    if ident:return trace_return('deployment/state_snapshots.py:matching_reference:215:13:return',(next((r for r in reversed(candidates) if workflow_call('deployment/state_snapshots.py:matching_reference:215:61:get',r.get,locals(), 'identifier')==ident
+                         and (not name or key(workflow_call('deployment/state_snapshots.py:matching_reference:216:46:get',r.get,locals(), 'record_name'))==key(name))),None)))
     if name:
-        named=[r for r in candidates if key(r.get('record_name'))==key(name)]
+        named=[r for r in candidates if key(workflow_call('deployment/state_snapshots.py:matching_reference:218:44:get',r.get,locals(), 'record_name'))==key(name)]
         # Same-name registrations are not interchangeable evidence. Without a
         # selected credential, an ambiguous collection must offer no row link.
-        if len({r.get('identifier','') for r in named})!=1:return None
-        return named[-1] if named else None
+        if len({workflow_call('deployment/state_snapshots.py:matching_reference:221:16:get',r.get,locals(), 'identifier','') for r in named})!=1:return trace_return('deployment/state_snapshots.py:matching_reference:221:59:return',(None))
+        return trace_return('deployment/state_snapshots.py:matching_reference:222:8:return',(named[-1] if named else None))
     if completed_negative_result(result):
-        return next((r for r in reversed(candidates) if r.get('identifier')=='@completed-search'),None)
-    return None
+        return trace_return('deployment/state_snapshots.py:matching_reference:224:8:return',(next((r for r in reversed(candidates) if workflow_call('deployment/state_snapshots.py:matching_reference:224:56:get',r.get,locals(), 'identifier')=='@completed-search'),None)))
+    return trace_return('deployment/state_snapshots.py:matching_reference:225:4:return',(None))
 
 def attach_links(result, refs):
-    data=dict(result);ref=matching_reference(data,refs)
+    data=dict(result);ref=workflow_call('deployment/state_snapshots.py:attach_links:228:26:matching_reference',matching_reference,locals(), data,refs)
     if ref:data.update(evidence_url=ref['url'],evidence_captured_at=ref['captured_at'])
     else:data['evidence_url']=''
-    review=data.get('identity_review')
+    review=workflow_call('deployment/state_snapshots.py:attach_links:231:11:get',data.get,locals(), 'identity_review')
     if review:
         # The signed record is populated in the master before this public view.
-        data['identity_review']={**review,'candidates':[dict(c) for c in review.get('candidates',[])]}
+        data['identity_review']={**review,'candidates':[dict(c) for c in workflow_call('deployment/state_snapshots.py:attach_links:234:73:get',review.get,locals(), 'candidates',[])]}
         for row in data['identity_review']['candidates']:
-            candidate=matching_reference({**row,'ein':data['ein'],'state':data['state']},refs)
+            candidate=workflow_call('deployment/state_snapshots.py:attach_links:236:22:matching_reference',matching_reference,locals(), {**row,'ein':data['ein'],'state':data['state']},refs)
             if candidate:row['evidence_url']=candidate['url']
-    data['evidence_capture']='saved' if ref else ('candidate_only' if review and any(r.get('evidence_url') for r in data['identity_review']['candidates']) else 'unavailable')
-    return data
+    data['evidence_capture']='saved' if ref else ('candidate_only' if review and any(workflow_call('deployment/state_snapshots.py:attach_links:238:85:get',r.get,locals(), 'evidence_url') for r in data['identity_review']['candidates']) else 'unavailable')
+    return trace_return('deployment/state_snapshots.py:attach_links:239:4:return',(data))
 
 def persist_history_timed(data,job,history,refs,store):
     from deployment.search_history import persist_worker_history
@@ -246,40 +247,42 @@ def persist_history_timed(data,job,history,refs,store):
         out['evidence_metrics']={**out['evidence_metrics'],'history_archive_ms':round((time.perf_counter()-started)*1000,2)}
     return out
 
+from deployment.workflow_observation import archive_stage
+@archive_stage
 def persist_worker_result(queue,result,job,store=None):
     """Supervisor only, after reaping. Never give child processes DB access."""
-    if not isinstance(result,dict):return result
+    if not isinstance(result,dict):return trace_return('deployment/state_snapshots.py:persist_worker_result:251:35:return',(result))
     data=dict(result);assets=data.pop('_worker_source_archives',[])
-    if isinstance(data.get('evidence_metrics'),dict):data['evidence_metrics']={**data['evidence_metrics'],'archive_ms':0}
+    if isinstance(workflow_call('deployment/state_snapshots.py:persist_worker_result:253:18:get',data.get,locals(), 'evidence_metrics'),dict):data['evidence_metrics']={**data['evidence_metrics'],'archive_ms':0}
     history=data.pop('_worker_search_history',None)
-    if data.get('_worker_desktop_evidence',{}).get('operation')=='empty_search' and isinstance(history,dict):
+    if workflow_call('deployment/state_snapshots.py:persist_worker_result:255:7:get',workflow_call('deployment/state_snapshots.py:persist_worker_result:255:7:get',data.get,locals(), '_worker_desktop_evidence',{}).get,locals(), 'operation')=='empty_search' and isinstance(history,dict):
         data['_worker_desktop_history']=history
     if not assets:
-        return persist_history_timed(data,job,history,[],store or (PostgresStore(queue.pool) if history and queue else None))
+        return trace_return('deployment/state_snapshots.py:persist_worker_result:258:8:return',(persist_history_timed(data,job,history,[],store or (PostgresStore(queue.pool) if history and queue else None))))
     data['evidence_url']=''
     refs=[];started=time.perf_counter()
     if (not isinstance(assets,list) or len(assets)>12
-            or digits(data.get('ein'))!=digits(job['payload']['ein']) or data.get('state')!=job['state']):
-        data['evidence_capture']='unavailable';return data
+            or digits(workflow_call('deployment/state_snapshots.py:persist_worker_result:262:22:get',data.get,locals(), 'ein'))!=digits(job['payload']['ein']) or workflow_call('deployment/state_snapshots.py:persist_worker_result:262:73:get',data.get,locals(), 'state')!=job['state']):
+        data['evidence_capture']='unavailable';return trace_return('deployment/state_snapshots.py:persist_worker_result:263:47:return',(data))
     try:
         store=store or PostgresStore(queue.pool)
         for asset in assets:
             if time.perf_counter()-started>1:
                 data['evidence_capture']='partial' if refs else 'unavailable';break
-            refs.append(archive(asset,ein=data['ein'],state=data['state'],run_id=asset.get('run_id',''),store=store))
+            refs.append(workflow_call('deployment/state_snapshots.py:persist_worker_result:269:24:archive',archive,locals(), asset,ein=data['ein'],state=data['state'],run_id=workflow_call('deployment/state_snapshots.py:persist_worker_result:269:81:get',asset.get,locals(), 'run_id',''),store=store))
     except Exception:
         data['evidence_capture']='partial' if refs else 'unavailable'
-    data=attach_links(data,refs)
+    data=workflow_call('deployment/state_snapshots.py:persist_worker_result:272:9:attach_links',attach_links,locals(), data,refs)
     data['evidence_archive_ms']=round((time.perf_counter()-started)*1000,2)
-    if isinstance(data.get('evidence_metrics'),dict):data['evidence_metrics'].update(archive_ms=data['evidence_archive_ms'],archived_assets=len(refs),row_link=bool(data.get('evidence_url')))
-    context=data.get('_worker_identity_review')
+    if isinstance(workflow_call('deployment/state_snapshots.py:persist_worker_result:274:18:get',data.get,locals(), 'evidence_metrics'),dict):data['evidence_metrics'].update(archive_ms=data['evidence_archive_ms'],archived_assets=len(refs),row_link=bool(workflow_call('deployment/state_snapshots.py:persist_worker_result:274:164:get',data.get,locals(), 'evidence_url')))
+    context=workflow_call('deployment/state_snapshots.py:persist_worker_result:275:12:get',data.get,locals(), '_worker_identity_review')
     if context:
         context={**context,'records':[dict(r) for r in context['records']]}
         for row in context['records']:
-            ref=matching_reference({**row,'ein':data['ein'],'state':data['state']},refs)
+            ref=workflow_call('deployment/state_snapshots.py:persist_worker_result:279:16:matching_reference',matching_reference,locals(), {**row,'ein':data['ein'],'state':data['state']},refs)
             if ref:row['evidence_url']=ref['url']
         data['_worker_identity_review']=context
-    return persist_history_timed(data,job,history,refs,store)
+    return trace_return('deployment/state_snapshots.py:persist_worker_result:282:4:return',(persist_history_timed(data,job,history,refs,store)))
 
 def persist_inline_result(master,result):
     """API-owned continuation: archive now, never expose private image bytes."""
@@ -405,16 +408,22 @@ class CaptureRun:
         other_capture=max(0,self.capture_ms-mark[1]-adapter_pixels)
         self.source_clock_calls+=1;self.source_wall_ms+=wall
         self.source_only_ms+=max(0,wall-adapter-other_capture)
-    def __enter__(self):self.token=CURRENT.set(self);return self
-    def __exit__(self,*args):CURRENT.reset(self.token)
+    def __enter__(self):
+        from deployment.workflow_observation import Observation,ACTIVE
+        self.observation=Observation(self.run_id,self.state,DEADLINE.get())
+        self.observation_token=ACTIVE.set(self.observation)
+        self.token=CURRENT.set(self);return self
+    def __exit__(self,*args):
+        from deployment.workflow_observation import ACTIVE
+        self.observation.release();ACTIVE.reset(self.observation_token);CURRENT.reset(self.token)
     def document(self,url,raw,kind='source_text',public_text='',note=''):
         try:
             url=public_url(url,self.state)
-            if not isinstance(raw,bytes) or not 0<len(raw)<=MAX_BYTES:return
+            if not isinstance(raw,bytes) or not 0<len(raw)<=MAX_BYTES:return trace_return('deployment/state_snapshots.py:document:413:70:return',None)
             while self.documents and (len(self.documents)>=8 or sum(len(d[1]) for d in self.documents)+len(raw)>6_000_000):
                 self.documents.pop(0)
-            self.documents.append((url,raw,kind,public_text,time.time(),note or self.provenance.get(url,'')))
-        except (ValueError,UnicodeError):return
+            self.documents.append((url,raw,kind,public_text,time.time(),note or workflow_call('deployment/state_snapshots.py:document:416:80:get',self.provenance.get,locals(), url,'')))
+        except (ValueError,UnicodeError):return trace_return('deployment/state_snapshots.py:document:417:41:return',None)
     def page(self,page):
         """Capture before its existing context closes; do not navigate or scroll."""
         started=time.perf_counter()
@@ -423,56 +432,56 @@ class CaptureRun:
             observation={'phase':'admission','outcome':'pending'}
             self.visual_adapter_facts.append({'adapter':'CO-existing-page-observation','page_capture_observations':[observation]})
         if self.state=='SC':
-            facts=[f for f in self.visual_adapter_facts if f.get('adapter')=='SC-selected-original-detail' and f.get('phase')=='capture']
+            facts=[f for f in self.visual_adapter_facts if workflow_call('deployment/state_snapshots.py:page:426:59:get',f.get,locals(), 'adapter')=='SC-selected-original-detail' and workflow_call('deployment/state_snapshots.py:page:426:111:get',f.get,locals(), 'phase')=='capture']
             if facts:
                 observation={'phase':'admission','outcome':'pending'}
                 facts[-1].setdefault('page_capture_observations',[]).append(observation)
         def observed(phase):
             if observation is not None:observation.update(phase=phase,elapsed_seconds=round(time.perf_counter()-started,6))
         try:
-            if time.monotonic()+3>=DEADLINE.get():
-                self.errors.append('capture_skipped_near_task_deadline');return
+            if time.monotonic()+3>=workflow_call('deployment/state_snapshots.py:page:433:35:get',DEADLINE.get,locals()):
+                self.errors.append('capture_skipped_near_task_deadline');return trace_return('deployment/state_snapshots.py:page:434:73:return',None)
             if self.state=='AK':
                 # Wait for the original site's view transition, never hide it.
                 try:
-                    page.wait_for_function("""async()=>{
+                    workflow_call('deployment/state_snapshots.py:page:438:20:wait_for_function',page.wait_for_function,locals(), """async()=>{
                         const url=location.href,text=document.body.innerText;
                         await new Promise(resolve=>setTimeout(resolve,200));
                         return location.href===url && document.body.innerText===text;
                     }""",timeout=700)
                 except Exception:
-                    self.errors.append('source_view_not_stable');return
+                    self.errors.append('source_view_not_stable');return trace_return('deployment/state_snapshots.py:page:444:65:return',None)
             if self.state=='WA':
                 try:
                     if not wa_painted_result_ready(page):
-                        self.errors.append('WA_source_overlay_visible');return
+                        self.errors.append('WA_source_overlay_visible');return trace_return('deployment/state_snapshots.py:page:448:72:return',None)
                 except Exception:
-                    self.errors.append('WA_source_overlay_not_cleared');return
+                    self.errors.append('WA_source_overlay_not_cleared');return trace_return('deployment/state_snapshots.py:page:450:72:return',None)
             observed('public_url')
             original_url=page.url
             url=public_url(original_url,self.state)
             observed('read_text')
-            text=page.inner_text('body',timeout=400)[:20000]
+            text=workflow_call('deployment/state_snapshots.py:page:455:17:inner_text',page.inner_text,locals(), 'body',timeout=400)[:20000]
             ak_empty=ak_empty_controls(page,self,text) if self.state=='AK' else None
             observed('read_dimensions')
-            size=page.locator('body').evaluate(
+            size=workflow_call('deployment/state_snapshots.py:page:458:17:evaluate',page.locator('body').evaluate,locals(),
                 '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=300)
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
-                self.errors.append('source_page_exceeds_capture_bound');return
+                self.errors.append('source_page_exceeds_capture_bound');return trace_return('deployment/state_snapshots.py:page:461:72:return',None)
             observed('screenshot')
-            raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=1000)
-            if self.state=='WA' and page.locator('#loaderDiv').is_visible():
-                self.errors.append('WA_source_overlay_returned_during_capture');return
+            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=1000)
+            if self.state=='WA' and workflow_call('deployment/state_snapshots.py:page:464:36:is_visible',page.locator('#loaderDiv').is_visible,locals()):
+                self.errors.append('WA_source_overlay_returned_during_capture');return trace_return('deployment/state_snapshots.py:page:465:80:return',None)
             observed('post_capture_binding')
-            if page.url!=original_url or page.inner_text('body',timeout=400)[:20000]!=text:
-                self.errors.append('source_page_changed_during_capture');return
+            if page.url!=original_url or workflow_call('deployment/state_snapshots.py:page:467:41:inner_text',page.inner_text,locals(), 'body',timeout=400)[:20000]!=text:
+                self.errors.append('source_page_changed_during_capture');return trace_return('deployment/state_snapshots.py:page:468:73:return',None)
             if ak_empty is not None:
                 if ak_empty_controls(page,self,text)!=ak_empty:
-                    self.errors.append('AK_empty_criteria_changed_during_capture');return
+                    self.errors.append('AK_empty_criteria_changed_during_capture');return trace_return('deployment/state_snapshots.py:page:471:83:return',None)
                 bindings=getattr(self,'ak_empty_image_bindings',None)
                 if bindings is None:self.ak_empty_image_bindings={}
                 self.ak_empty_image_bindings[hashlib.sha256(raw).hexdigest()]=ak_empty
-            self.document(url,raw,'image',text,note=('Original Alaska empty search view for displayed year '+ak_empty['year']+'. This one image does not by itself establish all yearly/name searches.' if ak_empty else ''))
+            workflow_call('deployment/state_snapshots.py:page:475:12:document',self.document,locals(), url,raw,'image',text,note=('Original Alaska empty search view for displayed year '+ak_empty['year']+'. This one image does not by itself establish all yearly/name searches.' if ak_empty else ''))
         except Exception as exc:
             self.errors.append('source_page_capture_unavailable')
             if observation is not None:observation.update(outcome='failed',error_type=type(exc).__name__,error_summary=str(exc)[:800])
@@ -482,15 +491,15 @@ class CaptureRun:
                 observation['total_seconds']=round(elapsed,6)
                 if observation['outcome']=='pending':observation['outcome']='returned'
     def finish(self,result):
-        if not isinstance(result,dict):return result
+        if not isinstance(result,dict):return trace_return('deployment/state_snapshots.py:finish:485:39:return',(result))
         data=dict(result);assets=[]
-        review_rows=(data.get('_worker_identity_review') or {}).get('records',[])
+        review_rows=workflow_call('deployment/state_snapshots.py:finish:487:20:get',(workflow_call('deployment/state_snapshots.py:finish:487:21:get',data.get,locals(), '_worker_identity_review') or {}).get,locals(), 'records',[])
         if not review_rows:
-            review_rows=(data.get('identity_review') or {}).get('candidates',[])
+            review_rows=workflow_call('deployment/state_snapshots.py:finish:489:24:get',(workflow_call('deployment/state_snapshots.py:finish:489:25:get',data.get,locals(), 'identity_review') or {}).get,locals(), 'candidates',[])
         records=[data]+[{**row,'state':self.state,'ein':self.ein} for row in review_rows]
         for row in records[:12]:
-            identifier=str(row.get('matched_registry_identifier') or row.get('identifier') or '')
-            name=str(row.get('matched_registry_name') or row.get('name') or '')
+            identifier=str(workflow_call('deployment/state_snapshots.py:finish:492:27:get',row.get,locals(), 'matched_registry_identifier') or workflow_call('deployment/state_snapshots.py:finish:492:69:get',row.get,locals(), 'identifier') or '')
+            name=str(workflow_call('deployment/state_snapshots.py:finish:493:21:get',row.get,locals(), 'matched_registry_name') or workflow_call('deployment/state_snapshots.py:finish:493:57:get',row.get,locals(), 'name') or '')
             negative=completed_negative_result(row)
             # Only source visuals are eligible; no text/JSON substitute is permitted.
             ordered=sorted((d for d in self.documents if d[2] in {'image','image_pages','source_pdf'}),key=lambda d:({'image':3,'image_pages':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
@@ -516,14 +525,14 @@ class CaptureRun:
                     if self.state=='RI':matched=url in self.validated_negative_visual_urls and 'No search results were found. Please refine your search criteria and try again.' in text and hashlib.sha256(raw).hexdigest() in getattr(self,'ri_validated_empty_images',set())
                 if re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I):continue
                 if not matched:continue
-                asset=asset_for(raw,kind=kind,state=self.state,ein=self.ein,run_id=self.run_id,source_url=url,
+                asset=workflow_call('deployment/state_snapshots.py:finish:519:22:asset_for',asset_for,locals(), raw,kind=kind,state=self.state,ein=self.ein,run_id=self.run_id,source_url=url,
                     organization_name=self.name,identifier='@completed-search' if negative else identifier,
                     record_name=name,public_text=public_text[:20000],capture_note='Saved during this lookup; no new registry search occurs when this PDF is opened. '+source_note)
                 asset['captured_at']=stamp;assets.append(asset);break
         if assets:data['_worker_source_archives']=assets
         data['evidence_capture_ms']=round(self.capture_ms,2)
         data['evidence_capture']='captured' if assets else 'unavailable'
-        visual_ms=sum(f.get('total_ms',0) for f in self.visual_adapter_facts)
+        visual_ms=sum(workflow_call('deployment/state_snapshots.py:finish:526:22:get',f.get,locals(), 'total_ms',0) for f in self.visual_adapter_facts)
         data['evidence_metrics']={
             'lookup_and_visual_ms':round((time.perf_counter()-self.lookup_started)*1000,2),
             'capture_ms':round(self.capture_ms,2),'visual_adapter_ms':round(visual_ms,2),
@@ -536,6 +545,7 @@ class CaptureRun:
             'visual_adapters':[dict(f) for f in self.visual_adapter_facts[:2]],
             'missing_stage':('' if assets else 'record_binding' if any(d[2] in {'image','image_pages','source_pdf'} for d in self.documents)
                 else 'capture' if self.errors else 'source_visual_not_collected')}
+        if getattr(self,'observation',None):data['workflow_observation']=self.observation.export()
         if self.state=='WI' and not assets:
             try:
                 from deployment.desktop_source_evidence import retained_request
@@ -543,7 +553,7 @@ class CaptureRun:
                 if request:data['_worker_desktop_evidence']=request
             except Exception:self.errors.append('desktop_evidence_request_unavailable')
         from deployment.search_history import finish_worker_history
-        return finish_worker_history(self,data)
+        return trace_return('deployment/state_snapshots.py:finish:546:8:return',(finish_worker_history(self,data)))
 
 class ContextCaptureProxy:
     def __init__(self,context):
@@ -552,35 +562,37 @@ class ContextCaptureProxy:
         if run:
             from deployment.search_observation import observe_browser_context
             observe_browser_context(context,run)
+            from deployment.workflow_observation import observe_context
+            observe_context(context,getattr(run,'observation',None))
     def __getattr__(self,key):return getattr(self._context,key)
     def capture(self):
-        run=CURRENT.get()
+        run=workflow_call('deployment/state_snapshots.py:capture:557:12:get',CURRENT.get,locals())
         if run and not self._closed and not self._captured:
             self._captured=True
             try:
-                for page in self._context.pages[:3]:run.page(page)
+                for page in self._context.pages[:3]:workflow_call('deployment/state_snapshots.py:capture:561:52:page',run.page,locals(), page)
             except Exception:run.errors.append('source_context_capture_unavailable')
             # AK's route hash can change from the previous result view during
             # its first photograph. One fresh read/capture only, no re-search.
             if run.state=='AK' and run.errors and run.errors[-1]=='source_page_changed_during_capture':
                 try:
-                    if self._context.pages:run.page(self._context.pages[0])
+                    if self._context.pages:workflow_call('deployment/state_snapshots.py:capture:567:43:page',run.page,locals(), self._context.pages[0])
                 except Exception:run.errors.append('source_context_recapture_unavailable')
     def close(self,*args,**kwargs):
-        self.capture()
-        value=self._context.close(*args,**kwargs);self._closed=True
-        return value
+        workflow_call('deployment/state_snapshots.py:close:570:8:capture',self.capture,locals())
+        value=workflow_call('deployment/state_snapshots.py:close:571:14:close',self._context.close,locals(), *args,**kwargs);self._closed=True
+        return trace_return('deployment/state_snapshots.py:close:572:8:return',(value))
 
 class BrowserCaptureProxy:
     def __init__(self,browser):self._browser=browser;self._owned_contexts=[]
     def __getattr__(self,key):return getattr(self._browser,key)
     def new_context(self,*args,**kwargs):
-        context=ContextCaptureProxy(self._browser.new_context(*args,**kwargs))
-        self._owned_contexts.append(context);return context
+        context=ContextCaptureProxy(workflow_call('deployment/state_snapshots.py:new_context:578:36:new_context',self._browser.new_context,locals(), *args,**kwargs))
+        self._owned_contexts.append(context);return trace_return('deployment/state_snapshots.py:new_context:579:45:return',(context))
     def close(self,*args,**kwargs):
         # Never inspect other contexts in a borrowed/shared browser.
-        for context in self._owned_contexts:context.capture()
-        return self._browser.close(*args,**kwargs)
+        for context in self._owned_contexts:workflow_call('deployment/state_snapshots.py:close:582:44:capture',context.capture,locals())
+        return trace_return('deployment/state_snapshots.py:close:583:8:return',(workflow_call('deployment/state_snapshots.py:close:583:15:close',self._browser.close,locals(), *args,**kwargs)))
 
 
 def nm_detail_snapshot_bound(record,query,evidence,url,text,identifier):

@@ -184,8 +184,15 @@ def final_four_asset(name, text):
         # lookups. This does not change registry requests or results.
         replace('            onProgress: (message) => {', '''            onProgress: (message, detail) => {
               if (detail && ["NY", "AL", "NM", "MS", "IL", "NV", "GA", "NC", "TN"].includes(detail.state)) {
+                if(detail.workflow_observation) {
+                  const diagnostic=detail.workflow_observation;
+                  const store=window.__CCWorkflowObservations ||= {};
+                  const key=diagnostic.lookup_id||detail.lookup_id||detail.state;
+                  if(Object.keys(store).length<100 || Object.hasOwn(store,key))store[key]=diagnostic;
+                  else window.__CCWorkflowObservationOverflow=true;
+                }
                 const events = window.__CCLabStateTrace ||= [];
-                events.push({at: Date.now(), state: detail.state, stage: detail.stage || "",
+                events.push({at: Date.now(), state: detail.state, stage: detail.stage || "", lookup_id:detail.lookup_id||null, query_id:detail.query_id||null,
                   action: detail.action || "", operation: detail.query?.operation || "",
                   query: detail.query?.name || "", reason: detail.reason || "",
                   ny_phase: detail.ny_phase || "", http_status: detail.http_status ?? null,
@@ -218,7 +225,9 @@ def final_four_asset(name, text):
         # diagnostic survive a browser-control disconnect without another run.
         replace('      const blob = new Blob([html], { type: "application/vnd.ms-excel" });', '''      const labTrace = encodeURIComponent(JSON.stringify({
         schema:"cc-lab-trace-v1",exported_at:new Date().toISOString(),
-        events:Array.isArray(window.__CCLabStateTrace)?window.__CCLabStateTrace:[]
+        events:Array.isArray(window.__CCLabStateTrace)?window.__CCLabStateTrace:[],
+        workflow_observations:window.__CCWorkflowObservations||{},
+        observation_overflow:window.__CCWorkflowObservationOverflow===true
       }));
       const blob = new Blob([`<!--CC_LAB_TRACE_V1:${labTrace}-->`,html], { type: "application/vnd.ms-excel" });''')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
@@ -236,13 +245,20 @@ def final_four_asset(name, text):
         replace("    const results=new Map(), external=states.filter(s=>s==='IL'||s==='GA');", '''    const runStarted=Date.now();
     const trace=(stage,detail={})=>{
       const events=window.__CCLabStateTrace ||= [];
+      if(stage==='workflow started') {
+        window.__CCWorkflowObservations={};window.__CCWorkflowObservationOverflow=false;
+        window.__CCWorkflowObservationRun={started_epoch_seconds:runStarted/1000};
+      }
       events.push({at:Date.now(),state:"*",stage,elapsed_ms:Date.now()-runStarted,...detail});
       if(events.length>2000)events.splice(0,events.length-2000);
     };
     trace("workflow started",{mode,states:[...states]});
     const results=new Map(), external=states.filter(s=>s==='IL'||s==='GA');''')
         replace('      results.set(result.state,result);onResult(result);', '''      results.set(result.state,result);
-      trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||""});
+      trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||"",evidence_link_present:!!result.evidence_url});
+      const observed=window.__CCWorkflowObservations ||= {};
+      if(result.workflow_observation)observed['server-'+result.state]=result.workflow_observation;
+      if(result.archive_observation)observed['archive-'+result.state]=result.archive_observation;
       onResult(result);''')
         replace('      connectorStarted=true;', '''      connectorStarted=true;
       const tnFirst=mode==='standard';
@@ -300,7 +316,7 @@ def final_four_asset(name, text):
         # continuations, source pages, or verification challenge material.
         replace('    async function api(fields, cleanup = false) {', '''    const trace = (stage, query = null, detail = {}) => {
       const publicQuery = query ? Object.fromEntries(Object.entries(query).filter(([key]) => ["state","operation","name","identifier","ein","orgName","orgID","city"].includes(key))) : null;
-      onProgress?.(`${label}: ${stage}.`, {state:registryState,stage,query:publicQuery,...detail});
+      onProgress?.(`${label}: ${stage}.`, {state:registryState,stage,lookup_id:lookupId||null,query:publicQuery,...detail});
     };
     async function api(fields, cleanup = false) {
       if (!cleanup) trace("master request", null, {action:fields.action});''')
@@ -318,7 +334,7 @@ def final_four_asset(name, text):
         replace('        let completed;', '        let completed;\n        trace("browser query started", state.query);')
         replace('progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.',
                 'progress => ["opening_page","waiting_for_form","preparing_query","query_sent"].includes(progress.ny_phase) ? trace("browser stage", state.query, {ny_phase:progress.ny_phase}) : Array.isArray(progress.ny_diagnostics) ? trace("browser stage", state.query, {ny_diagnostics:nyDiagnostics(progress.ny_diagnostics)}) : onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.')
-        replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",...(registryState==="NY" ? {ny_diagnostics:nyDiagnostics(completed.ny_diagnostics)} : {}),...(["GA","MS","NC","TN","AL","IL"].includes(registryState) && Array.isArray(completed.trial_diagnostics) ? {trial_diagnostics:completed.trial_diagnostics} : {}),...(["NY_CONNECTOR_VERIFICATION_REJECTED","NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(completed.ny_failure_cause) ? {ny_failure_cause:completed.ny_failure_cause,ny_reset_cooldown:completed.ny_reset_cooldown===true} : {}),...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {}),...(completed.nc_submission ? {nc_submission:completed.nc_submission} : {}),...(["visible","hidden"].includes(completed.page_visibility) ? {page_visibility:completed.page_visibility} : {}),...(registryState === "IL" && Array.isArray(completed.diagnostics) ? {il_dom:completed.diagnostics.slice(0,32).map(({phase,event,elapsed_ms,visibility})=>({phase,event,elapsed_ms,visibility}))} : {}),...(registryState === "NV" && completed.evidence?.filings ? {nv_filings:{complete:completed.evidence.filings.complete===true,total:completed.evidence.filings.total??null,failure_code:completed.evidence.filings.failure_code||""}} : {})});\n        state = completed.ok')
+        replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",query_id:state.query_id||null,workflow_observation:completed.workflow_observation||null,...(registryState==="NY" ? {ny_diagnostics:nyDiagnostics(completed.ny_diagnostics)} : {}),...(["GA","MS","NC","TN","AL","IL","NM","NV","NY"].includes(registryState) && Array.isArray(completed.trial_diagnostics) ? {trial_diagnostics:completed.trial_diagnostics} : {}),...(["NY_CONNECTOR_VERIFICATION_REJECTED","NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(completed.ny_failure_cause) ? {ny_failure_cause:completed.ny_failure_cause,ny_reset_cooldown:completed.ny_reset_cooldown===true} : {}),...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {}),...(completed.nc_submission ? {nc_submission:completed.nc_submission} : {}),...(["visible","hidden"].includes(completed.page_visibility) ? {page_visibility:completed.page_visibility} : {}),...(registryState === "IL" && Array.isArray(completed.diagnostics) ? {il_dom:completed.diagnostics.slice(0,32).map(({phase,event,elapsed_ms,visibility})=>({phase,event,elapsed_ms,visibility}))} : {}),...(registryState === "NV" && completed.evidence?.filings ? {nv_filings:{complete:completed.evidence.filings.complete===true,total:completed.evidence.filings.total??null,failure_code:completed.evidence.filings.failure_code||""}} : {})});\n        state = completed.ok')
         # An explicit source rejection is not an idle browser form. The
         # installed collector already exports these bounded public timings.
         # Keep its normal same-page attempt, but do not amplify a 429 by
