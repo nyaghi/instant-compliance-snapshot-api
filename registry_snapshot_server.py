@@ -645,21 +645,21 @@ def load_state_batch_bundle():
     global STATE_BATCH_BUNDLE
     if STATE_BATCH_BUNDLE is None:
         if STATE_BATCH_BUNDLE_PATH is None:
-            STATE_BATCH_BUNDLE = load_module_from_embedded_source(
+            STATE_BATCH_BUNDLE = workflow_call('source.step:load_state_batch_bundle:load_module_from_embedded_source:648',load_module_from_embedded_source,locals(),
                 "charity_state_batch_bundle",
                 EMBEDDED_STATE_BATCH_BUNDLE_B64,
             )
         else:
-            STATE_BATCH_BUNDLE = load_module_from_path("charity_state_batch_bundle", STATE_BATCH_BUNDLE_PATH)
+            STATE_BATCH_BUNDLE = workflow_call('source.step:load_state_batch_bundle:load_module_from_path:653',load_module_from_path,locals(), "charity_state_batch_bundle", STATE_BATCH_BUNDLE_PATH)
     return STATE_BATCH_BUNDLE
 
 
 def state_batch_modules(states: list[str]):
-    bundle = load_state_batch_bundle()
+    bundle = workflow_call('source.step:state_batch_modules:load_state_batch_bundle:658',load_state_batch_bundle,locals())
     requested = sorted({(state or "").upper() for state in states if state})
     missing = [state for state in requested if state not in STATE_BATCH_LOADED_STATES]
     if missing:
-        STATE_BATCH_MODULES.update(bundle.load_modules(missing))
+        STATE_BATCH_MODULES.update(workflow_call('source.step:state_batch_modules:load_modules:662',bundle.load_modules,locals(), missing))
         STATE_BATCH_LOADED_STATES.update(missing)
     return STATE_BATCH_MODULES
 
@@ -30045,8 +30045,8 @@ def search_ms_fast(page, org, navigate: bool = True):
 
 def search_batch_browser_state(page, org, state: str):
     state = (state or "").upper()
-    modules = state_batch_modules([state])
-    module = modules[load_state_batch_bundle().STATE_TO_MODULE[state]]
+    modules = workflow_call('source.step:search_batch_browser_state:state_batch_modules:30048',state_batch_modules,locals(), [state])
+    module = modules[workflow_call('source.step:search_batch_browser_state:load_state_batch_bundle:30049',load_state_batch_bundle,locals()).STATE_TO_MODULE[state]]
     if state == "MS":
         variants = ms_name_search_plan(org.organization_name, org.ein)
         if not variants:
@@ -30153,7 +30153,7 @@ def search_batch_browser_state(page, org, state: str):
                                            "reason": "Identity unconfirmed; status not applied"}]
             return result
     elif state == "OK":
-        external_result = search_ok_with_variants(page, org, module)
+        external_result = workflow_call('source.step:search_batch_browser_state:search_ok_with_variants:30156',search_ok_with_variants,locals(), page, org, module)
     else:
         raise ValueError(f"Unsupported browser batch state adapter: {state}")
     return copy_external_result(org, state, external_result)
@@ -30228,7 +30228,7 @@ def ok_tentative_detail_corroborated(detail_text: str, tentative_name: str, ein:
 
 def search_ok_with_variants(page, org, module):
     original_name = getattr(org, "organization_name", "") or ""
-    variants = build_search_queries(
+    variants = workflow_call('source.step:search_ok_with_variants:build_search_queries:30231',build_search_queries,locals(),
         original_name,
         getattr(org, "ein", "") or "",
         include_ein=False,
@@ -30294,7 +30294,7 @@ def search_ok_with_variants(page, org, module):
     started = time.perf_counter()
     attempted_variants: list[str] = []
     completed_no_match_variants: list[str] = []
-    planned_variants = (reviewed_queries_first(original_name, org.ein, variants, limit=OK_QUERY_LIMIT,
+    planned_variants = (workflow_call('source.step:search_ok_with_variants:reviewed_queries_first:30297',reviewed_queries_first,locals(), original_name, org.ein, variants, limit=OK_QUERY_LIMIT,
         transform=lambda value: ok_search_name_for_org(org_with_name(org, value))) or [original_name])
     # Reviewed identities can extend the old four-query plan. Give those
     # additional queries bounded time without changing query order or matching.
@@ -30314,7 +30314,7 @@ def search_ok_with_variants(page, org, module):
             *organization_match_target_variants(original_name, getattr(org, "ein", "") or ""),
         ]))
         attempted_variants.append(variant)
-        result = search_ok_precise(page, variant_org, module)
+        result = workflow_call('source.step:search_ok_with_variants:search_ok_precise:30317',search_ok_precise,locals(), page, variant_org, module)
         result.queries_attempted = list(attempted_variants)
         result.source_attempts = [
             *(getattr(result, "source_attempts", []) or []),
@@ -30327,7 +30327,7 @@ def search_ok_with_variants(page, org, module):
             and re.search(r"Could not click the Oklahoma Ok button", getattr(result, "error", "") or "", re.I)
             and time.perf_counter() - started <= search_budget_seconds
         ):
-            retry_result = search_ok_precise(page, variant_org, module)
+            retry_result = workflow_call('source.step:search_ok_with_variants:search_ok_precise:30330',search_ok_precise,locals(), page, variant_org, module)
             retry_result.queries_attempted = list(attempted_variants)
             retry_result.source_attempts = [
                 f"Oklahoma retried the consent/Ok-button step for query: {variant}."
@@ -30416,7 +30416,7 @@ def search_ok_with_variants(page, org, module):
                 + ", ".join(completed_no_match_variants) + ".",
             ]
         return best_result
-    return search_ok_precise(page, org, module)
+    return workflow_call('source.step:search_ok_with_variants:search_ok_precise:30419',search_ok_precise,locals(), page, org, module)
 
 
 def ok_singular_plural_name_variants(name: str) -> list[str]:
@@ -31040,28 +31040,28 @@ def search_ok_precise(page, org, module):
     )
     try:
         try:
-            page.goto(module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+            workflow_call('source.step:search_ok_precise:goto:31043',page.goto,locals(), module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
         except checker.PlaywrightTimeoutError:
             # Retry only this failed navigation, inside the original state's
             # allowance. No completed search/result is discarded or reused.
-            page.goto(module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+            workflow_call('source.step:search_ok_precise:goto:31047',page.goto,locals(), module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
 
         try:
-            page.locator("#ctl00_DefaultContent_CharityNameSearch1_RadioButtonList1_0").click(timeout=ok_action_timeout(org, 8000))
+            workflow_call('source.step:search_ok_precise:click:31050',page.locator("#ctl00_DefaultContent_CharityNameSearch1_RadioButtonList1_0").click,locals(), timeout=ok_action_timeout(org, 8000))
         except Exception:
             try:
-                page.get_by_label(re.compile("Search by Name", re.I)).click(timeout=ok_action_timeout(org, 4000))
+                workflow_call('source.step:search_ok_precise:click:31053',page.get_by_label(re.compile("Search by Name", re.I)).click,locals(), timeout=ok_action_timeout(org, 4000))
             except Exception:
                 result.error = "Could not select Oklahoma Search by Name."
                 return result
 
-        if not ok_click_name_search_ok_button(page, org):
+        if not workflow_call('source.step:search_ok_precise:ok_click_name_search_ok_button:31058',ok_click_name_search_ok_button,locals(), page, org):
             result.error = "Could not click the Oklahoma Ok button."
             return result
 
-        page.locator('input[name*="singlename" i]').first.wait_for(
+        workflow_call('source.step:search_ok_precise:wait_for:31062',page.locator('input[name*="singlename" i]').first.wait_for,locals(),
             state="visible", timeout=ok_action_timeout(org, 8000))
-        name_input = module.find_visible_input(page, [
+        name_input = workflow_call('source.step:search_ok_precise:find_visible_input:31064',module.find_visible_input,locals(), page, [
             "#ctl00_DefaultContent_CharityNameSearch1__singlename",
             'input[name="ctl00$DefaultContent$CharityNameSearch1$_singlename"]',
             'input[name*="singlename" i]',
@@ -31073,7 +31073,7 @@ def search_ok_precise(page, org, module):
             return result
 
         search_name = ok_search_name_for_org(org)
-        name_input.fill(search_name, timeout=ok_action_timeout(org, 4000))
+        workflow_call('source.step:search_ok_precise:fill:31076',name_input.fill,locals(), search_name, timeout=ok_action_timeout(org, 4000))
 
         clicked = False
         for candidate in [
@@ -31082,7 +31082,7 @@ def search_ok_precise(page, org, module):
             page.locator('input[type="submit"][value="Search"]').first,
         ]:
             try:
-                candidate.click(timeout=ok_action_timeout(org, 5000))
+                workflow_call('source.step:search_ok_precise:click:31085',candidate.click,locals(), timeout=ok_action_timeout(org, 5000))
                 clicked = True
                 break
             except Exception:
@@ -31091,12 +31091,12 @@ def search_ok_precise(page, org, module):
             result.error = "Could not click the Oklahoma Search button."
             return result
 
-        page.wait_for_function(
+        workflow_call('source.step:search_ok_precise:wait_for_function:31094',page.wait_for_function,locals(),
             """() => Boolean(document.querySelector('#ctl00_DefaultContent_CharityNameSearch1_EntityGridView span[id$="_lblName"]'))
                 || /no records found|no matching|no result/i.test(document.body?.innerText || '')""",
             timeout=ok_action_timeout(org, 12000))
 
-        text = module.body_text(page, timeout=ok_action_timeout(org, 4000))
+        text = workflow_call('source.step:search_ok_precise:body_text:31099',module.body_text,locals(), page, timeout=ok_action_timeout(org, 4000))
         if re.search(r"no records found|no matching|no result", text, re.I):
             result.status = module.STATUS_NOT_FOUND
             result.raw_status_text = "No results found"
@@ -31104,7 +31104,7 @@ def search_ok_precise(page, org, module):
             result.source_note = "Oklahoma search returned no matching entity result."
             return result
 
-        selected = ok_choose_safe_result_row(page, org, module)
+        selected = workflow_call('source.step:search_ok_precise:ok_choose_safe_result_row:31107',ok_choose_safe_result_row,locals(), page, org, module)
         if selected is None:
             result.status = "Unable to Confirm" if getattr(org, "ok_search_incomplete", False) else module.STATUS_NOT_FOUND
             result.raw_status_text = (
@@ -31121,7 +31121,7 @@ def search_ok_precise(page, org, module):
 
         matched_name, filing_number = ok_open_latest_equivalent_detail(page, org, module, selected)
 
-        detail_text = module.body_text(page, timeout=15000)
+        detail_text = workflow_call('source.step:search_ok_precise:body_text:31124',module.body_text,locals(), page, timeout=15000)
         tentative_name = getattr(org, "ok_tentative_candidate_name", "")
         if tentative_name:
             if not ok_tentative_detail_corroborated(detail_text, tentative_name, org.ein, module):
@@ -31153,10 +31153,10 @@ def search_ok_precise(page, org, module):
             filing_candidates.extend(lines)
         if not latest_filing:
             rows = page.locator("tr")
-            row_count = min(rows.count(), 200)
+            row_count = min(workflow_call('source.step:search_ok_precise:count:31156',rows.count,locals()), 200)
             for index in range(row_count):
                 try:
-                    row_text = re.sub(r"\s+", " ", rows.nth(index).inner_text(timeout=1000)).strip()
+                    row_text = re.sub(r"\s+", " ", workflow_call('source.step:search_ok_precise:inner_text:31159',rows.nth(index).inner_text,locals(), timeout=1000)).strip()
                 except Exception:
                     continue
                 if re.match(r"^\d+\s+", row_text):

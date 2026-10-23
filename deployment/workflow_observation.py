@@ -25,6 +25,10 @@ class Observation:
     def __init__(self, run_id, state, deadline=float('inf'), cap=1200):
         self.run_id, self.state, self.deadline = run_id, state, deadline
         self.cap = cap
+        # Playwright callbacks run in a different greenlet Context. Bind this
+        # run's journal now so callbacks cannot silently lose the failure log.
+        self.sink = SINK.get()
+        self.tail = []
         self.started = time.perf_counter()
         self.epoch = time.time()
         self.events, self.failures, self.pending = [], [], {}
@@ -53,7 +57,9 @@ class Observation:
                              error_type='NonJSONDiagnostic')
             if len(self.events)<self.cap:self.events.append(event)
             else:self.dropped += 1
-            sink=SINK.get()
+            self.tail.append(event)
+            if len(self.tail)>120:self.tail.pop(0)
+            sink=self.sink
             if sink is not None:sink.write(self.run_id,self.state,event)
             if event['outcome'] in ('exception','ownership_conflict','rejected'):
                 if len(self.failures)>=100:self.failures.pop(0);self.failures_dropped+=1
@@ -80,7 +86,7 @@ class Observation:
         return dict(schema=1, run_id=self.run_id, state=self.state, process_id=os.getpid(),
                     clock='process monotonic; epoch is for approximate cross-process alignment',
                     started_epoch_seconds=self.epoch, durations='nested; do not sum parents and children',
-                    events=list(self.events), failures=list(self.failures), pending=list(self.pending.values()),
+                    events=list(self.events), terminal_events=list(self.tail), failures=list(self.failures), pending=list(self.pending.values()),
                     dropped_events=self.dropped, dropped_failures=self.failures_dropped,
                     coverage_complete=False)
 
@@ -164,7 +170,7 @@ def workflow_call(stage, function, scope, *args, **kwargs):
     timeout=kwargs.get('timeout')
     seq=trace.emit(stage,'started',resource_id=resource_id,
                    allowance_remaining_seconds=trace.remaining(allowance) if allowance is not None else None,
-                   requested_timeout_seconds=timeout/(1 if stage=='source.http' else 1000) if isinstance(timeout,(int,float)) else None)
+                   requested_timeout_seconds=timeout/(1 if stage=='source.http' or getattr(function,'__name__','')=='acquire' else 1000) if isinstance(timeout,(int,float)) else None)
     trace.pending[seq]=dict(seq=seq,stage=stage,resource_id=resource_id)
     parent=PARENT.set(seq)
     try:
