@@ -434,7 +434,7 @@ def capture_selected_wa_source(master,result,run,deadline):
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:433:66:return',None)
     from deployment.state_snapshots import wa_painted_result_ready
     fact['phase']='painted_result_ready';begin=time.perf_counter()
-    if not wa_painted_result_ready(page,max(1,int(min(1,stop-time.monotonic()-2)*1000))):fact['outcome']='source_overlay_visible';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:436:130:return',None)
+    if not wa_painted_result_ready(page,max(1,int((stop-time.monotonic()-2)*1000))):fact['outcome']='source_overlay_visible';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:436:130:return',None)
     fact['painted_result_ready_ms']=round((time.perf_counter()-begin)*1000,2)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:438:66:return',None)
     fact['phase']='capture';begin=time.perf_counter();raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:439:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':1280,'height':height},timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
