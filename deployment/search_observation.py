@@ -112,6 +112,18 @@ def start_transport(url,body=None,params=None,run=None):
             if isinstance(name,str) and name.strip() and len(name)<=1000:
                 label=(first+'; '+second if first in {'Includes','Starts with'} and second in {'All words','At least one word'} else 'Michigan name field; search method not captured')
                 if not any(kind=='name' and value==name.strip() for kind,value,_ in observed):observed.append(('name',name.strip(),label))
+        if (run.state=='MN' and u.hostname=='www.ag.state.mn.us'
+            and u.path=='/Charity/Search/Results.asp'):
+            # The original Minnesota form posts txtOrg and txtEIN. Observe
+            # only those actual submitted fields; never infer reviewed names.
+            fields=body if isinstance(body,dict) else dict(parse_qsl(body.decode('utf8') if isinstance(body,bytes) else body or '',keep_blank_values=True))
+            for kind,field in [('name','txtOrg'),('ein','txtEIN')]:
+                value=fields.get(field,'')
+                if not isinstance(value,str):continue
+                value=value.strip()
+                if not value or len(value)>1000:continue
+                if kind=='ein' and not re.fullmatch(r'(?:[0-9]{9}|[0-9]{2}-[0-9]{7})',value):continue
+                if not any(k==kind and v==value for k,v,_ in observed):observed.append((kind,value,'Minnesota submitted '+field+' field'))
         observed += [('ein',value,label) for value,label in ein_criteria(url,body,params,getattr(run,'ein',''))]
         receipts = [SourceQueryReceipt(run,{'state':run.state,'operation':'search',kind:value,
                     'filter_label':label,'source_kind':'state_portal','url':public})
