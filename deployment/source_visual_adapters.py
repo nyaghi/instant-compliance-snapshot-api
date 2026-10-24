@@ -1779,7 +1779,15 @@ def capture_selected_wv_source(master,result,run,deadline):
         or re.search('verify you are human|user validation required|access denied|just a moment',text,re.I)):
      fact['outcome']='detail_binding_failed';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1773:45:return',None)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1774:66:return',None)
-    begin=time.perf_counter();fact['phase']='capture';before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1775:80:capture',context.capture,locals());fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
+    begin=time.perf_counter();fact['phase']='capture';before=len(run.documents)
+    previous_capture_stop=getattr(run,'page_capture_stop',None)
+    run.page_capture_stop=min(stop,previous_capture_stop) if previous_capture_stop is not None else stop
+    try:
+     workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1775:80:capture',context.capture,locals())
+    finally:
+     if previous_capture_stop is None:del run.page_capture_stop
+     else:run.page_capture_stop=previous_capture_stop
+    fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
     fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
     if context is not None:context._captured=True;workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1778:50:close',context.close,locals())

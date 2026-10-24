@@ -248,11 +248,13 @@ def render_pdf(doc,asset_root=None):
         dataset=e['query'].get('source_kind')=='official_dataset'
         count_label='Dataset rows matching this name: ' if dataset else 'Rows returned: '
         count_value=str(e['returned_rows']) if e.get('returned_rows') is not None else 'not captured'
-        cells.append([p(count_label+count_value),p('Query receipt: '+e['query_id'])])
+        is_search=e['operation']=='search'
+        if is_search:cells.append([p(count_label+count_value),p('Query receipt: '+e['query_id'])])
+        else:cells.append([p('Opened an existing record; this was not another name search.'),p('Query receipt: '+e['query_id'])])
         if e.get('reason'):cells.append([p('Incomplete: '+e['reason']),p('Reported: '+stamp(e['reported_at']))])
         table=Table(cells,colWidths=[280,230],hAlign='LEFT');table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#edf3f7')),('BOX',(0,0),(-1,-1),.4,colors.HexColor('#ccd6df')),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8)]))
         story += [KeepTogether([table,Spacer(1,10)])]
-        if e.get('returned_rows',0):
+        if is_search and e.get('returned_rows',0):
             story.append(p('Returned source records (not confirmed identity matches):'))
             records=e.get('returned_records')
             if records is None:story.append(p('Returned-record details were not captured in this saved history.'))
