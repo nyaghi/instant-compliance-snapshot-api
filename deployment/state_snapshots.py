@@ -427,6 +427,11 @@ class CaptureRun:
     def page(self,page):
         """Capture before its existing context closes; do not navigate or scroll."""
         started=time.perf_counter()
+        ma_capture_end=min(DEADLINE.get()-1,getattr(self,'page_capture_stop',float('inf'))-1,time.monotonic()+8) if self.state=='MA' else None
+        def ma_timeout(seconds):
+            remaining=ma_capture_end-time.monotonic()
+            if remaining<=0:raise TimeoutError('MA_capture_allowance_exhausted')
+            return max(1,int(min(seconds,remaining)*1000))
         observation=None
         if self.state=='CO':
             observation={'phase':'admission','outcome':'pending'}
@@ -461,19 +466,19 @@ class CaptureRun:
             original_url=page.url
             url=public_url(original_url,self.state)
             observed('read_text')
-            text=workflow_call('deployment/state_snapshots.py:page:455:17:inner_text',page.inner_text,locals(), 'body',timeout=400)[:20000]
+            text=workflow_call('deployment/state_snapshots.py:page:455:17:inner_text',page.inner_text,locals(), 'body',timeout=ma_timeout(2) if self.state=='MA' else 400)[:20000]
             ak_empty=ak_empty_controls(page,self,text) if self.state=='AK' else None
             observed('read_dimensions')
             size=workflow_call('deployment/state_snapshots.py:page:458:17:evaluate',page.locator('body').evaluate,locals(),
-                '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=300)
+                '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=ma_timeout(1) if self.state=='MA' else 300)
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
                 self.errors.append('source_page_exceeds_capture_bound');return trace_return('deployment/state_snapshots.py:page:461:72:return',None)
             observed('screenshot')
-            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=(max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'OK','ME'} else 1000))
+            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=(ma_timeout(5) if self.state=='MA' else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'OK','ME'} else 1000))
             if self.state=='WA' and workflow_call('deployment/state_snapshots.py:page:464:36:is_visible',page.locator('#loaderDiv').is_visible,locals()):
                 self.errors.append('WA_source_overlay_returned_during_capture');return trace_return('deployment/state_snapshots.py:page:465:80:return',None)
             observed('post_capture_binding')
-            if page.url!=original_url or workflow_call('deployment/state_snapshots.py:page:467:41:inner_text',page.inner_text,locals(), 'body',timeout=400)[:20000]!=text:
+            if page.url!=original_url or workflow_call('deployment/state_snapshots.py:page:467:41:inner_text',page.inner_text,locals(), 'body',timeout=ma_timeout(2) if self.state=='MA' else 400)[:20000]!=text:
                 self.errors.append('source_page_changed_during_capture');return trace_return('deployment/state_snapshots.py:page:468:73:return',None)
             if ak_empty is not None:
                 if ak_empty_controls(page,self,text)!=ak_empty:

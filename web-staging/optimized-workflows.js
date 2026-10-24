@@ -40,7 +40,7 @@
     }
     async function captureOriginal(result) {
       const started=performance.now();
-      let dcObservation=null;
+      let sourceObservation=null, evidencePhase='capture';
       try {
         if(signal?.aborted)return;
         const id=crypto.randomUUID(),channel='cc-owned-source-evidence-v1';
@@ -56,22 +56,32 @@
           timer=setTimeout(()=>{cleanup();resolve({ok:false,reason:'capture_timeout'});},22000);
           window.postMessage({channel,direction:'request',id,request:result.desktop_evidence_request},location.origin);
         });
-        if(result.state==='DC')dcObservation={reason:captured.reason||'',timing:captured.timing||null};
+        sourceObservation={phase:'capture',reason:typeof captured.reason==='string'
+          && /^[a-zA-Z0-9_.:-]{1,100}$/.test(captured.reason)?captured.reason:'',timing:captured.timing||null};
         if(signal?.aborted || !captured.ok)return;
+        evidencePhase='archive_request';
         const response=await fetch(apiBase+'/api/source-evidence',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode},
           signal:signal?AbortSignal.any([signal,AbortSignal.timeout(6000)]):AbortSignal.timeout(6000),
           body:JSON.stringify({...credentials,token,state:result.state,completion:captured})});
+        evidencePhase='archive_decode';
+        sourceObservation.http_status=response.status;
         const saved=await response.json();
+        evidencePhase='archive_binding';
         if(response.ok && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(saved.evidence_url||'')){
           for(const key of ['evidence_url','evidence_capture','evidence_captured_at','evidence_metrics','desktop_evidence_timing','search_history_url','search_history_capture'])
             if(Object.hasOwn(saved,key))result[key]=saved[key];
         }
-      } catch { /* Evidence failure never replaces the state status. */ }
+        sourceObservation.phase=result.evidence_url?'complete':'archive_rejected';
+      } catch(error) {
+        sourceObservation={...(sourceObservation||{}),phase:evidencePhase,
+          error_type:['TimeoutError','AbortError','TypeError','SyntaxError'].includes(error?.name)?error.name:'Error'};
+        /* Evidence failure never replaces the state status. */
+      }
       finally {
         result.desktop_evidence_seconds=(performance.now()-started)/1000;
         if(Array.isArray(window.__CCLabStateTrace)){
           window.__CCLabStateTrace.push({at:Date.now(),state:result.state,stage:'desktop evidence completed',
-            ...(result.state==='DC'?{source_observation:dcObservation}:{}),
+            source_observation:sourceObservation,
             seconds:result.desktop_evidence_seconds,captured:!!result.evidence_url,timing:result.desktop_evidence_timing||null});
           if(window.__CCLabStateTrace.length>2000)window.__CCLabStateTrace.splice(0,window.__CCLabStateTrace.length-2000);
         }
