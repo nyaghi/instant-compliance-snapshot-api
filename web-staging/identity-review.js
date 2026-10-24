@@ -63,7 +63,8 @@
         add(card, 'p', candidate.name, 'font-semibold');
         add(card, 'p', [candidate.identifier, candidate.location].filter(Boolean).join(' · '), 'mt-1 text-xs');
         add(card, 'p', [candidate.raw_status, candidate.expiration ? `Expiration: ${candidate.expiration}` : ''].filter(Boolean).join(' · '), 'mt-1 text-xs text-slate-600');
-        renderEvidence(card, candidate);
+        if (!(result.success === true && (result.status === 'Not Registered'
+          || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant'))) renderEvidence(card, candidate);
         if (candidate.decision) add(card, 'p', candidate.decision === 'accept' ? 'Identity accepted by user' : 'Identity rejected by user', 'mt-2 text-xs font-semibold');
         const controls = add(card, 'div', '', 'mt-2 flex flex-wrap gap-2');
         action(controls, review.exclusive ? 'Confirm this record' : 'Accept match', () => decide(candidate.id, 'accept'), candidate.decision === 'accept').setAttribute('aria-pressed', String(candidate.decision === 'accept'));
