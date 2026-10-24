@@ -35875,7 +35875,7 @@ def attach_identity_review(data, context):
     # Calendar decisions and extract age must be checked again on a new date.
     midnight = int(datetime.combine(date.today() + timedelta(days=1), datetime.min.time()).timestamp())
     record = {"issued": now, "expires": min(now + 86400, midnight), "version": APP_VERSION,
-              "base": {k: v for k, v in data.items() if k not in {"debug_trace", "identity_review"}},
+              "base": {k: v for k, v in data.items() if k not in {"debug_trace", "identity_review", "workflow_observation", "archive_observation"}},
               "records": rows, "search_complete": context.get("search_complete") is True,
               "exclusive": context.get("exclusive") is True,
               "freshness": context.get("freshness", ""), "decisions": {},

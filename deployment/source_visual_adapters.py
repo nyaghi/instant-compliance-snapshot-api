@@ -793,7 +793,7 @@ def capture_owned_md_page(run,result,page,context,deadline):
  if workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:780:4:get',result.get,locals(), 'status')=='Not Registered':return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:780:43:return',(workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:780:50:capture_owned_md_empty',capture_owned_md_empty,locals(), run,result,context,deadline)))
  if selected_url(run,result) is None or getattr(run,'selected_visual_attempted',False):return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:781:87:return',None)
  run.selected_visual_attempted=True;start=time.perf_counter();detail=None;detach_observer=lambda:None
- fact={'adapter':'MD-owned-selected-general','outcome':'not_started','navigation_ms':0,'general_ms':0,'financial_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':20000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'MD-owned-selected-general','outcome':'not_started','navigation_ms':0,'general_ms':0,'financial_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
  identifier=str(result['matched_registry_identifier']);hint=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:784:60:get',run.source_detail_hints.get,locals(), identifier);norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if not hint or norm(workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:785:21:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name']) or not isinstance(workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:785:96:get',hint.get,locals(), 'source_fields'),dict):fact['outcome']='selected_source_proof_missing';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:785:176:return',None)
  expected=hint['source_fields'];u=urlsplit(hint['url'])
@@ -802,7 +802,7 @@ def capture_owned_md_page(run,result,page,context,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:791:52:return',None)
-  stop=time.monotonic()+min(20.0,remaining)
+  stop=time.monotonic()+min(30.0,remaining)
   detail=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:793:9:new_page',context.new_page,locals());detach_observer=observe_visual_readiness(detail,fact);detail.set_extra_http_headers({});begin=time.perf_counter();fact['phase']='navigation';fact['waiting_for']='document_domcontentloaded'
   response=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:794:11:goto',detail.goto,locals(), hint['url'],referer=result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
   fact['waiting_for']=''
