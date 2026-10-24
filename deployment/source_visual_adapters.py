@@ -557,11 +557,23 @@ def capture_selected_va_source(master,result,run,deadline):
      workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:556:5:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['waiting_for']=''
     fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
-    text=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:559:9:inner_text',page.inner_text,locals(), 'body',timeout=400);core=va_registration_core(text)
-    if (not re.search(r'Registration ID:\s*'+re.escape(identifier)+r'(?!\d)',core)
-        or norm(result['matched_registry_name']) not in norm(core) or not re.search(r'Status\s+\S+',core)
-        or re.search('verify you are human|user validation required|access denied|just a moment',text,re.I)):
-     fact['outcome']='selected_registration_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:563:55:return',None)
+    # Visible labels can precede their selected-record values. Keep every
+    # existing binding requirement and wait only within the current allowance.
+    bound_started=time.perf_counter();fact['phase']='selected_identity_ready'
+    while True:
+     text=workflow_call('VA.selected_identity_text',page.inner_text,locals(), 'body',timeout=max(1,int(min(1.0,stop-time.monotonic()-1)*1000)));core=va_registration_core(text)
+     checks={'registration_id':bool(re.search(r'Registration ID:\s*'+re.escape(identifier)+r'(?!\d)',core)),
+             'organization_name':norm(result['matched_registry_name']) in norm(core),
+             'status_value':bool(re.search(r'Status\s+\S+',core)),
+             'source_clear':not bool(re.search('verify you are human|user validation required|access denied|just a moment',text,re.I))}
+     fact['selected_binding_checks']=checks
+     if page.url!=hint['url'] or not checks['source_clear']:
+      fact['outcome']='selected_registration_not_bound';return None
+     if all(checks.values()):break
+     if time.monotonic()+1.1>=stop:
+      fact['outcome']='selected_registration_not_bound';return None
+     workflow_call('VA.selected_identity_wait',page.wait_for_timeout,locals(), min(100,max(1,int((stop-time.monotonic()-1)*1000))))
+    fact['selected_identity_wait_ms']=round((time.perf_counter()-bound_started)*1000,2)
     panel=page.locator('.formio-form')
     if workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:565:7:count',panel.count,locals())!=1:fact['outcome']='source_panel_not_unique';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:565:66:return',None)
     expected=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:566:13:get',hint.get,locals(), 'source_fields')
@@ -705,7 +717,7 @@ def capture_selected_la_source(master,result,run,deadline,negative=False):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_la_source:706:52:return',None)
-  stop=time.monotonic()+min(8.0,remaining);held=workflow_call('deployment/source_visual_adapters.py:capture_selected_la_source:707:48:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
+  stop=time.monotonic()+min(16.0,remaining);held=workflow_call('deployment/source_visual_adapters.py:capture_selected_la_source:707:48:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_la_source:708:61:return',None)
   with master.checker.sync_playwright() as p:
    browser=workflow_call('deployment/source_visual_adapters.py:capture_selected_la_source:710:11:launch_lookup_browser',master.launch_lookup_browser,locals(), p,headless=True)
