@@ -102,9 +102,8 @@ def needs_search_history(result):
 
 
 def history_only_result(result):
-    return completed_negative_result(result) and (
-        result.get('identity_review_evidence_final') is True or not any(
-            result.get(k) for k in ('matched_registry_identifier','identifier','matched_registry_name')))
+    """Presentation only: completed negatives show actual search terms."""
+    return completed_negative_result(result)
 
 
 def manifest(record,result,snapshot,now):
@@ -226,7 +225,62 @@ def query_label(q,receipt=None):
     mode={'STARTS_WITH':'Starting With','ALL_WORDS':'All Words','EXACT_MATCH':'Exact'}.get(q.get('search_mode'),'Starting With')
     return name+' | '+mode
 
+def searched_terms(doc):
+    """Project observed requests only; never infer searches from reviewed names."""
+    names=[];eins=[];seen_names=set();seen_eins=set()
+    for entry in doc.get('queries',[]):
+        query=entry.get('query',{})
+        if entry.get('operation',query.get('operation'))!='search':continue
+        if query.get('operation')=='detail' or query.get('identifier') or query.get('orgID'):continue
+        name=query.get('name') or query.get('orgName')
+        if isinstance(name,str) and name.strip():
+            display=' '.join(name.split());key=display.casefold()
+            if key not in seen_names:seen_names.add(key);names.append(display)
+        ein=query.get('ein')
+        if isinstance(ein,str) and re.fullmatch(r'(?:[0-9]{9}|[0-9]{2}-[0-9]{7})',ein):
+            key=ein.replace('-','')
+            if key not in seen_eins:seen_eins.add(key);eins.append(key[:2]+'-'+key[2:])
+    return names,eins
+
+
+def render_names_pdf(doc,asset_root=None):
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet,ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,Image
+    out=io.BytesIO();styles=getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='NamesBody',fontName='Helvetica',fontSize=10,leading=15,spaceAfter=8))
+    styles.add(ParagraphStyle(name='NamesNote',fontName='Helvetica',fontSize=8,leading=11,textColor=colors.HexColor('#475569'),spaceAfter=6))
+    p=lambda value:Paragraph(escape(str(value)),styles['NamesBody'])
+    root=Path(asset_root) if asset_root else Path(__file__).resolve().parents[1]
+    story=[];logo=root/'report-assets/compliance-express.png'
+    if logo.exists():
+        from PIL import Image as PixelImage
+        with PixelImage.open(logo) as pixels:width,height=pixels.size
+        image=Image(str(logo),width=140,height=140*height/width);image.hAlign='LEFT'
+        story.extend([image,Spacer(1,14)])
+    story.extend([Paragraph('CharityClarity Names Searched',styles['Title']),p(doc['organization_name']),
+                  p('EIN '+doc['ein'][:2]+'-'+doc['ein'][2:]+' | State '+doc['state']),
+                  Paragraph(escape('Check completed '+stamp(doc['completed_at'])),styles['NamesNote']),Spacer(1,10)])
+    names,eins=searched_terms(doc)
+    if names:
+        for name in names:story.append(p(name))
+    else:story.append(p('No name searches were recorded for this check.'))
+    if eins:
+        story.extend([Spacer(1,10),Paragraph('EIN searched' if len(eins)==1 else 'EINs searched',styles['Heading2'])])
+        story.extend(p(ein) for ein in eins)
+    story.extend([Spacer(1,14),Paragraph('Actual search terms recorded by CharityClarity, with duplicates removed. Listing a term does not establish that its search completed.',styles['NamesNote'])])
+    def footer(canvas,document):
+        canvas.saveState();canvas.setFont('Helvetica',8);canvas.setFillColor(colors.HexColor('#475569'))
+        canvas.drawString(42,25,'Compliance Express | www.compliance-express.com | info@compliance-express.com')
+        canvas.drawRightString(570,25,str(document.page));canvas.restoreState()
+    SimpleDocTemplate(out,pagesize=(612,792),leftMargin=42,rightMargin=42,topMargin=35,bottomMargin=45,
+                      title='CharityClarity Names Searched',author='Compliance Express').build(story,onFirstPage=footer,onLaterPages=footer)
+    return out.getvalue()
+
+
 def render_pdf(doc,asset_root=None):
+    if doc.get('result_at_completion') in {'Not Registered','Not Registered / Non-Compliant'}:
+        return render_names_pdf(doc,asset_root)
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet,ParagraphStyle
     from reportlab.lib.enums import TA_LEFT
