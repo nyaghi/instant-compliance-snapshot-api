@@ -37,6 +37,8 @@ READ_ROW=r'''() => {
  return {columns,texts,clipped,headings};
 }'''
 
+READ_ROW_DIAGNOSTIC = "() => {\n const grids=[...document.querySelectorAll('vaadin-grid')].filter(g=>g.getBoundingClientRect().width>0);\n if(grids.length!==1)return {reason:'grid_count'};\n const g=grids[0],s=g.shadowRoot,t=s?.querySelector('table');\n if(!t||t.getAttribute('aria-rowcount')!=='2'||t.getAttribute('aria-colcount')!=='5')return {reason:'table_shape'};\n const columns=[...g.querySelectorAll('vaadin-grid-column')].map(e=>e.getAttribute('data-fieldname'));\n const rows=[...s.querySelectorAll('tbody tr')].filter(r=>!r.hidden&&!r.hasAttribute('loading')&&r.getBoundingClientRect().height>0);\n if(rows.length!==1||rows[0].getAttribute('aria-rowindex')!=='2')return {reason:'rendered_row'};\n const cells=[...rows[0].querySelectorAll('td')].slice(1);\n const texts=[],clipped=[];\n for(const td of cells){\n  const slot=td.querySelector('slot'),assigned=slot?.assignedElements();\n  if(assigned?.length!==1)return {reason:'assigned_cell'};\n  const e=assigned[0],r=e.getBoundingClientRect(),c=td.getBoundingClientRect();\n  if(r.width<=0||r.height<=0||c.x<0||c.right>innerWidth||c.y<0||c.bottom>innerHeight)return {reason:'cell_geometry'};\n  const range=document.createRange();range.selectNodeContents(e);\n  const textRect=range.getBoundingClientRect();\n  texts.push(e.innerText.trim());\n  clipped.push(textRect.right>c.right-4||textRect.left<c.left);\n }\n const headings=[...s.querySelectorAll('thead th')].slice(1).map(td=>td.querySelector('slot')?.assignedElements().map(e=>e.innerText.trim()).join(''));\n return {reason:'row_available',columns:columns.slice(0,8),texts:texts.slice(0,4).map(v=>v.slice(0,320)),clipped:clipped.slice(0,4),headings:headings.slice(0,8)};\n}"
+
 def valid_viewer(url):
  try:
   u=urlsplit(url)
@@ -129,5 +131,15 @@ def navigate_and_capture(page,record,deadline,on_query=None,metrics=None):
  # Observe rendered row, not hidden virtualized records left in DOM.
  day=date.fromisoformat(expected['expiration'])
  ready_text=[expected['identifier'],expected['raw_status'],f'{day.month}/{day.day}/{day.year%100:02d}, 12:00 AM',expected['name']]
- measured('bound_record_ready',lambda:workflow_call('deployment/dc_native_capture.py:navigate_and_capture:131:38:wait_for_function',page.wait_for_function,locals(), 'arg=>{const v=('+READ_ROW+')();return v&&JSON.stringify(v.columns)===JSON.stringify(arg.columns)&&JSON.stringify(v.headings)===JSON.stringify(arg.labels)&&JSON.stringify(v.texts)===JSON.stringify(arg.texts)&&v.clipped.every(x=>x===false)}',arg={'columns':list(COLUMNS),'labels':list(LABELS),'texts':ready_text},timeout=allowance()))
+ try:
+  measured('bound_record_ready',lambda:workflow_call('deployment/dc_native_capture.py:navigate_and_capture:131:38:wait_for_function',page.wait_for_function,locals(), 'arg=>{const v=('+READ_ROW+')();return v&&JSON.stringify(v.columns)===JSON.stringify(arg.columns)&&JSON.stringify(v.headings)===JSON.stringify(arg.labels)&&JSON.stringify(v.texts)===JSON.stringify(arg.texts)&&v.clipped.every(x=>x===false)}',arg={'columns':list(COLUMNS),'labels':list(LABELS),'texts':ready_text},timeout=allowance()))
+ except Exception:
+  # Read only the failed public-table predicate inside the existing completion
+  # reserve. No retry, alternate record, query, or changed acceptance rule.
+  remaining=deadline-time.monotonic()
+  if remaining>.1:
+   try:
+    metrics['bound_record_failure']=page.locator('body').evaluate('el=>('+READ_ROW_DIAGNOSTIC+')()',timeout=max(1,int(min(.5,remaining)*1000)))
+   except Exception as exc:metrics['bound_record_observation_error']=type(exc).__name__
+  raise
  return trace_return('deployment/dc_native_capture.py:navigate_and_capture:132:1:return',(measured('screenshot_and_recheck',lambda:workflow_call('deployment/dc_native_capture.py:navigate_and_capture:132:49:capture_ready',capture_ready,locals(), page,expected,deadline))))

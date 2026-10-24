@@ -823,7 +823,16 @@ def capture_owned_md_page(run,result,page,context,deadline):
   fact['approval_date_visible']=bool(value(general,'Latest Approval Date'))
   dismiss=detail.get_by_role('button',name='Dismiss alert.',exact=True)
   if workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:812:5:count',dismiss.count,locals())==1 and workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:812:28:is_visible',dismiss.is_visible,locals()):
-   workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:813:3:click',dismiss.click,locals(), timeout=400);workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:813:30:wait_for',dismiss.wait_for,locals(), state='hidden',timeout=500)
+   # Wait for the source's own alert to finish dismissing. Preserve three
+   # seconds for the original screenshot and post-capture identity checks.
+   fact['phase']='dismiss_source_alert'
+   if stop-time.monotonic()<=3:fact['outcome']='capture_reserve';return None
+   workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:813:3:click',dismiss.click,locals(), timeout=max(1,int((stop-time.monotonic()-3)*1000)))
+   if stop-time.monotonic()<=3:fact['outcome']='capture_reserve';return None
+   workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:813:30:wait_for',dismiss.wait_for,locals(), state='hidden',timeout=max(1,int((stop-time.monotonic()-3)*1000)))
+   if (not same_record() or norm(value(general,'Charity Name'))!=norm(result['matched_registry_name'])
+       or value(general,'Charity ID')!=identifier or (value(general,'Registration Status') or '').casefold()!=expected['status'].casefold()):
+    fact['outcome']='general_source_changed_during_alert';return None
   general_text=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:814:15:inner_text',detail.inner_text,locals(), 'body',timeout=400)
   general_fields=tuple(general.locator('.dvce-model-property').all_inner_texts())
   if not general_fields:fact['outcome']='general_fields_missing';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:816:65:return',None)
