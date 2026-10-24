@@ -39,6 +39,9 @@ def empty_metadata(d,payload):
 
 def retained_request(run,result):
     """Retain the source-issued URL before the owned lookup context closes."""
+    if run.state=='DC':
+        from deployment.dc_boss_evidence import retained_request as dc_request
+        return dc_request(run,result)
     if (run.state!='WI' or workflow_call('deployment/desktop_source_evidence.py:retained_request:41:27:get',result.get,locals(), 'state')!='WI' or workflow_call('deployment/desktop_source_evidence.py:retained_request:41:56:get',result.get,locals(), 'success') is not True
         or workflow_call('deployment/desktop_source_evidence.py:retained_request:42:11:get',result.get,locals(), 'status') in {'Unable to Confirm','Unable to Verify','Site Not Reachable','Needs Review'}
         or workflow_call('deployment/desktop_source_evidence.py:retained_request:43:11:get',result.get,locals(), 'confirmation_required') or workflow_call('deployment/desktop_source_evidence.py:retained_request:43:50:get',result.get,locals(), '_worker_identity_review')):return trace_return('deployment/desktop_source_evidence.py:retained_request:43:89:return',(None))
@@ -59,6 +62,9 @@ def retained_request(run,result):
 
 def describe(result):
     """Expose only a bounded request produced by the successful source lookup."""
+    if result.get('state')=='DC':
+        from deployment.dc_boss_evidence import describe as dc_describe
+        return dc_describe(result)
     d=workflow_call('deployment/desktop_source_evidence.py:describe:61:6:get',result.get,locals(), '_worker_desktop_evidence')
     if (workflow_call('deployment/desktop_source_evidence.py:describe:62:8:get',result.get,locals(), 'state')!='WI' or workflow_call('deployment/desktop_source_evidence.py:describe:62:37:get',result.get,locals(), 'success') is not True or workflow_call('deployment/desktop_source_evidence.py:describe:62:74:get',result.get,locals(), 'evidence_url')
         or not isinstance(d,dict) or workflow_call('deployment/desktop_source_evidence.py:describe:63:37:get',d.get,locals(), 'state')!='WI' or workflow_call('deployment/desktop_source_evidence.py:describe:63:61:get',d.get,locals(), 'operation') not in {'detail','empty_search'}
@@ -79,6 +85,9 @@ def dates(value):
     return trace_return('deployment/desktop_source_evidence.py:dates:78:4:return',({(int(m),int(d),int(y)) for m,d,y in re.findall(r'\b(\d{1,2})/(\d{1,2})/(\d{4})\b',value)}))
 
 def validate_completion(result,payload):
+    if result.get('state')=='DC':
+        from deployment.dc_boss_evidence import validate_completion as dc_validate
+        return dc_validate(result,payload)
     d=describe(result)
     if not d or not isinstance(payload,dict):raise ValueError('No bound source record')
     if workflow_call('deployment/desktop_source_evidence.py:validate_completion:83:7:get',payload.get,locals(), 'request')!=d:raise ValueError('Source request changed')
@@ -126,7 +135,7 @@ def persist_completion(result,payload,store=None):
             query_sha256=hashlib.sha256(json.dumps(query,sort_keys=True,separators=(',',':')).encode()).hexdigest())
         record.setdefault('completed',[]).append(dict(query=query,search_receipt=receipt))
     # Validate the entire negative receipt before saving either artifact.
-    ref=workflow_call('deployment/desktop_source_evidence.py:persist_completion:128:8:archive',archive,locals(), a,ein=a['ein'],state='WI',run_id=a['run_id'],store=store)
+    ref=workflow_call('deployment/desktop_source_evidence.py:persist_completion:128:8:archive',archive,locals(), a,ein=a['ein'],state=a['state'],run_id=a['run_id'],store=store)
     update={'evidence_url':ref['url'],'evidence_capture':'captured','evidence_captured_at':ref['captured_at']}
     if record is not None:
         record['source_snapshots']=[ref]
@@ -151,9 +160,10 @@ def handle_completion(master,handler,queue):
         if master.staging_access_error(email,code) or not master.is_verified_internal_passcode(email,code):
             return trace_return('deployment/desktop_source_evidence.py:handle_completion:151:12:return',(handler._send_json(403,{'error':'Authorized staging access required'})))
         record=unpack(master,workflow_call('deployment/desktop_source_evidence.py:handle_completion:152:29:get',p.get,locals(), 'token'),[email,device])
-        if 'WI' not in record['states'] or workflow_call('deployment/desktop_source_evidence.py:handle_completion:153:43:get',p.get,locals(), 'state')!='WI':raise ValueError('State not in workflow')
+        state=p.get('state')
+        if state not in {'WI','DC'} or state not in record['states']:raise ValueError('State not in workflow')
         status=queue.status('private-performance-lab',record['id'])
-        jobs=[j for j in status['jobs'] if j['state']=='WI' and j['phase']=='done' and isinstance(workflow_call('deployment/desktop_source_evidence.py:handle_completion:155:98:get',j.get,locals(), 'result'),dict)]
+        jobs=[j for j in status['jobs'] if j['state']==state and j['phase']=='done' and isinstance(workflow_call('deployment/desktop_source_evidence.py:handle_completion:155:98:get',j.get,locals(), 'result'),dict)]
         if len(jobs)!=1:raise ValueError('Settled source record required')
         result=jobs[0]['result']
         if re.sub(r'\D','',str(workflow_call('deployment/desktop_source_evidence.py:handle_completion:158:31:get',result.get,locals(), 'ein','')))!=record['ein'] or workflow_call('deployment/desktop_source_evidence.py:handle_completion:158:72:get',result.get,locals(), 'app_version')!=workflow_call('deployment/desktop_source_evidence.py:handle_completion:158:99:get',status.get,locals(), 'source_version'):
@@ -172,8 +182,8 @@ def handle_completion(master,handler,queue):
         metrics.update(row_link=True,missing_stage='',desktop_original=True)
         update['evidence_metrics']=metrics
         with queue.transaction() as (c,_):
-            changed=c.execute("UPDATE cc_lab_jobs SET result=result || %s WHERE workflow_id=%s AND state='WI' AND phase='done' AND result->'_worker_desktop_evidence'=%s AND COALESCE(result->>'evidence_url','')='' RETURNING id",
-                (Jsonb(update),record['id'],Jsonb(result['_worker_desktop_evidence']))).fetchone()
+            changed=c.execute("UPDATE cc_lab_jobs SET result=result || %s WHERE workflow_id=%s AND state=%s AND phase='done' AND result->'_worker_desktop_evidence'=%s AND COALESCE(result->>'evidence_url','')='' RETURNING id",
+                (Jsonb(update),record['id'],state,Jsonb(result['_worker_desktop_evidence']))).fetchone()
             if not changed:raise ValueError('Source result changed before archive completion')
         return trace_return('deployment/desktop_source_evidence.py:handle_completion:177:8:return',(handler._send_json(200,{k:v for k,v in update.items() if not k.startswith('_')},{'Cache-Control':'no-store'})))
     except (ValueError,TypeError,KeyError,UnicodeError):

@@ -17,7 +17,7 @@
     const record=result=>{
       if(signal?.aborted || !states.includes(result.state) || results.has(result.state)) return;
       results.set(result.state,result);onResult(result);
-      if(result.state==='WI' && result.desktop_evidence_request && !result.evidence_url)
+      if(['WI','DC'].includes(result.state) && result.desktop_evidence_request && !result.evidence_url)
         evidenceTasks.push(captureOriginal(result));
     };
     async function call(action,extra={},detached=false) {
@@ -40,6 +40,7 @@
     }
     async function captureOriginal(result) {
       const started=performance.now();
+      let dcObservation=null;
       try {
         if(signal?.aborted)return;
         const id=crypto.randomUUID(),channel='cc-owned-source-evidence-v1';
@@ -55,10 +56,11 @@
           timer=setTimeout(()=>{cleanup();resolve({ok:false,reason:'capture_timeout'});},22000);
           window.postMessage({channel,direction:'request',id,request:result.desktop_evidence_request},location.origin);
         });
+        if(result.state==='DC')dcObservation={reason:captured.reason||'',timing:captured.timing||null};
         if(signal?.aborted || !captured.ok)return;
         const response=await fetch(apiBase+'/api/source-evidence',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode},
           signal:signal?AbortSignal.any([signal,AbortSignal.timeout(6000)]):AbortSignal.timeout(6000),
-          body:JSON.stringify({...credentials,token,state:'WI',completion:captured})});
+          body:JSON.stringify({...credentials,token,state:result.state,completion:captured})});
         const saved=await response.json();
         if(response.ok && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(saved.evidence_url||'')){
           for(const key of ['evidence_url','evidence_capture','evidence_captured_at','evidence_metrics','desktop_evidence_timing','search_history_url','search_history_capture'])
@@ -68,7 +70,8 @@
       finally {
         result.desktop_evidence_seconds=(performance.now()-started)/1000;
         if(Array.isArray(window.__CCLabStateTrace)){
-          window.__CCLabStateTrace.push({at:Date.now(),state:'WI',stage:'desktop evidence completed',
+          window.__CCLabStateTrace.push({at:Date.now(),state:result.state,stage:'desktop evidence completed',
+            ...(result.state==='DC'?{source_observation:dcObservation}:{}),
             seconds:result.desktop_evidence_seconds,captured:!!result.evidence_url,timing:result.desktop_evidence_timing||null});
           if(window.__CCLabStateTrace.length>2000)window.__CCLabStateTrace.splice(0,window.__CCLabStateTrace.length-2000);
         }

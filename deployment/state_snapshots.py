@@ -546,7 +546,7 @@ class CaptureRun:
             'missing_stage':('' if assets else 'record_binding' if any(d[2] in {'image','image_pages','source_pdf'} for d in self.documents)
                 else 'capture' if self.errors else 'source_visual_not_collected')}
         if getattr(self,'observation',None):data['workflow_observation']=self.observation.export()
-        if self.state=='WI' and not assets:
+        if self.state in {'WI','DC'} and not assets:
             try:
                 from deployment.desktop_source_evidence import retained_request
                 request=retained_request(self,data)

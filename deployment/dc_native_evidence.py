@@ -82,6 +82,11 @@ def capture_dc(master,org,result,rows,deadline):
     negative=(getattr(result,'success',False) is True and getattr(result,'status','')=='Not Registered')
     hint=getattr(run,'dc_completed_query',None)
     if not targets and not (negative and negative_url(hint)):return trace_return('deployment/dc_native_evidence.py:capture_dc:83:61:return',None)
+    if len(targets)==1 and getattr(result,'_cc_license_record',None) is targets[0]:
+        expected=expected_record(targets[0])
+        if expected:
+            run.dc_boss_selected=expected
+            return
     start=time.perf_counter();browser=context=None;held=False;receipt=None
     fact={'adapter':'DC-native-original','outcome':'not_started','total_ms':0,'capture_ms':0,'records_requested':len(targets),'records_captured':0}
     run.visual_adapter_facts.append(fact)
