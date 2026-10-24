@@ -1643,12 +1643,12 @@ def capture_selected_nj_source(master,result,run,deadline):
       or identifier!=run.ein):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1657:30:return',None)
  except (ValueError,TypeError,KeyError):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1658:40:return',None)
  run.selected_visual_attempted=True
- start=time.perf_counter();fact={'adapter':'NJ-selected-original-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission'};run.visual_adapter_facts.append(fact)
+ start=time.perf_counter();fact={'adapter':'NJ-selected-original-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':22000};run.visual_adapter_facts.append(fact)
  held=False;browser=context=None
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1664:52:return',None)
-  stop=time.monotonic()+min(15.0,remaining)
+  stop=time.monotonic()+min(22.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1666:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1667:61:return',None)
   fact['phase']='playwright_start';begin=time.perf_counter()
@@ -2011,7 +2011,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
     run.selected_visual_attempted=True
     start=time.perf_counter();owned=[];detach_observer=lambda:None
     fact={'adapter':'MI-owned-selected-file-detail','phase':'admission','outcome':'not_started',
-          'visual_file_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':16000}
+          'visual_file_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':22000}
     run.visual_adapter_facts.append(fact)
     def official(p):
         u=urlsplit(p.url)
@@ -2021,7 +2021,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
     try:
         remaining=deadline-time.monotonic()-1
         if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2037:58:return',None)
-        stop=time.monotonic()+min(16,remaining)
+        stop=time.monotonic()+min(22,remaining)
         def allowance(reserve=1):return max(1,int((stop-time.monotonic()-reserve)*1000))
         detail=None
         # Reuse a selected detail already produced by the normal browser path.

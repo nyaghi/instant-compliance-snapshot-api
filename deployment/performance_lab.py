@@ -112,6 +112,16 @@ def bind_il_replies(text):
       '      && (!task.ilOwner || t.extension_id===task.ilOwner);\n'
       '  };',
       1),
+     ('    waiting.delete(m.id); clearTimeout(task.timer); task.resolve(m);',
+      '    const d=m.workflow_delivery;\n'
+      '    const observed=d?.schema===1?{...m,workflow_delivery:{schema:1,\n'
+      '      worker_post_epoch_seconds:Number.isFinite(d.worker_post_epoch_seconds)?d.worker_post_epoch_seconds:null,\n'
+      '      bridge_received_epoch_seconds:Number.isFinite(d.bridge_received_epoch_seconds)?d.bridge_received_epoch_seconds:null,\n'
+      '      bridge_post_epoch_seconds:Number.isFinite(d.bridge_post_epoch_seconds)?d.bridge_post_epoch_seconds:null,\n'
+      '      frontend_received_epoch_seconds:Date.now()/1000,\n'
+      '      bridge_visibility:["visible","hidden"].includes(d.bridge_visibility)?d.bridge_visibility:"unknown",\n'
+      '      frontend_visibility:document.visibilityState}}:m;\n'
+      '    waiting.delete(m.id); clearTimeout(task.timer); task.resolve(observed);',1),
      ('    if (m.progress) { task.onProgress?.(m); return; }',
       '    if (task.ilBound && !validIlTransport(m,task)) return;\n'
       '    if (m.progress) { task.onProgress?.(m); return; }',
@@ -205,6 +215,7 @@ def final_four_asset(name, text):
                     http_status:Number.isInteger(e?.http_status)&&e.http_status>=0&&e.http_status<=599?e.http_status:null,
                     visibility:["visible","hidden"].includes(e?.visibility)?e.visibility:"unknown"
                   })) : null,
+                  workflow_delivery: detail.workflow_delivery || null,
                   trial_diagnostics: Array.isArray(detail.trial_diagnostics)
                     ? detail.trial_diagnostics.slice(-120) : null,
                   il_dom: Array.isArray(detail.il_dom) ? detail.il_dom : null,
@@ -334,7 +345,7 @@ def final_four_asset(name, text):
         replace('        let completed;', '        let completed;\n        trace("browser query started", state.query);')
         replace('progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.',
                 'progress => ["opening_page","waiting_for_form","preparing_query","query_sent"].includes(progress.ny_phase) ? trace("browser stage", state.query, {ny_phase:progress.ny_phase}) : Array.isArray(progress.ny_diagnostics) ? trace("browser stage", state.query, {ny_diagnostics:nyDiagnostics(progress.ny_diagnostics)}) : onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.')
-        replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",query_id:state.query_id||null,workflow_observation:completed.workflow_observation||null,...(registryState==="NY" ? {ny_diagnostics:nyDiagnostics(completed.ny_diagnostics)} : {}),...(["GA","MS","NC","TN","AL","IL","NM","NV","NY"].includes(registryState) && Array.isArray(completed.trial_diagnostics) ? {trial_diagnostics:completed.trial_diagnostics} : {}),...(["NY_CONNECTOR_VERIFICATION_REJECTED","NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(completed.ny_failure_cause) ? {ny_failure_cause:completed.ny_failure_cause,ny_reset_cooldown:completed.ny_reset_cooldown===true} : {}),...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {}),...(completed.nc_submission ? {nc_submission:completed.nc_submission} : {}),...(["visible","hidden"].includes(completed.page_visibility) ? {page_visibility:completed.page_visibility} : {}),...(registryState === "IL" && Array.isArray(completed.diagnostics) ? {il_dom:completed.diagnostics.slice(0,32).map(({phase,event,elapsed_ms,visibility})=>({phase,event,elapsed_ms,visibility}))} : {}),...(registryState === "NV" && completed.evidence?.filings ? {nv_filings:{complete:completed.evidence.filings.complete===true,total:completed.evidence.filings.total??null,failure_code:completed.evidence.filings.failure_code||""}} : {})});\n        state = completed.ok')
+        replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",query_id:state.query_id||null,workflow_observation:completed.workflow_observation||null,workflow_delivery:completed.workflow_delivery||null,...(registryState==="NY" ? {ny_diagnostics:nyDiagnostics(completed.ny_diagnostics)} : {}),...(["GA","MS","NC","TN","AL","IL","NM","NV","NY"].includes(registryState) && Array.isArray(completed.trial_diagnostics) ? {trial_diagnostics:completed.trial_diagnostics} : {}),...(["NY_CONNECTOR_VERIFICATION_REJECTED","NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(completed.ny_failure_cause) ? {ny_failure_cause:completed.ny_failure_cause,ny_reset_cooldown:completed.ny_reset_cooldown===true} : {}),...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {}),...(completed.nc_submission ? {nc_submission:completed.nc_submission} : {}),...(["visible","hidden"].includes(completed.page_visibility) ? {page_visibility:completed.page_visibility} : {}),...(registryState === "IL" && Array.isArray(completed.diagnostics) ? {il_dom:completed.diagnostics.slice(0,32).map(({phase,event,elapsed_ms,visibility})=>({phase,event,elapsed_ms,visibility}))} : {}),...(registryState === "NV" && completed.evidence?.filings ? {nv_filings:{complete:completed.evidence.filings.complete===true,total:completed.evidence.filings.total??null,failure_code:completed.evidence.filings.failure_code||""}} : {})});\n        state = completed.ok')
         # An explicit source rejection is not an idle browser form. The
         # installed collector already exports these bounded public timings.
         # Keep its normal same-page attempt, but do not amplify a 429 by
