@@ -24002,6 +24002,17 @@ def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
                     or (name and name in re.sub(r"\W+", "", body).lower())
                 )
                 if identity_visible and nj_filing_context_from_body(body).get("computed_due_date"):
+                    # Preserve the selected original frame for the existing visual
+                    # adapter. This hint never establishes identity or status;
+                    # that adapter rechecks the visible EIN/name and record fields.
+                    try:
+                        from deployment.state_snapshots import CURRENT
+                        visual_run = CURRENT.get()
+                        if (len(digits) == 9 and visual_run is not None
+                                and visual_run.state == "NJ" and visual_run.ein == digits):
+                            visual_run.remember_detail(digits, org.organization_name, frame.url)
+                    except Exception:
+                        pass
                     return body
             except Exception:
                 pass
@@ -24119,6 +24130,18 @@ def nj_selected_public_detail(page, target, org) -> str:
         if (fields.get("crsm_federalein") != [digits] or fields.get("accountnumber") != [credential]
                 or not nj_filing_context_from_body(body).get("computed_due_date")):
             return ""
+        # The browser fallback can retrieve this exact selected detail via
+        # its ordinary public response without opening the detail iframe.
+        # Keep its URL so the existing adapter can capture the original page.
+        try:
+            from deployment.state_snapshots import CURRENT
+            visual_run = CURRENT.get()
+            if visual_run is not None and visual_run.state == "NJ" and visual_run.ein == digits:
+                visual_run.remember_detail(digits, name,
+                    "https://charportal.dca.njoag.gov/CHR-Public-Details-Page/?"
+                    + urlencode(dict(zip(("id", "rid"), identifiers))))
+        except Exception:
+            pass
         return body
     except Exception:
         return ""
