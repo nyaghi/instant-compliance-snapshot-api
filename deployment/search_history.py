@@ -101,6 +101,12 @@ def needs_search_history(result):
     return reportable_result(result) and completed_negative_result(result)
 
 
+def history_only_result(result):
+    return completed_negative_result(result) and (
+        result.get('identity_review_evidence_final') is True or not any(
+            result.get(k) for k in ('matched_registry_identifier','identifier','matched_registry_name')))
+
+
 def manifest(record,result,snapshot,now):
     from deployment.state_snapshots import digits
     state=record.get('state');ein=digits(record.get('ein',''))
@@ -161,6 +167,7 @@ def manifest(record,result,snapshot,now):
     return {'schema':SCHEMA,'organization_name':name,'ein':ein,'state':state,
             'run_id':record.setdefault('source_archive_run_id',secrets.token_hex(16)),'started_at':record['issued'],'completed_at':now,
             'result_at_completion':result['status'],'snapshot_url':snapshot.get('url',''),
+            'snapshot_expected':not history_only_result(result),
             'reviewed_names':list(dict.fromkeys([name]+reviewed)),
             'queries':entries,'source_limitations':'When available, the state image contains original source pixels. This separate document is CharityClarity\'s search history, not a state-issued certificate. Recorded searches do not establish an identity match by themselves. Attempts without confirmed completion remain explicitly incomplete.'}
 
@@ -275,7 +282,10 @@ def render_pdf(doc,asset_root=None):
     story += [Paragraph('Names supplied to CharityClarity',styles['Heading2']),p('These names were supplied for identity and search planning; they are not state registration matches. This list does not claim that each name was searched literally. The actual recorded requests are listed above.')]
     for n in doc['reviewed_names']:story.append(p(n))
     limits=[Paragraph('Evidence limits',styles['Heading2'])]
-    if not doc.get('snapshot_url'):limits.append(p('Original state-page snapshot unavailable for this run. This search history does not replace the missing original image.'))
+    # Older completed-negative histories predate the optional snapshot flag.
+    negative=doc.get('result_at_completion') in {'Not Registered','Not Registered / Non-Compliant'}
+    expected=doc.get('snapshot_expected',not negative)
+    if expected and not doc.get('snapshot_url'):limits.append(p('Original state-page snapshot unavailable for this run. This search history does not replace the missing original image.'))
     limits.append(p(doc['source_limitations']))
     story += [Spacer(1,8),KeepTogether(limits)]
     def footer(c,d):

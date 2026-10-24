@@ -10,8 +10,18 @@
     const history = /^\/state-evidence\/([a-f0-9]{64})\/search-history\.pdf$/.exec(result.search_history_url || '');
     const validHistory = history && (!result.evidence_bundle_url || bundle && bundle[1] === history[1]);
     if (validHistory && (result.identity_review_evidence_final === true || result.success === true && (result.status === 'Not Registered' || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant'))) {
-      const log = add(parent, 'a', 'View Names Searched (PDF)', 'mt-2 block text-xs underline whitespace-normal');
+      const log = add(parent, 'a', 'View Search History (PDF)', 'mt-2 block text-xs underline whitespace-normal');
       log.href = '/evidence-preview.html?document=' + encodeURIComponent(result.search_history_url); log.target = '_blank'; log.rel = 'noopener noreferrer';
+    }
+    // A completed absence is documented by actual queries, not an empty image.
+    // An identified record whose official status is Unregistered keeps its image.
+    const negative = result.success === true && (result.status === 'Not Registered'
+      || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant');
+    const matched = !!(result.matched_registry_identifier || result.identifier
+      || result.matched_registry_name);
+    if (negative && (result.identity_review_evidence_final === true || !matched)) {
+      if (!validHistory) add(parent,'p','Search history unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
+      return;
     }
     if (!source) {
       const candidateSnapshots = result.state === 'DC' && result.identity_review?.candidates?.length
