@@ -584,6 +584,25 @@ def capture_selected_va_source(master,result,run,deadline):
      lines=[line.strip() for line in workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:571:37:inner_text',component.inner_text,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000))).splitlines() if line.strip()]
      observed=' '.join(lines[1:])
      if observed.casefold()!=wanted.casefold():fact['outcome']='source_fields_changed_since_lookup';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:573:100:return',None)
+    # Bind the screenshot to a fresh frame after all seven source fields are
+    # populated. The earlier identity read can precede late panel values.
+    def selected_frame():
+     return workflow_call('VA.selected_capture_frame',page.locator('body').evaluate,locals(),
+      r'''(body,keys)=>{const panels=[...body.querySelectorAll('.formio-form')];
+       if(panels.length!==1)return null;const p=panels[0],fields={};
+       for(const key of keys){const nodes=p.querySelectorAll('.formio-component-'+key);
+        if(nodes.length!==1)return null;
+        fields[key]=nodes[0].innerText.split(/\n/).map(s=>s.trim()).filter(Boolean).slice(1).join(' ');}
+       return {url:location.href,text:body.innerText,fields};}''',list(expected),timeout=max(1,int((stop-time.monotonic()-.5)*1000)))
+    frame=selected_frame()
+    if (not frame or frame['url']!=hint['url'] or
+        any(frame['fields'].get(k,'').casefold()!=wanted.casefold() for k,wanted in expected.items())):
+     fact['outcome']='source_fields_changed_since_lookup';return None
+    capture_core=va_registration_core(frame['text'])
+    if (not re.search(r'Registration ID:\s*'+re.escape(identifier)+r'(?!\d)',capture_core)
+        or norm(result['matched_registry_name']) not in norm(capture_core)
+        or re.search('verify you are human|user validation required|access denied|just a moment',frame['text'],re.I)):
+     fact['outcome']='selected_registration_not_bound';return None
     bounds=panel.bounding_box()
     if not bounds or bounds['width']<=0 or bounds['height']<=0:fact['outcome']='source_panel_not_visible';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:575:106:return',None)
     import math
@@ -592,9 +611,12 @@ def capture_selected_va_source(master,result,run,deadline):
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:579:66:return',None)
     begin=time.perf_counter();fact['phase']='capture';raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:580:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':width,'height':height},timeout=max(1,int(min(5.0,stop-time.monotonic()-1)*1000)))
     fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
-    if page.url!=hint['url'] or va_registration_core(workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:582:53:inner_text',page.inner_text,locals(), 'body',timeout=400))!=core:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:582:144:return',None)
+    after=selected_frame()
+    if (not after or after['url']!=frame['url'] or after['fields']!=frame['fields']
+        or va_registration_core(after['text'])!=capture_core):
+     fact['outcome']='source_changed_during_capture';return None
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:583:78:return',None)
-    before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:584:30:document',run.document,locals(), hint['url'],raw,'image',core[:20000],note='Original selected registration fields and state header; lower optional submissions grid outside captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
+    before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:584:30:document',run.document,locals(), hint['url'],raw,'image',capture_core[:20000],note='Original selected registration fields and state header; lower optional submissions grid outside captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
     detach_observer()
     if context is not None:context._captured=True;workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:587:50:close',context.close,locals())

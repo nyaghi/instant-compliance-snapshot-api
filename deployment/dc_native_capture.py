@@ -121,8 +121,16 @@ def navigate_and_capture(page,record,deadline,on_query=None,metrics=None):
  select=page.get_by_role('button',name='Select all',exact=True)
  if workflow_call('deployment/dc_native_capture.py:navigate_and_capture:119:4:count',select.count,locals()):workflow_call('deployment/dc_native_capture.py:navigate_and_capture:119:19:click',select.click,locals(), timeout=allowance())
  workflow_call('deployment/dc_native_capture.py:navigate_and_capture:120:1:click',page.get_by_role('button',name='Deselect all',exact=True).click,locals(), timeout=allowance())
+ # Native selection updates asynchronously. Observe each completed selection
+ # before the next click; preserve the final exact table/record/pixel guards.
+ from playwright.sync_api import expect
  for label in LABELS:
-  workflow_call('deployment/dc_native_capture.py:navigate_and_capture:122:2:click',page.locator('.label').filter(has_text=re.compile('^'+re.escape(label)+'$')).click,locals(), timeout=allowance())
+  row=page.get_by_role('row',name=label,exact=True)
+  measured('column_cleared_'+label,lambda:expect(row).to_have_attribute('aria-selected','false',timeout=allowance()))
+ for label in LABELS:
+  row=page.get_by_role('row',name=label,exact=True)
+  workflow_call('DC.column_select',row.click,locals(),timeout=allowance())
+  measured('column_selected_'+label,lambda:expect(row).to_have_attribute('aria-selected','true',timeout=allowance()))
  workflow_call('deployment/dc_native_capture.py:navigate_and_capture:123:1:click',page.get_by_role('button',name='Column visibility',exact=True).click,locals(), timeout=allowance())
  # Close the native Tables panel to give the original row its full width.
  # No source CSS/text is changed. Long names still must pass clipping checks.
