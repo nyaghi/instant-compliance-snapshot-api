@@ -122,13 +122,38 @@
     let connected = false, recoveryUsed = false;
     async function api(fields, cleanup = false) {
       const timeout = AbortSignal.timeout(45000);
+      const requestStarted = Date.now();
+      let requestPhase = 'serialize', requestStatus = null;
+      try {
+      const requestBody = JSON.stringify({ ...credentials, ...fields });
+      requestPhase = "send";
       const response = await fetch(API + "/api/ny-connector", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        signal: fields.action === "capture_empty" ? AbortSignal.any([...(signal ? [signal] : []),timeout,AbortSignal.timeout(Math.max(1,alEvidenceDeadline-Date.now()))]) : signal && !cleanup ? AbortSignal.any([signal, timeout]) : timeout, body: JSON.stringify({ ...credentials, ...fields })
+        signal: fields.action === "capture_empty" ? AbortSignal.any([...(signal ? [signal] : []),timeout,AbortSignal.timeout(Math.max(1,alEvidenceDeadline-Date.now()))]) : signal && !cleanup ? AbortSignal.any([signal, timeout]) : timeout, body: requestBody
       });
+      requestStatus = response.status; requestPhase = "decode";
       const payload = await response.json();
+      requestPhase = "status";
       if (!response.ok) throw new Error(payload.error || `The ${label} browser check could not be completed.`);
       return payload;
+      } catch (error) {
+        // Record only public control-flow facts. Never export payloads,
+        // credentials, signed continuations, or arbitrary exception text.
+        if (!cleanup) try {
+          const reason = signal?.aborted ? 'CALLER_ABORTED' : timeout.aborted ? 'API_TIMEOUT'
+            : requestPhase === 'serialize' ? 'API_SERIALIZATION_FAILED'
+            : requestPhase === 'decode' ? 'API_RESPONSE_DECODE_FAILED'
+            : requestPhase === 'status' ? 'API_HTTP_REJECTED' : 'API_SEND_FAILED';
+          onProgress?.(`${label}: browser result submission failed.`, {
+            state:registryState,stage:'master request failed',action:fields.action,reason,
+            http_status:requestStatus,
+            diagnostic:{phase:requestPhase,elapsed_seconds:(Date.now()-requestStarted)/1000,
+              error_type:['TypeError','SyntaxError','AbortError','TimeoutError','Error'].includes(error?.name)?error.name:'OtherError',
+              caller_aborted:!!signal?.aborted,timeout_aborted:timeout.aborted}
+          });
+        } catch { /* Observation must not change the original outcome. */ }
+        throw error;
+      }
     }
     try {
       let connection = await bridge("ping", null, null, null, null, signal);

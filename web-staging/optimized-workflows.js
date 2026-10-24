@@ -77,6 +77,40 @@
         }
       }
     }
+    // A successful archive can outlive its browser acknowledgement. Read the
+    // existing workflow once; never repeat a source search or screenshot here.
+    async function reconcileSavedEvidence() {
+      if (!token || signal?.aborted) return;
+      const pending = [...results.values()].filter(r => ['WI','DC'].includes(r.state)
+        && r.desktop_evidence_request && !r.evidence_url);
+      if (!pending.length) return;
+      try {
+        const progress = await call('poll');
+        for (const result of pending) {
+          if (signal?.aborted || result.evidence_url) continue;
+          const matches = (progress.results || []).filter(r => r.state === result.state);
+          if (matches.length !== 1) continue;
+          const saved = matches[0];
+          const fields = ['state','ein','organization_name','status','success',
+            'matched_registry_identifier','matched_registry_name','raw_status_text',
+            'confirmation_required','execution_version'];
+          if (!fields.every(k => saved[k] === result[k]) || saved.confirmation_required) continue;
+          if (saved.evidence_capture !== 'captured' ||
+              !/^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(saved.evidence_url || '') ||
+              !Number.isFinite(saved.evidence_captured_at) ||
+              !Number.isFinite(result.desktop_evidence_request.issued_at) ||
+              saved.evidence_captured_at < result.desktop_evidence_request.issued_at - 1) continue;
+          for (const key of ['evidence_url','evidence_capture','evidence_captured_at',
+            'evidence_metrics','desktop_evidence_timing','search_history_url','search_history_capture'])
+            if (Object.hasOwn(saved,key)) result[key] = saved[key];
+          if (Array.isArray(window.__CCLabStateTrace)) {
+            window.__CCLabStateTrace.push({at:Date.now(),state:result.state,
+              stage:'saved evidence reconciled',captured:true});
+            if (window.__CCLabStateTrace.length>2000) window.__CCLabStateTrace.splice(0,window.__CCLabStateTrace.length-2000);
+          }
+        }
+      } catch { /* Preserve the original result when persistence is unavailable. */ }
+    }
     const cancel=()=>{if(token) void call('cancel',{},true).catch(()=>{});};
     signal?.throwIfAborted();signal?.addEventListener('abort',cancel,{once:true});
     let connector=Promise.resolve(),connectorStarted=false;
@@ -133,6 +167,7 @@
       await connector;
       for(const state of states)if(!results.has(state))record(missing(state));
       await Promise.all(evidenceTasks);
+      await reconcileSavedEvidence();
       return states.map(state=>results.get(state));
     } catch(error) {
       cancel();
@@ -141,6 +176,7 @@
       await connector;
       for(const state of states)if(!results.has(state))record(missing(state));
       await Promise.all(evidenceTasks);
+      await reconcileSavedEvidence();
       return states.map(state=>results.get(state));
     } finally {signal?.removeEventListener('abort',cancel);}
   }

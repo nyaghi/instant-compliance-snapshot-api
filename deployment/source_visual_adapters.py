@@ -1732,7 +1732,7 @@ def capture_selected_wv_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1736:52:return',None)
-  stop=time.monotonic()+min(8.0,remaining)
+  stop=time.monotonic()+min(16.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1738:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1739:61:return',None)
   with master.checker.sync_playwright() as p:
