@@ -581,7 +581,7 @@ def capture_selected_va_source(master,result,run,deadline):
     for field,wanted in expected.items():
      component=panel.locator('.formio-component-'+field)
      if workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:570:8:count',component.count,locals())!=1:fact['outcome']='source_field_component_changed';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:570:78:return',None)
-     lines=[line.strip() for line in workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:571:37:inner_text',component.inner_text,locals(), timeout=400).splitlines() if line.strip()]
+     lines=[line.strip() for line in workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:571:37:inner_text',component.inner_text,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000))).splitlines() if line.strip()]
      observed=' '.join(lines[1:])
      if observed.casefold()!=wanted.casefold():fact['outcome']='source_fields_changed_since_lookup';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:573:100:return',None)
     bounds=panel.bounding_box()
