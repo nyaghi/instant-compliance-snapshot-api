@@ -110,9 +110,13 @@ def start_transport(url,body=None,params=None,run=None):
                 label=(first+'; '+second if first in {'Includes','Starts with'} and second in {'All words','At least one word'} else 'Michigan name field; search method not captured')
                 if not any(kind=='name' and value==name.strip() for kind,value,_ in observed):observed.append(('name',name.strip(),label))
         observed += [('ein',value,label) for value,label in ein_criteria(url,body,params,getattr(run,'ein',''))]
-        return [SourceQueryReceipt(run,{'state':run.state,'operation':'search',kind:value,
+        receipts = [SourceQueryReceipt(run,{'state':run.state,'operation':'search',kind:value,
                     'filter_label':label,'source_kind':'state_portal','url':public})
                 for kind,value,label in observed]
+        if run.state in {'WV','AR','CT','OK','ME'}:
+            from deployment.validated_search_history import bind_transport
+            bind_transport(run,receipts)
+        return receipts
     except Exception:
         run.search_history_overflow=True;return []
 
@@ -139,6 +143,10 @@ def observed_http_call(call,*args,**kwargs):
     try:received(receipts,getattr(response,'status_code',None) or getattr(response,'status',None))
     except Exception:
         for receipt in receipts:receipt.incomplete()
+    try:
+        from deployment.completed_response_history import remember
+        remember(response,receipts)
+    except Exception:pass
     return response
 
 def observe_browser_context(context,run):

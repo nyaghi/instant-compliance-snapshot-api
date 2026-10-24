@@ -705,6 +705,9 @@ def load_ks_weekly_checker():
         # Pure text transformations: no EIN, reviewed alias, date or result.
         KS_WEEKLY_CHECKER.normalize_name = lru_cache(maxsize=16384)(KS_WEEKLY_CHECKER.normalize_name)
         KS_WEEKLY_CHECKER.normalize_legal_name = lru_cache(maxsize=16384)(KS_WEEKLY_CHECKER.normalize_legal_name)
+        from deployment.dataset_row_history import observe_ks_matcher
+        KS_WEEKLY_CHECKER.find_best_match = observe_ks_matcher(KS_WEEKLY_CHECKER.find_best_match, KS_WEEKLY_CHECKER, 'name')
+        KS_WEEKLY_CHECKER.find_ein_match = observe_ks_matcher(KS_WEEKLY_CHECKER.find_ein_match, KS_WEEKLY_CHECKER, 'ein')
     return KS_WEEKLY_CHECKER
 
 
@@ -2043,6 +2046,8 @@ def identity_fetch(url: str, deadline: float, *, headers=None, max_bytes=4_000_0
             body = zipped.read(max_bytes + 1)
     if len(body) > max_bytes:
         raise ValueError("Identity source exceeds size limit")
+    from deployment.completed_response_history import finish as _history_finish
+    _history_finish(response,body)
     return body
 
 
@@ -11482,7 +11487,10 @@ def sc_official_detail_lookup(org) -> object | None:
         if session is not None:
             response = _history_http_call(session.get, url, timeout=min(8, max(.05, deadline-time.monotonic())))
             response.raise_for_status()
-            return response.text or ""
+            source_body = response.text or ""
+            from deployment.completed_response_history import finish as _history_finish
+            _history_finish(response,source_body)
+            return source_body
         page_response = _history_http_call(opener.open, url, timeout=min(8, max(.05, deadline-time.monotonic())))
         return page_response.read().decode(page_response.headers.get_content_charset() or "utf-8", "replace")
 
@@ -11497,7 +11505,10 @@ def sc_official_detail_lookup(org) -> object | None:
         if session is not None:
             response = _history_http_call(session.post, url, data=fields, headers=headers, timeout=min(8, max(.05, deadline-time.monotonic())))
             response.raise_for_status()
-            return response.text or ""
+            source_body = response.text or ""
+            from deployment.completed_response_history import finish as _history_finish
+            _history_finish(response,source_body)
+            return source_body
         request = urllib.request.Request(
             url,
             data=urlencode(fields).encode("utf-8"),
@@ -11505,7 +11516,10 @@ def sc_official_detail_lookup(org) -> object | None:
             headers=headers,
         )
         response = _history_http_call(opener.open, request, timeout=min(8, max(.05, deadline-time.monotonic())))
-        return response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
+        source_body = response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
+        from deployment.completed_response_history import finish as _history_finish
+        _history_finish(response,source_body)
+        return source_body
     search_queries = build_search_queries(
         original_name,
         getattr(org, "ein", ""),
@@ -12124,7 +12138,10 @@ def va_evoke_api_get(path: str, filter_payload: dict | None = None, timeout_seco
             with _history_http_call(urllib.request.urlopen, request, timeout=timeout_seconds) as response:
                 charset = response.headers.get_content_charset() or "utf-8"
                 payload = response.read().decode(charset, errors="replace")
-            return json.loads(payload)
+            parsed_payload = json.loads(payload)
+            from deployment.completed_response_history import finish as _history_finish
+            _history_finish(response,parsed_payload)
+            return parsed_payload
         except Exception as exc:
             last_error = exc
             if attempt == 0:
@@ -12804,6 +12821,8 @@ class MaineRegistrySession:
             "ctl00$ctl00$mainContent$mainContent$ctl24": "BW",
             "ctl00$ctl00$mainContent$mainContent$btnSearch": "Search",
         })
+        from deployment.validated_search_history import begin_query
+        _cc_history = begin_query('ME',fields["ctl00$ctl00$mainContent$mainContent$scCompanyName"],NAME_SEARCH_PREFLIGHT_URLS['ME'])
         self.stage = "name search POST"
         response = __import__('deployment.search_observation',fromlist=['observed_http_call']).observed_http_call(self.session.post, self.url, data=fields,
             headers={"Referer": self.url, "Origin": "https://www.pfr.maine.gov"},
@@ -12814,6 +12833,8 @@ class MaineRegistrySession:
             self.completed_search_html = response.text
         rows, pages = me_collect_complete_pages(response.text, response.url, query,
             lambda url: __import__('deployment.search_observation',fromlist=['observed_http_call']).observed_http_call(self.session.get, url, timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_GET_TIMEOUT_SECONDS)))
+        from deployment.validated_search_history import finish_me
+        finish_me(_cc_history,rows,all_pages=True)
         # A results document can carry its own WebForms state without the search
         # form. Never submit that document's hidden fields as the next search.
         self.form_html = (response.text if re.search(
@@ -12890,11 +12911,16 @@ def me_browser_search_rows(page, query, deadline):
         timeout=1000 * me_request_timeout(deadline, 3))
     # WebForms submits a new document. Wait for that document, so an old empty
     # results table cannot be interpreted as the answer to this query.
+    from deployment.validated_search_history import begin_query
+    _cc_history = begin_query('ME',submitted_query,NAME_SEARCH_PREFLIGHT_URLS['ME'])
     with page.expect_navigation(wait_until="domcontentloaded",
             timeout=1000 * me_request_timeout(deadline, 12)):
         page.locator(f'input[name="{prefix}btnSearch"]').click(
             timeout=1000 * me_request_timeout(deadline, 3), no_wait_after=True)
-    return me_parse_search_rows(page.content()), MaineBrowserDetailReader(page, deadline)
+    history_rows = me_parse_search_rows(page.content())
+    from deployment.validated_search_history import finish_me
+    finish_me(_cc_history,history_rows)
+    return history_rows, MaineBrowserDetailReader(page, deadline)
 
 
 class MainePublicApplicationError(ValueError):
@@ -13998,6 +14024,8 @@ def search_or_completed(page, org, module):
                     const source = snapshot(parsed);
                     return actual && source !== null && snapshot(actual) === source;
                 }""", arg=body, timeout=max(1, int(remaining*1000)))
+                from deployment.completed_response_history import finish as _history_finish
+                _history_finish(response,body)
                 completed.append(True)
             except Exception as exc:
                 if not failure_detail:
@@ -15994,7 +16022,10 @@ def ct_direct_post_query(session, base_fields: dict[str, str], headers: dict[str
         timeout=(min(3.0, timeout), timeout),
     )
     response.raise_for_status()
-    return response.text
+    source_body = response.text
+    from deployment.completed_response_history import finish as _history_finish
+    _history_finish(response,source_body)
+    return source_body
 
 
 def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> str:
@@ -16539,6 +16570,8 @@ def search_ct(page, org):
                 return result
             input_box.fill("")
             input_box.fill(variant)
+            from deployment.validated_search_history import begin_query, finish_ct
+            _cc_history = begin_query('CT',variant,'https://www.elicense.ct.gov/lookup/licenselookup.aspx')
             try:
                 page.locator("#ctl00_MainContentPlaceHolder_ucLicenseLookup_btnLookup, input[type='submit']").first.click(timeout=remaining_ms(2500, 1000))
             except Exception:
@@ -16550,6 +16583,7 @@ def search_ct(page, org):
                 time.sleep(min(1.0, remaining_seconds()))
             text = readable_page_text(page)
             if no_registry_results_seen(text):
+                finish_ct(_cc_history,text,page.url,[])
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
                 result.source_note = "Connecticut public registry returned no matching record for the generated name variants."
@@ -16572,6 +16606,7 @@ def search_ct(page, org):
                 }).filter((row) => row.hasDetails && row.text && /PUBLIC CHARITY|CHR\\./i.test(row.text));
                 """
             )
+            finish_ct(_cc_history,text,page.url,candidate_rows)
             best_candidate = None
             best_score = -10000
             best_rank = (-10000, -1, -10000)
@@ -17867,7 +17902,10 @@ def search_nd_completed(page, org):
                     response = pending.value
                 if response.status >= 400:
                     raise OSError(f"North Dakota registry HTTP {response.status}")
-                return response.json()
+                parsed_response = response.json()
+                from deployment.completed_response_history import finish as _history_finish
+                _history_finish(response, parsed_response)
+                return parsed_response
             for query in queries:
                 query = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", query)).strip()
                 data = request("/api/Records/charitablesearch", {"SEARCH_VALUE": query,
@@ -24423,6 +24461,8 @@ def nj_completed_query_rows(request, query):
                 or "json" not in response.headers.get("content-type", "").lower()):
             return None
         data = response.json()
+        from deployment.completed_response_history import finish as _history_finish
+        _history_finish(response,data)
         exemption = nj_exact_ein_exempt_row(data, query)
         if exemption is not None:
             return [exemption]
@@ -24788,7 +24828,10 @@ def search_nj_public_details(org):
                         if size > maximum_bytes or time.monotonic() >= deadline:
                             raise ValueError("NJ public query response exceeded its allowance")
                         pieces.append(chunk)
-                    return b"".join(pieces).decode("utf-8")
+                    source_body = b"".join(pieces).decode("utf-8")
+                    from deployment.completed_response_history import finish as _history_finish
+                    _history_finish(response,source_body)
+                    return source_body
                 finally:
                     response.close()
 
@@ -25227,6 +25270,8 @@ def lab_pa_completed_no_match(result, org) -> bool:
 
 
 def search_pa_with_name_fallback(page, org):
+    from deployment.state_snapshots import CURRENT as _history_current
+    _history_run = _history_current.get()
     observations = []
     started = time.monotonic()
 
@@ -25267,6 +25312,8 @@ def search_pa_with_name_fallback(page, org):
             return
         try:
             payload = response.json()
+            from deployment.completed_response_history import finish as _history_finish
+            _history_finish(response,payload,run=_history_run)
             rows = payload.get("Table") if isinstance(payload, dict) else None
             if isinstance(rows, list) and all(isinstance(item, dict) for item in rows):
                 row["complete"] = True
@@ -28502,8 +28549,11 @@ def search_ky_strict_snapshot(org):
     near_rows = []
     abbreviated_dba_rows = set()
     from deployment.search_observation import dataset_scope as _history_dataset_scope
-    with _history_dataset_scope(targets):
-        for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
+    _history_ky_records = load_ky_snapshot_records()
+    with _history_dataset_scope(targets,
+            records=[{'Registration Number':r[0],'Name':r[1]} for r in _history_ky_records],
+            record_name=lambda r:r['Name'], name_score=target_name_score):
+        for registry_id, registry_name, filed_year, record_text in _history_ky_records:
             registry_norm = normalized_match_name(registry_name)
             registry_words = registry_norm.split()
             exact_target = registry_norm in original_target_norms
@@ -29018,7 +29068,11 @@ def search_nh_live_pdf(org):
         return best_candidate
 
     from deployment.search_observation import dataset_scope as _history_dataset_scope
-    with _history_dataset_scope(targets):
+    with _history_dataset_scope(targets,
+            records=[{'Registration Number':r.get('registry_id',''),
+                      'Name':r.get('registry_name') or nh_registry_name_from_live_body(r.get('body','')),
+                      'Status':r.get('status_code',''),'Renewal Date':r.get('due_raw','')} for r in records],
+            record_name=lambda r:r['Name'], name_score=target_name_score):
         best = find_best_nh_record(records)
         if not best:
             return result
@@ -29282,7 +29336,7 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
             result.success = False
             return result
         module = load_ks_weekly_checker()
-        external_result = __import__('deployment.search_observation',fromlist=['observed_dataset_call']).observed_dataset_call(module.search_ks_snapshot,[org.organization_name],org.organization_name, ARTIFACTS_DIR / "KS", org.ein)
+        external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS", org.ein)
         original_name = getattr(org, "original_organization_name", org.organization_name)
         if external_result.status == module.STATUS_NOT_REGISTERED:
             records, _, _ = module.load_live_records()
@@ -29296,7 +29350,7 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
                     (row.status or "").strip().upper() == "REGISTERED",
                     row.expire_date.toordinal() if row.expire_date else 0,
                 ))
-                recovered = __import__('deployment.search_observation',fromlist=['observed_dataset_call']).observed_dataset_call(module.search_ks_snapshot,[selected.name],selected.name, ARTIFACTS_DIR / "KS", org.ein)
+                recovered = module.search_ks_snapshot(selected.name, ARTIFACTS_DIR / "KS", org.ein)
                 if getattr(recovered, "contact_number", "") == selected.contact_number:
                     external_result = recovered
                 else:
@@ -30488,6 +30542,11 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         getattr(org, "organization_name", ""),
         getattr(org, "ein", ""),
     )
+    from deployment.state_snapshots import CURRENT as _history_current
+    from deployment.validated_search_history import finish_ok
+    _history_run = _history_current.get()
+    _history_query = getattr(_history_run,'validated_history_query',None)
+    _history_rows = []
     best = None
     best_score = -10000
     best_rank = (-10000, -1)
@@ -30562,6 +30621,7 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         if not registry_name:
             raise ValueError("Oklahoma filing link has no readable organization name")
 
+        _history_rows.append({'Name':registry_name,'Registration Number':filing_number})
         original_name = getattr(org, "original_organization_name", getattr(org, "organization_name", ""))
         if not registry_name_is_safe_for_org(registry_name, original_name, getattr(org, "ein", "")):
             if ok_reviewed_near_name(registry_name, original_name, getattr(org, "ein", "")):
@@ -30590,6 +30650,7 @@ def ok_choose_safe_result_row_on_page(page, org, module):
             best_score = score
             best = (row, filing_link, registry_name, filing_number)
 
+    finish_ok(_history_query,'',page.url,_history_rows)
     if (not best or best_score < 450) and len(tentative) == 1:
         org.ok_tentative_candidate_name = tentative[0][2]
         return tentative[0]
@@ -31100,6 +31161,8 @@ def search_ok_precise(page, org, module):
         search_name = ok_search_name_for_org(org)
         workflow_call('source.step:search_ok_precise:fill:31076',name_input.fill,locals(), search_name, timeout=ok_action_timeout(org, 4000))
 
+        from deployment.validated_search_history import begin_query, finish_ok
+        _cc_history = begin_query('OK',search_name,module.OK_SEARCH_URL)
         clicked = False
         for candidate in [
             page.locator("#ctl00_DefaultContent_CharityNameSearch1_SearchNameButton").first,
@@ -31124,6 +31187,7 @@ def search_ok_precise(page, org, module):
         text = workflow_call('source.step:search_ok_precise:body_text:31099',module.body_text,locals(), page, timeout=ok_action_timeout(org, 4000))
         if re.search(r"no records found|no matching|no result", text, re.I):
             result.status = module.STATUS_NOT_FOUND
+            finish_ok(_cc_history,text,page.url)
             result.raw_status_text = "No results found"
             result.success = True
             result.source_note = "Oklahoma search returned no matching entity result."
@@ -31315,6 +31379,8 @@ def ar_registration_date_ordinal(value: str) -> int:
 
 
 def ar_result_rows(page, org=None) -> list[dict]:
+    from deployment.validated_search_history import ar_rows_start, ar_row, ar_rows_failed
+    ar_rows_start()
     rows = []
     try:
         locator = page.locator("table tbody tr")
@@ -31323,14 +31389,17 @@ def ar_result_rows(page, org=None) -> list[dict]:
             try:
                 cells = row.locator("td")
                 if cells.count() < 4:
+                    ar_rows_failed('layout')
                     continue
                 row_values = [
                     re.sub(r"\s+", " ", cells.nth(cell_index).inner_text(timeout=1000)).strip()
                     for cell_index in range(4)
                 ]
             except Exception:
+                ar_rows_failed()
                 continue
             if row_values and not re.search(r"\bNo\s+Results\s+Found\b", " ".join(row_values), re.I):
+                ar_row(row_values)
                 rows.append({
                     "name": structured_registry_name(row_values[0],
                         getattr(org, "organization_name", ""), getattr(org, "ein", "")),
@@ -31339,7 +31408,7 @@ def ar_result_rows(page, org=None) -> list[dict]:
                     "registration_date": row_values[3],
                 })
     except Exception:
-        pass
+        ar_rows_failed()
     return rows
 
 
@@ -31663,6 +31732,8 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 return result
             page.locator('input[name="name"]').fill("")
             page.locator('input[name="name"]').fill(variant)
+            from deployment.validated_search_history import begin_query, finish_ar
+            _cc_history = begin_query('AR', variant, AR_SEARCH_URL)
             phase_started = time.perf_counter()
             page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=min(5000, nav_timeout_ms))
             page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
@@ -31688,6 +31759,7 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
             if explicit_no_results:
                 explicit_no_results_seen = True
             parsed_rows = ar_result_rows(page, org)
+            finish_ar(_cc_history, body, page.url, explicit_no_results)
             if parsed_rows or explicit_no_results:
                 completed_variants.append(variant)
             # A prefix can cover its associated full identity only on this
@@ -32781,8 +32853,11 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 continue
             if time.perf_counter() >= deadline:
                 break
+            from deployment.validated_search_history import begin_query, finish_wv
+            _cc_history = None
             if public_lookup is not None:
                 searched_queries.append(query_name)
+                _cc_history = begin_query('WV', query_name, WV_SEARCH_URL)
                 body, snapshot = public_lookup.search(query_name)
                 rows = None
             else:
@@ -32800,6 +32875,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 name_input.fill(query_name, timeout=action_timeout(3000))
                 searched_queries.append(query_name)
 
+                _cc_history = begin_query('WV', query_name, WV_SEARCH_URL)
                 _cc_wv_visual_issued=time.time()
                 page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=action_timeout(4000))
                 safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
@@ -32813,6 +32889,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 *organization_match_target_variants(query_name, org.ein),
             ]))
             if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
+                finish_wv(_cc_history, body, [], WV_SEARCH_URL if public_lookup is not None else page.url)
                 completed_queries.append(query_name)
                 if public_lookup is None:
                     try:
@@ -32828,6 +32905,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
                     snapshot = registry_table_text_snapshot(rows, 100, (0, 1, 4))
                 except Exception as exc:
                     raise TimeoutError("West Virginia result table did not finish loading") from exc
+            finish_wv(_cc_history, body, snapshot, WV_SEARCH_URL if public_lookup is not None else page.url)
             if snapshot:
                 saw_result_rows = True
                 progress["saw_result_rows"] = True
