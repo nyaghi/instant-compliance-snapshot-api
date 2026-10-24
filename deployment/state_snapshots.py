@@ -474,7 +474,7 @@ class CaptureRun:
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
                 self.errors.append('source_page_exceeds_capture_bound');return trace_return('deployment/state_snapshots.py:page:461:72:return',None)
             observed('screenshot')
-            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=(ma_timeout(5) if self.state=='MA' else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'OK','ME'} or (self.state=='WV' and hasattr(self,'page_capture_stop')) else 1000))
+            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=(ma_timeout(5) if self.state=='MA' else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'AK','OK','ME'} or (self.state=='WV' and hasattr(self,'page_capture_stop')) else 1000))
             if self.state=='WA' and workflow_call('deployment/state_snapshots.py:page:464:36:is_visible',page.locator('#loaderDiv').is_visible,locals()):
                 self.errors.append('WA_source_overlay_returned_during_capture');return trace_return('deployment/state_snapshots.py:page:465:80:return',None)
             observed('post_capture_binding')
