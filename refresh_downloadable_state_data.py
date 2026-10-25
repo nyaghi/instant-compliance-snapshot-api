@@ -250,7 +250,8 @@ def main() -> int:
     results, errors = [], []
     for state in states:
         print(f"Downloading {state}...", flush=True)
-        backups = {name: (BASE_DIR / name).read_bytes() if (BASE_DIR / name).exists() else None for name in ASSETS[state]}
+        dependent_assets = ['deployment/source-page-indexes.json'] if state in {'KY', 'NH'} else []
+        backups = {name: (BASE_DIR / name).read_bytes() if (BASE_DIR / name).exists() else None for name in ASSETS[state] + dependent_assets}
         try:
             if state == "KS":
                 if args.dry_run:
@@ -286,6 +287,16 @@ def main() -> int:
                     raise RuntimeError(f"{state} record count dropped over 20%; review required before deployment")
                 entry["downloaded_at"] = datetime.now(timezone.utc).isoformat()
                 entry["assets"] = [{"path": name, "sha256": sha256_bytes((BASE_DIR / name).read_bytes())} for name in ASSETS[state]]
+                if state in {'KY', 'NH'}:
+                    from deployment.pdf_page_index import build_page_index
+                    pdf_asset = next(a for a in entry['assets'] if a['path'].endswith('.pdf'))
+                    row_asset = next(a for a in entry['assets'] if a['path'].endswith('.json'))
+                    rows = json.loads((BASE_DIR / row_asset['path']).read_text())
+                    rows = rows.get('records', []) if isinstance(rows, dict) else rows
+                    index_path = BASE_DIR / 'deployment/source-page-indexes.json'
+                    indexes = json.loads(index_path.read_text()) if index_path.exists() else {}
+                    indexes[state] = build_page_index(state, (BASE_DIR / pdf_asset['path']).read_bytes(), rows, pdf_asset['path'])
+                    index_path.write_text(json.dumps(indexes, separators=(',', ':')), encoding='utf-8')
                 manifest["states"][state] = entry
             results.append(entry)
             print(f"Validated {state}: {entry.get('record_count', 'dry-run')} records", flush=True)

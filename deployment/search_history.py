@@ -258,7 +258,7 @@ def searched_terms(doc):
 def render_names_pdf(doc,asset_root=None):
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet,ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,Image
+    from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,Image,KeepTogether
     out=io.BytesIO();styles=getSampleStyleSheet()
     styles.add(ParagraphStyle(name='NamesBody',fontName='Helvetica',fontSize=10,leading=15,spaceAfter=8))
     styles.add(ParagraphStyle(name='NamesNote',fontName='Helvetica',fontSize=8,leading=11,textColor=colors.HexColor('#475569'),spaceAfter=6))
@@ -280,7 +280,8 @@ def render_names_pdf(doc,asset_root=None):
     if eins:
         story.extend([Spacer(1,10),Paragraph('EIN searched' if len(eins)==1 else 'EINs searched',styles['Heading2'])])
         story.extend(p(ein) for ein in eins)
-    story.extend([Spacer(1,14),Paragraph('Actual search terms recorded by CharityClarity, with duplicates removed. Listing a term does not establish that its search completed.',styles['NamesNote'])])
+    # Keep the explanation with the final actual term, never on a page alone.
+    story.append(KeepTogether([story.pop(),Spacer(1,14),Paragraph('Actual search terms recorded by CharityClarity, with duplicates removed. Listing a term does not establish that its search completed.',styles['NamesNote'])]))
     def footer(canvas,document):
         canvas.saveState();canvas.setFont('Helvetica',8);canvas.setFillColor(colors.HexColor('#475569'))
         canvas.drawString(42,25,'Compliance Express | www.compliance-express.com | info@compliance-express.com')

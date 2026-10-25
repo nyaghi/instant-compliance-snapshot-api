@@ -178,7 +178,14 @@ def matching_reference(result, refs):
     ein=digits(workflow_call('deployment/state_snapshots.py:matching_reference:177:15:get',result.get,locals(), 'ein',''));state=workflow_call('deployment/state_snapshots.py:matching_reference:177:43:get',result.get,locals(), 'state')
     candidates=[r for r in refs if workflow_call('deployment/state_snapshots.py:matching_reference:178:35:get',r.get,locals(), 'ein')==ein and workflow_call('deployment/state_snapshots.py:matching_reference:178:57:get',r.get,locals(), 'state')==state]
     if state=='GA':
-        candidates=sorted(candidates,key=lambda r:workflow_call('deployment/state_snapshots.py:matching_reference:180:50:get',r.get,locals(), 'operation')=='detail')
+        if (ident or name) and not completed_negative_result(result):
+            # A completed empty search is not a competing same-name credential.
+            # Positive/review records require their original selected detail;
+            # a search-list fallback must not masquerade as that detail.
+            candidates=[r for r in candidates if r.get('operation')=='detail'
+                        and r.get('identifier')!='@completed-search']
+        else:
+            candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
     if state=='NC':
         candidates=sorted(candidates,key=lambda r:workflow_call('deployment/state_snapshots.py:matching_reference:182:50:get',r.get,locals(), 'operation')=='detail')
     if state=='NM' and re.fullmatch(r'\d{2}-?\d{7}',ident) and digits(ident)==ein:
@@ -674,7 +681,12 @@ class CaptureRun:
             negative=completed_negative_result(row)
             # Only source visuals are eligible; no text/JSON substitute is permitted.
             ordered=sorted((d for d in self.documents if d[2] in {'image','image_pages','source_pdf'}),key=lambda d:({'image':3,'image_pages':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
-            if self.state=='MA' and not negative:ordered=ma_selected_originals(self,ma_selected_scan(self,ordered,row),row)
+            if self.state=='MA' and not negative:
+                from deployment.ma_view_more_evidence import select
+                ordered=select(self,ordered,row)
+            if self.state=='OK' and not negative:
+                from deployment.ok_certificate_evidence import pair_selected_certificate
+                ordered=pair_selected_certificate(self,ordered,row)
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))

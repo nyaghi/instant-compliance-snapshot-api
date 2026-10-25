@@ -109,7 +109,7 @@ def capture_selected_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1.0
   if remaining<3.0:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:110:54:return',None)
-  stop=time.monotonic()+min(22.0 if run.state=='RI' else 16.0 if run.state=='OR' else 8.0,remaining)
+  stop=time.monotonic()+min(22.0 if run.state=='RI' else 30.0 if run.state=='OR' else 8.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:112:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:113:61:return',None)
   runtime_started=time.perf_counter();runtime_close_started=None
@@ -180,7 +180,7 @@ def capture_selected_source(master,result,run,deadline):
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:179:66:return',None)
     before=len(run.documents);capture=time.perf_counter()
     # Preserve RI's existing absolute visual stop inside the screenshot call.
-    if run.state=='RI':run.page_capture_stop=stop
+    if run.state in {'RI','OR'}:run.page_capture_stop=stop
     # Owned ContextCaptureProxy captures once; its close must not capture again.
     workflow_call('deployment/source_visual_adapters.py:capture_selected_source:182:4:capture',context.capture,locals())
     fact['capture_ms']=round((time.perf_counter()-capture)*1000,2)
@@ -252,8 +252,17 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
      fact['waiting_for_field']=field
      page.locator('.formio-component-'+field).wait_for(state='visible',timeout=timeout())
     fact['waiting_for_field']=''
-    text=page.inner_text('body',timeout=timeout());core=ca_exempt_entity_core(text,result['matched_registry_name'],run.ein)
+    # Form containers can be visible before their bound values arrive. Keep the
+    # exact identity predicate and wait for its values within the existing cap.
+    core=None
+    while time.monotonic()+1<stop:
+     text=page.inner_text('body',timeout=timeout())
+     core=ca_exempt_entity_core(text,result['matched_registry_name'],run.ein)
+     if core:break
+     fact['waiting_for_field']='bound_entity_values'
+     page.wait_for_timeout(min(100,timeout()))
     if not core:fact['outcome']='selected_entity_not_bound';return
+    fact['waiting_for_field']=''
     panel=page.locator('.formio-form').filter(has=page.locator('.formio-component-entityStatus'))
     if panel.count()!=1:fact['outcome']='source_panel_not_unique';return
     bounds=panel.bounding_box()

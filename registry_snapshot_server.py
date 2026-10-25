@@ -16104,6 +16104,10 @@ def ct_identity_names_from_detail(detail_text: str) -> list[str]:
 
 def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str, session=None):
     row_text = html_fragment_text(row_html)
+    # CT signed rejection continuation: exclude only this request's credential.
+    rejected_id = re.search(r"\bCHR\.[0-9A-Z.-]+", row_text, re.I)
+    if rejected_id and user_rejected_credential(org.ein, "CT", rejected_id.group(0)):
+        return None, -10000
     name_match = re.search(r"<b[^>]*headline6[^>]*>(.*?)</b>", row_html, re.I | re.S)
     row_name = clean_registry_name(html_fragment_text(name_match.group(1)) if name_match else re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0])
     if institution_location_conflict(getattr(org, "original_organization_name", org.organization_name), row_name):
@@ -16176,8 +16180,13 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     return ct_shortened_identity_review(org, result, detail_text), score
 
 
+
 def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str], url: str):
     row_text = html_fragment_text(response_text)
+    # CT signed rejection continuation: exclude only this request's credential.
+    rejected_id = re.search(r"\bCHR\.[0-9A-Z.-]+", row_text, re.I)
+    if rejected_id and user_rejected_credential(org.ein, "CT", rejected_id.group(0)):
+        return None, -10000
     if not re.search(r"\b(PUBLIC\s+CHARITY|CHR\.)\b", row_text, re.I):
         return None, -10000
     row_name = clean_registry_name(
@@ -16243,6 +16252,7 @@ def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str],
         score += 10
     result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
     return ct_shortened_identity_review(org, result, row_text), score
+
 
 
 def ct_shortened_institutional_queries(original_name: str, ein: str) -> list[str]:
@@ -16627,6 +16637,10 @@ def search_ct(page, org):
             for candidate in candidate_rows:
                 row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
                 row_name = clean_registry_name(re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0])
+                rejected_id = re.search(r"\bCHR\.[0-9A-Z.-]+", row_text, re.I)
+                if rejected_id and user_rejected_credential(org.ein, "CT", rejected_id.group(0)):
+                    details_index += 1
+                    continue
                 name_score = target_name_score(row_name, safe_targets)
                 if name_score < 0:
                     details_index += 1
@@ -16741,6 +16755,7 @@ def search_ct(page, org):
         result.success = False
         return result
     return checker.StateResult(original_name, org.ein, "CT", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Connecticut public registry returned no matching record for the generated name variants.", success=True)
+
 
 
 class FloridaCertificateError(RuntimeError):
@@ -19646,7 +19661,14 @@ def search_ma_master(page, org, completed):
             # and explicit state statuses never enter this recovery path.
             result.source_attempts = ["Massachusetts completed its filing list; retried the unavailable Form PC detail once."]
             evidence = ma_read_latest_form_pc(page, result, body, completed)
-        return annotate_ma_visible_form_pc_due(result, evidence), body
+        result = annotate_ma_visible_form_pc_due(result, evidence)
+        try:
+            from deployment.state_snapshots import CURRENT
+            from deployment.ma_view_more_evidence import capture
+            capture(CURRENT.get(), page, record)
+        except Exception:
+            pass  # Evidence cannot change the completed status interpretation.
+        return result, body
     except Exception as exc:
         log_event(f"MA {step} unavailable: {type(exc).__name__}")
         return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED" if step == "selection" else "MA_FILING_LIST_UNCONFIRMED",
@@ -20089,10 +20111,6 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
                 document_eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", text)}
                 read_progress["complete"] = document_eins == {record["ein"]}
                 read_progress["identity_conflict"] = bool(document_eins - {record["ein"]})
-            try:
-                from deployment.state_snapshots import CURRENT, capture_ma_scan
-                capture_ma_scan(CURRENT.get(), scanned, record, row["url"], text)
-            except Exception:pass
             evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], registry_record=record,
                 document_url=row["url"], allow_older_period=allow_older_period)
             if not evidence:
@@ -20208,13 +20226,6 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
                 if not evidence:
                     return context
                 evidence["source_url"] = detail.url
-                # Photograph the already validated original before its popup closes.
-                # This does not issue a search or change the selected fiscal period.
-                try:
-                    from deployment.state_snapshots import CURRENT, capture_ma_formpc
-                    capture_ma_formpc(CURRENT.get(), detail, evidence)
-                except Exception:
-                    pass
                 forms.append(evidence)
             finally:
                 if detail is not None:
@@ -30929,6 +30940,14 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         response = page.request.post(detail_url, form=fields, timeout=5000)
         pdf_bytes = response.body()
         if response.ok and pdf_bytes.startswith(b"%PDF"):
+            # Preserve the selected response for page two; no second request and
+            # no change to certificate interpretation or registration status.
+            try:
+                from deployment.state_snapshots import CURRENT
+                from deployment.ok_certificate_evidence import retain_certificate
+                retain_certificate(CURRENT.get(), detail_url, document_number, registry_name, pdf_bytes)
+            except Exception:
+                pass
             due, note = read_certificate(pdf_bytes)
             return OklahomaCertificateResult(
                 due, "Certificate retrieval: primary request returned a verified PDF." if due else note,
@@ -36155,14 +36174,14 @@ def resolve_identity_review(payload, email, device):
             data.update(matched_registry_name="", matched_registry_identifier="",
                         raw_status_text="", computed_due_date="", source_url="",
                         comments=note + accepted_note + f" {len(pending)} candidate(s) still need an identity decision; the final state status is pending.")
-    elif not accepted and not record["search_complete"] and base["state"] == "WI":
+    elif not accepted and not record["search_complete"] and base["state"] in {"WI", "CT"}:
         # Rejection resumes the existing master lookup, scoped to this request.
         # It is never substituted for completed search coverage.
         excluded = sorted(set(record["rejected"] + [r["identifier"] for r in rejected]))
-        token = USER_IDENTITY_CONTEXT.set({"ein": canonical_ein_digits(base["ein"]), "state": "WI", "rejected": excluded, "history": record["history"]})
+        token = USER_IDENTITY_CONTEXT.set({"ein": canonical_ein_digits(base["ein"]), "state": base["state"], "rejected": excluded, "history": record["history"]})
         names_token = REVIEWED_NAME_CONTEXT.set({**REVIEWED_NAME_CONTEXT.get(), canonical_ein_digits(base["ein"]): base.get("reviewed_alternate_names", [])})
         try:
-            data = run_state_lookup(base["organization_name"], base["ein"], "WI")
+            data = run_state_lookup(base["organization_name"], base["ein"], base["state"])
             fresh_state_lookup = True
         finally:
             REVIEWED_NAME_CONTEXT.reset(names_token); USER_IDENTITY_CONTEXT.reset(token)
@@ -36241,10 +36260,11 @@ def resolve_identity_review(payload, email, device):
     from deployment.identity_evidence import resolve as resolve_review_evidence, bind as bind_review_evidence
     data = resolve_review_evidence(record,data,fresh_state_lookup)
     data = bind_review_evidence(sys.modules[__name__],data)
-    # Preserve a newly found candidate's token after continued Wisconsin search.
+    # Preserve a newly found candidate's token after continued state search.
     if "identity_review" not in data: data["identity_review"] = identity_review_view(record)
     log_event(f"Identity review {base['state']} {base['ein']} {selected['identifier']}: {action} by {email}; result {data['status']}")
     return confirmation_result_for_public(data)
+
 
 
 def normalize_organization_requests(payload: dict, privileged: bool) -> list[dict]:
