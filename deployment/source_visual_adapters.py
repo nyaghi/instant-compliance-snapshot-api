@@ -179,6 +179,8 @@ def capture_selected_source(master,result,run,deadline):
      fact['outcome']='record_not_ready_or_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:178:53:return',None)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:179:66:return',None)
     before=len(run.documents);capture=time.perf_counter()
+    # Preserve RI's existing absolute visual stop inside the screenshot call.
+    if run.state=='RI':run.page_capture_stop=stop
     # Owned ContextCaptureProxy captures once; its close must not capture again.
     workflow_call('deployment/source_visual_adapters.py:capture_selected_source:182:4:capture',context.capture,locals())
     fact['capture_ms']=round((time.perf_counter()-capture)*1000,2)
