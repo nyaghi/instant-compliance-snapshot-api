@@ -239,14 +239,14 @@ def capture_selected_ca_source(master,result,run,deadline):
  except (ValueError,TypeError,KeyError):return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:236:40:return',None)
  run.selected_visual_attempted=True
  start=time.perf_counter();held=False;browser=context=None
- fact={'adapter':'CA-selected-registration-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':22000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'CA-selected-registration-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:242:52:return',None)
   # Allow loaded selected fields enough time for original-pixel capture.
   # Keep this evidence work inside the existing state deadline.
   # Full38 live recovery and timing remain required.
-  stop=time.monotonic()+min(22.0,remaining)
+  stop=time.monotonic()+min(30.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:247:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:248:61:return',None)
   with master.checker.sync_playwright() as p:
