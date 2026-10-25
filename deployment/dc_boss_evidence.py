@@ -10,15 +10,21 @@ DETAILS={'https://boss.dc.gov/licensing/license-details','https://boss.dc.gov/ho
 LABELS=('Licensee','Trade Name','License Category','License Activity','License Number','Premise Address','License Status','Issue Date','Expiration Date')
 def norm(v):return re.sub(r'[^a-z0-9]','',str(v).lower())
 def eligible(r):
+ from deployment.dc_review_evidence import target
+ if target(r):return True
  return (r.get('state')=='DC' and r.get('success') is True and r.get('status') not in {'Not Registered','Unable to Confirm','Unable to Verify','Site Not Reachable','Needs Review'} and not r.get('confirmation_required') and not r.get('_worker_identity_review'))
 def retained_request(run,result):
  from deployment.state_snapshots import DEADLINE
  expected=getattr(run,'dc_boss_selected',None)
  if not eligible(result) or not isinstance(expected,dict):return None
- if str(result.get('matched_registry_identifier'))!=expected['identifier'] or norm(result.get('matched_registry_name'))!=norm(expected['name']):return None
+ from deployment.dc_review_evidence import target, request_matches
+ review=target(result)
+ if review:
+  if review!=expected:return None
+ elif str(result.get('matched_registry_identifier'))!=expected['identifier'] or norm(result.get('matched_registry_name'))!=norm(expected['name']):return None
  remaining=min(30.,DEADLINE.get()-time.monotonic()-1)
  if remaining<5:return None
- return dict(state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'))
+ return dict(state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'),**({'review_candidate':True} if review else {}))
 def describe(result):
  d=result.get('_worker_desktop_evidence')
  if not eligible(result) or result.get('evidence_url') or not isinstance(d,dict):return None
@@ -26,7 +32,8 @@ def describe(result):
  if not re.fullmatch(r'\d{5,16}',str(d.get('identifier',''))) or not re.fullmatch(r'[a-f0-9]{32}',str(d.get('run_id',''))):return None
  if not re.fullmatch(r'\d{9}',str(d.get('ein',''))) or d['ein']!=re.sub(r'\D','',str(result.get('ein',''))):return None
  if not isinstance(d.get('name'),str) or not 1<=len(d['name'])<=300 or not isinstance(d.get('raw_status'),str) or not 1<=len(d['raw_status'])<=100:return None
- if str(result.get('matched_registry_identifier'))!=d['identifier'] or norm(result.get('matched_registry_name'))!=norm(d['name']) or result.get('raw_status_text')!=d.get('result_raw_status'):return None
+ from deployment.dc_review_evidence import request_matches
+ if not request_matches(result,d):return None
  if any(type(d.get(k)) not in (int,float) or not math.isfinite(d[k]) for k in ('issued_at','expires_at')):return None
  if not 0<d['expires_at']-d['issued_at']<=30.1 or not -5<=time.time()-d['issued_at']<600:return None
  try:datetime.strptime(d['expiration'],'%Y-%m-%d')

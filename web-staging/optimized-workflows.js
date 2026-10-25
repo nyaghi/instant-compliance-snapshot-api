@@ -38,8 +38,18 @@
       }
       return response.json();
     }
+    function sameReviewCandidates(before,after) {
+      if(before.state!=='DC' || !before.desktop_evidence_request?.review_candidate)return false;
+      const a=before.identity_review,b=after.identity_review;
+      if(!a || !b || typeof b.token!=='string' || !Array.isArray(a.candidates) || !Array.isArray(b.candidates)
+          || a.candidates.length!==1 || b.candidates.length!==1 || a.search_complete!==b.search_complete || a.exclusive!==b.exclusive)return false;
+      const x=a.candidates[0],y=b.candidates[0];
+      return !x.decision && !y.decision && ['id','name','identifier','location','source_url','raw_status','expiration','suggested'].every(k=>x[k]===y[k])
+        && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(y.evidence_url||'');
+    }
     async function captureOriginal(result) {
       const started=performance.now();
+      const originalReviewToken=result.identity_review?.token;
       let sourceObservation=null, evidencePhase='capture';
       try {
         if(signal?.aborted)return;
@@ -67,8 +77,9 @@
         sourceObservation.http_status=response.status;
         const saved=await response.json();
         evidencePhase='archive_binding';
-        if(response.ok && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(saved.evidence_url||'')){
-          for(const key of ['evidence_url','evidence_capture','evidence_captured_at','evidence_metrics','desktop_evidence_timing','search_history_url','search_history_capture'])
+        if(response.ok && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(saved.evidence_url||'')
+            && (!originalReviewToken || (result.identity_review?.token===originalReviewToken && sameReviewCandidates(result,saved)))){
+          for(const key of ['evidence_url','evidence_capture','evidence_captured_at','evidence_metrics','desktop_evidence_timing','search_history_url','search_history_capture','identity_review','review_evidence_context'])
             if(Object.hasOwn(saved,key))result[key]=saved[key];
         }
         sourceObservation.phase=result.evidence_url?'complete':'archive_rejected';
@@ -104,14 +115,15 @@
           const fields = ['state','ein','organization_name','status','success',
             'matched_registry_identifier','matched_registry_name','raw_status_text',
             'confirmation_required','execution_version'];
-          if (!fields.every(k => saved[k] === result[k]) || saved.confirmation_required) continue;
+          if (!fields.every(k => saved[k] === result[k])) continue;
+          if (saved.confirmation_required && !sameReviewCandidates(result,saved)) continue;
           if (saved.evidence_capture !== 'captured' ||
               !/^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(saved.evidence_url || '') ||
               !Number.isFinite(saved.evidence_captured_at) ||
               !Number.isFinite(result.desktop_evidence_request.issued_at) ||
               saved.evidence_captured_at < result.desktop_evidence_request.issued_at - 1) continue;
           for (const key of ['evidence_url','evidence_capture','evidence_captured_at',
-            'evidence_metrics','desktop_evidence_timing','search_history_url','search_history_capture'])
+            'evidence_metrics','desktop_evidence_timing','search_history_url','search_history_capture','identity_review','review_evidence_context'])
             if (Object.hasOwn(saved,key)) result[key] = saved[key];
           if (Array.isArray(window.__CCLabStateTrace)) {
             window.__CCLabStateTrace.push({at:Date.now(),state:result.state,

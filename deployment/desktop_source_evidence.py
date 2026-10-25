@@ -137,6 +137,9 @@ def persist_completion(result,payload,store=None):
     # Validate the entire negative receipt before saving either artifact.
     ref=workflow_call('deployment/desktop_source_evidence.py:persist_completion:128:8:archive',archive,locals(), a,ein=a['ein'],state=a['state'],run_id=a['run_id'],store=store)
     update={'evidence_url':ref['url'],'evidence_capture':'captured','evidence_captured_at':ref['captured_at']}
+    if result.get('state')=='DC' and payload['request'].get('review_candidate') is True:
+        from deployment.dc_review_evidence import attach_reference
+        update.update(attach_reference(result,ref,store))
     if record is not None:
         record['source_snapshots']=[ref]
         combined=attach(record,{**result,**update},store)
@@ -185,6 +188,11 @@ def handle_completion(master,handler,queue):
             changed=c.execute("UPDATE cc_lab_jobs SET result=result || %s WHERE workflow_id=%s AND state=%s AND phase='done' AND result->'_worker_desktop_evidence'=%s AND COALESCE(result->>'evidence_url','')='' RETURNING id",
                 (Jsonb(update),record['id'],state,Jsonb(result['_worker_desktop_evidence']))).fetchone()
             if not changed:raise ValueError('Source result changed before archive completion')
+        if completion['request'].get('review_candidate') is True:
+            from deployment.staging_workflows import public_result
+            public=public_result(master,{**jobs[0],'result':{**result,**update}},record)
+            if not public.get('identity_review'):raise ValueError('Review evidence signing failed')
+            update['identity_review']=public['identity_review']
         return trace_return('deployment/desktop_source_evidence.py:handle_completion:177:8:return',(handler._send_json(200,{k:v for k,v in update.items() if not k.startswith('_')},{'Cache-Control':'no-store'})))
     except (ValueError,TypeError,KeyError,UnicodeError):
         return trace_return('deployment/desktop_source_evidence.py:handle_completion:179:8:return',(handler._send_json(400,{'error':'Source evidence did not match this completed workflow'})))
