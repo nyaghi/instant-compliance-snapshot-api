@@ -18752,6 +18752,10 @@ def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_nam
     current_year = ak_latest_registration_cycle()
     if found_year >= current_year:
         return None, "", "", ""
+    # Preserve the already confirmed original row before the existing newer-
+    # cycle recheck replaces the visible page. This adds no registry query.
+    from deployment.state_snapshots import capture_ak_selected_before_recheck
+    capture_ak_selected_before_recheck(page, found_year, original_org.ein, deadline)
     for newer_year in range(current_year, found_year, -1):
         if deadline and time.perf_counter() >= deadline:
             return None, "", "", ""

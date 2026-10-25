@@ -377,6 +377,39 @@ def ma_selected_originals(run, ordered, row):
     run.errors.append('MA_selected_form_pc_original_unavailable')
     return ordered
 
+def capture_ak_selected_before_recheck(page,year,ein,deadline):
+    """Save the actual selected cycle without interrupting newer-cycle checks."""
+    run=CURRENT.get()
+    if run is None or run.state!='AK' or digits(ein)!=run.ein or type(year) is not int:return
+    remaining=(deadline-time.perf_counter()) if deadline is not None else DEADLINE.get()-time.monotonic()
+    if remaining<3:return
+    start=len(run.documents);prior_stop=getattr(run,'page_capture_stop',None)
+    try:
+        def selected():
+            rows=page.get_by_role('table',name='Charitable Organizations',exact=True).get_by_role('row').evaluate_all(
+                '(rs)=>rs.slice(0,201).map(r=>Array.from(r.querySelectorAll("td")).map(c=>c.innerText.trim()))')
+            if len(rows)>200:return None
+            hits=[r for r in rows if len(r)>=4 and r[0]==str(year) and digits(r[1])==run.ein and r[2]]
+            return hits[0] if len(hits)==1 else None
+        row=selected()
+        if row is None:return
+        run.page_capture_stop=min(prior_stop or float('inf'),time.monotonic()+remaining)
+        run.page(page)
+        if selected()!=row or (deadline is not None and time.perf_counter()>=deadline):
+            del run.documents[start:];return
+        bindings=getattr(run,'ak_selected_cycle_images',None)
+        if bindings is None:run.ak_selected_cycle_images={}
+        for doc in run.documents[start:]:
+            if doc[2]=='image':run.ak_selected_cycle_images[hashlib.sha256(doc[1]).hexdigest()]=dict(year=year,ein=run.ein,name=row[2])
+    except Exception:
+        del run.documents[start:]
+        run.errors.append('AK_selected_cycle_capture_unavailable')
+    finally:
+        if prior_stop is None:
+            if hasattr(run,'page_capture_stop'):del run.page_capture_stop
+        else:run.page_capture_stop=prior_stop
+
+
 class CaptureRun:
     def __init__(self,name,ein,state):
         self.name,self.ein,self.state=name,digits(ein),state
@@ -513,6 +546,11 @@ class CaptureRun:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
+                if self.state=='AK' and not negative:
+                    cycle_image=getattr(self,'ak_selected_cycle_images',{}).get(hashlib.sha256(raw).hexdigest())
+                    if cycle_image:
+                        cycle=re.search(r'\bRegistration Cycle:\s*(20\d{2})\b',str(row.get('raw_status_text') or ''))
+                        matched=matched and bool(cycle and int(cycle.group(1))==cycle_image['year'] and cycle_image['ein']==self.ein and (not name or key(name)==key(cycle_image['name'])))
                 if negative:
                     matched=bool(re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I))
                     if self.state=='DC':matched=hashlib.sha256(raw).hexdigest() in getattr(self,'dc_validated_empty_images',set())

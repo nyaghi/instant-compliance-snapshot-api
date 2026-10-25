@@ -16,7 +16,7 @@ def retained_request(run,result):
  expected=getattr(run,'dc_boss_selected',None)
  if not eligible(result) or not isinstance(expected,dict):return None
  if str(result.get('matched_registry_identifier'))!=expected['identifier'] or norm(result.get('matched_registry_name'))!=norm(expected['name']):return None
- remaining=min(20.,DEADLINE.get()-time.monotonic()-1)
+ remaining=min(30.,DEADLINE.get()-time.monotonic()-1)
  if remaining<5:return None
  return dict(state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'))
 def describe(result):
@@ -28,7 +28,7 @@ def describe(result):
  if not isinstance(d.get('name'),str) or not 1<=len(d['name'])<=300 or not isinstance(d.get('raw_status'),str) or not 1<=len(d['raw_status'])<=100:return None
  if str(result.get('matched_registry_identifier'))!=d['identifier'] or norm(result.get('matched_registry_name'))!=norm(d['name']) or result.get('raw_status_text')!=d.get('result_raw_status'):return None
  if any(type(d.get(k)) not in (int,float) or not math.isfinite(d[k]) for k in ('issued_at','expires_at')):return None
- if not 0<d['expires_at']-d['issued_at']<=20.1 or not -5<=time.time()-d['issued_at']<600:return None
+ if not 0<d['expires_at']-d['issued_at']<=30.1 or not -5<=time.time()-d['issued_at']<600:return None
  try:datetime.strptime(d['expiration'],'%Y-%m-%d')
  except (KeyError,ValueError,TypeError):return None
  return dict(d)

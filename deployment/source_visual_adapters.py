@@ -411,8 +411,13 @@ def capture_selected_wa_source(master,result,run,deadline):
     exact=[cells.nth(i) for i in range(workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:408:39:count',cells.count,locals())) if norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:408:62:inner_text',cells.nth(i).inner_text,locals(), timeout=400))==norm(name)]
     if len(exact)!=1:fact['outcome']='selected_row_not_unique';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:409:63:return',None)
     cell=exact[0]
+    # The public result cell includes blank space; only its name anchor opens
+    # the selected organization. Keep the exact-row and detail identity guards.
+    anchors=cell.locator('a').filter(has_text=name)
+    if anchors.count()!=1 or norm(anchors.inner_text(timeout=400))!=norm(name):
+     fact['outcome']='selected_name_link_not_unique';return
     fact['search_ms']=round((time.perf_counter()-begin)*1000,2)
-    fact['phase']='selected_detail';begin=time.perf_counter();workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:412:62:click',cell.click,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    fact['phase']='selected_detail';begin=time.perf_counter();workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:412:62:click',anchors.click,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:413:4:wait_for',page.get_by_role('heading',name='ORGANIZATION SUMMARY',exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fein=page.locator('label:visible').filter(has_text=re.compile(r'^\s*FEIN Number:\s*$')).locator('..')
     renewal=page.locator('label:visible').filter(has_text=re.compile(r'^\s*Renewal Date:\s*$')).locator('..')

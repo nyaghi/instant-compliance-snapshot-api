@@ -53,7 +53,7 @@
             cleanup();resolve(event.data.result||{ok:false});
           };
           window.addEventListener('message',receive);signal?.addEventListener('abort',abort,{once:true});
-          timer=setTimeout(()=>{cleanup();resolve({ok:false,reason:'capture_timeout'});},22000);
+          timer=setTimeout(()=>{cleanup();resolve({ok:false,reason:'capture_timeout'});},result.state==='DC'?32000:22000);
           window.postMessage({channel,direction:'request',id,request:result.desktop_evidence_request},location.origin);
         });
         sourceObservation={phase:'capture',reason:typeof captured.reason==='string'
