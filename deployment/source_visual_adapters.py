@@ -271,7 +271,7 @@ def capture_selected_ca_source(master,result,run,deadline):
       fact.setdefault('label_wait_seconds',{})[label]=round(time.perf_counter()-label_started,6)
     fact['waiting_for_label']=''
     fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
-    text=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:271:9:inner_text',page.inner_text,locals(), 'body',timeout=400)
+    text=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:271:9:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     core=ca_registration_core(text)
     # Validate source labels and selected values, not merely a sidebar/list hit.
     if (not core or not re.search(r'Registration Number\s+'+re.escape(identifier)+r'(?!\d)',core)
@@ -298,7 +298,7 @@ def capture_selected_ca_source(master,result,run,deadline):
     from PIL import Image
     with Image.open(io.BytesIO(raw)) as im:
      if im.width*im.height>20000000:fact['outcome']='source_size_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:297:75:return',None)
-    if page.url!=hint['url'] or ca_registration_core(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:298:53:inner_text',page.inner_text,locals(), 'body',timeout=400))!=core:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:298:144:return',None)
+    if page.url!=hint['url'] or ca_registration_core(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:298:53:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-1)*1000))))!=core:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:298:144:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:299:78:return',None)
     before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:300:30:document',run.document,locals(), hint['url'],raw,'image',core[:20000],note='Original selected registration panel and state header. Optional lower filing grids are outside this captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
@@ -1035,7 +1035,7 @@ def capture_owned_fl_page(master,run,result,page,context,deadline):
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_fl_page:999:52:return',None)
   stop=time.monotonic()+min(6.0,remaining)
   begin=time.perf_counter();fact['phase']='navigation'
-  try:response=workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:1002:15:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int(min(3,stop-time.monotonic()-1)*1000)))
+  try:response=workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:1002:15:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
   except Exception as exc:
    if 'ERR_CERT_AUTHORITY_INVALID' not in str(exc):raise
    # Preserve the existing verified certificate-chain recovery. Never disable
