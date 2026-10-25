@@ -8174,14 +8174,14 @@ def ms_browser_clean_evidence(payload, query):
                 or type(payload['total']) is not int or not 0 <= payload['total'] <= 500
                 or not isinstance(payload['rows'], list) or len(payload['rows']) != payload['total']):
             raise ValueError('Mississippi search is incomplete')
-        seen = set()
+        seen = {}
         for row in payload['rows']:
             if (not isinstance(row, dict) or set(row) != {'name', 'identifier', 'raw_status'}
                     or not all(isinstance(v, str) and len(v) <= 500 for v in row.values())
                     or not row['name'].strip() or not re.fullmatch(r'\d{5,15}', row['identifier'])
-                    or row['identifier'] in seen):
+                    or (row['identifier'] in seen and seen[row['identifier']] != row)):
                 raise ValueError('Mississippi search row is incomplete')
-            seen.add(row['identifier'])
+            seen[row['identifier']] = dict(row)
     elif query.get('operation') == 'detail':
         if (set(payload) != {'query', 'complete', 'fields', 'source_url'}
                 or not isinstance(payload['fields'], dict)
@@ -8224,7 +8224,10 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
     review_details = {}
     for name in planned:
         query = {'state': 'MS', 'operation': 'search', 'name': name}
-        rows = ms_browser_clean_evidence(evidence(query), query)['rows']
+        source_rows = ms_browser_clean_evidence(evidence(query), query)['rows']
+        # Complete source rows remain intact in evidence. Identical repeated
+        # filings are one candidate, not competing identity matches.
+        rows = list({row['identifier']: row for row in source_rows}.values())
         attempted.append({'query': query, 'completed': True})
         accepted = []
         for row in rows:
