@@ -234,8 +234,17 @@ def searched_terms(doc):
         if query.get('operation')=='detail' or query.get('identifier') or query.get('orgID'):continue
         name=query.get('name') or query.get('orgName')
         if isinstance(name,str) and name.strip():
-            display=' '.join(name.split());key=display.casefold()
-            if key not in seen_names:seen_names.add(key);names.append(display)
+            display=' '.join(name.split())
+            # The DC visual receipt repeats the already-submitted combined query.
+            # Project its exact LIKE operands into names, then use normal deduplication.
+            displays=[display]
+            if (doc.get('state')=='DC' and query.get('state')=='DC'
+                    and query.get('filter_label')=='Repeated completed query for original visual evidence'
+                    and re.fullmatch(r'%[A-Z0-9]+(?:%[A-Z0-9]+)*%(?: OR %[A-Z0-9]+(?:%[A-Z0-9]+)*%)*',display)):
+                displays=[' '.join(term.strip('%').split('%')) for term in display.split(' OR ')]
+            for display in displays:
+                key=display.casefold()
+                if key not in seen_names:seen_names.add(key);names.append(display)
         ein=query.get('ein')
         if isinstance(ein,str) and re.fullmatch(r'(?:[0-9]{9}|[0-9]{2}-[0-9]{7})',ein):
             key=ein.replace('-','')
