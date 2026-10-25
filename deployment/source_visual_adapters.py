@@ -2069,7 +2069,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
     run.selected_visual_attempted=True
     start=time.perf_counter();owned=[];detach_observer=lambda:None
     fact={'adapter':'MI-owned-selected-file-detail','phase':'admission','outcome':'not_started',
-          'visual_file_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':22000}
+          'visual_file_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':30000}
     run.visual_adapter_facts.append(fact)
     def official(p):
         u=urlsplit(p.url)
@@ -2079,7 +2079,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
     try:
         remaining=deadline-time.monotonic()-1
         if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2037:58:return',None)
-        stop=time.monotonic()+min(22,remaining)
+        stop=time.monotonic()+min(30,remaining)
         def allowance(reserve=1):return max(1,int((stop-time.monotonic()-reserve)*1000))
         detail=None
         # Reuse a selected detail already produced by the normal browser path.
