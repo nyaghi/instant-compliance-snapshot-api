@@ -176,6 +176,9 @@ def observe_browser_context(context,run):
     observed.add(id(context));pending={}
     def request(req):
         try:
+            source=urlsplit(str(req.url))
+            hosts=OFFICIAL_HOSTS.get(run.state,set())|({'ccfs-api.prod.sos.wa.gov'} if run.state=='WA' else set())
+            if source.scheme!='https' or source.hostname not in hosts:return
             receipts=start_transport(req.url,req.post_data,run=run)
             if receipts:
                 pending[id(req)]=receipts

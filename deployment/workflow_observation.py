@@ -55,15 +55,28 @@ class Observation:
                              at_seconds=round(time.perf_counter()-self.started,6),
                              stage='observer.invalid_event', outcome='rejected',
                              error_type='NonJSONDiagnostic')
-            if len(self.events)<self.cap:self.events.append(event)
-            else:self.dropped += 1
-            self.tail.append(event)
-            if len(self.tail)>120:self.tail.pop(0)
+            network=event['stage']=='source.network'
+            network_count=sum(e['stage']=='source.network' for e in self.events)
+            if network and network_count>=max(1,self.cap//4):
+                self.dropped+=1
+            elif len(self.events)<self.cap:self.events.append(event)
+            elif not network and network_count:
+                self.events.pop(next(i for i,e in enumerate(self.events) if e['stage']=='source.network'))
+                self.events.append(event);self.dropped+=1
+            else:self.dropped+=1
+            if not network:
+                self.tail.append(event)
+                if len(self.tail)>120:self.tail.pop(0)
             sink=self.sink
             if sink is not None:sink.write(self.run_id,self.state,event)
             if event['outcome'] in ('exception','ownership_conflict','rejected'):
-                if len(self.failures)>=100:self.failures.pop(0);self.failures_dropped+=1
-                self.failures.append(event)
+                network_failures=sum(e['stage']=='source.network' for e in self.failures)
+                if network and network_failures>=25:self.failures_dropped+=1
+                else:
+                    if len(self.failures)>=100:
+                        position=next((i for i,e in enumerate(self.failures) if e['stage']=='source.network'),0)
+                        self.failures.pop(position);self.failures_dropped+=1
+                    self.failures.append(event)
             return self.sequence
         except Exception:return None
 

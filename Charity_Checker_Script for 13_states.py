@@ -882,6 +882,7 @@ def search_ca(page, org: Organization) -> StateResult:
         result.matched_registry_identifier = identifier
         # Retain already-fetched selected-entity data for master metadata extraction.
         result._cc_registration_records = registrations
+        result._cc_selected_entity = entity
         result.success = True
         return result
     except Exception as e:

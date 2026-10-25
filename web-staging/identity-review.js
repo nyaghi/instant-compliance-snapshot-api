@@ -21,9 +21,9 @@
       if (!validHistory) add(parent,'p','Names searched unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
       return;
     }
-    // During a multi-candidate GA review, keep the status decision pending,
+    // During a multi-candidate review, keep the status decision pending,
     // but make each explicitly accepted original available in the main comments.
-    const candidates = result.state === 'GA' && result.identity_review?.candidates;
+    const candidates = result.identity_review?.candidates;
     const accepted = candidates && candidates.filter(candidate => candidate.decision === 'accept');
     const unresolved = ['Needs Review', 'Unable to Confirm', 'Confirm Match'].includes(result.status);
     if (accepted?.length && (candidates.some(candidate => !candidate.decision) || unresolved)) {

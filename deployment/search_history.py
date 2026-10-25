@@ -19,6 +19,8 @@ STATES=frozenset(OFFICIAL_HOSTS)
 FIELDS={'state','operation','orgName','name','ein','search_mode','identifier','orgID','url','exact_above','source_kind','filter_label'}
 
 def public_query(query,state):
+    if state=='NY' and isinstance(query,dict) and set(query) in ({'ein'},{'orgName'},{'orgID'}):
+        query={'state':'NY',**query}
     if not isinstance(query,dict) or query.get('state')!=state:raise ValueError('Wrong query state')
     out={k:v for k,v in query.items() if k in FIELDS}
     if 'exact_above' in out and (state!='NV' or type(out['exact_above']) is not int or out['exact_above']!=20):raise ValueError('Invalid narrowing policy')
@@ -121,6 +123,7 @@ def manifest(record,result,snapshot,now):
         elif (matching_reference(result,[snapshot])!=snapshot
               or snapshot.get('run_id')!=record.get('source_archive_run_id')):
             raise ValueError('No bound selected-record snapshot')
+    receipt_limit=300 if state=='KY' and record.get('history_order')=='issued-sequence-v1' else 150
     entries=[]
     for item in record.get('completed',[]):
         receipt=item.get('search_receipt')
@@ -144,7 +147,7 @@ def manifest(record,result,snapshot,now):
         validate_returned_details(receipt)
         entries.append({**receipt,'sequence':len(entries)+1})
     failed=record.get('search_failed_receipts',[])
-    if not isinstance(failed,list) or len(failed)>(150 if record.get('history_order')=='issued-sequence-v1' else 10):raise ValueError('Invalid incomplete attempts')
+    if not isinstance(failed,list) or len(failed)>(receipt_limit if record.get('history_order')=='issued-sequence-v1' else 10):raise ValueError('Invalid incomplete attempts')
     for e in failed:
         e=dict(e)
         if (e.get('outcome')!='Completion not confirmed' or e.get('completed_at') is not None
@@ -152,10 +155,10 @@ def manifest(record,result,snapshot,now):
             or type(e.get('reported_at')) not in (int,float)
             or not record['issued']-1<=e['reported_at']<=now+1):raise ValueError('Invalid failure receipt')
         entries.append(e)
-    if not entries or len(entries)>150 or len({e['query_id'] for e in entries})!=len(entries):raise ValueError('Missing or duplicate receipts')
+    if not entries or len(entries)>receipt_limit or len({e['query_id'] for e in entries})!=len(entries):raise ValueError('Missing or duplicate receipts')
     if record.get('history_order')=='issued-sequence-v1':
         orders=[e.get('source_order') for e in entries]
-        if any(type(n) is not int or not 1<=n<=150 for n in orders) or len(set(orders))!=len(orders):raise ValueError('Invalid source request order')
+        if any(type(n) is not int or not 1<=n<=receipt_limit for n in orders) or len(set(orders))!=len(orders):raise ValueError('Invalid source request order')
         entries.sort(key=lambda e:e['source_order'])
     else:entries.sort(key=lambda e:e.get('completed_at') or e['reported_at'])
     for i,e in enumerate(entries):e['sequence']=i+1
@@ -417,7 +420,7 @@ class SourceQueryReceipt:
         self.saved=True
         entries=getattr(self.run,'search_history_receipts',None)
         if entries is None:entries=self.run.search_history_receipts=[]
-        if len(entries)>=150:
+        if len(entries)>=(300 if self.run.state=='KY' else 150):
             self.run.search_history_overflow=True;return
         entries.append({'query':self.query,'query_id':self.query_id,'source_order':self.sequence,
             'issued_at':self.issued,'completed_at':completed,'reported_at':time.time(),

@@ -16088,6 +16088,8 @@ def ct_identity_names_from_detail(detail_text: str) -> list[str]:
         "Name",
     ]
     for label in labels:
+        if label == 'Name' and re.search(r'\bName\s+and\s+Address\b', text, re.I):
+            continue
         value = checker.extract_labeled_value_from_text(text, [label])
         if value:
             cleaned = useful_registry_name(value)
@@ -16108,6 +16110,9 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
         return None, -10000
     detail_text = ct_direct_detail_text(row_html, timeout_seconds=CT_DIRECT_TIMEOUT_SECONDS, session=session)
     identity_names = [row_name, *ct_identity_names_from_detail(detail_text)]
+    reviewed_identity_names = [getattr(org, 'original_organization_name', org.organization_name), *known_names_for_ein(org.ein)]
+    identity_names = [name for name in identity_names if name and not all(
+        named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target)]
     scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
     name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
     if name_score < 0:
@@ -16183,6 +16188,9 @@ def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str],
         return None, -10000
     dba_name = text_between_labels(row_text, "DBA", ["Details", "Credential", "Status"]) or ""
     identity_names = [row_name, useful_registry_name(dba_name)]
+    reviewed_identity_names = [getattr(org, 'original_organization_name', org.organization_name), *known_names_for_ein(org.ein)]
+    identity_names = [name for name in identity_names if name and not all(
+        named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target)]
     scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
     name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
     if name_score < 0:
@@ -18088,6 +18096,8 @@ def oh_result_from_detail_text(result, detail_text, detail_url, detail_id):
     month_names = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
     month_names.update({name.lower(): index for index, name in enumerate(calendar.month_abbr) if name})
     site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
+    if urlparse(detail_url).path == "/Charities/FullyExemptOrganization":
+        site_name = html.unescape(text_between_labels(detail_text, "Organization Name", ["Description of Organization's Purpose", "DBA Name(s)", "Employer Identification Number", "Organization Phone", "EIN", "Registration Status"]))
     registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
     exemption_status = text_between_labels(detail_text, "Exemption Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End", "Street Address", "Organization Phone"])
     filing_year_raw = text_between_labels(detail_text, "Most Recent Report Filing Year", ["The financial information below", "Fiscal Year End", "Total Revenue"])
@@ -18288,6 +18298,10 @@ def search_oh(page, org):
         detail_id = str((detail_ref or {}).get("id") or "")
         detail_page_name = str((detail_ref or {}).get("pageName") or "OrganizationDetails")
         detail_url = ohio_detail_url(detail_page_name, detail_id)
+        try:
+            from deployment.state_snapshots import capture_oh_selected_grid
+            capture_oh_selected_grid(page,detail_ref,ein_digits)
+        except Exception:pass
         page.goto(detail_url, wait_until="domcontentloaded", timeout=45000)
         checker.safe_wait_for_network_idle(page, timeout=10000)
         time.sleep(1)
@@ -18311,6 +18325,10 @@ def search_oh(page, org):
                     "The state detail page could not be loaded after a retry, so a filing deadline was not inferred."
                 )
                 result.success = True
+                try:
+                    from deployment.state_snapshots import publish_oh_selected_grid
+                    publish_oh_selected_grid(result)
+                except Exception:pass
             else:
                 result.status = "Unable to Confirm"
                 result.raw_status_text = "Ohio matched search record; detail page did not confirm the EIN"
@@ -20071,6 +20089,10 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
                 document_eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", text)}
                 read_progress["complete"] = document_eins == {record["ein"]}
                 read_progress["identity_conflict"] = bool(document_eins - {record["ein"]})
+            try:
+                from deployment.state_snapshots import CURRENT, capture_ma_scan
+                capture_ma_scan(CURRENT.get(), scanned, record, row["url"], text)
+            except Exception:pass
             evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], registry_record=record,
                 document_url=row["url"], allow_older_period=allow_older_period)
             if not evidence:
@@ -24036,6 +24058,32 @@ def enrich_me_result_from_body(result, body: str) -> None:
         result.success = True
 
 
+def nj_completed_future_detail(body,ein,credential=None):
+    """A server-rendered future FYE is loaded data, not a completed filing period."""
+    from html.parser import HTMLParser
+    if not re.fullmatch(r'\d{9}',str(ein)) or not isinstance(body,str) or len(body)>1_000_000:return False
+    if not re.search(r'</html>\s*(?:<!--[\s\S]*?-->\s*)*$',body,re.I):return False
+    if re.search(r'verify you are human|human verification|access denied|too many requests',html_to_text(body),re.I):return False
+    class Fields(HTMLParser):
+        def __init__(self):super().__init__(convert_charrefs=True);self.values={}
+        def handle_starttag(self,tag,attrs):
+            a=dict(attrs)
+            if tag=='input' and a.get('id') in {'crsm_federalein','accountnumber','crsm_fiscalyearenddate'}:
+                self.values.setdefault(a['id'],[]).append(a)
+    try:
+        p=Fields();p.feed(body)
+        if any(len(p.values.get(k,[]))!=1 for k in ['crsm_federalein','accountnumber','crsm_fiscalyearenddate']):return False
+        values={k:v[0] for k,v in p.values.items()}
+        if any('readonly' not in a and 'readonly' not in a.get('class','').split() for a in values.values()):return False
+        if values['crsm_federalein'].get('value')!=ein:return False
+        found=values['accountnumber'].get('value','')
+        if not re.fullmatch(r'CH\d+',found) or (credential is not None and found!=credential):return False
+        raw=values['crsm_fiscalyearenddate'].get('value','')
+        if not re.fullmatch(r'20\d{2}-\d{2}-\d{2}T00:00:00(?:\.0+)?',raw):return False
+        return date.fromisoformat(raw[:10])>date.today()
+    except (ValueError,TypeError):return False
+
+
 def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
     """Read a matched, populated detail frame, including one already open."""
     deadline = time.monotonic() + wait_seconds
@@ -24065,7 +24113,7 @@ def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
                         pass
                     # Evidence availability does not depend on interpreting a
                     # filing deadline. Preserve the existing status-read contract.
-                    if nj_filing_context_from_body(body).get("computed_due_date"):
+                    if nj_filing_context_from_body(body).get("computed_due_date") or nj_completed_future_detail(body,digits):
                         return body
             except Exception:
                 pass
@@ -24081,6 +24129,7 @@ def nj_missing_period_result(result) -> bool:
     return (
         public_status(result) == "Current"
         and getattr(result, "status_reason", "") == "NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE"
+        and not getattr(result, "_cc_nj_completed_future_detail", False)
     )
 
 
@@ -24181,7 +24230,7 @@ def nj_selected_public_detail(page, target, org) -> str:
             if attrs.get("id") in {"crsm_federalein", "accountnumber"}:
                 fields.setdefault(attrs["id"], []).append(attrs.get("value", ""))
         if (fields.get("crsm_federalein") != [digits] or fields.get("accountnumber") != [credential]
-                or not nj_filing_context_from_body(body).get("computed_due_date")):
+                or not (nj_filing_context_from_body(body).get("computed_due_date") or nj_completed_future_detail(body,digits,credential))):
             return ""
         # The browser fallback can retrieve this exact selected detail via
         # its ordinary public response without opening the detail iframe.
@@ -24948,7 +24997,7 @@ def search_nj_public_details(org):
             if (not re.search(r"</html>\s*(?:<!--[\s\S]*?-->\s*)*$", detail, re.I)
                     or input_values(detail, "id", "crsm_federalein") != [ein]
                     or input_values(detail, "id", "accountnumber") != [credential]
-                    or not nj_filing_context_from_body(detail).get("computed_due_date")):
+                    or not (nj_filing_context_from_body(detail).get("computed_due_date") or nj_completed_future_detail(detail,ein,credential))):
                 return None
             body = f"Charity Name: {name}\nStatus {state_status} Federal EIN {ein}\nNJ Registration # {credential}\n" + detail
             result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, base + path)
@@ -25059,10 +25108,12 @@ def nj_result_from_body(page, org, result, body, ein_digits):
             if registry_name:
                 break
     result.matched_registry_name = registry_name
+    result._cc_nj_completed_future_detail = nj_completed_future_detail(body,ein_digits)
     nj_context = nj_filing_context_from_body(body)
     nj_due_date = nj_context.get("computed_due_date")
     if (
         not nj_due_date
+        and not result._cc_nj_completed_future_detail
         and re.search(r"\b(compliant|current|active)\b", status or "", re.I)
         and (not ein_digits or ein_digits in re.sub(r"\D", "", body or ""))
     ):
@@ -31826,6 +31877,11 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 if best_score is None or score > best_score:
                     best_score = score
                     best = dict(row, _cc_identity=identity)
+            if scope_candidates and not best:
+                try:
+                    from deployment.source_visual_adapters import capture_ar_review_page
+                    capture_ar_review_page(page,org,list(scope_candidates.values()),parsed_rows)
+                except Exception:pass
             if best:
                 break
         except Exception as exc:

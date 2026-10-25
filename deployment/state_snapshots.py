@@ -199,6 +199,7 @@ def matching_reference(result, refs):
         else:
             candidates=sorted(candidates,key=lambda r:workflow_call('deployment/state_snapshots.py:matching_reference:199:54:get',r.get,locals(), 'operation')=='detail')
     if state=='NY':
+        candidates=[r for r in candidates if r.get('operation')=='detail']
         path=urlsplit(workflow_call('deployment/state_snapshots.py:matching_reference:201:22:get',result.get,locals(), 'source_url') or workflow_call('deployment/state_snapshots.py:matching_reference:201:50:get',result.get,locals(), 'url') or '').path
         observed=re.fullmatch(r'/RegistrySearch/(\d{2}-\d{2}-\d{2})/?',path)
         if observed:
@@ -326,6 +327,59 @@ def ak_empty_controls(page,run,text):
 
 
 
+def capture_ma_scan(run, scanned, record, source_url, text):
+    """Keep the first original scan page already read by the MA lookup."""
+    if (run is None or run.state != 'MA' or not isinstance(record,dict)
+        or digits(record.get('ein','')) != run.ein or not run.ein
+        or not re.fullmatch(r'\d{6}',str(record.get('ago_account','')))
+        or not re.fullmatch(r'a09[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?',str(record.get('record_id','')))
+        or time.monotonic()+2 >= DEADLINE.get()):return
+    u=urlsplit(source_url)
+    if (u.scheme!='https' or u.netloc!='masscharities.my.site.com' or u.query or u.fragment
+        or not re.fullmatch(r'/FilingSearch/sfc/servlet\.shepherd/document/download/069[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?',u.path)):return
+    eins={digits(x) for x in re.findall(r'(?<!\d)\d{2}[- ]?\d{7}(?!\d)',text)}
+    if eins!={run.ein} or not source_name_present(record.get('name',''),text,'MA'):return
+    accounts=re.findall(r"Attorney\s+General(?:['’]s)?\s+Account\s*#?\s*:?\s*(\d{6})(?!\d)",text,re.I)
+    if any(x.lstrip('0')!=record['ago_account'].lstrip('0') for x in accounts):return
+    if scanned.tell()!=0 or not 0<scanned.width*scanned.height<=20_000_000:return
+    original=io.BytesIO();scanned.save(original,format='PNG');raw=original.getvalue()
+    if not 0<len(raw)<=MAX_BYTES or time.monotonic()>=DEADLINE.get():return
+    count=getattr(scanned,'n_frames',1)
+    note=f'Original first page of the selected state attachment ({count} source pages). No reconstructed source content; no fiscal period inferred from this image.'
+    run.document(source_url,raw,'image',text,note)
+    if not any(d[1]==raw and d[0]==source_url for d in run.documents):return
+    bindings=getattr(run,'ma_scan_bindings',None)
+    if bindings is None:run.ma_scan_bindings={};bindings=run.ma_scan_bindings
+    bindings[hashlib.sha256(raw).hexdigest()]={k:record[k] for k in ('ein','name','ago_account','record_id')}
+    bindings[hashlib.sha256(raw).hexdigest()]['url']=source_url
+
+
+def ma_selected_scan(run, ordered, row):
+    """Pair only the same selected account's original scan and original list."""
+    if (run.state!='MA' or row.get('state')!='MA' or digits(row.get('ein',''))!=run.ein
+        or row.get('success') is not True
+        or row.get('status') in {'Not Registered','Unable to Confirm','Site Not Reachable','Unable to Verify'}):return ordered
+    identifier=str(row.get('matched_registry_identifier') or '')
+    name=row.get('matched_registry_name','')
+    for detail in ordered:
+        proof=getattr(run,'ma_scan_bindings',{}).get(hashlib.sha256(detail[1]).hexdigest(),{})
+        if (not proof or detail[2]!='image' or detail[0]!=proof.get('url')
+            or proof.get('ein')!=run.ein or proof.get('ago_account')!=identifier
+            or key(proof.get('name',''))!=key(name)):continue
+        for listing in ordered:
+            u=urlsplit(listing[0])
+            if (listing[2]!='image' or u.scheme!='https' or u.netloc!='masscharities.my.site.com'
+                or u.path!='/FilingSearch/s/' or u.query or u.fragment
+                or run.ein not in digits(listing[3]) or not source_name_present(name,listing[3],'MA')
+                or not re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',listing[3])):continue
+            raw=json.dumps([base64.b64encode(d[1]).decode('ascii') for d in (listing,detail)]).encode('utf8')
+            if len(raw)>MAX_BYTES:return ordered
+            paired=(detail[0],raw,'image_pages',(listing[3]+'\n\n'+detail[3])[:20000],detail[4],
+                'Original filing list and '+detail[5])
+            return [paired,*ordered]
+    return ordered
+
+
 def capture_ma_formpc(run, page, evidence):
     """Retain an existing validated MA popup; no navigation or extra query."""
     if (run is None or run.state!='MA' or not isinstance(evidence,dict)
@@ -408,6 +462,85 @@ def capture_ak_selected_before_recheck(page,year,ein,deadline):
         if prior_stop is None:
             if hasattr(run,'page_capture_stop'):del run.page_capture_stop
         else:run.page_capture_stop=prior_stop
+
+
+def capture_oh_selected_grid(page, detail_ref, ein):
+    """Retain the original exact-EIN result before a potentially broken detail."""
+    run=CURRENT.get()
+    if (run is None or run.state!='OH' or digits(ein)!=run.ein
+            or not isinstance(detail_ref,dict) or detail_ref.get('einConfirmed') is not True
+            or str(detail_ref.get('inCompliance','')).strip().casefold()!='yes'
+            or not re.fullmatch(r'\d+',str(detail_ref.get('id','')))):
+        return
+    url='https://charitableregistration.ohioago.gov/Charities/ResearchCharities'
+    before=len(run.documents)
+    try:
+        if page.url not in {url,url+'#results'} or DEADLINE.get()-time.monotonic()<3:return
+        def selected():
+            return page.evaluate(r'''({ein,id,name})=>{
+                const norm=x=>String(x||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+                if(document.querySelector('#EIN')?.value.replace(/\D/g,'')!==ein
+                   ||document.querySelector('#ddlEINFilterCriteriaList')?.value!=='3')return null;
+                const rows=[...document.querySelectorAll('tr')].filter(r=>r.querySelectorAll('td').length===10);
+                const hits=rows.filter(r=>{
+                    const c=[...r.querySelectorAll('td')].map(x=>x.innerText.trim());
+                    const links=[...r.querySelectorAll('a')].map(a=>(a.getAttribute('onclick')||'').match(/OpenDetailsLink\('([^']+)','(\d+)'\)/i)).filter(Boolean);
+                    return c[2].replace(/\D/g,'')===ein && norm(c[0])===norm(name)
+                      &&c[8].toLowerCase()==='yes'&&links.length===1&&links[0][2]===id;
+                });
+                if(hits.length!==1)return null;
+                return {ein,id,name: hits[0].querySelector('td').innerText.trim(),row:hits[0].innerText};
+            }''',{'ein':run.ein,'id':str(detail_ref['id']),'name':detail_ref.get('registryName','')})
+        proof=selected()
+        if not proof:return
+        run.page(page)
+        if selected()!=proof or page.url not in {url,url+'#results'}:
+            del run.documents[before:];return
+        if not hasattr(run,'oh_selected_grid_images'):run.oh_selected_grid_images={}
+        for doc in run.documents[before:]:
+            if doc[2]=='image':run.oh_selected_grid_images[hashlib.sha256(doc[1]).hexdigest()]=proof
+        run.oh_pending_selected_grid=list(run.documents[before:])
+        del run.documents[before:]
+    except Exception:
+        del run.documents[before:]
+        run.errors.append('OH_selected_grid_capture_unavailable')
+
+
+def publish_oh_selected_grid(result):
+    """Publish the retained grid only after the existing fallback is selected."""
+    run=CURRENT.get()
+    if run is None or run.state!='OH':return
+    row=result if isinstance(result,dict) else vars(result)
+    pending=getattr(run,'oh_pending_selected_grid',[])
+    run.oh_pending_selected_grid=[]
+    for doc in pending:
+        if doc[2]=='image' and oh_selected_grid_bound(run,doc[1],doc[0],row):
+            run.documents.append(doc)
+
+
+def oh_selected_grid_bound(run,raw,url,row):
+    """Only the existing exact-EIN compliance fallback may use this image."""
+    proof=getattr(run,'oh_selected_grid_images',{}).get(hashlib.sha256(raw).hexdigest())
+    return bool(proof and url in {
+        'https://charitableregistration.ohioago.gov/Charities/ResearchCharities',
+        'https://charitableregistration.ohioago.gov/Charities/ResearchCharities#results'}
+        and row.get('success') is True and row.get('status')=='Current'
+        and row.get('raw_status_text')=='Ohio exact-EIN search: In Compliance: Yes | Detail page unavailable'
+        and proof['ein']==run.ein==digits(row.get('ein',''))
+        and proof['id']==str(row.get('matched_registry_identifier',''))
+        and key(proof['name'])==key(row.get('matched_registry_name','')))
+
+
+def me_detail_name_bound(name,text,identifier):
+ """Maine moves its indexed trailing ', THE' to the original detail heading."""
+ def canonical(value):
+  value=re.sub(r',\s*THE\s*$','',str(value),flags=re.I)
+  value=re.sub(r'^THE\s+','',value.strip(),flags=re.I)
+  return re.sub(r'[^a-z0-9]','',value.lower())
+ headings=re.findall(r'CHARITABLE SOLICITATIONS\s+(.*?)\s+CHARITABLE ORGANIZATION\s+License Number:',text,re.S|re.I)
+ return bool(re.fullmatch(r'CO\d+',str(identifier),re.I) and len(headings)==1
+             and canonical(name) and canonical(headings[0])==canonical(name)
+             and re.search(r'License\s+Number:\s*'+re.escape(identifier)+r'(?!\w)',text,re.I))
 
 
 class CaptureRun:
@@ -541,11 +674,13 @@ class CaptureRun:
             negative=completed_negative_result(row)
             # Only source visuals are eligible; no text/JSON substitute is permitted.
             ordered=sorted((d for d in self.documents if d[2] in {'image','image_pages','source_pdf'}),key=lambda d:({'image':3,'image_pages':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
-            if self.state=='MA' and not negative:ordered=ma_selected_originals(self,ordered,row)
+            if self.state=='MA' and not negative:ordered=ma_selected_originals(self,ma_selected_scan(self,ordered,row),row)
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))
+                if self.state=='ME' and not negative and me_detail_name_bound(name,text,identifier):matched=True
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
+                if self.state=='OH' and not negative and oh_selected_grid_bound(self,raw,url,row):matched=True
                 if self.state=='AK' and not negative:
                     cycle_image=getattr(self,'ak_selected_cycle_images',{}).get(hashlib.sha256(raw).hexdigest())
                     if cycle_image:
@@ -925,7 +1060,7 @@ def _connector_archive(record,payload,query,evidence):
             # carry short references, never images or repeated source URLs.
             record.setdefault('source_snapshots',[]).append({
                 **{k:ref[k] for k in ('url','identifier','record_name','captured_at','ein','state')},
-                'operation':'detail' if ga_detail or il_detail else query.get('operation','')})
+                'operation':'detail' if ga_detail or il_detail or (record['state']=='NY' and query.get('orgID')) else query.get('operation','')})
         refs=record.get('source_snapshots',[])
         if record['state']=='TN':refs=sorted(refs,key=lambda r:r.get('operation')=='detail')
         record['source_snapshots']=refs[-24:]

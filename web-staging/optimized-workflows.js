@@ -39,7 +39,7 @@
       return response.json();
     }
     function sameReviewCandidates(before,after) {
-      if(before.state!=='DC' || !before.desktop_evidence_request?.review_candidate)return false;
+      if(!['WI','DC'].includes(before.state) || !before.desktop_evidence_request?.review_candidate)return false;
       const a=before.identity_review,b=after.identity_review;
       if(!a || !b || typeof b.token!=='string' || !Array.isArray(a.candidates) || !Array.isArray(b.candidates)
           || a.candidates.length!==1 || b.candidates.length!==1 || a.search_complete!==b.search_complete || a.exclusive!==b.exclusive)return false;
@@ -63,7 +63,7 @@
             cleanup();resolve(event.data.result||{ok:false});
           };
           window.addEventListener('message',receive);signal?.addEventListener('abort',abort,{once:true});
-          timer=setTimeout(()=>{cleanup();resolve({ok:false,reason:'capture_timeout'});},result.state==='DC'?32000:22000);
+          timer=setTimeout(()=>{cleanup();resolve({ok:false,reason:'capture_timeout'});},result.state==='DC'?62000:52000);
           window.postMessage({channel,direction:'request',id,request:result.desktop_evidence_request},location.origin);
         });
         sourceObservation={phase:'capture',reason:typeof captured.reason==='string'

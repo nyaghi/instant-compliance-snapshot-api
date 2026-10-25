@@ -73,3 +73,40 @@ def capture_selected_kansas(master,result,run,deadline,root=None):
     except Exception:
         fact['outcome']='cache_or_binding_unavailable';run.errors.append('KS_original_row_unavailable')
     finally:fact['total_ms']=round((time.perf_counter()-start)*1000,2)
+
+
+def capture_kansas_review_or_selected(master,result,run,deadline,root=None):
+    """Photograph existing candidate rows without accepting their identities."""
+    review=result.get('_worker_identity_review') if isinstance(result,dict) else None
+    if not review:return capture_selected_kansas(master,result,run,deadline,root)
+    if (run is None or run.state!='KS' or result.get('state')!='KS'
+        or re.sub(r'\D','',str(result.get('ein','')))!=run.ein
+        or getattr(run,'ks_original_row_attempted',False)):return
+    rows=review.get('records') if isinstance(review,dict) else None
+    if not isinstance(rows,list) or not 1<=len(rows)<=12:return
+    module=master.load_ks_weekly_checker();seen=set()
+    for row in rows:
+        if (not isinstance(row,dict) or not isinstance(row.get('name'),str) or not row['name'].strip()
+            or not re.fullmatch(r'\d{2}-\d{6}',str(row.get('identifier','')))
+            or row['identifier'] in seen or row.get('url')!='https://www.ag.ks.gov/divisions/public-protection/resources/registration-directory-for-charitable-organizations'
+            or row.get('status') in {None,'Not Registered','Unable to Confirm','Unable to Verify','Site Not Reachable','Needs Review'}
+            or not isinstance(row.get('raw_status'),str) or not row['raw_status']
+            or (row.get('ein') and re.sub(r'\D','',str(row['ein']))!=run.ein)):
+            return
+        if row.get('expiration'):
+            try:datetime.strptime(row['expiration'],'%Y-%m-%d')
+            except (TypeError,ValueError):return
+        seen.add(row['identifier'])
+    import copy
+    run.ks_original_row_attempted=True
+    for row in rows:
+        if time.monotonic()+.5>=deadline:break
+        # original_row independently checks every value against the original
+        # workbook and the checksummed viewer image; this is no identity vote.
+        visual={**result,'success':True,'confirmation_required':False,
+                'status':row['status'],'matched_registry_name':row['name'],
+                'matched_registry_identifier':row['identifier'],
+                'raw_status_text':row['raw_status']+(' | Expiration Date: '+row['expiration'] if row.get('expiration') else '')}
+        local=copy.copy(run);local.ks_original_row_attempted=False
+        capture_selected_kansas(master,visual,local,deadline,root)
+

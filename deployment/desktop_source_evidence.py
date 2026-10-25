@@ -39,6 +39,9 @@ def empty_metadata(d,payload):
 
 def retained_request(run,result):
     """Retain the source-issued URL before the owned lookup context closes."""
+    if run.state=='WI' and result.get('_worker_identity_review'):
+        from deployment.wi_review_evidence import retained_request as wi_review_request
+        return wi_review_request(run,result)
     if run.state=='DC':
         from deployment.dc_boss_evidence import retained_request as dc_request
         return dc_request(run,result)
@@ -62,6 +65,9 @@ def retained_request(run,result):
 
 def describe(result):
     """Expose only a bounded request produced by the successful source lookup."""
+    if result.get('state')=='WI' and result.get('_worker_identity_review'):
+        from deployment.wi_review_evidence import describe as wi_review_describe
+        return wi_review_describe(result)
     if result.get('state')=='DC':
         from deployment.dc_boss_evidence import describe as dc_describe
         return dc_describe(result)
@@ -137,6 +143,9 @@ def persist_completion(result,payload,store=None):
     # Validate the entire negative receipt before saving either artifact.
     ref=workflow_call('deployment/desktop_source_evidence.py:persist_completion:128:8:archive',archive,locals(), a,ein=a['ein'],state=a['state'],run_id=a['run_id'],store=store)
     update={'evidence_url':ref['url'],'evidence_capture':'captured','evidence_captured_at':ref['captured_at']}
+    if result.get('state')=='WI' and payload['request'].get('review_candidate') is True:
+        from deployment.wi_review_evidence import attach_reference as wi_attach
+        update.update(wi_attach(result,ref,store))
     if result.get('state')=='DC' and payload['request'].get('review_candidate') is True:
         from deployment.dc_review_evidence import attach_reference
         update.update(attach_reference(result,ref,store))
@@ -148,6 +157,18 @@ def persist_completion(result,payload,store=None):
         update.update({k:combined[k] for k in ['search_history_url','search_history_capture'] if k in combined})
         update['_worker_desktop_history']=record
     return trace_return('deployment/desktop_source_evidence.py:persist_completion:137:4:return',(update))
+
+def valid_capture_timing(state,timing):
+    import math
+    if not isinstance(timing,dict):return False
+    seconds=timing.get('seconds')
+    finite=lambda v:type(v) in (int,float) and math.isfinite(v)
+    if not finite(seconds) or seconds<0:return False
+    if state not in {'WI','DC'} or 'queue_seconds' not in timing:return seconds<=30
+    queue=timing.get('queue_seconds');active=timing.get('active_seconds')
+    return (finite(queue) and finite(active) and 0<=queue<=30 and 0<=active<=(20 if state=='WI' else 30)
+        and seconds<=(50 if state=='WI' else 60) and abs(seconds-queue-active)<0.05)
+
 
 def handle_completion(master,handler,queue):
     """Authorized workflow owner may attach pixels only to its settled record."""
@@ -175,12 +196,12 @@ def handle_completion(master,handler,queue):
         completion=workflow_call('deployment/desktop_source_evidence.py:handle_completion:161:19:get',p.get,locals(), 'completion');validate_completion(result,completion)
         import math
         seconds=workflow_call('deployment/desktop_source_evidence.py:handle_completion:163:16:get',workflow_call('deployment/desktop_source_evidence.py:handle_completion:163:16:get',completion.get,locals(), 'timing',{}).get,locals(), 'seconds')
-        if type(seconds) not in (int,float) or not math.isfinite(seconds) or not 0<=seconds<=30:
+        if not valid_capture_timing(state,completion.get('timing',{})):
             raise ValueError('Invalid capture duration')
         # Serialization is bounded; no changes to phase, status, search or identity.
         start=time.perf_counter();update=persist_completion(result,completion,PostgresStore(queue.pool))
         update['desktop_evidence_timing']={'archive_seconds':round(time.perf_counter()-start,4),
-            'capture_seconds':seconds}
+            'capture_seconds':seconds, **({k:completion['timing'][k] for k in ('queue_seconds','active_seconds')} if state in {'WI','DC'} and 'queue_seconds' in completion['timing'] else {})}
         metrics=dict(workflow_call('deployment/desktop_source_evidence.py:handle_completion:170:21:get',result.get,locals(), 'evidence_metrics') or {})
         metrics.update(row_link=True,missing_stage='',desktop_original=True)
         update['evidence_metrics']=metrics

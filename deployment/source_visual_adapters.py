@@ -28,7 +28,7 @@ def _selected_url(run,result):
       or u.query or re.sub(r'\D','',identifier)!=run.ein):return None
  elif run.state=='OH':
   params=parse_qsl(u.query,keep_blank_values=True)
-  ordinary=(u.path=='/Charities/OrganizationDetails' and params==[('Id',identifier)])
+  ordinary=(u.path in {'/Charities/OrganizationDetails','/Charities/FullyExemptOrganization'} and params==[('Id',identifier)])
   exempt=(u.path=='/Charities/PartiallyExemptOrganization'
       and params in [[('Id',identifier),('ExemptionStatus','109')],
                      [('Id',identifier),('ExemptionStatus','1716')]])
@@ -68,13 +68,13 @@ def selected_url(run,result):
 def capture_selected_source(master,result,run,deadline):
  """Best-effort, isolated visual work. Failure never modifies lookup result."""
  if run is not None and run.state=='KS':
-  from deployment.kansas_row_evidence import capture_selected_kansas
+  from deployment.kansas_row_evidence import capture_kansas_review_or_selected as capture_selected_kansas
   return trace_return('deployment/source_visual_adapters.py:capture_selected_source:71:2:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:71:9:capture_selected_kansas',capture_selected_kansas,locals(), master,result,run,deadline)))
  if run is not None and run.state=='CA':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:72:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:72:47:capture_selected_ca_source',capture_selected_ca_source,locals(), master,result,run,deadline)))
  if run is not None and run.state=='SC':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:73:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:73:47:capture_selected_sc_source',capture_selected_sc_source,locals(), master,result,run,deadline)))
  if run is not None and run.state=='WA':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:74:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:74:47:capture_selected_wa_source',capture_selected_wa_source,locals(), master,result,run,deadline)))
  if run is not None and run.state=='VA':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:75:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:75:47:capture_selected_va_source',capture_selected_va_source,locals(), master,result,run,deadline)))
- if run is not None and run.state=='CT':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:76:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:76:47:capture_selected_ct_source',capture_selected_ct_source,locals(), master,result,run,deadline)))
+ if run is not None and run.state=='CT':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:76:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:76:47:capture_selected_ct_source',capture_ct_review_or_selected,locals(), master,result,run,deadline)))
  if run is not None and run.state=='LA':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:77:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:77:47:capture_selected_la_source',capture_selected_la_source,locals(), master,result,run,deadline)))
  if run is not None and run.state=='NJ':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:78:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:78:47:capture_selected_nj_source',capture_selected_nj_source,locals(), master,result,run,deadline)))
  if run is not None and run.state=='WV':return trace_return('deployment/source_visual_adapters.py:capture_selected_source:79:40:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:79:47:capture_selected_wv_source',capture_selected_wv_source,locals(), master,result,run,deadline)))
@@ -201,7 +201,87 @@ def capture_selected_source(master,result,run,deadline):
   if held:workflow_call('deployment/source_visual_adapters.py:capture_selected_source:198:10:release',master.BROWSER_LOOKUP_SEMAPHORE.release,locals())
   fact['total_ms']=round((time.perf_counter()-started)*1000,2)
 
+def remember_ca_exempt_entity(run,result):
+ if run is None or run.state!='CA' or not getattr(result,'success',False) or getattr(result,'status','')!='Exempt':return
+ entity=getattr(result,'_cc_selected_entity',None)
+ if not isinstance(entity,dict) or getattr(result,'_cc_registration_records',None)!=[]:return
+ identifier=str(getattr(result,'matched_registry_identifier','') or '')
+ name=str(getattr(result,'matched_registry_name','') or '')
+ norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
+ if (not re.fullmatch(r'\d+',identifier) or str(entity.get('id'))!=identifier
+     or entity.get('entityStatus')!='Exempt' or re.sub(r'\D','',str(entity.get('fein') or ''))!=run.ein
+     or not name or norm(entity.get('entityName') or entity.get('legalName') or entity.get('name'))!=norm(name)):return
+ run.remember_detail(identifier,name,'https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/'+identifier)
+ if identifier in run.source_detail_hints:run.source_detail_hints[identifier]['exempt_entity_ein']=run.ein
+
+def ca_exempt_entity_core(text,name,ein):
+ norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
+ heading=re.search(r'Entity Details:\s*(.*?)\s+Exempt\s+',text,re.S)
+ core=re.search(r'Entity Type\b[\s\S]*?Out of State\?\s*(?:Yes|No)\b',text)
+ shown=re.search(r'Entity Name\s+(.*?)\s+DBA\b',text,re.S)
+ fein=re.search(r'\bFEIN:\s*(\d{2}-?\d{7})(?!\d)',text)
+ if (not heading or not shown or norm(heading[1])!=norm(name) or norm(shown[1])!=norm(name)
+     or not fein or re.sub(r'\D','',fein[1])!=ein or not core
+     or not re.search(r'Entity Status\s+Exempt\b',core[0])
+     or re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I)):return None
+ return heading[0]+'\nFEIN: '+fein[1]+'\n'+core[0]
+
+def capture_ca_exempt_entity(master,result,run,deadline,hint):
+ identifier=str(result.get('matched_registry_identifier') or '')
+ url='https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/'+identifier
+ if (not re.fullmatch(r'\d+',identifier) or result.get('status')!='Exempt'
+     or hint.get('url')!=url or hint.get('exempt_entity_ein')!=run.ein):return
+ run.selected_visual_attempted=True
+ fact={'adapter':'CA-exempt-entity-detail','phase':'admission','outcome':'not_started','total_ms':0}
+ run.visual_adapter_facts.append(fact);start=time.perf_counter();held=False;browser=context=None
+ try:
+  remaining=deadline-time.monotonic()-1
+  if remaining<3:fact['outcome']='deadline_reserve';return
+  stop=time.monotonic()+min(30.0,remaining)
+  def timeout():return max(1,int((stop-time.monotonic()-1)*1000))
+  held=master.BROWSER_LOOKUP_SEMAPHORE.acquire(blocking=False)
+  if not held:fact['outcome']='browser_capacity_unavailable';return
+  with master.checker.sync_playwright() as p:
+   browser=master.launch_lookup_browser(p,headless=True)
+   try:
+    context=browser.new_context(viewport={'width':1600,'height':1000},locale='en-US');page=context.new_page()
+    fact['phase']='navigation';response=page.goto(url,wait_until='commit',timeout=timeout())
+    if response is None or response.status!=200 or page.url!=url:fact['outcome']='navigation_rejected';return
+    fact['phase']='selected_entity_ready'
+    for field in ['entityStatus','entityName']:
+     fact['waiting_for_field']=field
+     page.locator('.formio-component-'+field).wait_for(state='visible',timeout=timeout())
+    fact['waiting_for_field']=''
+    text=page.inner_text('body',timeout=timeout());core=ca_exempt_entity_core(text,result['matched_registry_name'],run.ein)
+    if not core:fact['outcome']='selected_entity_not_bound';return
+    panel=page.locator('.formio-form').filter(has=page.locator('.formio-component-entityStatus'))
+    if panel.count()!=1:fact['outcome']='source_panel_not_unique';return
+    bounds=panel.bounding_box()
+    import math
+    height=math.ceil(bounds['y']+bounds['height']+20) if bounds else 0
+    if not bounds or bounds['width']<=0 or bounds['height']<=0 or not 100<=height<=1000:fact['outcome']='source_panel_exceeds_viewport';return
+    if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return
+    fact['phase']='capture';begin=time.perf_counter()
+    raw=page.screenshot(type='jpeg',quality=80,clip={'x':0,'y':0,'width':1600,'height':height},timeout=max(1,min(5000,timeout())))
+    run.capture_ms+=(time.perf_counter()-begin)*1000
+    if page.url!=url or ca_exempt_entity_core(page.inner_text('body',timeout=timeout()),result['matched_registry_name'],run.ein)!=core:
+     fact['outcome']='source_changed_during_capture';return
+    if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
+    before=len(run.documents)
+    run.document(url,raw,'image',core,note='Original state entity page: explicit Exempt standing, organization name and EIN. No registration record exists in the completed lookup.')
+    fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
+   finally:
+    if context is not None:context._captured=True;context.close()
+    if browser is not None:browser.close()
+ except Exception as exc:
+  fact.update(outcome='source_visual_unavailable',error_type=type(exc).__name__,error_summary=str(exc).splitlines()[0][:180])
+ finally:
+  if held:master.BROWSER_LOOKUP_SEMAPHORE.release()
+  fact['total_ms']=round((time.perf_counter()-start)*1000,2)
+
+
 def remember_ca_selected(run,result):
+ remember_ca_exempt_entity(run,result)
  """Retain only the already selected registration's original public detail ID."""
  if run is None or run.state!='CA' or not getattr(result,'success',False):return
  number=str(getattr(result,'matched_registry_identifier','') or '')
@@ -231,6 +311,8 @@ def capture_selected_ca_source(master,result,run,deadline):
  hint=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:228:6:get',getattr(run,'source_detail_hints',{}).get,locals(), identifier)
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if not hint or not re.fullmatch(r'(?:CT)?\d+',identifier) or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:230:67:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name']):return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:230:124:return',None)
+ if hint.get('exempt_entity_ein'):
+  return capture_ca_exempt_entity(master,result,run,deadline,hint)
  try:
   u=urlsplit(hint['url'])
   if (u.scheme!='https' or u.hostname!='ca-rcf.evokeplatform.com' or u.port not in (None,443)
@@ -469,7 +551,7 @@ def remember_va_selected(run,result):
  if len(rows)!=1:return
  row=rows[0];entity=row.get('entity') or {};kind=row.get('registrationType') or {}
  if (str(row.get('registrationNumber') or '')!=identifier or row.get('type')!='Registration'
-     or not isinstance(kind,dict) or kind.get('name') not in {'Charity','ExemptCharity'}
+     or not isinstance(kind,dict) or kind.get('name') not in {'Charity','ExemptCharity','Exempt Charity'}
      or str(entity.get('id') or '')!=proof['entity_id'] or norm(entity.get('name'))!=norm(name)):return
  from datetime import date
  expected={}
@@ -486,7 +568,7 @@ def remember_va_selected(run,result):
  expected['renewalStatus']=str(row.get('renewalStatus') or '')
  run.remember_detail(identifier,name,'https://vdacs.evokeplatform.com/app/publicPortal/registration/'+identifier)
  if identifier in run.source_detail_hints:
-  if kind['name']=='ExemptCharity':
+  if kind['name'] in {'ExemptCharity','Exempt Charity'}:
    # This official page omits these date components when their values are empty.
    # A populated source date must still be visible and match exactly.
    for field in ['dateOfLastRenewal','expirationDate','extensionDate']:
@@ -650,6 +732,41 @@ def capture_selected_va_source(master,result,run,deadline):
 def ct_primary_registration_text(text):
  return re.split(r'\nActive Campaign Solicitations\n|\nSolicitation Reports',text,maxsplit=1)[0]
 
+def capture_ct_review_or_selected(master,result,run,deadline):
+ """Capture original signed candidates without resolving their identities."""
+ import copy
+ review=result.get('_worker_identity_review')
+ if not review:return capture_selected_ct_source(master,result,run,deadline)
+ if (run is None or run.state!='CT' or result.get('state')!='CT'
+     or re.sub(r'\D','',str(result.get('ein','')))!=run.ein
+     or result.get('source_url')!='https://www.elicense.ct.gov/lookup/licenselookup.aspx'
+     or getattr(run,'selected_visual_attempted',False)):
+  return
+ rows=review.get('records') if isinstance(review,dict) else None
+ if not isinstance(rows,list) or not 1<=len(rows)<=12:return
+ seen=set()
+ for row in rows:
+  if (not isinstance(row,dict) or not isinstance(row.get('name'),str) or not row['name'].strip()
+      or not re.fullmatch(r'CHR\.\d{7}(?:-EXEMPT)?',str(row.get('identifier','')))
+      or row.get('identifier') in seen or row.get('url')!=result['source_url']
+      or row.get('status') not in {'Current','Upcoming Filing','Exempt','Delinquent','Closed / Withdrawn / Canceled','Revoked / Suspended','Pending / In Process','Failed to Renew'}
+      or (row.get('ein') and re.sub(r'\D','',str(row['ein']))!=run.ein)):
+   return
+  seen.add(row['identifier'])
+ # Every candidate shares one existing 20-second visual allowance.
+ stop=min(deadline,time.monotonic()+20)
+ run.selected_visual_attempted=True
+ for row in rows:
+  if time.monotonic()+3>=stop:break
+  local=copy.copy(run)
+  local.selected_visual_attempted=False
+  visual={**result,'success':True,'status':row['status'],
+          'matched_registry_name':row['name'],'matched_registry_identifier':row['identifier']}
+  capture_selected_ct_source(master,visual,local,stop)
+  run.capture_ms=local.capture_ms
+
+
+
 def capture_selected_ct_source(master,result,run,deadline):
  """Fresh credential search and actual source-issued selected detail link."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_ct_source:599:5:get',result.get,locals(), 'state')!='CT' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_ct_source:599:54:get',result.get,locals(), 'ein','')))!=run.ein
@@ -739,6 +856,10 @@ def capture_selected_ct_source(master,result,run,deadline):
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
 
 def capture_selected_la_source(master,result,run,deadline,negative=False):
+ if not negative:
+  from deployment.la_original_row import capture_original_la_row
+  if capture_original_la_row(master,result,run,deadline):return
+
  """Original public publisher row; retain its Registered Through label."""
  if (run is None or run.state!='LA' or workflow_call('deployment/source_visual_adapters.py:capture_selected_la_source:687:39:get',result.get,locals(), 'state')!='LA'
      or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_la_source:688:28:get',result.get,locals(), 'ein','')))!=run.ein or workflow_call('deployment/source_visual_adapters.py:capture_selected_la_source:688:63:get',result.get,locals(), 'success') is not True
@@ -1023,7 +1144,8 @@ def capture_owned_me_page(run,result,page,context,deadline):
    fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_owned_me_page:976:41:return',None)
   text=workflow_call('deployment/source_visual_adapters.py:capture_owned_me_page:977:7:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int(min(1,stop-time.monotonic()-4)*1000)))
   norm=lambda value:re.sub(r'[^a-z0-9]','',value.lower())
-  if (norm(result['matched_registry_name']) not in norm(text)
+  from deployment.state_snapshots import me_detail_name_bound
+  if ((norm(result['matched_registry_name']) not in norm(text) and not me_detail_name_bound(result['matched_registry_name'],text,result['matched_registry_identifier']))
       or not re.search(r'License\s+Number:\s*'+re.escape(result['matched_registry_identifier'])+r'(?!\w)',text,re.I)
       or re.search('verify you are human|user validation required|access denied|just a moment',text,re.I)):
    fact['outcome']='record_binding_failed';return trace_return('deployment/source_visual_adapters.py:capture_owned_me_page:982:43:return',None)
@@ -2069,6 +2191,83 @@ def mi_values_bound(values,result,ein):
     if re.search(r'Registration Pending',result.get('raw_status_text',''),re.I) and not re.search(r'Registration Pending',values['standing'],re.I):return False
     return True
 
+def mi_explicit_detail_error(page):
+    u=urlsplit(page.url)
+    return (u.scheme=='https' and u.hostname=='www.ag.state.mi.us' and u.port in (None,443)
+            and not u.username and not u.password and not u.fragment
+            and u.path=='/CharitableTrust/frmErrorPage.aspx'
+            and parse_qsl(u.query)==[('aspxerrorpath','/CharitableTrust/frmSearchResults.aspx')]
+            and 'Application Error' in page.inner_text('body',timeout=400))
+
+def mi_selected_grid_values(page,result):
+    """Bind original single-file results to the lookup's exact expiration."""
+    u=urlsplit(page.url);identifier=str(result.get('matched_registry_identifier',''))
+    if (u.scheme!='https' or u.hostname!='www.ag.state.mi.us' or u.port not in (None,443)
+        or u.username or u.password or u.query or u.fragment or u.path!='/CharitableTrust/frmSearchResults.aspx'
+        or not re.fullmatch(r'\d{3,8}',identifier)):return None
+    raw=re.fullmatch(r'License / Registration Expiration: (\d{1,2}/\d{1,2}/\d{4}) \| AG File#: '+re.escape(identifier),str(result.get('raw_status_text','')))
+    if not raw:return None
+    clean=lambda s:re.sub(r'\s+',' ',s).strip()
+    echo=page.locator('#ctl00_MainContent_lblSearchResults')
+    grid=page.locator('#ctl00_MainContent_GridView1')
+    if echo.count()!=1 or grid.count()!=1:return None
+    if clean(echo.inner_text(timeout=400))!='Results for the following input: File No: '+identifier+'; 1 record(s) found':return None
+    rows=grid.locator(':scope > tbody > tr')
+    if rows.count()!=2:return None
+    cells=rows.nth(1).locator(':scope > td')
+    if cells.count()!=3:return None
+    link=cells.nth(1).get_by_role('link',name=result['matched_registry_name'],exact=True)
+    if link.count()!=1 or clean(cells.nth(0).inner_text(timeout=400))!=identifier or clean(cells.nth(2).inner_text(timeout=400))!=raw[1]:return None
+    return clean(echo.inner_text(timeout=400)),clean(grid.inner_text(timeout=400))
+
+def capture_mi_error_grid(run,result,search,detail,stop,fact):
+    """Only an explicit state application error permits this limited fallback."""
+    if search is None or not mi_explicit_detail_error(detail):return False
+    fact['phase']='official_detail_error';fact['waiting_for']=''
+    values=mi_selected_grid_values(search,result)
+    if not values:fact['outcome']='error_grid_not_bound';return True
+    if time.monotonic()+1>=stop:fact['outcome']='error_grid_deadline';return True
+    search.bring_to_front()
+    text=search.inner_text('body',timeout=max(1,int((stop-time.monotonic()-.5)*1000)))
+    if re.search(r'verify you are human|access denied|just a moment',text,re.I):fact['outcome']='error_grid_verification';return True
+    url=search.url;start=time.perf_counter()
+    raw=search.screenshot(type='jpeg',quality=80,full_page=True,timeout=max(1,int((stop-time.monotonic()-.5)*1000)))
+    fact['capture_ms']=round((time.perf_counter()-start)*1000,2)
+    if search.url!=url or mi_selected_grid_values(search,result)!=values or time.monotonic()>=stop:
+        fact['outcome']='error_grid_changed';return True
+    before=len(run.documents)
+    run.document(url,raw,'image',text,note='Original Michigan single-record results page. The state detail page returned Application Error. This image shows the selected file, name and registration expiration used by the lookup; it does not supply unavailable financial detail.')
+    fact['outcome']='captured_original_grid_after_source_error' if len(run.documents)>before else 'capture_failed'
+    return True
+
+def prepare_mi_selected_grid(search,result,stop,fact):
+    """Retain the exact completed source before opening a potentially slow popup."""
+    try:
+        values=mi_selected_grid_values(search,result)
+        if not values or time.monotonic()+3>=stop:return None
+        text=search.inner_text('body',timeout=max(1,int((stop-time.monotonic()-2)*1000)))
+        if re.search(r'verify you are human|access denied|just a moment',text,re.I):return None
+        url=search.url;started=time.perf_counter()
+        raw=search.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1500,max(1,int((stop-time.monotonic()-2)*1000))))
+        fact['capture_ms']+=round((time.perf_counter()-started)*1000,2)
+        if search.url!=url or mi_selected_grid_values(search,result)!=values or time.monotonic()>=stop:return None
+        binding=tuple(result.get(k) for k in ('ein','matched_registry_identifier','matched_registry_name','raw_status_text'))
+        return dict(url=url,raw=raw,text=text,captured_at=time.time(),binding=binding)
+    except Exception:return None
+
+def retain_mi_grid_on_popup_timeout(run,result,grid,fact):
+    """No substitution after a contradictory detail: only a popup timeout."""
+    if not grid or fact.get('phase')!='selected_popup':return False
+    binding=tuple(result.get(k) for k in ('ein','matched_registry_identifier','matched_registry_name','raw_status_text'))
+    if binding!=grid['binding']:return False
+    before=len(run.documents)
+    run.document(grid['url'],grid['raw'],'image',grid['text'],note='Original Michigan single-file results page captured before opening the selected detail. The detail popup did not finish within this check. This page shows the exact selected file, organization and registration expiration; it does not supply the unavailable detail or financial fields.')
+    if len(run.documents)<=before:return False
+    doc=run.documents[-1];run.documents[-1]=(*doc[:4],grid['captured_at'],doc[5])
+    fact['outcome']='captured_original_grid_after_detail_timeout'
+    return True
+
+
 def capture_owned_mi_page(run,result,page,context,deadline):
     """One selected-file visual query, original popup pixels, no status mutation."""
     if workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2015:7:get',result.get,locals(), 'status')=='Not Registered':
@@ -2082,7 +2281,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
         or workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2023:11:get',result.get,locals(), 'source_url')!='https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx'
         or getattr(run,'selected_visual_attempted',False)):return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2024:59:return',None)
     run.selected_visual_attempted=True
-    start=time.perf_counter();owned=[];detach_observer=lambda:None
+    start=time.perf_counter();owned=[];selected_grid=None;detach_observer=lambda:None
     fact={'adapter':'MI-owned-selected-file-detail','phase':'admission','outcome':'not_started',
           'visual_file_queries':0,'capture_ms':0,'total_ms':0,'local_visual_budget_ms':30000}
     run.visual_adapter_facts.append(fact)
@@ -2096,7 +2295,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
         if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2037:58:return',None)
         stop=time.monotonic()+min(30,remaining)
         def allowance(reserve=1):return max(1,int((stop-time.monotonic()-reserve)*1000))
-        detail=None
+        detail=None;search=None;selected_grid=None
         # Reuse a selected detail already produced by the normal browser path.
         for existing in list(context.pages):
             if official(existing) and workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2043:38:count',existing.locator(MI_DETAIL_PREFIX+'lblFileNo').count,locals())==1:
@@ -2122,10 +2321,16 @@ def capture_owned_mi_page(run,result,page,context,deadline):
             links=grid.get_by_role('link',name=result['matched_registry_name'],exact=True)
             if workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2064:15:count',links.count,locals())!=1 or not re.search(r'(?<!\d)'+re.escape(identifier)+r'(?!\d)',workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2064:92:inner_text',grid.inner_text,locals(), timeout=400)):
                 fact['outcome']='selected_result_not_unique';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2065:61:return',None)
+            selected_grid=prepare_mi_selected_grid(search,result,stop,fact)
             fact['phase']='selected_popup';fact['waiting_for']='selected_link_popup'
             with search.expect_popup(timeout=allowance()) as popup:
                 workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2068:16:click',links.click,locals(), timeout=allowance())
             detail=popup.value;owned.append(detail)
+        # Wait for either the real selected record or the official error page.
+        # A completed application error must not spend the rest of the budget
+        # waiting for a detail field that this page will never contain.
+        detail.wait_for_function("() => !!document.querySelector('#ctl00_MainContent_fvCSForm_lblSolicitationRegistrationStatus') || (location.pathname==='/CharitableTrust/frmErrorPage.aspx' && document.body?.innerText.includes('Application Error'))",timeout=allowance())
+        if capture_mi_error_grid(run,result,search,detail,stop,fact):return
         fact['phase']='detail_binding';fact['waiting_for']='selected_status_field'
         workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2071:8:wait_for',detail.locator(MI_DETAIL_PREFIX+'lblSolicitationRegistrationStatus').wait_for,locals(), state='visible',timeout=allowance())
         values=mi_detail_values(detail)
@@ -2140,13 +2345,17 @@ def capture_owned_mi_page(run,result,page,context,deadline):
         if time.monotonic()+1>=stop:fact['outcome']='image_readiness_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2081:78:return',None)
         fact['phase']='capture';fact['waiting_for']='';begin=time.perf_counter();url=detail.url
         raw=workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2083:12:screenshot',detail.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=min(1500,allowance(.5)))
-        fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
+        fact['capture_ms']+=round((time.perf_counter()-begin)*1000,2)
         if detail.url!=url or mi_detail_values(detail)!=values:fact['outcome']='record_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2085:111:return',None)
         if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2086:82:return',None)
         before=len(run.documents)
         workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2088:8:document',run.document,locals(), url,raw,'image',text,note='Original selected Michigan detail, including EIN, solicitation standing and financial period. Retrieved by the already selected AG file number; not a reconstructed report.')
         fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
     except Exception as exc:
+        from playwright.sync_api import TimeoutError as BrowserTimeoutError
+        if isinstance(exc,BrowserTimeoutError) and retain_mi_grid_on_popup_timeout(run,result,selected_grid,fact):
+            fact['detail_error_type']='TimeoutError'
+            return
         fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
     finally:
         detach_observer()
@@ -2314,3 +2523,43 @@ def capture_va_unregistered_entity(master,result,run,deadline):
  finally:
   if held:workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2256:10:release',master.BROWSER_LOOKUP_SEMAPHORE.release,locals())
   fact['total_ms']=round((time.perf_counter()-started)*1000,2)
+
+
+def capture_ar_review_page(page,org,candidates,parsed_rows):
+    """Retain the original candidate page before the next normal query replaces it."""
+    from deployment.state_snapshots import CURRENT,DEADLINE
+    run=CURRENT.get()
+    if run is None or run.state!='AR' or run.ein!=re.sub(r'\D','',str(getattr(org,'ein',''))):return
+    if not isinstance(candidates,list) or not 1<=len(candidates)<=12 or not parsed_rows:return
+    u=urlsplit(page.url)
+    if u.scheme!='https' or u.hostname!='sos-corp-search.ark.org' or u.path!='/charity/results' or u.fragment:return
+    params=parse_qs(u.query)
+    if len(params.get('name',[]))!=1 or set(params)-{'name','type'} or ('type' in params and params['type']!=['Charity Registration']):return
+    saved=getattr(run,'ar_review_names',set())
+    pending=[c for c in candidates if c.get('_identity_outcome')=='possible' and c.get('name') not in saved
+             and c.get('url')==page.url and any(r.get('name')==c.get('name') and r.get('status')==c.get('raw_status') and r.get('registration_date')==c.get('initial') for r in parsed_rows)]
+    if not pending:return
+    used=getattr(run,'ar_review_capture_seconds',0.)
+    remaining=min(6.-used,DEADLINE.get()-time.monotonic()-1)
+    if remaining<1:return
+    start=time.monotonic();stop=start+remaining;url=page.url
+    fact={'adapter':'AR-original-review-results','outcome':'not_started','total_ms':0,'capture_ms':0}
+    run.visual_adapter_facts.append(fact)
+    def allowance():return max(1,int((stop-time.monotonic())*1000))
+    try:
+        text=page.inner_text('body',timeout=allowance())
+        if re.search(r'captcha|verify you are human|access denied|request could not be satisfied',text,re.I):return
+        clean=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
+        if any(clean(c['name']) not in clean(text) or clean(c['raw_status']) not in clean(text) for c in pending):return
+        begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=allowance())
+        fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
+        if time.monotonic()>=stop or page.url!=url or page.inner_text('body',timeout=allowance())!=text:
+            fact['outcome']='source_changed';return
+        before=len(run.documents);run.document(url,raw,'image',text,note='Original Arkansas results containing the identity-review candidate, captured before subsequent searches. Identity remains for user decision.')
+        if len(run.documents)>before:
+            run.ar_review_names=saved|{c['name'] for c in pending};fact['outcome']='captured'
+    except Exception as exc:
+        fact['outcome']='capture_unavailable';fact['error_type']=type(exc).__name__
+    finally:
+        elapsed=time.monotonic()-start;run.ar_review_capture_seconds=used+elapsed
+        run.capture_ms+=fact['capture_ms'];fact['total_ms']=round(elapsed*1000,2)
