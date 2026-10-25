@@ -49,7 +49,7 @@ def fields(url,text,d):
  if positions!=sorted(positions):return None
  f={label:' '.join(lines[positions[i]+1:positions[i+1] if i+1<len(positions) else len(lines)]) for i,label in enumerate(LABELS)}
  if any(not v or v=='N/A' for k,v in f.items() if k not in {'Trade Name','Premise Address'}):return None
- if f['License Number']!=d['identifier'] or norm(f['Licensee'])!=norm(d['name']) or f['License Activity'].lower()!='charitable solicitation' or f['License Status']!=d['raw_status']:return None
+ if f['License Number']!=d['identifier'] or norm(f['Licensee'])!=norm(d['name']) or f['License Activity'].lower() not in {'charitable solicitation','charitable exempt'} or f['License Status']!=d['raw_status']:return None
  try:
   if datetime.strptime(f['Expiration Date'],'%m/%d/%Y').date().isoformat()!=d['expiration']:return None
   datetime.strptime(f['Issue Date'],'%m/%d/%Y')

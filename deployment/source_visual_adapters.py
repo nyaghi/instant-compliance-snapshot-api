@@ -109,7 +109,7 @@ def capture_selected_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1.0
   if remaining<3.0:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:110:54:return',None)
-  stop=time.monotonic()+min(16.0 if run.state=='RI' else 8.0,remaining)
+  stop=time.monotonic()+min(22.0 if run.state=='RI' else 16.0 if run.state=='OR' else 8.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:112:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:113:61:return',None)
   runtime_started=time.perf_counter();runtime_close_started=None
@@ -469,7 +469,7 @@ def remember_va_selected(run,result):
  if len(rows)!=1:return
  row=rows[0];entity=row.get('entity') or {};kind=row.get('registrationType') or {}
  if (str(row.get('registrationNumber') or '')!=identifier or row.get('type')!='Registration'
-     or not isinstance(kind,dict) or kind.get('name')!='Charity'
+     or not isinstance(kind,dict) or kind.get('name') not in {'Charity','ExemptCharity'}
      or str(entity.get('id') or '')!=proof['entity_id'] or norm(entity.get('name'))!=norm(name)):return
  from datetime import date
  expected={}
@@ -485,7 +485,14 @@ def remember_va_selected(run,result):
  expected['calculatedRegistrationStatusLabel']=str(row.get('calculatedRegistrationStatusLabel') or (status.get('name') if isinstance(status,dict) else '') or '')
  expected['renewalStatus']=str(row.get('renewalStatus') or '')
  run.remember_detail(identifier,name,'https://vdacs.evokeplatform.com/app/publicPortal/registration/'+identifier)
- if identifier in run.source_detail_hints:run.source_detail_hints[identifier]['source_fields']=expected
+ if identifier in run.source_detail_hints:
+  if kind['name']=='ExemptCharity':
+   # This official page omits these date components when their values are empty.
+   # A populated source date must still be visible and match exactly.
+   for field in ['dateOfLastRenewal','expirationDate','extensionDate']:
+    if expected[field]=='':expected.pop(field)
+   run.source_detail_hints[identifier]['registration_type']='ExemptCharity'
+  run.source_detail_hints[identifier]['source_fields']=expected
 
 def va_registration_core(text):
  return re.split(r'\nSubmissions\n',text,maxsplit=1)[0]
@@ -559,7 +566,9 @@ def capture_selected_va_source(master,result,run,deadline):
     begin=time.perf_counter();fact['phase']='selected_fields_ready'
     fact['waiting_for']='Registration Information heading'
     workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:553:4:wait_for',page.get_by_role('heading',name='Registration Information',exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    for label in ['Registration ID','Initial Registration Date','Current Registration Date','Expiration Date']:
+    labels=['Registration ID','Initial Registration Date','Current Registration Date']
+    if hint.get('registration_type')!='ExemptCharity' or 'expirationDate' in hint.get('source_fields',{}):labels.append('Expiration Date')
+    for label in labels:
      fact['waiting_for']=label
      workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:556:5:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['waiting_for']=''
@@ -584,7 +593,12 @@ def capture_selected_va_source(master,result,run,deadline):
     panel=page.locator('.formio-form')
     if workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:565:7:count',panel.count,locals())!=1:fact['outcome']='source_panel_not_unique';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:565:66:return',None)
     expected=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:566:13:get',hint.get,locals(), 'source_fields')
-    if not isinstance(expected,dict) or len(expected)!=7:fact['outcome']='source_field_proof_missing';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:567:102:return',None)
+    required={'initialIssueDate','issueDate','calculatedRegistrationStatusLabel','renewalStatus'}
+    optional={'dateOfLastRenewal','expirationDate','extensionDate'}
+    exempt=hint.get('registration_type')=='ExemptCharity'
+    if (not isinstance(expected,dict) or not required<=set(expected) or not set(expected)<=required|optional
+        or not exempt and set(expected)!=required|optional):
+     fact['outcome']='source_field_proof_missing';return None
     for field,wanted in expected.items():
      component=panel.locator('.formio-component-'+field)
      if workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:570:8:count',component.count,locals())!=1:fact['outcome']='source_field_component_changed';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:570:78:return',None)
@@ -643,7 +657,7 @@ def capture_selected_ct_source(master,result,run,deadline):
      or not workflow_call('deployment/source_visual_adapters.py:capture_selected_ct_source:601:12:get',result.get,locals(), 'matched_registry_name') or getattr(run,'selected_visual_attempted',False)
      or workflow_call('deployment/source_visual_adapters.py:capture_selected_ct_source:602:8:get',result.get,locals(), 'source_url')!='https://www.elicense.ct.gov/lookup/licenselookup.aspx'):return trace_return('deployment/source_visual_adapters.py:capture_selected_ct_source:602:91:return',None)
  identifier=str(workflow_call('deployment/source_visual_adapters.py:capture_selected_ct_source:603:16:get',result.get,locals(), 'matched_registry_identifier') or '')
- match=re.fullmatch(r'CHR\.(\d{7})',identifier)
+ match=re.fullmatch(r'CHR\.(\d{7})(?:-EXEMPT)?',identifier)
  if not match:return trace_return('deployment/source_visual_adapters.py:capture_selected_ct_source:605:14:return',None)
  run.selected_visual_attempted=True;start=time.perf_counter();held=False;browser=context=None
  fact={'adapter':'CT-fresh-selected-original-detail','outcome':'not_started','navigation_ms':0,'search_ms':0,'detail_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission'};run.visual_adapter_facts.append(fact)
@@ -846,7 +860,7 @@ def capture_owned_md_page(run,result,page,context,deadline):
   def value(panel,label):
    field=panel.locator('.dvce-model-property').filter(has=detail.get_by_role('heading',name=label,exact=True))
    if field.count()!=1:return None
-   return field.locator('p').inner_text(timeout=400).strip()
+   return field.locator('p').inner_text(timeout=max(1,int((stop-time.monotonic()-1)*1000))).strip()
   if (not same_record() or norm(value(general,'Charity Name'))!=norm(result['matched_registry_name'])
       or value(general,'Charity ID')!=identifier or (value(general,'Registration Status') or '').casefold()!=expected['status'].casefold()):fact['outcome']='general_source_fields_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:809:190:return',None)
   fact['approval_date_visible']=bool(value(general,'Latest Approval Date'))
@@ -1688,8 +1702,9 @@ def capture_selected_nj_source(master,result,run,deadline):
   u=urlsplit(hint['url']);params=parse_qsl(u.query,keep_blank_values=True)
   if (u.scheme!='https' or u.hostname!='charportal.dca.njoag.gov' or u.port not in (None,443)
       or u.username or u.password or u.path!='/CHR-Public-Details-Page/' or u.fragment
-      or [k for k,v in params]!=['id','rid']
-      or any(not re.fullmatch(r'[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}',value) for key,value in params)
+      or [k for k,v in params] not in (['id','rid'],['id','rid','t'])
+      or any(not re.fullmatch(r'[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}',value) for key,value in params if key in {'id','rid'})
+      or any(not re.fullmatch(r'[0-9]{10,16}',value) for key,value in params if key=='t')
       or identifier!=run.ein):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1657:30:return',None)
  except (ValueError,TypeError,KeyError):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1658:40:return',None)
  run.selected_visual_attempted=True

@@ -21,6 +21,23 @@
       if (!validHistory) add(parent,'p','Names searched unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
       return;
     }
+    // During a multi-candidate GA review, keep the status decision pending,
+    // but make each explicitly accepted original available in the main comments.
+    const candidates = result.state === 'GA' && result.identity_review?.candidates;
+    const accepted = candidates && candidates.filter(candidate => candidate.decision === 'accept');
+    const unresolved = ['Needs Review', 'Unable to Confirm', 'Confirm Match'].includes(result.status);
+    if (accepted?.length && (candidates.some(candidate => !candidate.decision) || unresolved)) {
+      for (const candidate of accepted) {
+        if (/^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(candidate.evidence_url || '')) {
+          const link = add(parent, 'a', `View State Snapshot (PDF) — ${candidate.name} (identity accepted)`, 'mt-2 block text-xs underline whitespace-normal');
+          link.href = '/evidence-preview.html?document=' + encodeURIComponent(candidate.evidence_url);
+          link.target = '_blank'; link.rel = 'noopener noreferrer';
+        } else {
+          add(parent, 'p', `State snapshot unavailable for ${candidate.name} (identity accepted).`, 'mt-2 text-xs text-slate-500 whitespace-normal');
+        }
+      }
+      return;
+    }
     if (!source) {
       const candidateSnapshots = result.state === 'DC' && result.identity_review?.candidates?.length
         && result.identity_review.candidates.every(candidate => /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(candidate.evidence_url || ''));

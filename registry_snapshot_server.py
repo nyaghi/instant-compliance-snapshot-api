@@ -8171,7 +8171,7 @@ def ms_browser_clean_evidence(payload, query):
     if query.get('operation') == 'search':
         if (set(payload) != {'state', 'query', 'complete', 'verification_pending', 'rows', 'total'}
                 or payload['state'] != 'MS' or payload['verification_pending'] is not False
-                or type(payload['total']) is not int or not 0 <= payload['total'] <= 100
+                or type(payload['total']) is not int or not 0 <= payload['total'] <= 500
                 or not isinstance(payload['rows'], list) or len(payload['rows']) != payload['total']):
             raise ValueError('Mississippi search is incomplete')
         seen = set()
@@ -9919,7 +9919,9 @@ def dc_charity_records(org, deadline):
     fields = "OBJECTID,CUSTOMERNUMBER,ENTITYNAME,ENTITYTRADENAME,LICENSESTATUS,BUSINESSACTIVITY,PREMISEADDRESS,PREMISEINDC,LICENSEENDDATE,LICENSESTARTDATE,INITIALISSUEDATE,DATAREFRESHEDON"
     where = "UPPER(BUSINESSACTIVITY) LIKE '%CHARITABLE%' AND (" + " OR ".join(clauses) + ")"
     from deployment.search_history import begin_source_query
-    history_receipt=begin_source_query('DC',' OR '.join(dc_license_query_patterns(required + generated)),'Combined ENTITYNAME / ENTITYTRADENAME LIKE patterns',DC_LICENSE_API)
+    history_receipts=[receipt for pattern in dc_license_query_patterns(required + generated)
+        if (receipt:=begin_source_query('DC',' '.join(pattern.strip('%').split('%')),
+            'Term included in the combined ENTITYNAME / ENTITYTRADENAME LIKE request',DC_LICENSE_API))]
     try:
         offset, raw_rows, seen = 0, [], set()
         while True:
@@ -9970,7 +9972,7 @@ def dc_charity_records(org, deadline):
                 "initial": (dc_source_date(raw.get("INITIALISSUEDATE")) or ""), "initial_label": "Initial Issue Date",
                 "renewal": (dc_source_date(raw.get("LICENSESTARTDATE")) or ""), "renewal_label": "License Start Date",
                 "renewal_type": "current_effective_date", "url": DC_LICENSE_API + "?" + urlencode({"where": "CUSTOMERNUMBER='"+identifier.replace("'", "''")+"'", "outFields": "*", "returnGeometry": "false", "f": "pjson"})})
-        if history_receipt:__import__('deployment.search_observation',fromlist=['complete_public_rows']).complete_public_rows(history_receipt,len(raw_rows),rows=raw_rows)
+        for receipt in history_receipts:receipt.complete(None)  # Combined result has no per-term row count.
         # Retain only this completed, freshness-validated query for original evidence.
         try:
             from deployment.state_snapshots import CURRENT
@@ -9982,7 +9984,7 @@ def dc_charity_records(org, deadline):
         except Exception:pass
         return rows, f"Data freshness: DC's public business-license extract was refreshed {refreshed.isoformat()}. It may lag the licensing portal; confirm time-sensitive decisions in DC's BOSS license search (https://boss.dc.gov/business/business-license-search)."
     finally:
-        if history_receipt:history_receipt.incomplete()
+        for receipt in history_receipts:receipt.incomplete()
 
 
 def search_dc(org):
@@ -18295,6 +18297,9 @@ def search_oh(page, org):
         if ein_digits not in re.sub(r"\D", "", detail_text):
             result.matched_registry_identifier = detail_id
             result.matched_registry_name = clean_registry_name(detail_ref.get("registryName", ""))
+            # Retain the source-issued selected link for a later original capture.
+            # The existing exact-EIN standing fallback remains unchanged.
+            result.source_url = detail_url
             if detail_ref.get("einConfirmed") and str(detail_ref.get("inCompliance", "")).strip().lower() == "yes":
                 result.status = checker.STATUS_CURRENT
                 result.raw_status_text = "Ohio exact-EIN search: In Compliance: Yes | Detail page unavailable"
@@ -24043,7 +24048,7 @@ def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
                     (digits and digits in re.sub(r"\D", "", body))
                     or (name and name in re.sub(r"\W+", "", body).lower())
                 )
-                if identity_visible and nj_filing_context_from_body(body).get("computed_due_date"):
+                if identity_visible:
                     # Preserve the selected original frame for the existing visual
                     # adapter. This hint never establishes identity or status;
                     # that adapter rechecks the visible EIN/name and record fields.
@@ -24055,7 +24060,10 @@ def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
                             visual_run.remember_detail(digits, org.organization_name, frame.url)
                     except Exception:
                         pass
-                    return body
+                    # Evidence availability does not depend on interpreting a
+                    # filing deadline. Preserve the existing status-read contract.
+                    if nj_filing_context_from_body(body).get("computed_due_date"):
+                        return body
             except Exception:
                 pass
         remaining = deadline - time.monotonic()
@@ -25526,11 +25534,12 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
         result = completion_guard(checker.search_pa(page, org))
     if public_status(result) != "Not Registered": return result
     url = "https://www.charities.pa.gov/#/page/searchCharities"
-    # One PA name fallback, with no more than 30 seconds of request budget.
+    # One PA name fallback, bounded by its allowance and the parent state deadline.
     # A completed negative is different from a request which did not finish.
-    try: budget = min(30.0, max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "30"))))
-    except (ValueError, TypeError): budget = 30.0
-    deadline = time.monotonic() + budget
+    try: budget = min(45.0, max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "45"))))
+    except (ValueError, TypeError): budget = 45.0
+    from deployment.state_snapshots import DEADLINE
+    deadline = min(time.monotonic() + budget, DEADLINE.get() - 1.0)
     attempts, attempted, collected = [], [], []
     for variant in pa_name_search_plan(org):
         # Only a completed contains response can cover a later literal extension.
@@ -25581,11 +25590,13 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
             collected.extend(rows)
         except Exception as exc:
             entry["failure"] = ("HTTP " + str(exc.code) if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__)
-            entry["failure_kind"] = "transport" if isinstance(exc, (urllib.error.URLError, OSError)) else "response"
+            exhausted = time.monotonic() >= deadline
+            entry["failure_kind"] = "budget" if exhausted else "transport" if isinstance(exc, (urllib.error.URLError, OSError)) else "response"
+            if exhausted: entry["failure"] = "Name fallback time limit reached"
             if isinstance(exc, urllib.error.HTTPError): entry["http_status"] = exc.code
             # A result limit can be avoided by another name; repeating the entire
             # lookup cannot repair it. Transport failures retain the master retry.
-            if entry["failure_kind"] == "transport": break
+            if entry["failure_kind"] in {"transport", "budget"}: break
             continue
         finally:
             entry["seconds"] = round(time.monotonic() - started, 3)
@@ -35951,6 +35962,10 @@ def attach_identity_review(data, context):
         rows.append(clean)
     if not any(row["reviewable"] for row in rows) or len(rows) > 100:
         return
+    if data["state"] == "GA":
+        # A Georgia review must expose every record that can determine its
+        # result. Do not retain an unreviewable automatic match behind the cards.
+        for row in rows: row["reviewable"] = True
     prior = USER_IDENTITY_CONTEXT.get()
     same_review = prior.get("ein") == canonical_ein_digits(data["ein"]) and prior.get("state") == data["state"]
     now = int(time.time())
@@ -36024,6 +36039,10 @@ def resolve_identity_review(payload, email, device):
     if (payload.get("ein") != base["ein"] or payload.get("state") != base["state"]
             or payload.get("action") not in {"accept", "reject", "clear"}):
         raise ValueError("Invalid identity decision or organization binding.")
+    if base["state"] == "GA":
+        # Also expose previously automatic records in still-valid older tokens.
+        # Identity, source fields, owner and expiry remain signed and unchanged.
+        for row in record["records"]: row["reviewable"] = True
     selected = next((r for r in record["records"] if r["id"] == payload.get("candidate_id") and r["reviewable"]), None)
     if not selected or len(record["history"]) >= 100:
         raise ValueError("This candidate is unavailable for review. Rerun the state check.")
@@ -36068,6 +36087,15 @@ def resolve_identity_review(payload, email, device):
     if pending:
         data.update(status="Needs Review", success=False,
                     comments=note + base["comments"] + f" {len(pending)} candidate(s) still need an identity decision.")
+        if base["state"] == "GA":
+            # An unresolved review has no final selected record. Keep accepted
+            # original evidence on its cards/comments without stale base fields.
+            accepted_note = " ".join(
+                f"Accepted identity: {r['name']} ({r['identifier']}); registry status: {r['raw_status'] or 'not provided'}."
+                for r in accepted)
+            data.update(matched_registry_name="", matched_registry_identifier="",
+                        raw_status_text="", computed_due_date="", source_url="",
+                        comments=note + accepted_note + f" {len(pending)} candidate(s) still need an identity decision; the final state status is pending.")
     elif not accepted and not record["search_complete"] and base["state"] == "WI":
         # Rejection resumes the existing master lookup, scoped to this request.
         # It is never substituted for completed search coverage.
@@ -36125,6 +36153,9 @@ def resolve_identity_review(payload, email, device):
         chosen, conflict = select_licensed_charity(org, candidates, base["state"], time.monotonic() + 5)
         if conflict or not chosen:
             data.update(status="Needs Review", success=False, comments=note + (conflict or "No complete registration record could be selected."))
+            if base["state"] == "GA":
+                data.update(matched_registry_name="", matched_registry_identifier="",
+                            raw_status_text="", computed_due_date="", source_url="")
         else:
             due = chosen["expiration"]
             if base["state"] == "WI" and due:

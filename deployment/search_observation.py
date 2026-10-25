@@ -83,8 +83,12 @@ def ein_criteria(url,body=None,params=None,known_ein=''):
         leaf=re.split(r'[.$]',field)[-1]
         explicit=bool(re.search(r'(?:^|[^a-z])(?:f?ein)(?:[^a-z]|$)|(?:federal|tax).*id|federal.*ein$|f?ein(?:number|no|searchfield)$',field,re.I))
         generic=bool(GENERIC_FIELD.fullmatch(leaf) and value.replace('-','')==known_ein)
-        if explicit or generic:
-            label='Federal EIN field' if explicit else 'Public search field; EIN entered'
+        md_ein=(urlsplit(str(url)).scheme=='https' and urlsplit(str(url)).netloc=='onestop.md.gov'
+                and urlsplit(str(url)).path=='/list_views/62f3e1797f7e3200016a3dab/entries'
+                and field in {'a87e8739-62de-600d-728c-6300bf865f9e','filter[a87e8739-62de-600d-728c-6300bf865f9e]'}
+                and value.replace('-','')==known_ein)
+        if explicit or generic or md_ein:
+            label='Federal EIN field' if explicit or md_ein else 'Public search field; EIN entered'
             result.append((value,label))
     return list(dict.fromkeys(result))[:20]
 
@@ -210,16 +214,26 @@ def dataset_scope(names, *, records=None, record_name=None, name_score=None):
     run=CURRENT.get();receipts=[]
     if run:
         for name in dict.fromkeys(names):
+            # KY retries evaluate many of the same names in the same dataset.
+            # The names-only report retains each actual term once; it does not
+            # need a second scoring pass or duplicate attempt rows.
+            if run.state=='KY':
+                seen=getattr(run,'ky_observed_dataset_names',set())
+                if name in seen:continue
             label='Name filter in downloaded state list; identity reviewed separately' if records is not None else 'Safe-name evaluation of official dataset'
             receipt=begin_source_query(run.state,name,label,'','official_dataset')
-            if receipt:receipts.append(receipt)
+            if receipt:
+                receipts.append(receipt)
+                if run.state=='KY':
+                    if not hasattr(run,'ky_observed_dataset_names'):run.ky_observed_dataset_names=set()
+                    run.ky_observed_dataset_names.add(name)
     try:yield
     except BaseException:
         for receipt in receipts:receipt.incomplete()
         raise
     else:
         for receipt in receipts:
-            if records is None:
+            if records is None or run.state=='KY':
                 receipt.complete(None)
                 continue
             # Observe a real local name filter over the loaded original rows.
