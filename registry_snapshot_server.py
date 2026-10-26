@@ -22698,6 +22698,9 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
     original_name = getattr(org, "original_organization_name", org.organization_name)
     ein = getattr(org, "ein", "") or ""
 
+    # The optional-variant limit must not truncate required reviewed names.
+    direct_names = list(dict.fromkeys([*equivalent_name_queries(original_name, ein), *direct_names]))
+
     best_match = None
     last_body = ""
     wi_reader_reached = False
@@ -27954,6 +27957,12 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
 
+    if (state == "PA" and status == "Unable to Confirm"
+            and getattr(result, "reason_code", "") == "PA_NAME_BUDGET_EXHAUSTED"):
+        return ("Pennsylvania returned some search results, but CharityClarity reached its name-search time limit "
+                "before all required searches finished. Registration status remains Unable to Confirm. "
+                "This is not a completed no-record finding or an identity-mismatch decision.")
+
     if (state == "WA" and status == "Unable to Confirm"
             and getattr(result, "reason_code", "") == "WA_SOURCE_EIN_CONFLICT"):
         return note
@@ -28134,7 +28143,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
             filing = re.search(r"(?:Renewal Registration|Application for Registration)(?:\s*-\s*EZ)?\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})", raw, re.I)
             filed = parsed_result_date(filing.group(1)) if filing else None
             basis = f"the completed renewal filed on {format_date(filed)}" if filed else "the completed registration filing"
-            return (f"Calculated registration expiration: {format_date(calculated)} (certificate unavailable; not certificate-confirmed). "
+            return (f"Calculated registration expiration: {format_date(calculated)} (certificate expiration not confirmed). "
                     f"The date is one year after {basis}. {comment_date_conclusion(calculated, status)} "
                     "This calculation concerns registration expiration; a separate Form 990-based filing deadline was not determined.")
         if certificate:
@@ -31383,7 +31392,7 @@ def search_ok_precise(page, org, module):
                 result.status = status_from_calendar_date(calculated_due)
                 result.raw_status_text = f"{latest_filing} | Calculated Registration Expiration: {format_date(calculated_due)}"
                 result.source_note = (
-                    f"Calculated registration expiration: {format_date(calculated_due)} (certificate unavailable; not certificate-confirmed). One calendar year after the "
+                    f"Calculated registration expiration: {format_date(calculated_due)} (certificate expiration not confirmed). One calendar year after the "
                     f"completed registration/renewal filing dated {format_date(module.parse_ok_filing_date(latest_filing))}. "
                     "The live registry record safely matched the organization. This is the registration anniversary, "
                     "not a separately determined Form 990-based filing deadline. Confirm time-sensitive decisions directly with the state registry."
