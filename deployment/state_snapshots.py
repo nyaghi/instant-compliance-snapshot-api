@@ -684,9 +684,6 @@ class CaptureRun:
             if self.state=='MA' and not negative:
                 from deployment.ma_view_more_evidence import select
                 ordered=select(self,ordered,row)
-            if self.state=='OK' and not negative:
-                from deployment.ok_certificate_evidence import pair_selected_certificate
-                ordered=pair_selected_certificate(self,ordered,row)
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))
