@@ -441,15 +441,26 @@ def capture_selected_sc_source(master,result,run,deadline):
     panel=page.locator('#MainContent_Panel_CharityDetail');workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:347:59:wait_for',panel.wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     text=workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:348:9:inner_text',panel.inner_text,locals(), timeout=400);heading=panel.locator('h4')
     selected_name_key=norm(re.sub(r'^\s*the\s+','',result['matched_registry_name'],flags=re.I))
-    # Actual P2775 links its old name to the same canonical "The" detail.
-    # Only this leading article can differ, after the exact name+ID source link.
+    # The exact selected name+public-ID link can open a differently spelled
+    # canonical heading. Bind that transition to the unique public ID, not a
+    # second name-match decision (actual P54670 includes a typo and DBA).
     detail_name_key=norm(re.sub(r'^\s*the\s+','',workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:352:49:inner_text',heading.inner_text,locals(), timeout=400),flags=re.I)) if workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:352:97:count',heading.count,locals())==1 else ''
-    if (not detail_name_key or detail_name_key!=selected_name_key
-        or not re.search(r'Public Id:\s*'+re.escape(identifier)+r'(?!\w)',text)
+    if (not detail_name_key
+        or re.findall(r'Public Id:\s*(P\d+)(?!\w)',text)!=[identifier]
         or not re.search(r'Status:\s*\S+',text) or page.url!=result['source_url']):fact['outcome']='selected_detail_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:355:127:return',None)
     fact['detail_ms']=round((time.perf_counter()-begin)*1000,2)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:357:66:return',None)
     begin=time.perf_counter();fact['phase']='capture';before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:358:80:capture',context.capture,locals());fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
+    # The context captures original pixels and rejects URL/text changes.
+    # Carry the already validated source-link binding into archive selection.
+    if len(run.documents)>before:
+     import hashlib
+     bindings=getattr(run,'sc_selected_image_bindings',None)
+     if bindings is None:bindings=run.sc_selected_image_bindings={}
+     for url,raw,kind,body,*_ in run.documents[before:]:
+      if (kind=='image' and url==result['source_url'] and norm(text) in norm(body)
+          and re.findall(r'Public Id:\s*(P\d+)(?!\w)',body)==[identifier]):
+       bindings[hashlib.sha256(raw).hexdigest()]=(result['matched_registry_name'],identifier)
     fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
     if context is not None:context._captured=True;workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:361:50:close',context.close,locals())
@@ -2236,7 +2247,15 @@ def mi_selected_grid_values(page,result):
     cells=rows.nth(1).locator(':scope > td')
     if cells.count()!=3:return None
     link=cells.nth(1).get_by_role('link',name=result['matched_registry_name'],exact=True)
-    if link.count()!=1 or clean(cells.nth(0).inner_text(timeout=400))!=identifier or clean(cells.nth(2).inner_text(timeout=400))!=raw[1]:return None
+    if link.count()!=1 or clean(cells.nth(0).inner_text(timeout=400))!=identifier:return None
+    # The selected grid pads month/day; the EIN lookup can omit those zeros.
+    # Compare real calendar dates, retaining the exact file/name/single-row guards.
+    from datetime import datetime
+    displayed=clean(cells.nth(2).inner_text(timeout=400))
+    if not re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}',displayed):return None
+    try:
+        if datetime.strptime(displayed,'%m/%d/%Y').date()!=datetime.strptime(raw[1],'%m/%d/%Y').date():return None
+    except ValueError:return None
     return clean(echo.inner_text(timeout=400)),clean(grid.inner_text(timeout=400))
 
 def capture_mi_error_grid(run,result,search,detail,stop,fact):

@@ -687,6 +687,9 @@ class CaptureRun:
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))
+                if self.state=='SC' and not negative and getattr(self,'selected_visual_attempted',False):
+                    matched=(kind=='image' and url=='https://search.scsos.com/charities'
+                        and getattr(self,'sc_selected_image_bindings',{}).get(hashlib.sha256(raw).hexdigest())==(name,identifier))
                 if self.state=='ME' and not negative and me_detail_name_bound(name,text,identifier):matched=True
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
                 if self.state=='OH' and not negative and oh_selected_grid_bound(self,raw,url,row):matched=True

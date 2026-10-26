@@ -19617,6 +19617,21 @@ def search_ma_master(page, org, completed):
         page.get_by_role("button", name="Search", exact=True).click(timeout=5000)
         page.get_by_text(re.compile(r"^Select a Charity$|^No Charity Found[.!]?$", re.I)).and_(page.locator(":visible")).first.wait_for(timeout=15000)
         body = registry_page_body(page)
+        # Record the actual submitted field only after its result is displayed.
+        # Passive traffic parsing does not recognize this Salesforce form.
+        try:
+            from deployment.state_snapshots import CURRENT
+            from deployment.search_history import SourceQueryReceipt
+            run = CURRENT.get()
+            if run is not None and run.state == "MA":
+                receipt = SourceQueryReceipt(run, {
+                    "state": "MA", "operation": "search",
+                    "ein" if mode == "Employer Identification Number" else "name": query,
+                    "filter_label": mode, "source_kind": "state_portal", "url": result.source_url,
+                })
+                receipt.complete(0 if re.search(r"\bNo Charity Found\b", body, re.I) else None)
+        except Exception:
+            pass  # History capture cannot change the completed registry result.
         if re.search(r"\bNo Charity Found\b", body, re.I):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No record found"

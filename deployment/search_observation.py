@@ -46,6 +46,7 @@ def criteria(url, body=None, params=None, known_names=()):
         # also contain CharityNameSearch in their field names.
         if u.hostname=='www.sos.ok.gov' and u.path=='/corp/charityInquiryFind.aspx' and field.lstrip('.')!='ctl00$DefaultContent$CharityNameSearch1$_singlename':continue
         leaf=re.split(r'[.$]',field)[-1]
+        if leaf.casefold() in {'option', 'options', 'flags'}:continue
         if not value or len(value)>1000 or CONTROL_FIELD.search(field) or PRIVATE_FIELD.search(field) and not field.endswith('tbDBA_Contact'):continue
         if re.fullmatch(r'[\d\s-]+',value):continue
         explicit=bool(NAME_FIELD.search(field) or re.search(r'(?:^|[.$])(?:fullName|primaryName)(?:[.$](?:like|contains|startsWith|eq))?$',field,re.I)
