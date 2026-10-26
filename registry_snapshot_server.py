@@ -6800,6 +6800,14 @@ def al_charity_search_evidence(payload):
             raise ValueError("Alabama result columns are incomplete")
         fields = dict(zip(headers, (re.sub(r"\s+", " ", v).strip() for v in cells)))
         identifier, name = fields["License/Registration#"], fields["Name"]
+        # The public broad search also returns health studios with no license
+        # number. Their explicit category is outside charity scope; preserve
+        # duplicate detection but do not require a charity identity for them.
+        if not identifier and fields["Registration Type"] == "Health Studio" and name and fields["Status"]:
+            if tuple(cells) in seen:
+                raise ValueError("Alabama result identity is missing or duplicated across pages")
+            seen.add(tuple(cells))
+            continue
         unnumbered = not identifier and fields["Registration Type"] == "Private Foundation"
         # A public unnumbered foundation is real source evidence, but it is
         # not an issued license. Use an internal row key only for deduplication;
