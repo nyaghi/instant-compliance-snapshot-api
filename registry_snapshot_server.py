@@ -8607,7 +8607,18 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
             "Their identity remains unconfirmed; use Accept or Reject match to review them. "
             "Rejecting them does not establish non-registration because the search is incomplete.")
     started = time.perf_counter() - max(0, time.time() - record["issued"])
-    data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, started)
+    # An incomplete later AL query can return before the continuation installs
+    # its evidence context. Preserve already validated candidate images in the
+    # signed review, without treating the failed search as complete.
+    if state == "AL" and candidates:
+        from deployment.state_snapshots import REFERENCES
+        snapshot_context = REFERENCES.set(record.get("source_snapshots", []))
+        try:
+            data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, started)
+        finally:
+            REFERENCES.reset(snapshot_context)
+    else:
+        data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, started)
     # Explicit failure requests return before the continuation's name context
     # is installed. Preserve the signed, reviewed inputs so a UI retry cannot
     # silently perform a narrower search after a timeout or verification stop.
@@ -8628,6 +8639,13 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
             "pending_name": pending.get("name", ""),
             **({"elapsed_seconds": round(max(0, time.time() - record["issued"]), 2)} if state == "NC" else {}),
         }
+    if state == "AL" and candidates:
+        from deployment.state_snapshots import attach_links
+        from deployment.search_history import attach as attach_search_history
+        from deployment.identity_evidence import bind as bind_review_evidence
+        data = attach_links(data, record.get("source_snapshots", []))
+        data = attach_search_history(record, data)
+        data = bind_review_evidence(sys.modules[__name__], data)
     return preserve_nc_identity_retry(data, record)
 
 
