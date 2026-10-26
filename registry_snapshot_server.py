@@ -24101,8 +24101,16 @@ def nj_completed_future_detail(body,ein,credential=None):
         # This proves page completion only; it does not invent a filing period.
         if raw=='':
             visible=p.values.get('crsm_fiscalyearenddate_datepicker_description',[])
-            return (len(visible)==1 and visible[0].get('value','')==''
-                    and ('readonly' in visible[0] or 'readonly' in visible[0].get('class','').split()))
+            if visible:
+                return (len(visible)==1 and visible[0].get('value','')==''
+                        and ('readonly' in visible[0] or 'readonly' in visible[0].get('class','').split()))
+            # The original server response precedes the generated datepicker.
+            # Require its exact read-only datetime control before treating a
+            # blank field as complete; identity checks above still apply.
+            field=values['crsm_fiscalyearenddate']
+            return (field.get('data-ui')=='datetimepicker' and field.get('data-type')=='date'
+                    and field.get('data-attribute')=='crsm_fiscalyearenddate'
+                    and field.get('data-behavior')=='TimeZoneIndependent')
         if not re.fullmatch(r'20\d{2}-\d{2}-\d{2}T00:00:00(?:\.0+)?',raw):return False
         return date.fromisoformat(raw[:10])>date.today()
     except (ValueError,TypeError):return False
