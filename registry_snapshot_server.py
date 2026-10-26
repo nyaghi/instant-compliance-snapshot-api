@@ -16116,7 +16116,9 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     identity_names = [row_name, *ct_identity_names_from_detail(detail_text)]
     reviewed_identity_names = [getattr(org, 'original_organization_name', org.organization_name), *known_names_for_ein(org.ein)]
     identity_names = [name for name in identity_names if name and not all(
-        named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target)]
+        named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target) and (
+        not any(named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target)
+        or normalized_match_name(name) in {normalized_match_name(target) for target in reviewed_identity_names if target})]
     scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
     name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
     if name_score < 0:
@@ -16199,7 +16201,9 @@ def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str],
     identity_names = [row_name, useful_registry_name(dba_name)]
     reviewed_identity_names = [getattr(org, 'original_organization_name', org.organization_name), *known_names_for_ein(org.ein)]
     identity_names = [name for name in identity_names if name and not all(
-        named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target)]
+        named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target) and (
+        not any(named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target)
+        or normalized_match_name(name) in {normalized_match_name(target) for target in reviewed_identity_names if target})]
     scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
     name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
     if name_score < 0:
@@ -24073,7 +24077,7 @@ def enrich_me_result_from_body(result, body: str) -> None:
 
 
 def nj_completed_future_detail(body,ein,credential=None):
-    """A server-rendered future FYE is loaded data, not a completed filing period."""
+    """A complete read-only blank/future FYE is loaded data, not a filed period."""
     from html.parser import HTMLParser
     if not re.fullmatch(r'\d{9}',str(ein)) or not isinstance(body,str) or len(body)>1_000_000:return False
     if not re.search(r'</html>\s*(?:<!--[\s\S]*?-->\s*)*$',body,re.I):return False
@@ -24082,17 +24086,23 @@ def nj_completed_future_detail(body,ein,credential=None):
         def __init__(self):super().__init__(convert_charrefs=True);self.values={}
         def handle_starttag(self,tag,attrs):
             a=dict(attrs)
-            if tag=='input' and a.get('id') in {'crsm_federalein','accountnumber','crsm_fiscalyearenddate'}:
+            if tag=='input' and a.get('id') in {'crsm_federalein','accountnumber','crsm_fiscalyearenddate','crsm_fiscalyearenddate_datepicker_description'}:
                 self.values.setdefault(a['id'],[]).append(a)
     try:
         p=Fields();p.feed(body)
         if any(len(p.values.get(k,[]))!=1 for k in ['crsm_federalein','accountnumber','crsm_fiscalyearenddate']):return False
-        values={k:v[0] for k,v in p.values.items()}
+        values={k:p.values[k][0] for k in ['crsm_federalein','accountnumber','crsm_fiscalyearenddate']}
         if any('readonly' not in a and 'readonly' not in a.get('class','').split() for a in values.values()):return False
         if values['crsm_federalein'].get('value')!=ein:return False
         found=values['accountnumber'].get('value','')
         if not re.fullmatch(r'CH\d+',found) or (credential is not None and found!=credential):return False
         raw=values['crsm_fiscalyearenddate'].get('value','')
+        # A complete, read-only selected record may explicitly have no FYE.
+        # This proves page completion only; it does not invent a filing period.
+        if raw=='':
+            visible=p.values.get('crsm_fiscalyearenddate_datepicker_description',[])
+            return (len(visible)==1 and visible[0].get('value','')==''
+                    and ('readonly' in visible[0] or 'readonly' in visible[0].get('class','').split()))
         if not re.fullmatch(r'20\d{2}-\d{2}-\d{2}T00:00:00(?:\.0+)?',raw):return False
         return date.fromisoformat(raw[:10])>date.today()
     except (ValueError,TypeError):return False

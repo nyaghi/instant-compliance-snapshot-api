@@ -39,7 +39,7 @@
       return;
     }
     if (!source) {
-      const candidateSnapshots = ['DC', 'CT', 'AR'].includes(result.state) && result.identity_review?.candidates?.length
+      const candidateSnapshots = ['DC', 'CT', 'AR', 'KS'].includes(result.state) && result.identity_review?.candidates?.length
         && result.identity_review.candidates.every(candidate => /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(candidate.evidence_url || ''));
       if (candidateSnapshots) add(parent,'p','View the state snapshots in the candidate records below.','mt-2 text-xs text-slate-500 whitespace-normal');
       else if (result.evidence_capture === 'unavailable') add(parent,'p',result.state === 'TN' && result.matched_registry_identifier ? 'Detail snapshot unavailable for this check.' : 'State snapshot unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');

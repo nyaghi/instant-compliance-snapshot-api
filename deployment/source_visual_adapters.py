@@ -719,7 +719,7 @@ def capture_selected_va_source(master,result,run,deadline):
      bounds=panel.bounding_box()
      if not bounds or bounds['width']<=0 or bounds['height']<=0:fact['outcome']='source_panel_not_visible';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:575:106:return',None)
      import math
-     height=math.ceil(bounds['y']+bounds['height']+20);width=min(1600,math.ceil(bounds['x']+bounds['width']+20))
+     height=math.ceil(bounds['y']+bounds['height']+20);width=page.viewport_size['width']
      if height<100 or height>1400 or width<100:fact['outcome']='source_panel_exceeds_viewport';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:578:94:return',None)
      if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:579:66:return',None)
      begin=time.perf_counter();fact['phase']='capture';raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:580:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':width,'height':height},timeout=max(1,int(min(5.0,stop-time.monotonic()-1)*1000)))
@@ -1837,7 +1837,7 @@ def capture_selected_nj_source(master,result,run,deadline):
      or not workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1646:12:get',result.get,locals(), 'matched_registry_name') or getattr(run,'selected_visual_attempted',False)):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1646:99:return',None)
  identifier=str(workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1647:16:get',result.get,locals(), 'matched_registry_identifier') or '')
  hint=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1648:6:get',getattr(run,'source_detail_hints',{}).get,locals(), identifier)
- norm=lambda value:re.sub(r'[^a-z0-9]','',str(value).lower())
+ norm=lambda value:re.sub(r'[^a-z0-9]','',re.sub(r'^the\s+', '', str(value).strip(), flags=re.I).lower())
  if not hint or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1650:21:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name']):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1650:78:return',None)
  try:
   u=urlsplit(hint['url']);params=parse_qsl(u.query,keep_blank_values=True)
@@ -1876,15 +1876,15 @@ def capture_selected_nj_source(master,result,run,deadline):
     if response is None or response.status!=200 or page.url!=hint['url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1684:111:return',None)
     fact['phase']='selected_fields_ready';begin=time.perf_counter();workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1685:68:wait_for_function',page.wait_for_function,locals(), '''({ein,name})=>{
      const n=document.querySelector('#name'),e=document.querySelector('#crsm_federalein'),r=document.querySelector('#accountnumber'),f=document.querySelector('#crsm_fiscalyearenddate_datepicker_description');
-     const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9]/g,'');
-     return n&&e&&r&&f&&norm(n.value)===norm(name)&&e.value.replace(/\\D/g,'')===ein&&/^CH[0-9]+$/.test(r.value)&&f.value;
+     const norm=x=>String(x).trim().replace(/^the\\s+/i,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+     return n&&e&&r&&f&&norm(n.value)===norm(name)&&e.value.replace(/\\D/g,'')===ein&&/^CH[0-9]+$/.test(r.value)&&(f.value||document.readyState!=='loading'&&f.hasAttribute('readonly')&&document.querySelector('#crsm_fiscalyearenddate')?.hasAttribute('readonly')&&!document.querySelector('#crsm_fiscalyearenddate')?.value);
     }''',arg={'ein':run.ein,'name':result['matched_registry_name']},timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
     fields=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1691:11:evaluate',page.evaluate,locals(), NJ_VISIBLE_FIELDS)
     if (not fields or norm(fields['name'])!=norm(result['matched_registry_name'])
         or re.sub(r'\D','',fields['crsm_federalein'])!=run.ein
         or not re.fullmatch(r'CH\d+',fields['accountnumber']) or not fields['crsm_filestanding']
-        or not re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}',fields['crsm_fiscalyearenddate_datepicker_description'])):
+        or not (re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}',fields['crsm_fiscalyearenddate_datepicker_description']) or fields['crsm_fiscalyearenddate_datepicker_description']=='' and master.nj_completed_future_detail(page.content(),run.ein,fields['accountnumber']))):
      fact['outcome']='record_binding_failed';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1696:45:return',None)
     if workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1697:7:evaluate',page.evaluate,locals(), NJ_VISIBLE_GEOMETRY) is not True:fact['outcome']='selected_fields_overlap';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1697:96:return',None)
     text=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1698:9:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
