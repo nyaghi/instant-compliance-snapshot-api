@@ -706,27 +706,37 @@ def capture_selected_va_source(master,result,run,deadline):
         if(nodes.length!==1)return null;
         fields[key]=nodes[0].innerText.split(/\n/).map(s=>s.trim()).filter(Boolean).slice(1).join(' ');}
        return {url:location.href,text:body.innerText,fields};}''',list(expected),timeout=max(1,int((stop-time.monotonic()-.5)*1000)))
-    frame=selected_frame()
-    if (not frame or frame['url']!=hint['url'] or
-        any(frame['fields'].get(k,'').casefold()!=wanted.casefold() for k,wanted in expected.items())):
-     fact['outcome']='source_fields_changed_since_lookup';return None
-    capture_core=va_registration_core(frame['text'])
-    if (not re.search(r'Registration ID:\s*'+re.escape(identifier)+r'(?!\d)',capture_core)
-        or norm(result['matched_registry_name']) not in norm(capture_core)
-        or re.search('verify you are human|user validation required|access denied|just a moment',frame['text'],re.I)):
-     fact['outcome']='selected_registration_not_bound';return None
-    bounds=panel.bounding_box()
-    if not bounds or bounds['width']<=0 or bounds['height']<=0:fact['outcome']='source_panel_not_visible';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:575:106:return',None)
-    import math
-    height=math.ceil(bounds['y']+bounds['height']+20);width=min(1600,math.ceil(bounds['x']+bounds['width']+20))
-    if height<100 or height>1400 or width<100:fact['outcome']='source_panel_exceeds_viewport';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:578:94:return',None)
-    if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:579:66:return',None)
-    begin=time.perf_counter();fact['phase']='capture';raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:580:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':width,'height':height},timeout=max(1,int(min(5.0,stop-time.monotonic()-1)*1000)))
-    fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
-    after=selected_frame()
-    if (not after or after['url']!=frame['url'] or after['fields']!=frame['fields']
-        or va_registration_core(after['text'])!=capture_core):
-     fact['outcome']='source_changed_during_capture';return None
+    for capture_attempt in range(2):
+     frame=selected_frame()
+     if (not frame or frame['url']!=hint['url'] or
+         any(frame['fields'].get(k,'').casefold()!=wanted.casefold() for k,wanted in expected.items())):
+      fact['outcome']='source_fields_changed_since_lookup';return None
+     capture_core=va_registration_core(frame['text'])
+     if (not re.search(r'Registration ID:\s*'+re.escape(identifier)+r'(?!\d)',capture_core)
+         or norm(result['matched_registry_name']) not in norm(capture_core)
+         or re.search('verify you are human|user validation required|access denied|just a moment',frame['text'],re.I)):
+      fact['outcome']='selected_registration_not_bound';return None
+     bounds=panel.bounding_box()
+     if not bounds or bounds['width']<=0 or bounds['height']<=0:fact['outcome']='source_panel_not_visible';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:575:106:return',None)
+     import math
+     height=math.ceil(bounds['y']+bounds['height']+20);width=min(1600,math.ceil(bounds['x']+bounds['width']+20))
+     if height<100 or height>1400 or width<100:fact['outcome']='source_panel_exceeds_viewport';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:578:94:return',None)
+     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:579:66:return',None)
+     begin=time.perf_counter();fact['phase']='capture';raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:580:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':width,'height':height},timeout=max(1,int(min(5.0,stop-time.monotonic()-1)*1000)))
+     capture_elapsed=round((time.perf_counter()-begin)*1000,2);fact['capture_ms']+=capture_elapsed;run.capture_ms+=capture_elapsed
+     after=selected_frame()
+     if not after or after['url']!=frame['url'] or after['fields']!=frame['fields']:
+      fact['capture_change']='selected_url_or_fields'
+      fact['outcome']='source_changed_during_capture';return None
+     if va_registration_core(after['text'])!=capture_core:
+      fact['capture_change']='selected_page_text'
+      # Do not keep the first image. Re-read and validate the entire record,
+      # recompute its bounds, then require an unchanged replacement image.
+      if capture_attempt==0 and time.monotonic()+2<stop:
+       fact['capture_recaptures']=1
+       continue
+      fact['outcome']='source_changed_during_capture';return None
+     break
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:583:78:return',None)
     before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:584:30:document',run.document,locals(), hint['url'],raw,'image',capture_core[:20000],note='Original selected registration fields and state header; lower optional submissions grid outside captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:

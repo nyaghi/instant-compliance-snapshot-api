@@ -25601,8 +25601,8 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     # One PA name fallback, bounded by its allowance and the parent state deadline.
     # A completed negative is different from a request which did not finish.
-    try: budget = min(45.0, max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "45"))))
-    except (ValueError, TypeError): budget = 45.0
+    try: budget = min(15.0, max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "15"))))
+    except (ValueError, TypeError): budget = 15.0
     from deployment.state_snapshots import DEADLINE
     deadline = min(time.monotonic() + budget, DEADLINE.get() - 1.0)
     attempts, attempted, collected = [], [], []
