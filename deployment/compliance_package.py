@@ -87,7 +87,16 @@ def evidence(row, ref, store):
     original_id = str(meta.get('identifier') or '')
     if identifier and identifier != original_id:
         # NM already uses the formatted and unformatted forms of the same EIN.
-        if not (row['state'] == 'NM' and ss.digits(identifier) == row['ein'] == ss.digits(original_id)):
+        nm_same_ein = row['state'] == 'NM' and ss.digits(identifier) == row['ein'] == ss.digits(original_id)
+        # NY's public result uses the EIN; its selected source URL binds the
+        # registration number. Preserve its exact official URL and name binding.
+        ny_selected = (row['state'] == 'NY' and selected is row
+                       and identifier == row['ein']
+                       and re.fullmatch(r'\d{2}-\d{2}-\d{2}', original_id)
+                       and row.get('source_url') == meta.get('source_url') == 'https://charities-search.ag.ny.gov/RegistrySearch/' + original_id
+                       and bool(row.get('matched_registry_name'))
+                       and ss.key(row['matched_registry_name']) == ss.key(meta.get('record_name')))
+        if not (nm_same_ein or ny_selected):
             raise ValueError('Saved evidence does not match the selected record')
     return ss.render_pdf(meta, raw)
 
