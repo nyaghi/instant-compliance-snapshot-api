@@ -1163,7 +1163,7 @@ def downloaded_record(master,result):
                         # identity/layout or exhausted reserve keeps the full page.
                         try:
                             from deployment.original_table_excerpt import original_row_excerpt
-                            excerpt=original_row_excerpt(original,run.state,identifier,name,min(DEADLINE.get()-1,time.monotonic()+(8 if run.state=='KY' else 3)))
+                            excerpt=original_row_excerpt(original,run.state,identifier,name,min(DEADLINE.get()-1,time.monotonic()+8))
                             if excerpt:
                                 original,facts=excerpt
                                 run.visual_adapter_facts.append({'adapter':run.state+'-original-row-excerpt','outcome':'captured','total_ms':round(facts['processing_seconds']*1000,2),'record_identifier':identifier})
