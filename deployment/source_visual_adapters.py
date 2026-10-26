@@ -2363,7 +2363,7 @@ def capture_owned_mi_page(run,result,page,context,deadline):
         workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2080:8:wait_for_function',detail.wait_for_function,locals(), "() => Array.from(document.images).every(i => i.complete && i.naturalWidth > 0)",timeout=allowance(1))
         if time.monotonic()+1>=stop:fact['outcome']='image_readiness_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2081:78:return',None)
         fact['phase']='capture';fact['waiting_for']='';begin=time.perf_counter();url=detail.url
-        raw=workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2083:12:screenshot',detail.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=min(1500,allowance(.5)))
+        raw=workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2083:12:screenshot',detail.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=allowance(.5))
         fact['capture_ms']+=round((time.perf_counter()-begin)*1000,2)
         if detail.url!=url or mi_detail_values(detail)!=values:fact['outcome']='record_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2085:111:return',None)
         if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2086:82:return',None)
