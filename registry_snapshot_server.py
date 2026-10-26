@@ -7493,7 +7493,7 @@ def final_four_search_evidence(payload, state, query):
             if state == "NV":
                 identity_ok = identity_ok and (bool(row["entity_type"].strip()) or nv_untyped_search_row_can_read_detail(row))
             if state == "NV" and re.fullmatch(r"(?:NR|C)\d{8}-\d+", row["identifier"]):
-                identity_ok = row["entity_type"] == "" and bool(str(row.get("raw_status") or "").strip())
+                identity_ok = row["entity_type"] in {"", "Name Reservation"} and bool(str(row.get("raw_status") or "").strip())
             if state == "NV" and row.get("business_identifier_missing") is True:
                 identity_ok = (isinstance(row.get("entity_number"), str)
                                and re.fullmatch(r"E\d{7,14}-\d", row["entity_number"])
@@ -7895,7 +7895,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             if state == "AL":
                 record = row
             else:
-                if state == 'NV' and not row['entity_type'] and re.fullmatch(r'(?:NR|C)\d{8}-\d+', row['identifier']):
+                if state == 'NV' and row['entity_type'] in {'', 'Name Reservation'} and re.fullmatch(r'(?:NR|C)\d{8}-\d+', row['identifier']):
                     detail_query = {'state': state, 'operation': 'detail', 'identifier': row['identifier']}
                     detail = collect(detail_query)
                     if not isinstance(detail, dict) or detail.get('query') != detail_query or detail.get('complete') is not True:
