@@ -174,8 +174,11 @@ def generate(payload, supported_states, store=None):
         review = row.get('identity_review') or {}
         if not isinstance(review, dict) or not isinstance(review.get('candidates', []), list) or len(review.get('candidates', [])) > 24:
             raise ValueError('Invalid identity review')
-        if any(not isinstance(c, dict) or c.get('decision') not in {None, 'accept', 'reject'} for c in review.get('candidates', [])):
+        if any(not isinstance(c, dict) or c.get('decision') not in {None, '', 'accept', 'reject'} for c in review.get('candidates', [])):
             raise ValueError('Invalid identity decision')
+        for candidate in review.get('candidates', []):
+            if candidate.get('decision') == '':
+                candidate['decision'] = None
     rows.sort(key=lambda r: r['state'])
     store = store if store is not None else ss.STORE
     started = time.monotonic()
