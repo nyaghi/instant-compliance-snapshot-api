@@ -589,6 +589,9 @@ def build_handler(master, key, capacity=None, durable=None):
                 return self._send_json(503, {'code': 'PERFORMANCE_LAB_EXPIRED',
                     'error': 'The isolated Performance Lab access window has expired. No registry search was run.'})
             if trial_identity():
+                if self.path == '/api/compliance-package':
+                    from deployment.compliance_package import handle
+                    return handle(master, self)
                 if self.path == '/api/source-evidence' and durable is not None:
                     from deployment.desktop_source_evidence import handle_completion
                     return handle_completion(master,self,durable)
