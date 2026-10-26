@@ -638,11 +638,11 @@ def capture_selected_va_source(master,result,run,deadline):
  if (not re.fullmatch(r'\d+',identifier) or not hint or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:532:61:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name'])
      or workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:533:8:get',hint.get,locals(), 'url')!='https://vdacs.evokeplatform.com/app/publicPortal/registration/'+identifier):return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:533:102:return',None)
  run.selected_visual_attempted=True;start=time.perf_counter();held=False;browser=context=None;detach_observer=lambda:None
- fact={'adapter':'VA-selected-original-registration','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':22000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'VA-selected-original-registration','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:538:52:return',None)
-  stop=time.monotonic()+min(22.0,remaining)
+  stop=time.monotonic()+min(30.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:540:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:541:61:return',None)
   with master.checker.sync_playwright() as p:
