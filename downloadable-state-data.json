@@ -20,22 +20,14 @@
     },
     "LA": {
       "state": "LA",
-      "record_count": 427,
+      "record_count": 424,
       "source_url": "https://www.ag.state.la.us/Charity/Registration/Listing",
       "source_date": "",
-      "downloaded_at": "2026-10-26T14:52:01.106962+00:00",
+      "downloaded_at": "2026-10-25T19:05:00.844594+00:00",
       "assets": [
         {
           "path": "downloadable-data/LA.xlsx",
-          "sha256": "2fde537f23adcf95eb9c2b35ceaf90c62c5edc96fdffe030e1726cf4b173a63d"
-        },
-        {
-          "path": "downloadable-data/LA-original-row-images.json",
-          "sha256": "41a7185667e71a56746e0b3b3f13a7ed08776c1ef2534897cbf5796b80d41feb"
-        },
-        {
-          "path": "downloadable-data/LA-original-row-images.zip",
-          "sha256": "0921308ed30782e89259f322a8db14a4351a21787ff7dc60e826ff8093e5f9d8"
+          "sha256": "985d210edf3633208f0e28b36880b176e9f35aba70ea718291549036ed452f7e"
         }
       ]
     },
@@ -70,14 +62,6 @@
         {
           "path": "KS_weekly_checker.py",
           "sha256": "ea1595a6c79edb9d9944e8ebd9d090674d8b98e18bbd66ec055c6b0cfe701789"
-        },
-        {
-          "path": "downloadable-data/KS-original-row-images.json",
-          "sha256": "ce77a44ab6d91600464617c9d07cb30cc82ea383be2c43ef459652c5760ccffa"
-        },
-        {
-          "path": "downloadable-data/KS-original-row-images.zip",
-          "sha256": "5e93ab2e298e650e62d522083349c6d5f3e0b97c7aa227df881fc58da68e6933"
         }
       ]
     },

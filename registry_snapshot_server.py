@@ -2249,13 +2249,6 @@ def _me_existing_query_variants(org) -> list[str]:
         add(re.sub(r"\s*&\s*", " and ", literal, flags=re.I))
         add(re.sub(r"\band\b", "&", literal, flags=re.I))
 
-    # Retain required names first; prioritize this source spelling over
-    # generated cosmetic hyphen variants inside the existing six-query cap.
-    for literal in list(variants):
-        if not re.search(r"\bfoundation\b",literal,re.I):continue
-        variant=re.sub(r"\bfoundation\b","FDN",canonical_name_punctuation(literal),flags=re.I)
-        variant=re.sub(r"\s+"," ",variant.replace(".","")).strip()
-        if len(distinctive_match_tokens(literal))>=2:add(variant)
     for variant in organization_name_variants(
         original_name,
         getattr(org, "ein", ""),
@@ -3776,6 +3769,12 @@ def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
         if later:
             evidence["next_known_period_end"] = min(later, key=lambda row: row["period_begin"])["period_end"]
             evidence["transition_basis"] = "A later same-EIN IRS return identifies the next covered period; it does not establish receipt by the state."
+        begin, end = parse_due_date(evidence["period_begin"]), parse_due_date(evidence["period_end"])
+        if (end - begin).days < 350:
+            fiscal_end = fiscal_year_end_for_ein(ein)
+            if fiscal_end == (end.month, end.day):
+                evidence["short_period_fiscal_end_confirmed"] = True
+                evidence["transition_basis"] = "The short-period ending month and day agree with the same-EIN IRS fiscal-year-end metadata."
     if evidence.get("tax_year_label") != label:
         try:
             url = f"https://charity.ehawaii.gov/charity/{ein}/details.html"
@@ -3795,12 +3794,6 @@ def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
             failures.append(alternate_step + ": " + type(exc).__name__)
             read_incomplete = True
     if evidence.get("tax_year_label") == label:
-        begin, end = parse_due_date(evidence["period_begin"]), parse_due_date(evidence["period_end"])
-        if (end - begin).days < 350:
-            fiscal_end = fiscal_year_end_for_ein(ein)
-            if fiscal_end == (end.month, end.day):
-                evidence["short_period_fiscal_end_confirmed"] = True
-                evidence["transition_basis"] = "The short-period ending month and day agree with the same-EIN IRS fiscal-year-end metadata."
         with TAX_PERIOD_EVIDENCE_LOCK:
             if len(TAX_PERIOD_EVIDENCE_CACHE) >= 1200:
                 TAX_PERIOD_EVIDENCE_CACHE.clear()
@@ -6543,14 +6536,6 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     queries = ([{"state": state, "ein": canonical_ein_digits(org.ein)}] if state == "IL" else [])
     if purpose != "identity":
         names = il_browser_name_queries(required, generated) if state == "IL" else required + generated
-        if state == "GA":
-            # GA distinguishes punctuation in literal prefix retrieval.
-            # Keep a leading-article spelling for punctuated initial names.
-            for name in list(required):
-                if re.search(r"\b[A-Za-z]\.\s",name) and not re.match(r"^(?:the|a|an)\s",name,re.I):
-                    variant=ga_distinctive_covering_prefix("The "+name) or "The "+name
-                    if variant.casefold() not in {n.casefold() for n in names}:
-                        names.append(variant)
         queries += [{"state": state, "orgName": name} for name in names]
     records, seen, completed = [], set(), []
     covered_ga_names = set()
@@ -7537,18 +7522,6 @@ def nv_name_reservation_evidence(fields, identifier, source_url):
     return fields['Linked Entity Information'] == 'This name reservation has not been linked to a business'
 
 
-def foundation_suffix_review_candidate(original_name, registry_name):
-    """A complete primary name plus Foundation is review-only, never identity."""
-    def core(value):
-        value=canonical_name_punctuation(value)
-        value=re.sub(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$","",value.strip(),flags=re.I)
-        return re.sub(r"\s+"," ",value).strip(" ,.").casefold()
-    expected,found=core(original_name),core(registry_name)
-    return bool(expected and found==expected+" foundation"
-        and len(distinctive_match_tokens(original_name))>=2
-        and score_candidate(original_name,"",{"name":registry_name})["decision"]=="possible")
-
-
 def final_four_search_candidate_scores(name, ein, state, row):
     """Shortlist source identities without changing master acceptance rules."""
     names = [row["name"], *row.get("aliases", [])]
@@ -7575,10 +7548,6 @@ def final_four_search_candidate_scores(name, ein, state, row):
         # A bounded detail inspection only. The source domicile name must
         # subsequently agree exactly; a prefix never establishes identity.
         candidates.append({"score": 55, "decision": "possible", "reason": "REVIEW_NV_POSSIBLE_DOMICILE"})
-    if (state == "AL" and not row.get("ein") and candidates
-            and all(c["decision"] == "rejected" for c in candidates)
-            and foundation_suffix_review_candidate(name,row["name"])):
-        candidates.append({"score":55,"decision":"possible","reason":"REVIEW_FOUNDATION_SUFFIX"})
     return candidates
 
 
@@ -8649,7 +8618,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     # An incomplete later AL query can return before the continuation installs
     # its evidence context. Preserve already validated candidate images in the
     # signed review, without treating the failed search as complete.
-    if state in {"AL", "NC"} and candidates:
+    if state == "AL" and candidates:
         from deployment.state_snapshots import REFERENCES
         snapshot_context = REFERENCES.set(record.get("source_snapshots", []))
         try:
@@ -8678,7 +8647,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
             "pending_name": pending.get("name", ""),
             **({"elapsed_seconds": round(max(0, time.time() - record["issued"]), 2)} if state == "NC" else {}),
         }
-    if state in {"AL", "NC"} and candidates:
+    if state == "AL" and candidates:
         from deployment.state_snapshots import attach_links
         from deployment.search_history import attach as attach_search_history
         from deployment.identity_evidence import bind as bind_review_evidence
@@ -9604,11 +9573,6 @@ def licensed_charity_identity(org, row, state, deadline):
             return "possible"
         decision = {"decision": "possible", "score": 55, "reason": "MATCH_FULL_NAME_WITH_REGISTRY_YEAR"}
         row["match"] = decision
-    if (state == "AL" and decision["decision"] == "rejected" and not row.get("ein")
-            and foundation_suffix_review_candidate(org.organization_name,row["name"])):
-        row["match"]={"decision":"possible","score":55,"reason":"REVIEW_FOUNDATION_SUFFIX"}
-        row["address_evidence"]={"decision":"unavailable","basis":"The registry adds Foundation to the complete entered name; confirm or reject this identity."}
-        return "possible"
     if decision["decision"] == "rejected":
         return "rejected"
     if (state in {"AL", "NC", "NV", "TN"} and not row.get("ein")
@@ -16069,7 +16033,6 @@ def ct_direct_post_query(session, base_fields: dict[str, str], headers: dict[str
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     timeout = max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS))
     fields = dict(base_fields)
-    fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$ddCredPrefix"] = "CHR"
     fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$tbDBA_Contact"] = search_name
     fields["__EVENTTARGET"] = "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
     fields["__EVENTARGUMENT"] = "3"
@@ -16429,20 +16392,6 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
     return prioritized
 
 
-def literal_registry_name_queries(original_name, ein, *, remove_periods=False):
-    """Retrieval spellings only; never new identity aliases or acceptance rules."""
-    values=[]
-    for value in [original_name, *known_names_for_ein(ein)]:
-        literal=re.sub(r"\s+", " ", ascii_dash_search_name(canonical_name_punctuation(value))).strip()
-        if literal and literal.casefold() not in {v.casefold() for v in values}:
-            values.append(literal)
-        if remove_periods and "'" in literal:
-            compact=re.sub(r"\s+", " ", literal.replace(".", "")).strip()
-            if compact and compact.casefold() not in {v.casefold() for v in values}:
-                values.append(compact)
-    return values
-
-
 def equivalent_name_queries(original_name: str, ein: str, *, preserve_at: bool = False) -> list[str]:
     """One useful retrieval spelling per complete approved identity."""
     queries, seen = [], set()
@@ -16515,9 +16464,9 @@ def search_ct_direct(org):
         max_queries=CT_NAME_VARIANT_LIMIT * 2,
     ))
     variants = reviewed_queries_first(original_name, org.ein,
-        list(dict.fromkeys([*literal_registry_name_queries(original_name, org.ein), *equivalent_name_queries(original_name, org.ein, preserve_at=True),
+        list(dict.fromkeys([*equivalent_name_queries(original_name, org.ein, preserve_at=True),
                            *ct_shortened_institutional_queries(original_name, org.ein), *variants])), limit=CT_NAME_VARIANT_LIMIT,
-        transform=lambda value: canonical_name_punctuation(value).strip())
+        transform=lambda value: (equivalent_name_queries(value, "", preserve_at=True) or [value])[0])
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -16544,12 +16493,6 @@ def search_ct_direct(org):
             session = None
             fields = None
             headers = None
-            continue
-        declared=re.search(r"Showing\s+([0-9,]+)\s+result",body,re.I)
-        returned=sum(1 for row in re.finditer(r"<tr\b[^>]*>.*?</tr>",body,re.I|re.S)
-            if re.search(r"\bCredential\s+[A-Z]+\.\d+\b",html_fragment_text(row.group(0)),re.I))
-        if declared and int(declared.group(1).replace(",",""))>returned:
-            last_error="Connecticut charity results span unread pages; no complete-search conclusion was made."
             continue
         completed_variants += 1
         if re.search(r"Showing\s+0\s+result", body, re.I):
@@ -21468,8 +21411,7 @@ def wi_search_names_for_org(org) -> list[str]:
     identities = equivalent_name_queries(original_name, org.ein)
     # DFI distinguishes separators in search even when the identity is the same.
     # Keep every word; this expands retrieval only, never candidate acceptance.
-    prioritized = [*literal_registry_name_queries(original_name, org.ein, remove_periods=True)]
-    prioritized += [query for name in identities for query in
+    prioritized = [query for name in identities for query in
                    (name, re.sub(r"\s+", " ", re.sub(r"[-\u2010-\u2015]+", " ", name)).strip())]
     prioritized.extend(filtered_names)
     queries, seen = [], set()
@@ -22802,7 +22744,7 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
     ein = getattr(org, "ein", "") or ""
 
     # The optional-variant limit must not truncate required reviewed names.
-    direct_names = list(dict.fromkeys([*literal_registry_name_queries(original_name, ein, remove_periods=True), *equivalent_name_queries(original_name, ein), *direct_names]))
+    direct_names = list(dict.fromkeys([*equivalent_name_queries(original_name, ein), *direct_names]))
 
     best_match = None
     last_body = ""
@@ -30758,7 +30700,6 @@ def ok_choose_safe_result_row_on_page(page, org, module):
     best_rank = (-10000, -1)
     equivalent_records = []
     tentative = []
-    foundation_review = {}
     try:
         rows = page.locator("tr")
         row_count = rows.count()
@@ -30831,8 +30772,6 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         _history_rows.append({'Name':registry_name,'Registration Number':filing_number})
         original_name = getattr(org, "original_organization_name", getattr(org, "organization_name", ""))
         if not registry_name_is_safe_for_org(registry_name, original_name, getattr(org, "ein", "")):
-            if foundation_suffix_review_candidate(original_name, registry_name):
-                foundation_review.setdefault(filing_number,(row,filing_link,registry_name,filing_number))
             if ok_reviewed_near_name(registry_name, original_name, getattr(org, "ein", "")):
                 tentative.append((row, filing_link, registry_name, filing_number))
             continue
@@ -30860,11 +30799,6 @@ def ok_choose_safe_result_row_on_page(page, org, module):
             best = (row, filing_link, registry_name, filing_number)
 
     finish_ok(_history_query,'',page.url,_history_rows)
-    if (not best or best_score < 450) and len(foundation_review) == 1:
-        selected = next(iter(foundation_review.values()))
-        if all(item[3] == selected[3] for item in tentative):
-            org.ok_foundation_review = (selected[2], selected[3])
-            return selected
     if (not best or best_score < 450) and len(tentative) == 1:
         org.ok_tentative_candidate_name = tentative[0][2]
         return tentative[0]
@@ -30880,7 +30814,6 @@ def ok_choose_safe_result_row_on_page(page, org, module):
 def ok_choose_safe_result_row(page, org, module):
     """Approved OK policy: inspect page one; extra pages do not imply a failure."""
     org.ok_search_incomplete = False
-    org.ok_foundation_review = None
     ok_action_timeout(org, 1000)
     # Read/parse failures propagate to the caller's retrieval-error path.
     return ok_choose_safe_result_row_on_page(page, org, module)
@@ -31335,29 +31268,6 @@ def ok_open_latest_equivalent_detail(page, org, module, selected):
     return name, identifier
 
 
-def ok_attach_foundation_review(result, org, page):
-    selected=getattr(org,"ok_foundation_review",None)
-    if not selected or not getattr(result,"success",False):return result
-    name,identifier=selected
-    if (getattr(result,"matched_registry_name",None)!=name
-            or getattr(result,"matched_registry_identifier",None)!=identifier):return result
-    url=str(page.url)
-    parsed=urlparse(url)
-    if (parsed.hostname!="www.sos.ok.gov" or parsed.path.lower()!="/corp/charitydetail.aspx"
-            or parse_qs(parsed.query).get("id")!=[identifier]):return result
-    # Preserve the existing master calculation in the signed candidate.
-    interpreted=result.status
-    result._cc_identity_review={"records":[{"name":name,"identifier":identifier,"ein":"",
-        "location":"","url":url,"raw_status":result.raw_status_text,"expiration":"",
-        "status":interpreted,"license_category":"Charity","_identity_outcome":"possible"}],
-        "search_complete":False,"freshness":""}
-    result.status="Needs Review"
-    result.reason_code="OK_FOUNDATION_SUFFIX_IDENTITY_REVIEW"
-    result.source_note="The Oklahoma record adds Foundation to the complete entered name. Confirm or reject its identity before applying the state record's calculated status."
-    result.success=False
-    return result
-
-
 def search_ok_precise(page, org, module):
     result = module.SearchResult(
         organization_name=org.organization_name,
@@ -31385,11 +31295,11 @@ def search_ok_precise(page, org, module):
                 workflow_call('source.step:search_ok_precise:click:31053',page.get_by_label(re.compile("Search by Name", re.I)).click,locals(), timeout=ok_action_timeout(org, 4000))
             except Exception:
                 result.error = "Could not select Oklahoma Search by Name."
-                return ok_attach_foundation_review(result, org, page)
+                return result
 
         if not workflow_call('source.step:search_ok_precise:ok_click_name_search_ok_button:31058',ok_click_name_search_ok_button,locals(), page, org):
             result.error = "Could not click the Oklahoma Ok button."
-            return ok_attach_foundation_review(result, org, page)
+            return result
 
         workflow_call('source.step:search_ok_precise:wait_for:31062',page.locator('input[name*="singlename" i]').first.wait_for,locals(),
             state="visible", timeout=ok_action_timeout(org, 8000))
@@ -31402,7 +31312,7 @@ def search_ok_precise(page, org, module):
         ])
         if not name_input:
             result.error = "Could not find the Oklahoma Entity Name input."
-            return ok_attach_foundation_review(result, org, page)
+            return result
 
         search_name = ok_search_name_for_org(org)
         workflow_call('source.step:search_ok_precise:fill:31076',name_input.fill,locals(), search_name, timeout=ok_action_timeout(org, 4000))
@@ -31423,7 +31333,7 @@ def search_ok_precise(page, org, module):
                 continue
         if not clicked:
             result.error = "Could not click the Oklahoma Search button."
-            return ok_attach_foundation_review(result, org, page)
+            return result
 
         workflow_call('source.step:search_ok_precise:wait_for_function:31094',page.wait_for_function,locals(),
             """() => Boolean(document.querySelector('#ctl00_DefaultContent_CharityNameSearch1_EntityGridView span[id$="_lblName"]'))
@@ -31437,7 +31347,7 @@ def search_ok_precise(page, org, module):
             result.raw_status_text = "No results found"
             result.success = True
             result.source_note = "Oklahoma search returned no matching entity result."
-            return ok_attach_foundation_review(result, org, page)
+            return result
 
         selected = workflow_call('source.step:search_ok_precise:ok_choose_safe_result_row:31107',ok_choose_safe_result_row,locals(), page, org, module)
         if selected is None:
@@ -31452,7 +31362,7 @@ def search_ok_precise(page, org, module):
                 if getattr(org, "ok_search_incomplete", False)
                 else "Oklahoma completed the first result page without a safe matching organization row; the bounded name variants are checked under the approved first-page policy."
             )
-            return ok_attach_foundation_review(result, org, page)
+            return result
 
         matched_name, filing_number = ok_open_latest_equivalent_detail(page, org, module, selected)
 
@@ -31466,7 +31376,7 @@ def search_ok_precise(page, org, module):
                 result.reason_code = "OK_NEAR_NAME_IDENTITY_UNCONFIRMED"
                 result.rejected_candidates = [tentative_name]
                 result.success = False
-                return ok_attach_foundation_review(result, org, page)
+                return result
             result.ok_name_location_corroborated = True
         status_text = module.extract_labeled_value_from_text(detail_text, ["Status"])
         if not status_text:
@@ -31474,7 +31384,7 @@ def search_ok_precise(page, org, module):
             result.raw_status_text = "Status not found on detail page"
             result.success = True
             result.source_note = "Oklahoma detail page was reached, but entity status was not found."
-            return ok_attach_foundation_review(result, org, page)
+            return result
 
         history_match = re.search(
             r"FILING HISTORY\s*:?\s*Document Number\s+Filing Type\s+Filing Date\s+Page Count\s+([0-9A-Za-z].*?)(?:Visit Ok\.gov|Accessibility|Disclaimer|$)",
@@ -31509,7 +31419,7 @@ def search_ok_precise(page, org, module):
                 "CharityClarity uses that registry status instead of calculating status from annual filing dates. "
                 "The accepted row safely matched the requested organization."
             )
-            return ok_attach_foundation_review(result, org, page)
+            return result
         if not latest_filing:
             result.status = status_text
             result.raw_status_text = status_text
@@ -31518,7 +31428,7 @@ def search_ok_precise(page, org, module):
                 "Oklahoma detail page status was found, but filing history could not be parsed. "
                 "The accepted row safely matched the requested organization."
             )
-            return ok_attach_foundation_review(result, org, page)
+            return result
 
         certificate_evidence = ok_fetch_registration_certificate(page, latest_filing, matched_name)
         certificate_due, certificate_note = certificate_evidence
@@ -31533,7 +31443,7 @@ def search_ok_precise(page, org, module):
                 + (" " + certificate_note if "Certificate freshness note:" in certificate_note else "")
             )
             result.success = True
-            return ok_attach_foundation_review(result, org, page)
+            return result
         if ok_certificate_service_unavailable(certificate_evidence):
             calculated_due = ok_calculated_registration_expiration(
                 latest_filing, certificate_evidence, detail_text, filing_candidates, module)
@@ -31547,12 +31457,12 @@ def search_ok_precise(page, org, module):
                     "not a separately determined Form 990-based filing deadline. Confirm time-sensitive decisions directly with the state registry."
                 )
                 result.success = True
-                return ok_attach_foundation_review(result, org, page)
+                return result
             result.status = "Site Not Reachable"
             result.raw_status_text = latest_filing
             result.source_note = certificate_note + " The matched organization was found, but the state certificate could not be retrieved; no deadline was inferred."
             result.success = False
-            return ok_attach_foundation_review(result, org, page)
+            return result
         latest_filing_date = module.parse_ok_filing_date(latest_filing)
         if latest_filing_date:
             result.status, assumed_due_date = ok_status_from_latest_filing_date(latest_filing_date)
@@ -31569,7 +31479,7 @@ def search_ok_precise(page, org, module):
             )
         result.raw_status_text = latest_filing
         result.success = True
-        return ok_attach_foundation_review(result, org, page)
+        return result
     except Exception as exc:
         result.error = f"OK error: {exc}"
         if isinstance(exc, TimeoutError):
@@ -31577,7 +31487,7 @@ def search_ok_precise(page, org, module):
             result.raw_status_text = "Oklahoma search deadline expired before retrieval completed"
             result.source_note = "The Oklahoma search did not complete; no negative registration conclusion was made."
             result.reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
-        return ok_attach_foundation_review(result, org, page)
+        return result
 
 
 def search_bundled_name_state(page, org, state: str):
@@ -36185,7 +36095,7 @@ def attach_identity_review(data, context):
         if snapshot_ref:
             clean['evidence_url'] = snapshot_ref['url']
         clean["suggested"] = row.get("suggested") is True
-        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK"}:
+        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT"}:
             # Keep the master interpretation of complete state evidence in the
             # signed snapshot. Identity acceptance cannot substitute a generic
             # Active label for a filing-history or charity-scope decision.
@@ -36238,7 +36148,7 @@ def identity_review_wi_status(row):
 
 
 def identity_review_state_status(state, row):
-    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK"}:
+    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT"}:
         status = row.get("interpreted_status")
         return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
             "Pending", "Suspended", "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",

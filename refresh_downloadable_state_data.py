@@ -227,9 +227,9 @@ def refresh_or(dry_run: bool) -> dict:
 
 
 ASSETS = {
-    "KS": ["KS_weekly_checker.py", "downloadable-data/KS-original-row-images.json", "downloadable-data/KS-original-row-images.zip"],
+    "KS": ["KS_weekly_checker.py"],
     "KY": ["downloadable-data/KY.pdf", "downloadable-data/KY-records.json"],
-    "LA": ["downloadable-data/LA.xlsx", "downloadable-data/LA-original-row-images.json", "downloadable-data/LA-original-row-images.zip"],
+    "LA": ["downloadable-data/LA.xlsx"],
     "NH": ["registered-charities.pdf", "downloadable-data/NH-records.json"],
     "OR": ["Charity_OR.txt"],
 }
@@ -297,8 +297,6 @@ def main() -> int:
                     indexes = json.loads(index_path.read_text()) if index_path.exists() else {}
                     indexes[state] = build_page_index(state, (BASE_DIR / pdf_asset['path']).read_bytes(), rows, pdf_asset['path'])
                     index_path.write_text(json.dumps(indexes, separators=(',', ':')), encoding='utf-8')
-                from deployment.downloadable_evidence_integrity import validate_source_evidence
-                validate_source_evidence(BASE_DIR, state)
                 manifest["states"][state] = entry
             results.append(entry)
             print(f"Validated {state}: {entry.get('record_count', 'dry-run')} records", flush=True)
