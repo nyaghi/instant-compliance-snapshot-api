@@ -187,7 +187,9 @@ def matching_reference(result, refs):
         else:
             candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
     if state=='NC':
-        candidates=sorted(candidates,key=lambda r:workflow_call('deployment/state_snapshots.py:matching_reference:182:50:get',r.get,locals(), 'operation')=='detail')
+        # A result list may contain another expanded record. Only the original
+        # selected profile is evidence for a positive or review credential.
+        candidates=[r for r in candidates if r.get('operation')=='detail']
     if state=='NM' and re.fullmatch(r'\d{2}-?\d{7}',ident) and digits(ident)==ein:
         # The connector uses the nine-digit FEIN while the public result keeps
         # New Mexico's displayed hyphen. This is one already-bound credential.
