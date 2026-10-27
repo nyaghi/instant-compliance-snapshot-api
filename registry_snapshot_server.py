@@ -22729,11 +22729,32 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
     return best_match, reader_reached
 
 
+def wi_direct_search_names(org) -> list[str]:
+    searched = wi_search_names_for_org(org) or [org.organization_name]
+    original = getattr(org, "original_organization_name", org.organization_name)
+    required = list(dict.fromkeys([*literal_registry_name_queries(original, org.ein, remove_periods=True),
+                                  *equivalent_name_queries(original, org.ein)]))
+    direct = list(dict.fromkeys([*required, *searched[:WI_DIRECT_VARIANT_LIMIT]]))
+    query_key = lambda value: re.sub(r"[^a-z0-9]", "", value.casefold())
+    required_keys = {query_key(value) for value in required}
+    # Required identity spellings can occupy every optional-query slot. Retain
+    # one already-generated distinctive probe before treating those empty
+    # full-name searches as a negative. This changes retrieval, not matching.
+    if all(query_key(value) in required_keys for value in direct):
+        for value in searched[:24]:
+            if (re.fullmatch(r"[A-Za-z]{8,}", value or "")
+                    and query_key(value) not in required_keys
+                    and value.casefold() not in {"association", "foundation", "hospital", "hospitals",
+                        "institute", "international", "national", "organization", "university"}):
+                direct.append(value)
+                break
+    return direct
+
+
 def wi_confirm_clean_no_results_page(org, max_seconds: float = 14.0, progress: dict | None = None):
     deadline = time.perf_counter() + max(3.0, max_seconds)
     progress = progress if progress is not None else {"attempted": [], "completed": set()}
-    required = list(dict.fromkeys([*equivalent_name_queries(org.organization_name, org.ein),
-                                  *(wi_search_names_for_org(org) or [org.organization_name])[:WI_DIRECT_VARIANT_LIMIT]]))
+    required = wi_direct_search_names(org)
     for search_name in required:
         if search_name in progress["completed"]: continue
         if time.perf_counter() >= deadline:
@@ -22847,7 +22868,7 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
     ein = getattr(org, "ein", "") or ""
 
     # The optional-variant limit must not truncate required reviewed names.
-    direct_names = list(dict.fromkeys([*literal_registry_name_queries(original_name, ein, remove_periods=True), *equivalent_name_queries(original_name, ein), *direct_names]))
+    direct_names = wi_direct_search_names(org)
 
     best_match = None
     last_body = ""
