@@ -68,8 +68,18 @@ def capture(run, page, record):
         detail.wait_for_url(expected, wait_until='domcontentloaded', timeout=timeout())
         observation['phase'] = 'detail_readiness'
         detail.get_by_text(re.compile(r'Employer Identification Number \(EIN\)')).first.wait_for(timeout=timeout())
-        if detail.url != expected:
-            raise ValueError('MA_view_more_wrong_record')
+        # A visible field label can precede the selected record values.
+        # Wait for the same existing identity binding, inside the original cap,
+        # leaving one second for the original image capture.
+        while True:
+            if detail.url != expected:
+                raise ValueError('MA_view_more_wrong_record')
+            text = detail.locator('body').inner_text(timeout=timeout())
+            if bound(text, record, run):
+                break
+            if stop - time.monotonic() <= 1:
+                raise ValueError('MA_view_more_identity_unbound')
+            detail.wait_for_timeout(min(100, max(1, int((stop - time.monotonic() - 1) * 1000))))
         retain(detail, 'detail')
         observation['phase'] = 'complete'
     except Exception as exc:
