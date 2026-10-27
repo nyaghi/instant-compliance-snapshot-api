@@ -4068,6 +4068,14 @@ def hi_public_filing_period(page, ein: str) -> dict:
     except FilingPeriodReadIncomplete as exc:
         evidence = {}; read_failure = str(exc)
     if evidence:
+        begin = parse_due_date(evidence.get("period_begin", ""))
+        end = parse_due_date(evidence.get("period_end", ""))
+        if (evidence.get("ein") == canonical_ein_digits(ein)
+                and evidence.get("tax_year_label") == label
+                and irs_form_period_is_valid(begin, end, label) and (end - begin).days < 350
+                and fiscal_year_end_for_ein(ein) == (end.month, end.day)):
+            evidence["short_period_fiscal_end_confirmed"] = True
+            evidence["transition_basis"] = "The short-period ending month and day agree with the same-EIN IRS fiscal-year-end metadata."
         return {**evidence, "state_source_url": page.url,
                 "period_basis": evidence.get("period_basis") or "Hawaii filing attachment"}
     # The exact state label remains the anchor if its attachment is scanned.
@@ -30627,6 +30635,11 @@ def search_ok_with_variants(page, org, module):
                 result = retry_result
         if public_status(result) == "Site Not Reachable":
             return result
+        if (getattr(result, "reason_code", "") == "OK_FOUNDATION_SUFFIX_IDENTITY_REVIEW"
+                and getattr(result, "status", "") == "Needs Review"
+                and isinstance(getattr(result, "_cc_identity_review", None), dict)
+                and result._cc_identity_review.get("records")):
+            return result
         if public_status(result) == "Unable to Confirm" and not getattr(result, "matched_registry_name", ""):
             incomplete_result = incomplete_result or result
             best_result = best_result or result
@@ -34813,7 +34826,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 except Exception:pass
             elif state == "NJ":
                 result = search_nj_with_name_fallback(page, org)
-                if public_status(result) != "Not Registered":
+                if (public_status(result) != "Not Registered"
+                        and getattr(result, "reason_code", "") != "NJ_COMPLETE_UNNUMBERED_EXEMPTION"):
                     body = nj_detail_body(page, org)
                     if nj_missing_period_result(result) and not workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34462:64:get',nj_filing_context_from_body(body).get,locals(), "computed_due_date"):
                         recovered_body = nj_reload_detail_body(page, org)
