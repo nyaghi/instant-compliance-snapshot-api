@@ -111,7 +111,7 @@ def select(run, ordered, row):
         record = binding.get('record', {})
         if (document[2] != 'image' or binding.get('url') != document[0]
                 or str(record.get('ago_account', '')) != str(row.get('matched_registry_identifier', ''))
-                or key(record.get('name', '')) != key(row.get('matched_registry_name', ''))
+                or key(row.get('matched_registry_name', '')) not in {key(record.get('name', '')), key(re.split(r'\s+DBA\s+', str(record.get('name', '')), maxsplit=1, flags=re.I)[0])}
                 or not bound(document[3], record, run)):
             continue
         selected.setdefault(binding['role'], document)
