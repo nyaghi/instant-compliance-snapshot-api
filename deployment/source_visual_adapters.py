@@ -126,7 +126,20 @@ def capture_selected_source(master,result,run,deadline):
     page=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:125:9:new_page',context.new_page,locals())
     fact['context_start_ms']=round((time.perf_counter()-context_started)*1000,2)
     nav=time.perf_counter()
-    response=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:128:13:goto',page.goto,locals(), url,wait_until='commit' if run.state=='OR' else 'domcontentloaded',timeout=max(1,int((stop-time.monotonic()-3 if run.state=='RI' else (stop-time.monotonic()-1 if run.state=='OR' else min(5.0,stop-time.monotonic())))*1000)))
+    if run.state=='OR':
+     from playwright.sync_api import TimeoutError as NavigationTimeout
+     # One retry of the same validated detail URL, only before any document
+     # commits. Preserve the original thirty-second allowance and capture reserve.
+     fact['navigation_attempts']=1
+     try:
+      response=workflow_call('OR selected document first navigation',page.goto,locals(),url,wait_until='commit',timeout=max(1,int(min(15.0,stop-time.monotonic()-3)*1000)))
+     except NavigationTimeout:
+      if page.url!='about:blank' or stop-time.monotonic()<5.0:raise
+      fact['first_navigation_outcome']='no_document_timeout'
+      fact['navigation_attempts']=2
+      response=workflow_call('OR selected document same-URL recovery',page.goto,locals(),url,wait_until='commit',timeout=max(1,int((stop-time.monotonic()-3)*1000)))
+    else:
+     response=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:128:13:goto',page.goto,locals(), url,wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-3 if run.state=='RI' else min(5.0,stop-time.monotonic()))*1000)))
     fact['navigation_ms']=round((time.perf_counter()-nav)*1000,2)
     fact['http_status']=response.status if response else None
     fact['url_stable']=page.url==url
