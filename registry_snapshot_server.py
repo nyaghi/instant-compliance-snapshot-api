@@ -31284,6 +31284,8 @@ def ok_click_name_search_ok_button(page, org=None) -> bool:
 
 
 def lab_ok_completed_detail_enabled() -> bool:
+    if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
+        return True
     return (APP_VERSION.endswith("-performance-lab")
             and performance_origin_enabled()
             and os.environ.get("CE_LAB_OK_COMPLETED_DETAIL") == "1"
