@@ -482,7 +482,7 @@ def capture_selected_wa_source(master,result,run,deadline):
      or not workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:376:12:get',result.get,locals(), 'matched_registry_name') or getattr(run,'selected_visual_attempted',False)
      or workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:377:8:get',result.get,locals(), 'source_url')!='https://ccfs.sos.wa.gov/#/cftSearch'):return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:377:73:return',None)
  run.selected_visual_attempted=True;start=time.perf_counter();held=False;browser=context=None
- fact={'adapter':'WA-selected-original-summary','outcome':'not_started','navigation_ms':0,'search_ms':0,'detail_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':24000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'WA-selected-original-summary','outcome':'not_started','navigation_ms':0,'search_ms':0,'detail_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  name=result['matched_registry_name'];parts=[norm(part) for part in re.split(r'[()]',name) if norm(part)]
  try:
@@ -491,7 +491,7 @@ def capture_selected_wa_source(master,result,run,deadline):
   # Observed ordinary WA EIN responses take9-16s before detail. The separate
   # local visual allowance is measured, stays inside the existing state
   # deadline, and is NOT an accepted global performance change.
-  stop=time.monotonic()+min(24.0,remaining)
+  stop=time.monotonic()+min(30.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:389:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:390:61:return',None)
   with master.checker.sync_playwright() as p:
