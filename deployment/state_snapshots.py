@@ -645,7 +645,7 @@ class CaptureRun:
             ak_empty=ak_empty_controls(page,self,text) if self.state=='AK' else None
             observed('read_dimensions')
             size=workflow_call('deployment/state_snapshots.py:page:458:17:evaluate',page.locator('body').evaluate,locals(),
-                '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=ma_timeout(1) if self.state=='MA' else 300)
+                '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=ma_timeout(1) if self.state=='MA' else max(1,int(min(2.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state=='AK' else 300)
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
                 self.errors.append('source_page_exceeds_capture_bound');return trace_return('deployment/state_snapshots.py:page:461:72:return',None)
             observed('screenshot')
