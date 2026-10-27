@@ -8688,6 +8688,10 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
         data["lab_diagnostic"] = {"verification_attempts": attempts,
                                   "failure_reason": result.status_reason,
                                   "completed_queries": len(record.get("completed", []))}
+        if diagnostic in {'CONTINUATION_INVALID', 'STATE_EXPIRED', 'IMAGE_INVALID',
+                          'IMAGE_DIMENSIONS', 'READER_BUSY', 'IMAGE_BLANK',
+                          'READER_DEADLINE', 'READS_UNCERTAIN', 'READER_EXCEPTION'}:
+            data['lab_diagnostic']['verification_reader_stage'] = diagnostic
     if state in {"NM", "MS", "NC"}:
         pending = (record.get("pending") or {}).get("query") or {}
         data["lab_diagnostic"] = {
@@ -8976,7 +8980,18 @@ def final_four_connector_request(payload, origin):
                     'Invalid Alabama verification image', 'Invalid Alabama verification dimensions',
                     'Blank Alabama verification image', 'Alabama verification image is uncertain'} else
                     'NY_CONNECTOR_AL_READER_UNAVAILABLE')
-                return 200, {'phase': 'complete', 'result': final_four_connector_failure(record, reason)}
+                reader_stage = {
+                    'Invalid Alabama verification continuation': 'CONTINUATION_INVALID',
+                    'Alabama check expired before verification': 'STATE_EXPIRED',
+                    'Invalid Alabama verification image': 'IMAGE_INVALID',
+                    'Invalid Alabama verification dimensions': 'IMAGE_DIMENSIONS',
+                    'Alabama verification reader busy': 'READER_BUSY',
+                    'Blank Alabama verification image': 'IMAGE_BLANK',
+                    'Alabama verification image deadline': 'READER_DEADLINE',
+                    'Alabama verification image is uncertain': 'READS_UNCERTAIN',
+                }.get(safe_reason, 'READER_EXCEPTION')
+                return 200, {'phase': 'complete', 'result': final_four_connector_failure(
+                    record, reason, diagnostic=reader_stage)}
         try:
             evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
         except (ValueError, TypeError, KeyError):
