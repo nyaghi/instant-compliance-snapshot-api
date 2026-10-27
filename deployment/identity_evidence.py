@@ -158,6 +158,10 @@ def _continued(record,data,store):
                   'source_sha256':hashlib.sha256(raw).hexdigest(),'captured_at':doc['completed_at']}
             out['review_evidence_context']=store.save(meta,raw)
         else:
+            if data.get('state') == 'CT' and data.get('rejected_search_history') is True:
+                doc['names_only_after_rejection']=True
+                doc['snapshot_expected']=False
+                out['identity_review_evidence_final']=True
             out['search_history_url']=_save_history(doc,store);out.pop('evidence_bundle_url',None)
         return out
     except Exception:

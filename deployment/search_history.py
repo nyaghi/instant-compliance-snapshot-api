@@ -100,7 +100,7 @@ def reportable_result(result):
 
 def needs_search_history(result):
     """User-facing search account is required only for completed negatives."""
-    return reportable_result(result) and completed_negative_result(result)
+    return reportable_result(result) and (completed_negative_result(result) or (result.get('state') == 'CT' and result.get('rejected_search_history') is True and result.get('status') in {'Unable to Confirm','Site Not Reachable'}))
 
 
 def history_only_result(result):
@@ -292,7 +292,7 @@ def render_names_pdf(doc,asset_root=None):
 
 
 def render_pdf(doc,asset_root=None):
-    if doc.get('result_at_completion') in {'Not Registered','Not Registered / Non-Compliant'}:
+    if doc.get('result_at_completion') in {'Not Registered','Not Registered / Non-Compliant'} or doc.get('names_only_after_rejection') is True:
         return render_names_pdf(doc,asset_root)
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet,ParagraphStyle

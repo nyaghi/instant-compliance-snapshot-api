@@ -16693,8 +16693,9 @@ def search_ct_direct(org):
             f"Connecticut attempted prioritized name queries: {', '.join(searched_variants)}."
         ] if searched_variants else []
         return result
-    result = checker.StateResult(original_name, org.ein, "CT", "Site Not Reachable", url)
-    result.raw_status_text = "Connecticut direct registry lookup could not be completed"
+    partial_results = last_error == "Connecticut charity results span unread pages; no complete-search conclusion was made."
+    result = checker.StateResult(original_name, org.ein, "CT", "Unable to Confirm" if partial_results else "Site Not Reachable", url)
+    result.raw_status_text = "Connecticut returned results, but additional result pages remain unread" if partial_results else "Connecticut direct registry lookup could not be completed"
     if saw_zero_results and (exhausted_budget or attempted_variants < len(variants)):
         result.source_note = "Connecticut public registry AJAX lookup ended before all prioritized name variants could be checked."
     else:
@@ -34522,6 +34523,14 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         downloaded_record(sys.modules[__name__],data)
         workflow_call('registry_snapshot_server.py:run_state_lookup:34055:8:get',CURRENT.get,locals()).source_pdf_extract_ms+=(time.perf_counter()-source_extract_started)*1000
         try:
+            review_context = USER_IDENTITY_CONTEXT.get()
+            if (state == "CT" and review_context.get("state") == "CT"
+                    and canonical_ein_digits(review_context.get("ein", "")) == canonical_ein_digits(ein)
+                    and review_context.get("rejected")
+                    and data.get("status") in {"Unable to Confirm", "Site Not Reachable"}):
+                # Preserve actual receipts from this signed rejection continuation.
+                # This flag does not change source coverage or the resulting status.
+                data["rejected_search_history"] = True
             data=capture.finish(data)
             if workflow_call('registry_snapshot_server.py:run_state_lookup:34058:15:get',os.environ.get,locals(), 'CE_FINAL_FOUR_CHILD') != '1':
                 from deployment.state_snapshots import persist_inline_result
