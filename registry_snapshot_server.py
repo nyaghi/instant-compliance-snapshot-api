@@ -1490,6 +1490,10 @@ def public_status(result) -> str:
     status = (result.status or "").strip()
     error = (result.error or "").strip().lower()
 
+    if (getattr(result, "state", "") == "CT" and status == "Unable to Confirm"
+            and getattr(result, "reason_code", "") == "CT_RESULTS_INCOMPLETE"
+            and (result.raw_status_text or "").startswith("Connecticut returned results, but")):
+        return "Unable to Confirm"
     if error:
         return "Site Not Reachable"
 
@@ -15941,7 +15945,7 @@ def apply_confirmed_feedback_correction(result) -> str:
 def fill_registry_match_from_text(result, body: str, org) -> None:
     if (getattr(result, "matched_registry_name", "") or "").strip():
         result.matched_registry_name = (structured_registry_name(result.matched_registry_name, org.organization_name, org.ein)
-                                        if result.state == "WV" else useful_registry_name(result.matched_registry_name))
+                                        if result.state in {"WV", "WI"} else useful_registry_name(result.matched_registry_name))
         return
     if public_status(result) == "Not Registered":
         return
@@ -16045,7 +16049,7 @@ def normalize_registry_match_fields(result, org) -> None:
         result.matched_registry_identifier = ""
         return
     matched_name = useful_registry_name(getattr(result, "matched_registry_name", "") or "")
-    if result.state == "WV" and not matched_name:
+    if result.state in {"WV", "WI"} and not matched_name:
         matched_name = structured_registry_name(getattr(result, "matched_registry_name", ""), org.organization_name, org.ein)
     matched_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     submitted_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or getattr(result, "organization_name", "") or "").strip())
@@ -16176,6 +16180,80 @@ def ct_direct_post_query(session, base_fields: dict[str, str], headers: dict[str
     return source_body
 
 
+class CTIncompleteResults(RuntimeError):
+    """The source responded, but its complete result set was not retrieved."""
+
+
+def ct_direct_complete_pages(session, base_fields, headers, search_name, body, deadline):
+    """Follow only source-provided grid links inside the existing lookup deadline."""
+    from deployment.search_observation import observed_http_call
+    from deployment.completed_response_history import finish
+    grid = "ctl00$MainContentPlaceHolder$ucLicenseLookup$gvSearchResults"
+    panel = "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
+    prefix = "ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$"
+    url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
+    def rows_of(value):
+        return [(m.group(1), row) for row in re.findall(r"<tr\b[^>]*>.*?</tr>", value, re.I | re.S)
+                if (m := re.search(r"\bCredential\s+([A-Z]+\.\d+(?:-[A-Z0-9]+)?)\b", html_fragment_text(row), re.I))]
+    declared = re.search(r"Showing\s+([0-9,]+)\s+result", body, re.I)
+    if not declared:
+        return body  # Existing non-grid handling remains unchanged.
+    total = int(declared.group(1).replace(",", "")); rows = rows_of(body)
+    if total <= len(rows):
+        return body
+    initial = body; fields = dict(base_fields); seen = {key for key, _ in rows}; extra = []
+    if len(seen) != len(rows) or total > 200:
+        raise CTIncompleteResults("Connecticut result coverage exceeds the bounded pagination envelope.")
+    for next_page in range(2, 21):
+        remaining = deadline - time.perf_counter() - 1.0
+        if remaining <= 1.0:
+            raise CTIncompleteResults("Connecticut result pagination reached its existing lookup deadline.")
+        links = set(re.findall(r"__doPostBack\('([^']+)','(Page\$\d+)'\)", html.unescape(body)))
+        if (grid, f"Page${next_page}") not in links:
+            raise CTIncompleteResults("Connecticut did not provide the next result page.")
+        # ASP.NET AJAX encodes each field as length|kind|id|value|.
+        # Malformed or stale state must never be interpreted as an empty page.
+        pos = 0
+        try:
+            while pos < len(body.rstrip()):
+                a = body.index("|", pos); length = int(body[pos:a])
+                b = body.index("|", a + 1); d = body.index("|", b + 1)
+                end = d + 1 + length
+                if length < 0 or body[end:end + 1] != "|":
+                    raise ValueError("Invalid delta length")
+                if body[a + 1:b] == "hiddenField":
+                    fields[body[b + 1:d]] = body[d + 1:end]
+                pos = end + 1
+        except (ValueError, IndexError) as exc:
+            raise CTIncompleteResults("Connecticut pagination state could not be read.") from exc
+        fields.update(ct_direct_form_fields(body))
+        # Sending Search along with a page-link postback clears the source grid.
+        fields.pop("ctl00$MainContentPlaceHolder$ucLicenseLookup$btnLookup", None)
+        fields.pop("ctl00$MainContentPlaceHolder$ucLicenseLookup$btnShowPopup", None)
+        fields.update({prefix + "ddCredPrefix": "CHR", prefix + "tbDBA_Contact": search_name,
+                       "__EVENTTARGET": grid, "__EVENTARGUMENT": f"Page${next_page}",
+                       "ctl00$ScriptManager1": panel + "|" + grid, "__ASYNCPOST": "true"})
+        timeout = min(CT_DIRECT_TIMEOUT_SECONDS, remaining)
+        try:
+            response = observed_http_call(session.post, url, data=fields,
+                headers={**headers, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                         "X-MicrosoftAjax": "Delta=true", "X-Requested-With": "XMLHttpRequest"},
+                timeout=(min(3.0, timeout), timeout))
+            response.raise_for_status(); body = response.text; finish(response, body)
+        except Exception as exc:
+            raise CTIncompleteResults("Connecticut responded initially, but a later result page could not be read.") from exc
+        count = re.search(r"Showing\s+([0-9,]+)\s+result", body, re.I); page_rows = rows_of(body)
+        keys = [key for key, _ in page_rows]
+        if (not count or int(count.group(1).replace(",", "")) != total or not keys
+                or len(set(keys)) != len(keys) or seen.intersection(keys)
+                or len(seen) + len(keys) > total):
+            raise CTIncompleteResults("Connecticut result pages changed or repeated before coverage was complete.")
+        seen.update(keys); extra.extend(row for _, row in page_rows)
+        if len(seen) == total:
+            return initial + "\n" + "\n".join(extra)
+    raise CTIncompleteResults("Connecticut result coverage exceeds the bounded pagination envelope.")
+
+
 def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> str:
     try:
         session, fields, headers = ct_direct_prepare_session(timeout_seconds)
@@ -16245,7 +16323,7 @@ def ct_identity_names_from_detail(detail_text: str) -> list[str]:
     return names
 
 
-def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str, session=None):
+def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str, session=None, deadline=None):
     row_text = html_fragment_text(row_html)
     # CT signed rejection continuation: exclude only this request's credential.
     rejected_id = re.search(r"\bCHR\.[0-9A-Z.-]+", row_text, re.I)
@@ -16255,7 +16333,15 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     row_name = clean_registry_name(html_fragment_text(name_match.group(1)) if name_match else re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0])
     if institution_location_conflict(getattr(org, "original_organization_name", org.organization_name), row_name):
         return None, -10000
-    detail_text = ct_direct_detail_text(row_html, timeout_seconds=CT_DIRECT_TIMEOUT_SECONDS, session=session)
+    detail_timeout = CT_DIRECT_TIMEOUT_SECONDS
+    if deadline is not None:
+        remaining = deadline - time.perf_counter() - 1.0
+        if remaining < 2.0:
+            raise CTIncompleteResults("Connecticut result review reached its existing lookup deadline.")
+        detail_timeout = min(detail_timeout, remaining)
+    detail_text = ct_direct_detail_text(row_html, timeout_seconds=detail_timeout, session=session)
+    if deadline is not None and time.perf_counter() >= deadline - 1.0:
+        raise CTIncompleteResults("Connecticut result review reached its existing lookup deadline.")
     identity_names = [row_name, *ct_identity_names_from_detail(detail_text)]
     reviewed_identity_names = [getattr(org, 'original_organization_name', org.organization_name), *known_names_for_ein(org.ein)]
     identity_names = [name for name in identity_names if name and not all(
@@ -16608,6 +16694,7 @@ def search_ct_direct(org):
     last_error = ""
     attempted_variants = 0
     completed_variants = 0
+    incomplete_results = False
     searched_variants: list[str] = []
     session = None
     fields = None
@@ -16623,6 +16710,11 @@ def search_ct_direct(org):
             if session is None or fields is None or headers is None:
                 session, fields, headers = ct_direct_prepare_session(attempt_timeout)
             body = ct_direct_post_query(session, fields, headers, variant, attempt_timeout)
+            body = ct_direct_complete_pages(session, fields, headers, variant, body, deadline)
+        except CTIncompleteResults as exc:
+            incomplete_results = True
+            last_error = str(exc)
+            continue
         except Exception as exc:
             last_error = str(exc)
             session = None
@@ -16633,6 +16725,7 @@ def search_ct_direct(org):
         returned=sum(1 for row in re.finditer(r"<tr\b[^>]*>.*?</tr>",body,re.I|re.S)
             if re.search(r"\bCredential\s+[A-Z]+\.\d+\b",html_fragment_text(row.group(0)),re.I))
         if declared and int(declared.group(1).replace(",",""))>returned:
+            incomplete_results = True
             last_error="Connecticut charity results span unread pages; no complete-search conclusion was made."
             continue
         completed_variants += 1
@@ -16641,17 +16734,27 @@ def search_ct_direct(org):
             continue
         has_charity_rows = False
         shortened_review_rows = []
+        prior_best, prior_score = best_result, best_score
+        review_incomplete = False
         for row_match in re.finditer(r"<tr\b[^>]*>.*?</tr>", body, re.I | re.S):
             row_html = row_match.group(0)
             if not re.search(r"\b(PUBLIC\s+CHARITY|CHR\.)\b", html_fragment_text(row_html), re.I):
                 continue
             has_charity_rows = True
-            result, score = ct_direct_result_from_row(org, row_html, safe_targets, url, session=session)
+            try:
+                result, score = ct_direct_result_from_row(org, row_html, safe_targets, url, session=session, deadline=deadline)
+            except CTIncompleteResults as exc:
+                incomplete_results = review_incomplete = True
+                last_error = str(exc)
+                best_result, best_score = prior_best, prior_score
+                break
             if result and getattr(result, "_cc_identity_review", None):
                 shortened_review_rows.extend(result._cc_identity_review["records"])
             if result and (best_result is None or result.selection_rank > best_result.selection_rank):
                 best_result = result
                 best_score = score
+        if review_incomplete:
+            continue
         if not best_result and not has_charity_rows:
             # Never reinterpret a rejected structured row as a flattened page:
             # echoed search text can otherwise become the supposed charity name.
@@ -16677,7 +16780,7 @@ def search_ct_direct(org):
         ]
         return best_result
     exhausted_budget = time.perf_counter() >= deadline - 0.25
-    if not last_error and not exhausted_budget and completed_variants >= len(variants):
+    if not last_error and not incomplete_results and not exhausted_budget and completed_variants >= len(variants):
         result = checker.StateResult(
             original_name,
             org.ein,
@@ -16693,14 +16796,18 @@ def search_ct_direct(org):
             f"Connecticut attempted prioritized name queries: {', '.join(searched_variants)}."
         ] if searched_variants else []
         return result
-    partial_results = last_error == "Connecticut charity results span unread pages; no complete-search conclusion was made."
+    partial_results = incomplete_results
     result = checker.StateResult(original_name, org.ein, "CT", "Unable to Confirm" if partial_results else "Site Not Reachable", url)
-    result.raw_status_text = "Connecticut returned results, but additional result pages remain unread" if partial_results else "Connecticut direct registry lookup could not be completed"
-    if saw_zero_results and (exhausted_budget or attempted_variants < len(variants)):
+    result.raw_status_text = "Connecticut returned results, but result-page or record review could not be completed" if partial_results else "Connecticut direct registry lookup could not be completed"
+    if partial_results:
+        result.source_note = "Connecticut responded, but the complete result set could not be reviewed within the lookup limits."
+    elif saw_zero_results and (exhausted_budget or attempted_variants < len(variants)):
         result.source_note = "Connecticut public registry AJAX lookup ended before all prioritized name variants could be checked."
     else:
         result.source_note = "Connecticut public registry AJAX lookup did not return a usable response."
     result.error = last_error
+    if partial_results:
+        result.reason_code = "CT_RESULTS_INCOMPLETE"
     result.success = False
     result.queries_attempted = list(searched_variants)
     result.source_attempts = [
