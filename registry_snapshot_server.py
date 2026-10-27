@@ -8830,6 +8830,32 @@ def al_read_verification_image(data_url, deadline):
         _AL_VERIFICATION_OCR_LOCK.release()
 
 
+def al_uncertain_image_recovery(record, now):
+    """One fresh ordinary page before any source submission; no relaxed OCR."""
+    pending = record.get('pending') or {}
+    query = pending.get('query') or {}
+    if (not trial_identity() or record.get('state') != 'AL'
+            or record.get('mode') != 'standard'
+            or record.get('purpose') != 'registration'
+            or record.get('recovery_protocol') != 'al-unread-image-v1'
+            or record.get('connector_version') != '0.6.135'
+            or record.get('al_image_recovery') or record.get('completed')
+            or record.get('al_verification_attempts', 0) != 0
+            or query.get('state') != 'AL' or query.get('operation') != 'search'
+            or 'verification' in query or not pending.get('query_id')
+            or record['expires'] - now <= 60):
+        return None
+    record['al_image_recovery'] = {'attempt': 1, 'reason': 'READS_UNCERTAIN',
+        'elapsed_seconds': round(now - record['issued'], 3)}
+    pending['query_id'] = secrets.token_urlsafe(18)
+    remaining = max(0, int((record['expires'] - now) * 1000))
+    return {'phase': 'search', **pending,
+        'recovery': {'action': 'fresh_browser', 'attempt': 1,
+                     'reason': 'NY_CONNECTOR_AL_IMAGE_UNCERTAIN'},
+        'check_token': ny_connector_pack(record),
+        'lookup_remaining_ms': remaining, 'expires_in': remaining // 1000}
+
+
 def al_verification_continuation(record, evidence):
     """Verification is incomplete evidence, never a result or a new budget."""
     pending = record.get('pending') or {}
@@ -8919,6 +8945,11 @@ def final_four_connector_request(payload, origin):
                 return 400, {"error": "This identity retry changed or expired. Rerun the state check."}
         if payload.get("recovery_protocol") == "nc-fresh-search-v1":
             record["recovery_protocol"] = "nc-fresh-search-v1"
+        elif (state == 'AL' and mode == 'standard'
+              and payload.get('recovery_protocol') == 'al-unread-image-v1'
+              and payload.get('connector_version') == '0.6.135'):
+            record['recovery_protocol'] = 'al-unread-image-v1'
+            record['connector_version'] = '0.6.135'
     else:
         try:
             record = ny_connector_unpack(payload.get("check_token"), email, device)
@@ -8976,6 +9007,10 @@ def final_four_connector_request(payload, origin):
                     'Alabama verification reader busy', 'Blank Alabama verification image',
                     'Alabama verification image deadline', 'Alabama verification image is uncertain'} else type(exc).__name__
                 log_event('AL verification reader incomplete: ' + safe_reason)
+                if safe_reason == 'Alabama verification image is uncertain':
+                    recovery = al_uncertain_image_recovery(record, time.time())
+                    if recovery is not None:
+                        return 200, recovery
                 reason = ('NY_CONNECTOR_AL_IMAGE_UNCERTAIN' if safe_reason in {
                     'Invalid Alabama verification image', 'Invalid Alabama verification dimensions',
                     'Blank Alabama verification image', 'Alabama verification image is uncertain'} else

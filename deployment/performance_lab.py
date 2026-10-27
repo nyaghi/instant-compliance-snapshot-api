@@ -315,8 +315,8 @@ def final_four_asset(name, text):
         replace('API + "/api/ny-connector"', 'API + (finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
         replace('headers: { "Content-Type": "application/json" }', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + admin_passcode }')
         replace('action: "start", state: registryState,', 'action: "start", mode, ...(finalFour && sales_cutoff_seconds!==undefined ? {sales_cutoff_seconds}:{}), state: registryState,')
-        replace('recovery_protocol: "il-fresh-page-v1"', 'recovery_protocol: registryState === "NC" ? "nc-fresh-search-v1" : "il-fresh-page-v1"')
-        replace('registryState !== "IL" || recoveryUsed', '!["IL", "NC"].includes(registryState) || recoveryUsed')
+        replace('recovery_protocol: "il-fresh-page-v1"', 'recovery_protocol: registryState === "AL" ? "al-unread-image-v1" : registryState === "NC" ? "nc-fresh-search-v1" : "il-fresh-page-v1"')
+        replace('registryState !== "IL" || recoveryUsed', '!["IL", "NC", "AL"].includes(registryState) || recoveryUsed')
         replace('onProgress?.("Illinois: verification stalled. Reopening the state page once and resuming this check.");',
                 'onProgress?.(`${label}: the search stalled. Reopening the state page once and resuming this check.`);')
         replace('() => onProgress?.("Illinois: waiting to resume after verification recovery."), "IL", recoverySignal',
