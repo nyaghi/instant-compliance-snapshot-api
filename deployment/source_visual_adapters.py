@@ -321,7 +321,7 @@ def observe_selected_readiness(page, fact, expected_url, expected_name, expected
  """Passive dependency metadata and one bounded failure-state read; no source requests."""
  from urllib.parse import urlsplit
  import hashlib
- started=time.monotonic(); pending={}; callbacks=[]
+ started=time.monotonic(); pending={}; callbacks=[]; finalized=False
  data={'lane':'server_chromium','requests':0,'finished':0,'failed':0,'pending_overflow':0,'errors':[],'failures':[]}
  fact['selected_readiness_observation']=data
  allowed={'document','script','xhr','fetch','stylesheet'}
@@ -364,6 +364,9 @@ def observe_selected_readiness(page, fact, expected_url, expected_name, expected
   try:page.on(event,callback);callbacks.append((event,callback))
   except Exception:data['observer_error']=True
  def finish():
+  nonlocal finalized
+  if finalized:return
+  finalized=True
   try:
    data['elapsed_seconds']=round(time.monotonic()-started,3)
    data['remaining_seconds']=round(max(0,stop-time.monotonic()),3)
@@ -400,6 +403,31 @@ def observe_selected_readiness(page, fact, expected_url, expected_name, expected
     except Exception:pass
  return finish
 
+
+def initialization_completion_stop(fact, old_stop, state_deadline, now):
+ """One same-page continuation earned by observed recent public-portal boot."""
+ if fact.get('initialization_continuation'):return None
+ obs=fact.get('selected_readiness_observation',{})
+ terminal=obs.get('terminal',{})
+ host={'CA-selected-registration-detail':'ca-rcf.evokeplatform.com','VA-selected-original-registration':'vdacs.evokeplatform.com'}.get(fact.get('adapter'))
+ paths={'/api/webContent/themes','/api/admin/environment/public','/api/webContent/apps/publicPortal/public'}
+ # Failed body reads, partial selected records, errors and verification do not
+ # earn a new allowance. Body text can be zero during the proven bootstrap.
+ if (not host or obs.get('route_matches') is not True or obs.get('terminal_read')!='completed'
+     or terminal.get('document_state')!='complete' or terminal.get('form_count')!=0
+     or terminal.get('expected_name_present') is not False or terminal.get('expected_id_present') is not False
+     or terminal.get('verification_present') is not False or terminal.get('error_present') is not False
+     or terminal.get('body_text_chars')!=0 or obs.get('pending_overflow')!=0
+     or obs.get('failed')!=0):return None
+ recent=[p for p in obs.get('pending',[]) if p.get('host')==host and p.get('path') in paths
+         and p.get('type')=='xhr' and type(p.get('age_seconds')) in (float,int)
+         and 0<=p['age_seconds']<=3 and ('status' not in p or p['status']==200)]
+ if not recent:return None
+ # Absolute stop is extended once, never reset from the time of the retry.
+ # A five-second completion reserve applies to the continued first-field wait.
+ new_stop=min(old_stop+15,state_deadline-1)
+ if new_stop-now<6:return None
+ return new_stop
 
 def capture_selected_ca_source(master,result,run,deadline):
  """Photograph the selected actual registration, never the entity Listed label."""
@@ -448,7 +476,18 @@ def capture_selected_ca_source(master,result,run,deadline):
      fact['waiting_for_label']=label
      label_started=time.perf_counter()
      try:
-      workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:266:6:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+      try:
+       workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:266:6:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+      except Exception as ready_error:
+       if label!='Registration Number' or type(ready_error).__name__!='TimeoutError':raise
+       finish_readiness()
+       proposed_stop=initialization_completion_stop(fact,stop,deadline,time.monotonic())
+       if proposed_stop is None:raise
+       fact['initialization_continuation']={'count':1,'extra_cap_seconds':15,'extra_granted_seconds':round(proposed_stop-stop,3),'completion_reserve_seconds':5}
+       fact['initialization_boundary_observation']=fact['selected_readiness_observation']
+       stop=proposed_stop
+       finish_readiness=observe_selected_readiness(page,fact,hint['url'],result['matched_registry_name'],identifier,stop)
+       workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:266:6:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-5)*1000)))
      finally:
       fact.setdefault('label_wait_seconds',{})[label]=round(time.perf_counter()-label_started,6)
     fact['waiting_for_label']=''
@@ -761,7 +800,18 @@ def capture_selected_va_source(master,result,run,deadline):
     if response is None or response.status!=200 or page.url!=hint['url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:550:111:return',None)
     begin=time.perf_counter();fact['phase']='selected_fields_ready'
     fact['waiting_for']='Registration Information heading'
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:553:4:wait_for',page.get_by_role('heading',name='Registration Information',exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    try:
+     workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:553:4:wait_for',page.get_by_role('heading',name='Registration Information',exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    except Exception as ready_error:
+     if type(ready_error).__name__!='TimeoutError':raise
+     finish_readiness()
+     proposed_stop=initialization_completion_stop(fact,stop,deadline,time.monotonic())
+     if proposed_stop is None:raise
+     fact['initialization_continuation']={'count':1,'extra_cap_seconds':15,'extra_granted_seconds':round(proposed_stop-stop,3),'completion_reserve_seconds':5}
+     fact['initialization_boundary_observation']=fact['selected_readiness_observation']
+     stop=proposed_stop
+     finish_readiness=observe_selected_readiness(page,fact,hint['url'],result['matched_registry_name'],identifier,stop)
+     workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:553:4:wait_for',page.get_by_role('heading',name='Registration Information',exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-5)*1000)))
     labels=['Registration ID','Initial Registration Date','Current Registration Date']
     if hint.get('registration_type')!='ExemptCharity' or 'expirationDate' in hint.get('source_fields',{}):labels.append('Expiration Date')
     for label in labels:
