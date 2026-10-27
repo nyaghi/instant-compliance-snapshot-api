@@ -414,7 +414,7 @@ def capture_selected_sc_source(master,result,run,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:322:52:return',None)
-  stop=time.monotonic()+min(8.0,remaining)
+  stop=time.monotonic()+min(16.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:324:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:325:61:return',None)
   with master.checker.sync_playwright() as p:
@@ -469,6 +469,7 @@ def capture_selected_sc_source(master,result,run,deadline):
  finally:
   if held:workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:365:10:release',master.BROWSER_LOOKUP_SEMAPHORE.release,locals())
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
+
 
 def wa_summary_core(text):
  parts=re.findall(r'\bORGANIZATION INFORMATION\b[\s\S]*?\bCONTACT INFORMATION\b',text)

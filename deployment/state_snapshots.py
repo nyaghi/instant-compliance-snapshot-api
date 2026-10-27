@@ -764,9 +764,9 @@ class ContextCaptureProxy:
             try:
                 for page in self._context.pages[:3]:workflow_call('deployment/state_snapshots.py:capture:561:52:page',run.page,locals(), page)
             except Exception:run.errors.append('source_context_capture_unavailable')
-            # AK's route hash can change from the previous result view during
-            # its first photograph. One fresh read/capture only, no re-search.
-            if run.state=='AK' and run.errors and run.errors[-1]=='source_page_changed_during_capture':
+            # A source view may finish changing during its first photograph.
+            # One fresh NJ/AK capture, retaining every binding guard; no re-search.
+            if run.state in {'AK','NJ'} and run.errors and run.errors[-1]=='source_page_changed_during_capture':
                 try:
                     if self._context.pages:workflow_call('deployment/state_snapshots.py:capture:567:43:page',run.page,locals(), self._context.pages[0])
                 except Exception:run.errors.append('source_context_recapture_unavailable')

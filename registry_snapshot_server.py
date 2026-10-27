@@ -2327,7 +2327,18 @@ def _me_existing_query_variants(org) -> list[str]:
     # promote an article-prefixed historical spelling above that primary query.
     final.sort(key=lambda query: 0 if any(value.casefold().startswith(query.casefold())
                for value in (original_name, leading_article_removed) if value) else 1)
+    # Aliases can consume the early cap before FDN variants are added.
+    # After literal-prefix reduction, use a spare existing slot for the primary
+    # name's FDN spelling. Preserve every prior query and matching target.
+    fdn = re.sub(r"\bfoundation\b", "FDN", canonical_name_punctuation(original_name), flags=re.I)
+    fdn = re.sub(r"\s+", " ", fdn.replace(".", "")).strip()
+    if (re.search(r"\bfoundation\b", original_name, re.I)
+            and len(distinctive_match_tokens(original_name)) >= 2
+            and len(final) < ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS
+            and not any(fdn.casefold().startswith(query.casefold()) for query in final)):
+        final.append(fdn)
     return final
+
 
 def me_collect_complete_pages(body, url, query, get):
     first = body
@@ -13625,7 +13636,18 @@ def copy_external_result(org, state: str, external_result):
     if state_upper == "WA" and getattr(external_result, "verified_registry_ein", "") and external_result.verified_registry_ein == canonical_ein_digits(org.ein):
         result.verified_registry_ein = external_result.verified_registry_ein
         result.identity_anchor = "EIN"
+    # Preserve the master-created Oklahoma suffix review through the external
+    # result adapter; otherwise its signed candidate and original PDF disappear.
+    review = getattr(external_result, "_cc_identity_review", None)
+    if (state_upper == "OK"
+            and getattr(external_result, "reason_code", "") == "OK_FOUNDATION_SUFFIX_IDENTITY_REVIEW"
+            and getattr(external_result, "status", "") == "Needs Review"
+            and isinstance(review, dict) and review.get("records")):
+        result._cc_identity_review = review
+        result.status = "Needs Review"
+        result.success = False
     return result
+
 
 
 def xlsx_shared_strings(zf: zipfile.ZipFile) -> list[str]:
