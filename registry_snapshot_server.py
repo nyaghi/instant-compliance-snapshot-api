@@ -16261,7 +16261,11 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     identity_names = [name for name in identity_names if name and not all(
         named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target) and (
         not any(named_geographic_scope_conflict(target, name) for target in reviewed_identity_names if target)
-        or normalized_match_name(name) in {normalized_match_name(target) for target in reviewed_identity_names if target})]
+        or normalized_match_name(name) in {normalized_match_name(target) for target in reviewed_identity_names if target}
+        # A shortened institution is admitted only to the signed review below,
+        # never promoted to an approved identity by a conflicting old alias.
+        or normalized_match_name(name) in {normalized_match_name(target) for target in
+            ct_shortened_institutional_queries(org.organization_name, org.ein)})]
     scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
     name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
     if name_score < 0:
