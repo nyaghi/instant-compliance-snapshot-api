@@ -419,6 +419,8 @@ def lab_asset(path):
     if file.suffix.lower() in {'.html', '.js', '.css'}:
         text = data.decode('utf-8')
         text = final_four_asset(file.name, text)
+        if file.name == "ny-connector.js" and trial_identity():
+            text = shared_readiness_asset(text)
         for origin in ('https://instant-compliance-snapshot-api-staging-8dnk.onrender.com',
                        'https://instant-compliance-snapshot-api-staging.onrender.com',
                        'https://staging.compliance-express.com'):
@@ -715,3 +717,14 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+def shared_readiness_asset(text):
+    """Share an in-flight read-only ping; preserve every state lookup owner."""
+    old = '      let connection = await bridge("ping", null, null, null, ["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(registryState) ? registryState : null, signal);\r\n      // A sleeping/busy extension can miss one readiness response. Retry only\r\n      // this read-only handshake once, before acquiring or starting any check.\r\n      if (!connection.ok && connection.reason === "NY_CONNECTOR_UNAVAILABLE") {\r\n        connection = await bridge("ping", null, null, null, ["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(registryState) ? registryState : null, signal);\r\n      }\r\n'
+    replacement = '      let connection = await connectorReadiness(signal);\n'
+    helper = '  // Only the read-only connection check is shared. Never cache a settled\n  // reply or share registry requests, lookup IDs, owner bindings or decisions.\n  let pendingReadiness = null;\n  function connectorReadiness(signal) {\n    signal?.throwIfAborted();\n    if (!pendingReadiness) {\n      const pending = (async () => {\n        let response = await bridge("ping", null, null, null, "NY");\n        if (!response.ok && response.reason === "NY_CONNECTOR_UNAVAILABLE")\n          response = await bridge("ping", null, null, null, "NY");\n        return response;\n      })();\n      pendingReadiness = pending;\n      const clear = () => { if (pendingReadiness === pending) pendingReadiness = null; };\n      pending.then(clear, clear);\n    }\n    const pending = pendingReadiness;\n    if (!signal) return pending;\n    // A cancelled state stops waiting without cancelling other consumers.\n    // The read-only operation itself remains bounded by the existing 2x5s cap.\n    return new Promise((resolve, reject) => {\n      const abort = () => { signal.removeEventListener(\'abort\', abort); reject(signal.reason); };\n      signal.addEventListener(\'abort\', abort, {once:true});\n      pending.then(value => { signal.removeEventListener(\'abort\', abort); resolve(value); },\n        error => { signal.removeEventListener(\'abort\', abort); reject(error); });\n    });\n  }\n'
+    anchor = '  async function setup() {'
+    if text.count(old) != 1 or text.count(anchor) != 1:
+        raise RuntimeError('Shared readiness frontend contract mismatch')
+    return text.replace(old, replacement, 1).replace(anchor, helper + anchor, 1)
