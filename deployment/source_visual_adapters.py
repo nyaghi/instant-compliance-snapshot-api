@@ -1867,12 +1867,12 @@ def capture_selected_nj_source(master,result,run,deadline):
       or identifier!=run.ein):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1657:30:return',None)
  except (ValueError,TypeError,KeyError):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1658:40:return',None)
  run.selected_visual_attempted=True
- start=time.perf_counter();fact={'adapter':'NJ-selected-original-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':22000};run.visual_adapter_facts.append(fact)
+ start=time.perf_counter();fact={'adapter':'NJ-selected-original-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
  held=False;browser=context=None
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1664:52:return',None)
-  stop=time.monotonic()+min(22.0,remaining)
+  stop=time.monotonic()+min(30.0,remaining)
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1666:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1667:61:return',None)
   fact['phase']='playwright_start';begin=time.perf_counter()
@@ -1888,7 +1888,7 @@ def capture_selected_nj_source(master,result,run,deadline):
     # Required public values are present in the response HTML. Waiting for all
     # document scripts can consume the allowance before those values are read.
     # Readiness below still requires the actual visible selected fields; the
-    # original eight-second visual deadline and capture reserve stay intact.
+    # state deadline and capture reserve stay intact.
     response=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1682:13:goto',page.goto,locals(), hint['url'],wait_until='commit',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=hint['url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1684:111:return',None)
@@ -1919,11 +1919,20 @@ def capture_selected_nj_source(master,result,run,deadline):
     before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1709:30:document',run.document,locals(), hint['url'],raw,'image',bound_text[:20000])
     fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
+    if fact['phase']=='selected_fields_ready' and 'selected_fields_ready_ms' not in fact and stop-time.monotonic()>.5:
+     try:
+      fact['selected_fields_at_failure']=page.locator('html').evaluate("""(root,args)=>{
+       const d=root.ownerDocument,get=id=>d.querySelector('#'+id),n=get('name'),e=get('crsm_federalein'),r=get('accountnumber'),f=get('crsm_fiscalyearenddate_datepicker_description'),h=get('crsm_fiscalyearenddate');
+       const norm=x=>String(x).trim().replace(/^the\\s+/i,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+       return {document_state:d.readyState,name_present:!!n,name_matches:!!n&&norm(n.value)===norm(args.name),ein_present:!!e,ein_matches:!!e&&e.value.replace(/\\D/g,'')===args.ein,registration_present:!!r,registration_valid:!!r&&/^CH[0-9]+$/.test(r.value),fiscal_display_present:!!f,fiscal_display_populated:!!f&&!!f.value,completed_empty_fiscal:!!f&&d.readyState!=='loading'&&f.hasAttribute('readonly')&&!!h&&h.hasAttribute('readonly')&&!h.value};
+      }""",{'ein':run.ein,'name':result['matched_registry_name']},timeout=max(1,int(min(.4,stop-time.monotonic()-.5)*1000)))
+     except Exception as probe_error:fact['selected_fields_probe_error']=type(probe_error).__name__
     if context is not None:context._captured=True;workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1712:50:close',context.close,locals())
     if browser is not None:workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1713:27:close',browser.close,locals())
  except Exception as exc:
   fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc)[:800]
   if fact['phase']=='navigation':fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
+
  finally:
   if held:workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1718:10:release',master.BROWSER_LOOKUP_SEMAPHORE.release,locals())
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
