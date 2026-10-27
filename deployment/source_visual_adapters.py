@@ -317,6 +317,90 @@ def ca_registration_core(text):
  parts=re.findall(r'\bEntity Related\b[\s\S]*?\bCHARITABLE ORGANIZATION DETAILS\b',text)
  return parts[0] if len(parts)==1 else None
 
+def observe_selected_readiness(page, fact, expected_url, expected_name, expected_id, stop):
+ """Passive dependency metadata and one bounded failure-state read; no source requests."""
+ from urllib.parse import urlsplit
+ import hashlib
+ started=time.monotonic(); pending={}; callbacks=[]
+ data={'lane':'server_chromium','requests':0,'finished':0,'failed':0,'pending_overflow':0,'errors':[],'failures':[]}
+ fact['selected_readiness_observation']=data
+ allowed={'document','script','xhr','fetch','stylesheet'}
+ def resource(req):
+  u=urlsplit(req.url)
+  # Public resource identity only: never include query, fragment or credentials.
+  return {'host':u.hostname or '', 'path':u.path[:240], 'type':req.resource_type}
+ def request(req):
+  try:
+   if req.resource_type not in allowed:return
+   data['requests']+=1
+   if len(pending)>=128:data['pending_overflow']+=1;return
+   pending[req]=(time.monotonic(),resource(req))
+  except Exception:data['observer_error']=True
+ def response(resp):
+  try:
+   item=pending.get(resp.request)
+   if item:item[1]['status']=int(resp.status)
+  except Exception:data['observer_error']=True
+ def ended(req,failed=False):
+  try:
+   item=pending.pop(req,None)
+   if not item:return
+   data['failed' if failed else 'finished']+=1
+   if failed and len(data['failures'])<8:
+    failure=str(req.failure or '')
+    # Chromium network error codes are useful; arbitrary URL/message text is not saved.
+    codes=re.findall(r'(?:net::)?ERR_[A-Z_]+',failure)
+    data['failures'].append({**item[1],'seconds':round(time.monotonic()-item[0],3),'code':codes[0] if codes else 'request_failed'})
+  except Exception:data['observer_error']=True
+ def page_error(error):
+  try:
+   raw=str(error)
+   if len(data['errors'])<8:
+    # Error type plus digest groups recurring failures without storing source data.
+    kind=next((x for x in ['TypeError','ReferenceError','SyntaxError','ChunkLoadError','SecurityError'] if x in raw),'page_error')
+    data['errors'].append({'kind':kind,'sha256':hashlib.sha256(raw.encode()).hexdigest()[:16],'seconds':round(time.monotonic()-started,3)})
+  except Exception:data['observer_error']=True
+ for event,callback in [('request',request),('response',response),('requestfinished',ended),('requestfailed',lambda req:ended(req,True)),('pageerror',page_error)]:
+  try:page.on(event,callback);callbacks.append((event,callback))
+  except Exception:data['observer_error']=True
+ def finish():
+  try:
+   data['elapsed_seconds']=round(time.monotonic()-started,3)
+   data['remaining_seconds']=round(max(0,stop-time.monotonic()),3)
+   data['pending_count']=len(pending)
+   data['pending']=[{**item,'age_seconds':round(time.monotonic()-when,3)} for when,item in list(pending.values())[:12]]
+   data['route_matches']=page.url==expected_url
+   if fact.get('outcome')=='captured':return
+   remaining=stop-time.monotonic()-.25
+   if remaining<=0:data['terminal_read']='no_time_remaining';return
+   labels=(['Registration Number','Registration Type','Registration Status','Initial Registration Date','Current Expiration Date']
+           if fact.get('adapter')=='CA-selected-registration-detail' else ['Registration Information','Registration ID','Initial Registration Date','Current Registration Date'])
+   timeout=max(1,int(min(.25,remaining)*1000))
+   data['terminal_read_timeout_ms']=timeout
+   try:
+    data['terminal']=page.locator('body').evaluate(r'''(body,expected)=>{
+     const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};
+     const text=(body.innerText||'').slice(0,100000), norm=s=>s.toLowerCase().replace(/[^a-z0-9]/g,'');
+     const nodes=[...body.querySelectorAll('label,p,span,div,h1,h2,h3,h4')].slice(0,10000);
+     return {document_state:document.readyState,body_text_chars:text.length,
+      form_count:body.querySelectorAll('.formio-form').length,
+      expected_name_present:norm(text).includes(norm(expected.name)),
+      expected_id_present:text.includes(expected.id),
+      headings:[...body.querySelectorAll('h1,h2,h3,h4,[role="heading"]')].filter(visible).slice(0,8).map(e=>(e.innerText||'').trim().slice(0,80)),
+      required:expected.labels.map(label=>{const found=nodes.filter(e=>e.children.length===0&&(e.innerText||'').trim()===label);return {label,count:found.length,visible:found.some(visible)};}),
+      verification_present:/verify you are human|user validation required|just a moment/i.test(text),
+      error_present:/access denied|something went wrong|failed to load|service unavailable/i.test(text)};
+    }''',{'name':expected_name,'id':expected_id,'labels':labels},timeout=timeout)
+    data['terminal_read']='completed'
+   except Exception as exc:data['terminal_read']='unavailable';data['terminal_error_type']=type(exc).__name__
+  except Exception:data['observer_error']=True
+  finally:
+   for event,callback in callbacks:
+    try:page.remove_listener(event,callback)
+    except Exception:pass
+ return finish
+
+
 def capture_selected_ca_source(master,result,run,deadline):
  """Photograph the selected actual registration, never the entity Listed label."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:224:5:get',result.get,locals(), 'state')!='CA' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:224:54:get',result.get,locals(), 'ein','')))!=run.ein
@@ -336,6 +420,7 @@ def capture_selected_ca_source(master,result,run,deadline):
  except (ValueError,TypeError,KeyError):return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:236:40:return',None)
  run.selected_visual_attempted=True
  start=time.perf_counter();held=False;browser=context=None
+ finish_readiness=lambda:None
  fact={'adapter':'CA-selected-registration-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
@@ -352,7 +437,7 @@ def capture_selected_ca_source(master,result,run,deadline):
     options={'viewport':{'width':1600,'height':1000},'locale':'en-US'}
     if getattr(master,'BROWSER_USER_AGENT',None):options['user_agent']=master.BROWSER_USER_AGENT
     context=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:254:12:new_context',browser.new_context,locals(), **options);page=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:254:48:new_page',context.new_page,locals())
-    fact['phase']='navigation';begin=time.perf_counter()
+    finish_readiness=observe_selected_readiness(page,fact,hint['url'],result['matched_registry_name'],identifier,stop);fact['phase']='navigation';begin=time.perf_counter()
     response=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:256:13:goto',page.goto,locals(), hint['url'],wait_until='commit',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=hint['url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:258:111:return',None)
@@ -399,6 +484,7 @@ def capture_selected_ca_source(master,result,run,deadline):
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:299:78:return',None)
     before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:300:30:document',run.document,locals(), hint['url'],raw,'image',core[:20000],note='Original selected registration panel and state header. Optional lower filing grids are outside this captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
+    finish_readiness()
     if context is not None:context._captured=True;workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:302:50:close',context.close,locals())
     if browser is not None:workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:303:27:close',browser.close,locals())
  except Exception as exc:fact['outcome']='source_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
@@ -656,6 +742,7 @@ def capture_selected_va_source(master,result,run,deadline):
  if (not re.fullmatch(r'\d+',identifier) or not hint or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:532:61:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name'])
      or workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:533:8:get',hint.get,locals(), 'url')!='https://vdacs.evokeplatform.com/app/publicPortal/registration/'+identifier):return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:533:102:return',None)
  run.selected_visual_attempted=True;start=time.perf_counter();held=False;browser=context=None;detach_observer=lambda:None
+ finish_readiness=lambda:None
  fact={'adapter':'VA-selected-original-registration','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
@@ -668,7 +755,7 @@ def capture_selected_va_source(master,result,run,deadline):
    try:
     options={'viewport':{'width':1600,'height':1400},'locale':'en-US'}
     if getattr(master,'BROWSER_USER_AGENT',None):options['user_agent']=master.BROWSER_USER_AGENT
-    context=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:547:12:new_context',browser.new_context,locals(), **options);page=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:547:48:new_page',context.new_page,locals());detach_observer=observe_visual_readiness(page,fact);begin=time.perf_counter();fact['phase']='navigation';fact['waiting_for']='document_commit'
+    context=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:547:12:new_context',browser.new_context,locals(), **options);page=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:547:48:new_page',context.new_page,locals());finish_readiness=observe_selected_readiness(page,fact,hint['url'],result['matched_registry_name'],identifier,stop);detach_observer=observe_visual_readiness(page,fact);begin=time.perf_counter();fact['phase']='navigation';fact['waiting_for']='document_commit'
     response=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:548:13:goto',page.goto,locals(), hint['url'],wait_until='commit',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=hint['url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:550:111:return',None)
@@ -758,6 +845,7 @@ def capture_selected_va_source(master,result,run,deadline):
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:583:78:return',None)
     before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:584:30:document',run.document,locals(), hint['url'],raw,'image',capture_core[:20000],note='Original selected registration fields and state header; lower optional submissions grid outside captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
+    finish_readiness()
     detach_observer()
     if context is not None:context._captured=True;workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:587:50:close',context.close,locals())
     if browser is not None:workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:588:27:close',browser.close,locals())
