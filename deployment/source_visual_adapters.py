@@ -2076,6 +2076,23 @@ def capture_selected_nj_source(master,result,run,deadline):
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
 
 
+def wv_pending_navigation_stop(observation, fact, old_stop, deadline, now):
+ """Continue one outstanding selected-navigation request, never issue it twice."""
+ if fact.get('navigation_continuation') or observation.get('invalid'):return None
+ pending=observation.get('pending',[])
+ if len(pending)!=1:return None
+ req=pending[0]
+ if (req.get('host')!='erls.wvsos.gov' or req.get('path') not in
+     {'/OnlineCharitiesSearch/Search','/OnlineCharitiesSearch/CharitiesInformation'}
+     or req.get('method')!='POST' or req.get('main_document') is not True
+     or req.get('responded') is not False):return None
+ # Only the exhausted original wait qualifies, not a shorter unrelated timeout.
+ if not 0<=old_stop-now<=1.5:return None
+ proposed=min(old_stop+15,deadline-1)
+ if proposed-now<6:return None
+ return proposed
+
+
 def capture_selected_wv_source(master,result,run,deadline):
  """Use the visible WV ID search and actual organization-ID detail link."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1724:5:get',result.get,locals(), 'state')!='WV' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1724:54:get',result.get,locals(), 'ein','')))!=run.ein
@@ -2100,28 +2117,54 @@ def capture_selected_wv_source(master,result,run,deadline):
     options={'viewport':{'width':1280,'height':900},'locale':'en-US'}
     if getattr(master,'BROWSER_USER_AGENT',None):options['user_agent']=master.BROWSER_USER_AGENT
     context=workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1745:12:new_context',browser.new_context,locals(), **options);page=workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1745:48:new_page',context.new_page,locals());begin=time.perf_counter();fact['phase']='navigation'
-    response=workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1746:13:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    pending_documents={};navigation_observation={'pending':[],'invalid':False}
+    def navigation_started(req):
+     try:
+      if req.resource_type!='document' or req.frame!=page.main_frame:return
+      u=urlsplit(req.url)
+      pending_documents[req]={'host':u.hostname,'path':u.path,'method':req.method,'main_document':True,'responded':False}
+      if len(pending_documents)>4:navigation_observation['invalid']=True
+     except Exception:navigation_observation['invalid']=True
+    def navigation_response(resp):
+     if resp.request in pending_documents:pending_documents[resp.request]['responded']=True
+    def navigation_ended(req):pending_documents.pop(req,None)
+    page.on('request',navigation_started);page.on('response',navigation_response)
+    page.on('requestfinished',navigation_ended);page.on('requestfailed',navigation_ended)
+    def selected_click(stage,control):
+     nonlocal stop
+     try:workflow_call(stage,control.click,locals(),timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
+     except Exception as exc:
+      if type(exc).__name__!='TimeoutError':raise
+      navigation_observation['pending']=list(pending_documents.values())
+      proposed=wv_pending_navigation_stop(navigation_observation,fact,stop,deadline,time.monotonic())
+      fact['navigation_boundary_observation']=navigation_observation.copy()
+      if proposed is None:raise
+      fact['navigation_continuation']={'count':1,'stage':fact['phase'],'extra_cap_seconds':15,
+        'extra_granted_seconds':round(proposed-stop,3),'completion_reserve_seconds':5}
+      stop=proposed
+      # The caller waits for the original selected row/detail, without another click.
+    response=workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1746:13:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=result['source_url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1748:120:return',None)
     begin=time.perf_counter();fact['phase']='credential_search'
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1750:4:select_option',page.locator('#ddlType').select_option,locals(), '1',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1751:4:fill',page.locator('#CharitiesSearch-CharitiesSearch_txtID').fill,locals(), identifier,timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1752:4:click',page.locator('#CharitiesSearch-CharitiesSearch_btnSearch').click,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1750:4:select_option',page.locator('#ddlType').select_option,locals(), '1',timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
+    workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1751:4:fill',page.locator('#CharitiesSearch-CharitiesSearch_txtID').fill,locals(), identifier,timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
+    selected_click('deployment/source_visual_adapters.py:capture_selected_wv_source:1752:4:click',page.locator('#CharitiesSearch-CharitiesSearch_btnSearch'))
     row=page.locator('#xhtml_grid tr').filter(has=page.locator('a').filter(has_text=re.compile('^'+re.escape(identifier)+'$')))
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1754:4:wait_for',row.wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1754:4:wait_for',row.wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
     if workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1755:7:count',row.count,locals())!=1 or norm(result['matched_registry_name']) not in norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1755:75:inner_text',row.inner_text,locals(), timeout=400)):fact['outcome']='selected_row_binding_failed';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1755:150:return',None)
     fact['credential_search_ms']=round((time.perf_counter()-begin)*1000,2);fact['visual_credential_queries']=1
     link=row.locator('a')
     if workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1758:7:count',link.count,locals())!=1 or not re.fullmatch(r'NavigateLienInfo\(\d+\)',link.get_attribute('onclick') or ''):fact['outcome']='source_detail_control_changed';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1758:155:return',None)
     begin=time.perf_counter();fact['phase']='detail'
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1760:4:click',link.click,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    page.wait_for_url('https://erls.wvsos.gov/OnlineCharitiesSearch/CharitiesInformation',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    selected_click('deployment/source_visual_adapters.py:capture_selected_wv_source:1760:4:click',link)
+    page.wait_for_url('https://erls.wvsos.gov/OnlineCharitiesSearch/CharitiesInformation',wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
     workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1762:4:wait_for_function',page.wait_for_function,locals(), '''({id,name})=>{
       const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9]/g,'');
       const text=document.body.innerText;
       return norm(text).includes(norm(name))&&new RegExp('ID:\\\\s*'+id+'\\\\s+Initial Registration Date:').test(text)
         &&/Expiration Date:/.test(text)&&/Status:/.test(text)&&!/Please wait\\.\\.\\./i.test(text);
-    }''',arg={'id':identifier,'name':result['matched_registry_name']},timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    }''',arg={'id':identifier,'name':result['matched_registry_name']},timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
     fact['detail_ms']=round((time.perf_counter()-begin)*1000,2)
     text=workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1769:9:inner_text',page.inner_text,locals(), 'body',timeout=400)
     if (not re.search(r'\bID:\s*'+re.escape(identifier)+r'\s+Initial Registration Date:',text)
