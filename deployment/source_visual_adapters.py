@@ -415,12 +415,12 @@ def observe_selected_readiness(page, fact, expected_url, expected_name, expected
 
 
 def initialization_completion_stop(fact, old_stop, state_deadline, now):
- """One same-page continuation earned by observed recent public-portal boot."""
+ """One same-page continuation earned by observed same-navigation public-portal boot."""
  if fact.get('initialization_continuation'):return None
  obs=fact.get('selected_readiness_observation',{})
  terminal=obs.get('terminal',{})
  host={'CA-selected-registration-detail':'ca-rcf.evokeplatform.com','VA-selected-original-registration':'vdacs.evokeplatform.com'}.get(fact.get('adapter'))
- paths={'/api/webContent/themes','/api/admin/environment/public','/api/webContent/apps/publicPortal/public'}
+ paths={'/api/webContent/themes','/api/admin/environment/public','/api/webContent/apps/publicPortal/public','/api/webContent/apps/publicPortal'}
  # Failed body reads, partial selected records, errors and verification do not
  # earn a new allowance. Body text can be zero during the proven bootstrap.
  if (not host or obs.get('route_matches') is not True or obs.get('terminal_read')!='completed'
@@ -428,11 +428,17 @@ def initialization_completion_stop(fact, old_stop, state_deadline, now):
      or terminal.get('expected_name_present') is not False or terminal.get('expected_id_present') is not False
      or terminal.get('verification_present') is not False or terminal.get('error_present') is not False
      or terminal.get('body_text_chars')!=0 or obs.get('pending_overflow')!=0
-     or obs.get('failed')!=0):return None
- recent=[p for p in obs.get('pending',[]) if p.get('host')==host and p.get('path') in paths
-         and p.get('type')=='xhr' and type(p.get('age_seconds')) in (float,int)
-         and 0<=p['age_seconds']<=3 and ('status' not in p or p['status']==200)]
- if not recent:return None
+     or obs.get('failed')!=0 or obs.get('observer_error') or obs.get('errors')):return None
+ # The observer starts on the new owned page before navigation. A request
+ # still pending from that navigation is not stale merely because it began
+ # more than three seconds ago. Never grant a second continuation or reset
+ # the parent deadline; this changes eligibility, not the existing maximum.
+ elapsed=obs.get('elapsed_seconds')
+ if type(elapsed) not in (float,int) or not 0<=elapsed<float('inf'):return None
+ pending=[p for p in obs.get('pending',[]) if p.get('host')==host and p.get('path') in paths
+          and p.get('type') in {'xhr','fetch'} and type(p.get('age_seconds')) in (float,int)
+          and 0<=p['age_seconds']<=elapsed+.01 and ('status' not in p or p['status']==200)]
+ if not pending:return None
  # Absolute stop is extended once, never reset from the time of the retry.
  # A five-second completion reserve applies to the continued first-field wait.
  new_stop=min(old_stop+15,state_deadline-1)
