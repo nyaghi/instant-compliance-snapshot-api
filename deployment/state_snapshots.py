@@ -603,6 +603,11 @@ class CaptureRun:
         """Capture before its existing context closes; do not navigate or scroll."""
         started=time.perf_counter()
         ma_capture_end=min(DEADLINE.get()-1,getattr(self,'page_capture_stop',float('inf'))-1,time.monotonic()+8) if self.state=='MA' else None
+        co_capture_end=min(DEADLINE.get()-1,getattr(self,'page_capture_stop',float('inf'))-1,time.monotonic()+8) if self.state=='CO' else None
+        def co_timeout(reserve,cap):
+            remaining=co_capture_end-time.monotonic()-reserve
+            if remaining<=0:raise TimeoutError('CO_capture_allowance_exhausted')
+            return max(1,int(min(cap,remaining)*1000))
         def ma_timeout(seconds):
             remaining=ma_capture_end-time.monotonic()
             if remaining<=0:raise TimeoutError('MA_capture_allowance_exhausted')
@@ -641,19 +646,19 @@ class CaptureRun:
             original_url=page.url
             url=public_url(original_url,self.state)
             observed('read_text')
-            text=workflow_call('deployment/state_snapshots.py:page:455:17:inner_text',page.inner_text,locals(), 'body',timeout=ma_timeout(2) if self.state=='MA' else 400)[:20000]
+            text=workflow_call('deployment/state_snapshots.py:page:455:17:inner_text',page.inner_text,locals(), 'body',timeout=co_timeout(6,2) if self.state=='CO' else ma_timeout(2) if self.state=='MA' else 400)[:20000]
             ak_empty=ak_empty_controls(page,self,text) if self.state=='AK' else None
             observed('read_dimensions')
             size=workflow_call('deployment/state_snapshots.py:page:458:17:evaluate',page.locator('body').evaluate,locals(),
-                '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=ma_timeout(1) if self.state=='MA' else max(1,int(min(2.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state=='AK' else 300)
+                '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=co_timeout(5,2) if self.state=='CO' else ma_timeout(1) if self.state=='MA' else max(1,int(min(2.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state=='AK' else 300)
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
                 self.errors.append('source_page_exceeds_capture_bound');return trace_return('deployment/state_snapshots.py:page:461:72:return',None)
             observed('screenshot')
-            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=(ma_timeout(5) if self.state=='MA' else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'AK','OK','ME'} or (self.state in {'WV','RI'} and hasattr(self,'page_capture_stop')) else 1000))
+            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=(co_timeout(1,5) if self.state=='CO' else ma_timeout(5) if self.state=='MA' else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'AK','OK','ME'} or (self.state in {'WV','RI'} and hasattr(self,'page_capture_stop')) else 1000))
             if self.state=='WA' and workflow_call('deployment/state_snapshots.py:page:464:36:is_visible',page.locator('#loaderDiv').is_visible,locals()):
                 self.errors.append('WA_source_overlay_returned_during_capture');return trace_return('deployment/state_snapshots.py:page:465:80:return',None)
             observed('post_capture_binding')
-            if page.url!=original_url or workflow_call('deployment/state_snapshots.py:page:467:41:inner_text',page.inner_text,locals(), 'body',timeout=ma_timeout(2) if self.state=='MA' else 400)[:20000]!=text:
+            if page.url!=original_url or workflow_call('deployment/state_snapshots.py:page:467:41:inner_text',page.inner_text,locals(), 'body',timeout=co_timeout(0,2) if self.state=='CO' else ma_timeout(2) if self.state=='MA' else 400)[:20000]!=text:
                 self.errors.append('source_page_changed_during_capture');return trace_return('deployment/state_snapshots.py:page:468:73:return',None)
             if ak_empty is not None:
                 if ak_empty_controls(page,self,text)!=ak_empty:
@@ -661,6 +666,8 @@ class CaptureRun:
                 bindings=getattr(self,'ak_empty_image_bindings',None)
                 if bindings is None:self.ak_empty_image_bindings={}
                 self.ak_empty_image_bindings[hashlib.sha256(raw).hexdigest()]=ak_empty
+            if self.state=='CO' and time.monotonic()>=co_capture_end:
+                raise TimeoutError('CO_capture_allowance_exhausted')
             workflow_call('deployment/state_snapshots.py:page:475:12:document',self.document,locals(), url,raw,'image',text,note=('Original Alaska empty search view for displayed year '+ak_empty['year']+'. This one image does not by itself establish all yearly/name searches.' if ak_empty else ''))
         except Exception as exc:
             self.errors.append('source_page_capture_unavailable')

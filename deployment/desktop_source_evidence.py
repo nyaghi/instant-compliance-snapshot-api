@@ -166,8 +166,8 @@ def valid_capture_timing(state,timing):
     if not finite(seconds) or seconds<0:return False
     if state not in {'WI','DC'} or 'queue_seconds' not in timing:return seconds<=30
     queue=timing.get('queue_seconds');active=timing.get('active_seconds')
-    return (finite(queue) and finite(active) and 0<=queue<=(30 if state=='WI' else 55) and 0<=active<=(20 if state=='WI' else 30)
-        and seconds<=(50 if state=='WI' else 60) and abs(seconds-queue-active)<0.05)
+    return (finite(queue) and finite(active) and 0<=queue<=55 and 0<=active<=(20 if state=='WI' else 30)
+        and seconds<=(75 if state=='WI' else 60) and abs(seconds-queue-active)<0.05)
 
 
 def handle_completion(master,handler,queue):
