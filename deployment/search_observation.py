@@ -107,6 +107,21 @@ def start_transport(url,body=None,params=None,run=None):
         # Playwright dispatches callbacks in its own greenlet context. Bind the
         # already-owned run explicitly instead of reading a different ContextVar.
         observed=[('name',value,label) for value,label in criteria(url,body,params,getattr(run,'known_names',[run.name]))]
+        if (run.state=='FL' and u.scheme=='https' and u.netloc=='csapp.fdacs.gov'
+                and u.path=='/CSPublicApp/CheckACharity/CheckACharity.aspx'
+                and isinstance(body,(str,bytes)) and 200000<len(body)<=8000000):
+            # ASP.NET state can exceed the generic observation size cap. Read
+            # only this exact public name input; never retain the opaque state.
+            from urllib.parse import unquote_plus
+            encoded=body.decode('utf8','replace') if isinstance(body,bytes) else body
+            fields=re.findall(r'(?:^|&)ctl00(?:%24|\$)cpMainContent(?:%24|\$)BusinessNameTb=([^&]{0,4000})(?=&|$)',encoded,re.I)
+            names=[unquote_plus(v).strip() for v in fields]
+            if len(names)==1 and 0<len(names[0])<=1000:
+                value=names[0]
+                if not any(k=='name' and v==value for k,v,_ in observed):
+                    observed.append(('name',value,'Florida submitted Business Name field'))
+            observation=getattr(run,'observation',None)
+            if observation:observation.emit('history.FL.large_post','observed',body_bytes=len(body),name_fields=len(names),names_retained=sum(k=='name' for k,_,_ in observed))
         if (run.state=='MI' and u.netloc=='www.ag.state.mi.us'
             and u.path=='/CharitableTrust/frmDefault.aspx' and not u.query and not u.fragment):
             # MI uses txtName, which the generic public-field detector does not
