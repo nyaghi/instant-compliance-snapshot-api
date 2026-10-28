@@ -18326,6 +18326,8 @@ def search_nd_completed(page, org):
                     if not fields.get("Status"):
                         raise ValueError("North Dakota detail did not contain a registration status")
                     if selected.get("_scope_review"):
+                        from deployment.nd_candidate_evidence import capture as capture_nd_candidate
+                        capture_nd_candidate(page, selected, fields, deadline)
                         detail_body = "\n".join(f"{key}: {value}" for key, value in fields.items())
                         source_result = checker.StateResult(org.organization_name, org.ein, "ND", fields["Status"], base,
                             raw_status_text=fields["Status"], matched_registry_name=selected["TITLE"][0],

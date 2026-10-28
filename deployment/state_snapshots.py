@@ -595,8 +595,12 @@ class CaptureRun:
         try:
             url=public_url(url,self.state)
             if not isinstance(raw,bytes) or not 0<len(raw)<=MAX_BYTES:return trace_return('deployment/state_snapshots.py:document:413:70:return',None)
-            while self.documents and (len(self.documents)>=8 or sum(len(d[1]) for d in self.documents)+len(raw)>6_000_000):
-                self.documents.pop(0)
+            nd_bindings=getattr(self,'nd_review_image_bindings',{}) if self.state=='ND' else {}
+            limit=10 if nd_bindings else 8
+            while self.documents and (len(self.documents)>=limit or sum(len(d[1]) for d in self.documents)+len(raw)>6_000_000):
+                disposable=next((i for i,d in enumerate(self.documents) if hashlib.sha256(d[1]).hexdigest() not in nd_bindings),None)
+                if disposable is None:return
+                self.documents.pop(disposable)
             self.documents.append((url,raw,kind,public_text,time.time(),note or workflow_call('deployment/state_snapshots.py:document:416:80:get',self.provenance.get,locals(), url,'')))
         except (ValueError,UnicodeError):return trace_return('deployment/state_snapshots.py:document:417:41:return',None)
     def page(self,page):
@@ -702,6 +706,9 @@ class CaptureRun:
                 if self.state=='ME' and not negative and me_detail_name_bound(name,text,identifier):matched=True
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
                 if self.state=='OH' and not negative and oh_selected_grid_bound(self,raw,url,row):matched=True
+                if self.state=='ND' and review_rows:
+                    matched=(kind=='image' and url=='https://firststop.sos.nd.gov/search/charitable'
+                        and getattr(self,'nd_review_image_bindings',{}).get(hashlib.sha256(raw).hexdigest())==(name,identifier))
                 if self.state=='AK' and not negative:
                     cycle_image=getattr(self,'ak_selected_cycle_images',{}).get(hashlib.sha256(raw).hexdigest())
                     if cycle_image:
