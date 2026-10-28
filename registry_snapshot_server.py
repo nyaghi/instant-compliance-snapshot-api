@@ -1808,12 +1808,24 @@ def or_confirm_snapshot_delinquency(org, result):
             url = 'https://justice.oregon.gov/Charities/Charity/details?charityID=' + row[0]
             request = urllib.request.Request(url, headers={'User-Agent': 'ComplianceExpressRegistrySnapshot/1.0'})
             attempts = []
+            from deployment.state_snapshots import DEADLINE
+            stop = min(time.monotonic() + 40.0, DEADLINE.get() - 1.0)
             for attempt in range(2):
+                phase = 'response_headers'
+                started = time.monotonic()
                 try:
-                    with urllib.request.urlopen(request, timeout=20) as response:
+                    remaining = stop - started
+                    if remaining <= 0:
+                        raise TimeoutError('Oregon live confirmation allowance exhausted')
+                    with urllib.request.urlopen(request, timeout=remaining) as response:
                         if urlparse(response.url).hostname != 'justice.oregon.gov':
                             raise ValueError('Unexpected Oregon detail destination')
+                        phase = 'response_body'
+                        if time.monotonic() >= stop:
+                            raise TimeoutError('Oregon live confirmation allowance exhausted')
                         content = response.read(2_000_001)
+                        if time.monotonic() >= stop:
+                            raise TimeoutError('Oregon live confirmation allowance exhausted')
                         if len(content) > 2_000_000:
                             raise ValueError('Oregon detail exceeded the document size limit')
                         source = content.decode('utf-8', errors='replace')
@@ -1829,8 +1841,8 @@ def or_confirm_snapshot_delinquency(org, result):
                         if evidence:
                             break
                 except Exception as exc:
-                    attempts.append(f'Oregon live detail attempt {attempt + 1}: {type(exc).__name__}.')
-                    if attempt:
+                    attempts.append(f'Oregon live detail attempt {attempt + 1}: {phase}; {type(exc).__name__}; elapsed {time.monotonic()-started:.1f} seconds; remaining {max(0.0,stop-time.monotonic()):.1f} seconds.')
+                    if attempt or time.monotonic() >= stop:
                         raise
             result.source_attempts = [*(getattr(result, 'source_attempts', []) or []), *attempts]
     except Exception as exc:
@@ -17346,9 +17358,9 @@ def search_fl_with_transport(page, org, transport):
 
     def remaining_ms(default_ms: int, minimum_ms: int = 1000) -> int:
         remaining = int(remaining_seconds() * 1000)
-        if remaining <= minimum_ms:
-            return minimum_ms
-        return min(default_ms, remaining)
+        if remaining <= 0:
+            raise TimeoutError("FL lookup allowance exhausted")
+        return max(1, min(default_ms, remaining))
 
     def deadline_expired() -> bool:
         return time.monotonic() >= deadline
@@ -17627,9 +17639,30 @@ def search_fl_with_transport(page, org, transport):
     last_error = None
     alias_review = None
     search_variants = reviewed_queries_first(original_name, org.ein, variants, limit=8)
-    final_exact_retry_added = False
+    failed_queries = {}
+    retried_queries = set()
     completed_search_form = False
-    if (fl_business_lookup_enabled() and search_variants and not getattr(org, "evidence_mode", False)
+    # Receipts live only in this exact state/name/EIN run. A changed plan gets
+    # a fresh receipt set. Only completed responses accepted by the existing
+    # parser may be retained; failure/verification pages never enter it.
+    completed_queries = {}
+    shared_run = None
+    if trial_identity():
+        from deployment.state_snapshots import CURRENT
+        candidate_run = CURRENT.get()
+        if (candidate_run is not None and candidate_run.state == 'FL'
+                and getattr(candidate_run, 'semantic_history_scope', False)
+                and candidate_run.ein == canonical_ein_digits(org.ein)
+                and canonical_name_punctuation(candidate_run.name) == original_name):
+            shared_run = candidate_run
+            binding = (original_name, canonical_ein_digits(org.ein), tuple(search_variants), url)
+            progress = getattr(shared_run, 'fl_query_progress', None)
+            if not isinstance(progress, dict) or progress.get('binding') != binding:
+                progress = {'binding': binding, 'completed': {}, 'attempts': []}
+                shared_run.fl_query_progress = progress
+            completed_queries = progress['completed']
+            progress['attempts'].append({'reused_queries': list(completed_queries), 'completed_queries': [], 'failed_queries': []})
+    if (not completed_queries and fl_business_lookup_enabled() and search_variants and not getattr(org, "evidence_mode", False)
             and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
         rows = fl_business_public_rows(canonical_name_punctuation(original_name), deadline)
         exact = [row for row in rows if normalized_match_name(row["business_evidence"]["name"])
@@ -17649,6 +17682,9 @@ def search_fl_with_transport(page, org, transport):
                     confirmed._cc_fl_business_source_verified = True
                     return confirmed
     for variant in search_variants:
+        if variant in completed_queries:
+            best_result = completed_queries[variant]
+            continue
         if deadline_expired():
             break
         result = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, url)
@@ -17694,6 +17730,11 @@ def search_fl_with_transport(page, org, transport):
                 result.source_note = "Florida Check-A-Charity returned no matching record for the generated name variants."
                 result.success = True
                 best_result = result
+                completed_queries[variant] = result
+                if shared_run is not None:
+                    progress['attempts'][-1]['completed_queries'].append(variant)
+                failed_queries.pop(variant, None)
+                last_error = next(iter(failed_queries.values()), None)
                 continue
             candidate_rows = page.evaluate(
                 """
@@ -17710,6 +17751,11 @@ def search_fl_with_transport(page, org, transport):
                 result.source_note = "Florida Check-A-Charity returned search results, but none safely matched the requested organization."
                 result.success = True
                 best_result = result
+                completed_queries[variant] = result
+                if shared_run is not None:
+                    progress['attempts'][-1]['completed_queries'].append(variant)
+                failed_queries.pop(variant, None)
+                last_error = next(iter(failed_queries.values()), None)
                 continue
             classified = finish_fl_candidate(result, best_candidate)
             if classified is not None:
@@ -17730,13 +17776,14 @@ def search_fl_with_transport(page, org, transport):
                 )
                 result.success = False
                 return result
-            if (
-                not final_exact_retry_added
-                and normalized_match_name(original_name) != normalized_match_name(variant)
-                and remaining_seconds() > 4
-            ):
-                search_variants.append(original_name)
-                final_exact_retry_added = True
+            if shared_run is not None:
+                progress['attempts'][-1]['failed_queries'].append({'query': variant, 'error_type': type(exc).__name__})
+            failed_queries[variant] = exc
+            # Complete the missing query once after the original plan. Completed
+            # queries are not repeated; all coverage must finish before NR.
+            if variant not in retried_queries and remaining_seconds() > 4:
+                search_variants.append(variant)
+                retried_queries.add(variant)
             if deadline_expired():
                 break
             continue
@@ -36066,16 +36113,21 @@ def _run_single_state_lookup_reliably_source(organization_name: str, ein: str, s
 
 
 def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
-    # Wisconsin's existing confirmation passes share completed source queries.
-    # Keep their observations in the same state/EIN/name scope too. The source
-    # retry function and every registry action remain unchanged.
-    if (state or '').upper()!='WI' or not trial_identity():
+    # Preserve completed searches and original history within a single state run.
+    # Florida receipts are bound to the exact name/EIN/query plan; WI is unchanged.
+    if (state or '').upper() not in {'WI','FL'} or not trial_identity():
         return _run_single_state_lookup_reliably_source(organization_name,ein,state)
     from deployment.state_snapshots import CaptureRun
-    with CaptureRun(organization_name,ein,'WI') as capture:
+    with CaptureRun(organization_name,ein,(state or '').upper()) as capture:
         capture.semantic_history_scope=True
         capture.known_names=[organization_name,*known_names_for_ein(ein)]
         data=_run_single_state_lookup_reliably_source(organization_name,ein,state)
+        if state.upper() == 'FL':
+            progress = getattr(capture, 'fl_query_progress', {})
+            data['fl_query_completion'] = {
+                'completed_queries': list(progress.get('completed', {})),
+                'attempts': progress.get('attempts', []),
+            }
         try:
             data=capture.finish(data)
             if os.environ.get('CE_FINAL_FOUR_CHILD')!='1':

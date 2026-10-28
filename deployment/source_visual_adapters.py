@@ -7,8 +7,18 @@ Positive-record paths only; negative and candidate-review routes remain separate
 import base64,hashlib,json,re,time
 from urllib.parse import urlsplit,parse_qsl,parse_qs
 
+
+def completed_names_only_result(run,result):
+ """A completed, same-run negative needs actual search names, not a new search."""
+ from deployment.state_snapshots import completed_negative_result
+ from deployment.identity_evidence import has_review
+ return (run is not None and completed_negative_result(result) and not has_review(result)
+         and result.get('state')==run.state
+         and re.sub(r'\D','',str(result.get('ein','')))==run.ein)
+
 def capture_result_visuals(master,result,run,deadline):
  """Measure visual-only requests separately; never alter a completed status."""
+ if completed_names_only_result(run,result):return None
  for capture in (capture_selected_source,capture_negative_search):
   try:workflow_call('deployment/source_visual_adapters.py:capture_result_visuals:12:6:capture',capture,locals(), master,result,run,deadline)
   except Exception:
@@ -1127,6 +1137,9 @@ def remember_md_selected(master,run,result,body,org):
 
 def capture_owned_md_page(run,result,page,context,deadline):
  """Original General Information page in a separate owned source page."""
+ if completed_names_only_result(run,result):
+  context._captured=True
+  return None
  if run is None or run.state!='MD':return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:778:35:return',None)
  context._captured=True
  if workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:780:4:get',result.get,locals(), 'status')=='Not Registered':return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:780:43:return',(workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:780:50:capture_owned_md_empty',capture_owned_md_empty,locals(), run,result,context,deadline)))
@@ -2505,6 +2518,7 @@ def retain_mi_grid_on_popup_timeout(run,result,grid,fact):
 
 def capture_owned_mi_page(run,result,page,context,deadline):
     """One selected-file visual query, original popup pixels, no status mutation."""
+    if completed_names_only_result(run,result):return None
     if workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2015:7:get',result.get,locals(), 'status')=='Not Registered':
         return trace_return('deployment/source_visual_adapters.py:capture_owned_mi_page:2016:8:return',(workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2016:15:capture_owned_mi_empty',capture_owned_mi_empty,locals(), run,result,context,deadline)))
     identifier=str(workflow_call('deployment/source_visual_adapters.py:capture_owned_mi_page:2017:19:get',result.get,locals(), 'matched_registry_identifier') or '')
