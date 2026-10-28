@@ -7036,11 +7036,11 @@ def nc_charity_profile_evidence(card, profile, filings=None):
     if not isinstance(profile, dict) or not required.issubset(profile) or not all(isinstance(profile[k], str) for k in required):
         raise ValueError("North Carolina profile is incomplete")
     application = (card.get("unissued_application") is True
-                   and card.get("raw_status") == "In-Process"
+                   and card.get("raw_status") in {"In-Process", "Withdrawn"}
                    and card.get("identifier") == "NCAPP-" + card["url"].rsplit("/", 1)[-1])
     expected_number = "" if application else card["identifier"]
     if (profile["profile_url"] != card["url"] or profile["Registration #"].strip() != expected_number
-            or application and profile["Status"] != "In-Process"
+            or application and profile["Status"] != card["raw_status"]
             or normalized_match_name(profile["Name"]) not in {normalized_match_name(n) for n in [card["name"], *card.get("aliases", [])]}):
         raise ValueError("North Carolina profile does not belong to the selected charity")
     result = nc_charity_record_evidence({"CSL Legal Name": profile["Name"], "CSL Type": card["license_category"],
@@ -7677,10 +7677,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             required = list(dict.fromkeys(part for name in required
                 for part in (licensed_compound_retrieval_names(name) or [name])))
         generated = [name for name in generated if not licensed_compound_retrieval_names(name)]
-        if state == "NC":
+        if state in {"NC", "NV"}:
             # Splitting a display label can recreate a reviewed name already
-            # deduplicated by licensed_charity_names. NC normalizes case in
-            # its displayed query, and its collector validates case-insensitively.
+            # deduplicated by licensed_charity_names. Preserve its existing
+            # case-insensitive alias uniqueness after compound expansion.
             # Restore that same deduplication; retain punctuation and both sides.
             distinct_names = {}
             for name in required:
@@ -7916,8 +7916,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 # or non-registration and must retain the conservative hold.
                 raise ValueError("North Carolina matching unsupported category needs scope confirmation")
             if (state == "NC" and row.get("unissued_application")
-                    and (not trial_identity() or row.get("raw_status") != "In-Process")):
-                # Terminal applications retain their existing coverage rules.
+                    and (not trial_identity() or row.get("raw_status") not in {"In-Process", "Withdrawn"})):
+                # Unsupported application states retain their existing coverage rules.
                 records.append(row)
                 seen.add(row["identifier"])
                 continue
@@ -8493,7 +8493,7 @@ def final_four_clean_evidence(payload, query):
         expected_number = "" if application_detail else query.get("identifier")
         if (not isinstance(fields, dict) or set(fields) - allowed or fields.get(identity_key) != expected_number
                 or application_detail and (fields.get("profile_url") != query["url"]
-                    or fields.get("Status") != "In-Process"
+                    or fields.get("Status") not in {"In-Process", "Withdrawn"}
                     or fields.get("Expiration Date") or fields.get("Extension End Date"))):
             raise ValueError("Unexpected or mismatched detail identity fields")
         if state == "TN" and "financial_history_absent" in fields:
@@ -9358,7 +9358,7 @@ def licensed_charity_names(org, *, literal_suffix_priority=False, literal_name_p
         # priority; the helper's shorter prefix retains its previous position.
         forms = ((literal_forms[:1] if literal_name_priority else [])
                  + licensed_dash_retrieval_forms(name) + possessive_search_phrases(name)
-                 + (literal_forms if literal_suffix_priority and reviewed_retrieval_key(name)[1] else [])
+                 + (literal_forms if literal_suffix_priority else [])
                  + high_signal_search_phrases(name) + literal_forms)
         for value in forms:
             value = re.sub(r"\s+", " ", value).strip()
@@ -24437,6 +24437,67 @@ def enrich_me_result_from_body(result, body: str) -> None:
         result.success = True
 
 
+def nj_selected_detail_fields(body):
+    """Read one original read-only detail, never infer fields from nearby grid text."""
+    from html.parser import HTMLParser
+    keys={'name','accountnumber','crsm_federalein','crsm_filestanding'}
+    if not isinstance(body,str) or len(body)>1_000_000:return None
+    if not re.search(r'</html>\s*(?:<!--[\s\S]*?-->\s*)*$',body,re.I):return None
+    if re.search(r'verify you are human|human verification|access denied|too many requests',html_to_text(body),re.I):return None
+    class Fields(HTMLParser):
+        def __init__(self):super().__init__(convert_charrefs=True);self.values={};self.current=None;self.option=False
+        def handle_starttag(self,tag,attrs):
+            a=dict(attrs);key=a.get('id')
+            if tag in {'input','textarea','select'} and key in keys:
+                self.values.setdefault(key,[]).append({'attrs':a,'value':a.get('value',''),'selected':0})
+                if tag!='input':self.current=(tag,key)
+            elif tag=='option' and self.current and self.current[0]=='select':
+                self.option='selected' in a
+                if self.option:self.values[self.current[1]][-1]['selected']+=1
+        def handle_data(self,data):
+            if self.current and (self.current[0]=='textarea' or self.option):self.values[self.current[1]][-1]['value']+=data
+        def handle_endtag(self,tag):
+            if tag=='option':self.option=False
+            if self.current and tag==self.current[0]:self.current=None;self.option=False
+    try:
+        p=Fields();p.feed(body)
+        if any(len(p.values.get(k,[]))!=1 for k in keys):return None
+        entries={k:p.values[k][0] for k in keys}
+        if any('readonly' not in entries[k]['attrs'] for k in keys-{'name'}):return None
+        if entries['crsm_filestanding']['selected']!=1:return None
+        f={k:v['value'].strip() for k,v in entries.items()}
+        if not f['name'] or len(f['name'])>300 or not re.fullmatch(r'CH\d+',f['accountnumber']):return None
+        if not re.fullmatch(r'\d{2}-?\d{7}',f['crsm_federalein']) or canonical_ein_digits(f['crsm_federalein'])=='000000000':return None
+        if f['crsm_filestanding'] not in {'Compliant','Non-Compliant','Exempt','Retired','Withdrawn','Revoked','Suspended','Expired','Pending','Active','Current','Delinquent'}:return None
+        return f
+    except (ValueError,TypeError):return None
+
+
+def nj_strong_name_ein_conflict(name, observed_ein, org):
+    """A narrow review candidate, never a corrected EIN or automatic match."""
+    requested=canonical_ein_digits(org.ein);observed=canonical_ein_digits(observed_ein)
+    return (len(requested)==len(observed)==9 and observed!='000000000'
+        and sum(a!=b for a,b in zip(requested,observed))==1
+        and normalized_match_name(name)==normalized_match_name(org.organization_name)
+        and bool(distinctive_match_tokens(name)) and len(re.findall(r'[A-Za-z0-9]+',name))>=2)
+
+
+def nj_conflict_review_allowed(row, name, ein):
+    """Server-retained exact-name conflict; an explicit choice is still required."""
+    if row.get("nj_ein_conflict") is not True:return False
+    org=SimpleNamespace(organization_name=name,ein=ein)
+    if not nj_strong_name_ein_conflict(row.get("name",""),row.get("ein",""),org):return False
+    if not re.fullmatch(r"CH\d+",str(row.get("identifier",""))):return False
+    try:
+        u=urllib.parse.urlsplit(row.get("url",""));pairs=urllib.parse.parse_qsl(u.query,keep_blank_values=True)
+        return (u.scheme=="https" and u.hostname=="charportal.dca.njoag.gov" and u.port in (None,443)
+            and not u.username and not u.password and not u.fragment and u.path=="/CHR-Public-Details-Page/"
+            and [k for k,v in pairs] in (["id","rid"],["id","rid","t"])
+            and all(re.fullmatch(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}",v) for k,v in pairs if k in {"id","rid"})
+            and all(re.fullmatch(r"[0-9]{10,16}",v) for k,v in pairs if k=="t"))
+    except (TypeError,ValueError):return False
+
+
 def nj_completed_future_detail(body,ein,credential=None):
     """A complete read-only blank/future FYE is loaded data, not a filed period."""
     from html.parser import HTMLParser
@@ -24493,6 +24554,15 @@ def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
                     or (name and name in re.sub(r"\W+", "", body).lower())
                 )
                 if identity_visible:
+                    fields=nj_selected_detail_fields(body)
+                    if fields:
+                        page._cc_nj_selected_record=(fields,frame.url)
+                        try:
+                            from deployment.state_snapshots import CURRENT
+                            run=CURRENT.get()
+                            if run is not None and run.state=="NJ":
+                                run.remember_detail(fields['accountnumber'],fields['name'],frame.url)
+                        except Exception:pass
                     # Preserve the selected original frame for the existing visual
                     # adapter. This hint never establishes identity or status;
                     # that adapter rechecks the visible EIN/name and record fields.
@@ -25113,7 +25183,7 @@ def nj_complete_public_zero(data) -> bool:
             and data.get("Success") is not False)
 
 
-def nj_complete_other_ein_rows(data, ein) -> bool:
+def nj_complete_other_ein_rows(data, ein, org=None) -> bool:
     """A complete name response whose every row explicitly identifies another EIN."""
     if (not isinstance(data, dict) or type(data.get("ItemCount")) is not int
             or not 1 <= data["ItemCount"] <= 10
@@ -25138,6 +25208,7 @@ def nj_complete_other_ein_rows(data, ein) -> bool:
             if raw is not None and raw != fields[key]:
                 return False
         other = fields["crsm_federalein"]
+        if org is not None and nj_strong_name_ein_conflict(fields["name"],other,org):return False
         if (not fields["name"] or not fields["accountnumber"]
                 or not re.fullmatch(r"\d{2}-?\d{7}", other)
                 or canonical_ein_digits(other) in (ein, "000000000")):
@@ -25203,6 +25274,7 @@ def nj_complete_grid_excludes_org(data, org) -> bool:
             return False
         credentials.add(credential)
         if other:
+            if nj_strong_name_ein_conflict(name,other,org):return False
             if (not re.fullmatch(r"\d{2}-?\d{7}", other)
                     or canonical_ein_digits(other) in (ein, "000000000")):
                 return False
@@ -25339,7 +25411,7 @@ def search_nj_public_details(org):
                     exempt = nj_name_exemption_result(named, org, deadline)
                     if exempt is not None:
                         return exempt, exempt.source_note
-                    if not (nj_complete_public_zero(named) or nj_complete_other_ein_rows(named, ein)
+                    if not (nj_complete_public_zero(named) or nj_complete_other_ein_rows(named, ein, org)
                             or (nj_complete_grid_enabled() and nj_complete_grid_excludes_org(named, org))):
                         break  # Positive/ambiguous/unusable queries keep browser matching.
                     progress.queries.add(query)
@@ -25409,6 +25481,14 @@ def search_nj_public_details(org):
 
 
 def nj_result_from_body(page, org, result, body, ein_digits):
+    selected_fields=nj_selected_detail_fields(body)
+    if selected_fields:
+        # Prefix only values parsed from the selected original form. The same
+        # status/date interpreter is used for public and browser responses.
+        body=(f"Charity Name: {selected_fields['name']}\nStatus {selected_fields['crsm_filestanding']} Federal EIN {selected_fields['crsm_federalein']}\n"
+              + body)
+        result._cc_nj_selected_fields=selected_fields
+        result.verified_registry_ein=canonical_ein_digits(selected_fields['crsm_federalein'])
     status = ""
     status_patterns = [
         ("Noncompliant", r"\bnon\W*compliant\b"),
@@ -25565,6 +25645,7 @@ def search_nj_direct(page, org, identity_org=None):
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, url)
     page._cc_nj_selected_detail = None  # A new search always obtains fresh evidence.
+    page._cc_nj_selected_record = None
     try:
         ein_digits = re.sub(r"\D", "", org.ein or "")
         body = nj_search_body(page, ein_digits or org.organization_name)
@@ -25644,6 +25725,33 @@ def search_nj_with_name_fallback(page, org):
                 or getattr(fallback, "reason_code", "") == "NJ_INCOMPLETE_QUERY_RESPONSE"):
             return copy_name_fallback_result(org, fallback)
         if public_status(fallback) == "Not Registered":
+            continue
+        observed=getattr(fallback,"verified_registry_ein","")
+        if observed and observed!=canonical_ein_digits(org.ein):
+            if nj_strong_name_ein_conflict(fallback.matched_registry_name,observed,org):
+                interpreted=public_status(fallback)
+                selected=getattr(page,"_cc_nj_selected_record",None)
+                fields=getattr(fallback,"_cc_nj_selected_fields",None)
+                row=None
+                if isinstance(selected,tuple) and len(selected)==2 and selected[0]==fields:
+                    row={"name":fields['name'],"ein":observed,"identifier":fields['accountnumber'],
+                        "url":selected[1],"raw_status":fallback.raw_status_text,"status":interpreted,
+                        "expiration":getattr(fallback,"computed_due_date","") or "",
+                        "nj_ein_conflict":True,"_identity_outcome":"conflict"}
+                    if not nj_conflict_review_allowed(row,org.organization_name,org.ein):row=None
+                fallback.status="Needs Review" if row else "Unable to Confirm"
+                fallback.success=False
+                if row:
+                    fallback.matched_registry_identifier=row['identifier']
+                    fallback.source_url=row['url']
+                    # This early identity conflict does not certify completion
+                    # of the remaining alias plan. Reject must retain that fact.
+                    fallback._cc_identity_review={"records":[row],"search_complete":False,"freshness":""}
+                fallback.reason_code="NJ_SELECTED_EIN_CONFLICT"
+                fallback.source_note=(f"New Jersey lists {fallback.matched_registry_name} with EIN {observed}; "
+                    f"the entered EIN is {canonical_ein_digits(org.ein)}. The identity conflict requires review; "
+                    "the source standing is retained without automatically correcting either EIN.")
+                return copy_name_fallback_result(org,fallback)
             continue
         if result_registry_name_is_safe(fallback, org.organization_name, org.ein):
             fallback.source_note = (
@@ -36460,15 +36568,18 @@ def attach_identity_review(data, context):
         if outcome not in {"accepted", "possible", "conflict"}:
             continue
         if row.get("ein") and canonical_ein_digits(row["ein"]) != canonical_ein_digits(data["ein"]):
-            continue
+            if not (data['state']=='NJ' and nj_conflict_review_allowed(row,data['organization_name'],data['ein'])):
+                continue
         clean = {key: row.get(key, "") for key in
                  ("name", "identifier", "ein", "location", "url", "raw_status", "expiration", "license_category", "initial", "evidence_url")}
         from deployment.state_snapshots import REFERENCES, matching_reference
         snapshot_ref = matching_reference({**clean, 'state': data['state'], 'ein': data['ein']}, REFERENCES.get())
         if snapshot_ref:
             clean['evidence_url'] = snapshot_ref['url']
+        if data['state']=='NJ' and row.get('nj_ein_conflict') is True:
+            clean['nj_ein_conflict']=True
         clean["suggested"] = row.get("suggested") is True
-        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK"}:
+        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ"}:
             # Keep the master interpretation of complete state evidence in the
             # signed snapshot. Identity acceptance cannot substitute a generic
             # Active label for a filing-history or charity-scope decision.
@@ -36521,7 +36632,7 @@ def identity_review_wi_status(row):
 
 
 def identity_review_state_status(state, row):
-    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK"}:
+    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ"}:
         status = row.get("interpreted_status")
         return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
             "Pending", "Suspended", "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",
@@ -36632,6 +36743,14 @@ def resolve_identity_review(payload, email, device):
                     success=record["search_complete"], matched_registry_name="", matched_registry_identifier="",
                     raw_status_text="User rejected the retrieved identity candidates", computed_due_date="",
                     comments=note + ("The completed search has no remaining qualifying registration record." if record["search_complete"] else "The search is incomplete; rejecting this candidate does not establish non-registration."))
+    elif base["state"] == "NJ" and len(accepted)==1 and nj_conflict_review_allowed(accepted[0],base['organization_name'],base['ein']):
+        chosen=accepted[0];status=identity_review_state_status('NJ',chosen)
+        data.update(status=status,success=status not in {'Unable to Confirm','Needs Review'},
+            matched_registry_name=chosen['name'],matched_registry_identifier=chosen['identifier'],
+            source_url=chosen['url'],raw_status_text=chosen['raw_status'],
+            computed_due_date=chosen.get('expiration',''),verified_registry_ein=chosen['ein'],
+            comments=note+f"The user confirmed this record despite the EIN conflict: entered {base['ein']}, registry {chosen['ein']}. "
+                +f"The registry reports {chosen['raw_status']}; CharityClarity retains {status}. Neither EIN was changed.")
     elif base["state"] == "KY":
         # Re-evaluate the signed, user-selected identity against the current
         # Kentucky snapshot. Its filed-year and IRS fiscal-period rules remain

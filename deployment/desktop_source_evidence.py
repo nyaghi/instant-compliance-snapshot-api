@@ -4,7 +4,7 @@ from deployment.workflow_observation import workflow_call, trace_return, workflo
 Status and identity remain the existing worker's decision. No URL discovery,
 challenge solving, search planning or shared-browser session access lives here.
 """
-import re,time,json
+import re,time,json,math
 from urllib.parse import urlsplit,parse_qsl
 
 def normalized(value):
@@ -38,6 +38,23 @@ def empty_metadata(d,payload):
         and workflow_call('deployment/desktop_source_evidence.py:empty_metadata:37:12:get',m.get,locals(), 'visible') is True)))
 
 def retained_request(run,result):
+    request=_retained_request(run,result)
+    if not request or request.get('state')!='WI' or 'expires_at' in request:return request
+    from deployment.state_snapshots import DEADLINE
+    remaining=min(300.,DEADLINE.get()-time.monotonic()-1.)
+    if remaining<23:return None
+    # Preserve one original outer state stop across queue, capture and archive.
+    return {**request,'expires_at':time.time()+remaining,'deadline_schema':1}
+
+def deadline_valid(d):
+    if 'deadline_schema' in d and (type(d['deadline_schema']) is not int or d['deadline_schema']!=1):return False
+    if d.get('deadline_schema')==1 and 'expires_at' not in d:return False
+    if 'expires_at' not in d:return True  # Existing saved WI requests retain their old transport.
+    return (type(d.get('expires_at')) in (int,float) and math.isfinite(d['expires_at'])
+        and type(d.get('issued_at')) in (int,float) and math.isfinite(d['issued_at'])
+        and 0<d['expires_at']-d['issued_at']<=300.1)
+
+def _retained_request(run,result):
     """Retain the source-issued URL before the owned lookup context closes."""
     if run.state=='WI' and result.get('_worker_identity_review'):
         from deployment.wi_review_evidence import retained_request as wi_review_request
@@ -64,6 +81,8 @@ def retained_request(run,result):
         raw_status=raw,run_id=run.run_id,issued_at=time.time(),operation='detail')))
 
 def describe(result):
+    request=result.get('_worker_desktop_evidence')
+    if isinstance(request,dict) and request.get('state')=='WI' and not deadline_valid(request):return None
     """Expose only a bounded request produced by the successful source lookup."""
     if result.get('state')=='WI' and result.get('_worker_identity_review'):
         from deployment.wi_review_evidence import describe as wi_review_describe
@@ -104,6 +123,7 @@ def validate_completion(result,payload):
         or normalized(d['name']) not in normalized(text)
         or re.search(r'verify you are human|user validation required|access denied|just a moment|you have been blocked',text,re.I)):
         raise ValueError('Source detail does not match the selected record')
+    if 'expires_at' in d and stamp>d['expires_at']:raise ValueError('WI capture outside deadline')
     if d['operation']=='detail':
         if (not re.search(r'(?<!\d)'+re.escape(d['identifier'])+r'(?!\d)',text)
             or 'Credential Summary' not in text or 'CHARITABLE ORGANIZATION (800)' not in text
@@ -158,7 +178,7 @@ def persist_completion(result,payload,store=None):
         update['_worker_desktop_history']=record
     return trace_return('deployment/desktop_source_evidence.py:persist_completion:137:4:return',(update))
 
-def valid_capture_timing(state,timing):
+def valid_capture_timing(state,timing,request=None):
     import math
     if not isinstance(timing,dict):return False
     seconds=timing.get('seconds')
@@ -166,8 +186,13 @@ def valid_capture_timing(state,timing):
     if not finite(seconds) or seconds<0:return False
     if state not in {'WI','DC'} or 'queue_seconds' not in timing:return seconds<=30
     queue=timing.get('queue_seconds');active=timing.get('active_seconds')
-    return (finite(queue) and finite(active) and 0<=queue<=55 and 0<=active<=(20 if state=='WI' else 30)
-        and seconds<=(75 if state=='WI' else 60) and abs(seconds-queue-active)<0.05)
+    total=(75 if state=='WI' else 60);queue_max=55
+    if isinstance(request,dict) and request.get('deadline_schema')==1:
+        if not deadline_valid(request):return False
+        total=request['expires_at']-request['issued_at']
+        queue_max=max(0,total-(20 if state=='WI' else 30))
+    return (finite(queue) and finite(active) and 0<=queue<=queue_max and 0<=active<=(20 if state=='WI' else 30)
+        and seconds<=total and abs(seconds-queue-active)<0.05)
 
 
 def handle_completion(master,handler,queue):
@@ -196,7 +221,7 @@ def handle_completion(master,handler,queue):
         completion=workflow_call('deployment/desktop_source_evidence.py:handle_completion:161:19:get',p.get,locals(), 'completion');validate_completion(result,completion)
         import math
         seconds=workflow_call('deployment/desktop_source_evidence.py:handle_completion:163:16:get',workflow_call('deployment/desktop_source_evidence.py:handle_completion:163:16:get',completion.get,locals(), 'timing',{}).get,locals(), 'seconds')
-        if not valid_capture_timing(state,completion.get('timing',{})):
+        if not valid_capture_timing(state,completion.get('timing',{}),describe(result)):
             raise ValueError('Invalid capture duration')
         # Serialization is bounded; no changes to phase, status, search or identity.
         start=time.perf_counter();update=persist_completion(result,completion,PostgresStore(queue.pool))

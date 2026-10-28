@@ -22,11 +22,12 @@ def retained_request(run,result):
  if review:
   if review!=expected:return None
  elif str(result.get('matched_registry_identifier'))!=expected['identifier'] or norm(result.get('matched_registry_name'))!=norm(expected['name']):return None
- remaining=min(60.,DEADLINE.get()-time.monotonic()-1)
+ remaining=min(300.,DEADLINE.get()-time.monotonic()-1)
  if remaining<5:return None
- return dict(state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'),**({'review_candidate':True} if review else {}))
+ return dict(deadline_schema=1,state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'),**({'review_candidate':True} if review else {}))
 def describe(result):
  d=result.get('_worker_desktop_evidence')
+ if isinstance(d,dict) and 'deadline_schema' in d and (type(d['deadline_schema']) is not int or d['deadline_schema']!=1):return None
  if not eligible(result) or result.get('evidence_url') or not isinstance(d,dict):return None
  if d.get('state')!='DC' or d.get('operation')!='detail' or d.get('url')!=SEARCH:return None
  if not re.fullmatch(r'\d{5,16}',str(d.get('identifier',''))) or not re.fullmatch(r'[a-f0-9]{32}',str(d.get('run_id',''))):return None
@@ -35,7 +36,7 @@ def describe(result):
  from deployment.dc_review_evidence import request_matches
  if not request_matches(result,d):return None
  if any(type(d.get(k)) not in (int,float) or not math.isfinite(d[k]) for k in ('issued_at','expires_at')):return None
- if not 0<d['expires_at']-d['issued_at']<=60.1 or not -5<=time.time()-d['issued_at']<600:return None
+ if not 0<d['expires_at']-d['issued_at']<=(300.1 if d.get('deadline_schema')==1 else 60.1) or not -5<=time.time()-d['issued_at']<600:return None
  try:datetime.strptime(d['expiration'],'%Y-%m-%d')
  except (KeyError,ValueError,TypeError):return None
  return dict(d)

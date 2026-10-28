@@ -123,7 +123,7 @@ def manifest(record,result,snapshot,now):
         elif (matching_reference(result,[snapshot])!=snapshot
               or snapshot.get('run_id')!=record.get('source_archive_run_id')):
             raise ValueError('No bound selected-record snapshot')
-    receipt_limit=300 if state=='KY' and record.get('history_order')=='issued-sequence-v1' else 150
+    receipt_limit=300 if state in {'KY','LA'} and record.get('history_order')=='issued-sequence-v1' else 150
     entries=[]
     for item in record.get('completed',[]):
         receipt=item.get('search_receipt')
@@ -421,7 +421,7 @@ class SourceQueryReceipt:
         self.saved=True
         entries=getattr(self.run,'search_history_receipts',None)
         if entries is None:entries=self.run.search_history_receipts=[]
-        if len(entries)>=(300 if self.run.state=='KY' else 150):
+        if len(entries)>=(300 if self.run.state in {'KY','LA'} else 150):
             self.run.search_history_overflow=True;return
         entries.append({'query':self.query,'query_id':self.query_id,'source_order':self.sequence,
             'issued_at':self.issued,'completed_at':completed,'reported_at':time.time(),

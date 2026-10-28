@@ -57,13 +57,14 @@
         const captured=await new Promise(resolve=>{
           let timer;
           const cleanup=()=>{clearTimeout(timer);window.removeEventListener('message',receive);signal?.removeEventListener('abort',abort);};
-          const abort=()=>{cleanup();resolve({ok:false,reason:'cancelled'});};
+          const cancel=()=>window.postMessage({channel,direction:'cancel',id},location.origin);
+          const abort=()=>{cancel();cleanup();resolve({ok:false,reason:'cancelled'});};
           const receive=event=>{
             if(event.source!==window || event.origin!==location.origin || event.data?.channel!==channel || event.data.direction!=='response' || event.data.id!==id)return;
             cleanup();resolve(event.data.result||{ok:false});
           };
           window.addEventListener('message',receive);signal?.addEventListener('abort',abort,{once:true});
-          timer=setTimeout(()=>{cleanup();resolve({ok:false,reason:'capture_timeout'});},result.state==='DC'?62000:77000);
+          timer=setTimeout(()=>{cancel();cleanup();resolve({ok:false,reason:'capture_timeout'});},result.desktop_evidence_request.deadline_schema===1&&Number.isFinite(result.desktop_evidence_request.expires_at)?Math.max(1,Math.min(300000,result.desktop_evidence_request.expires_at*1000-Date.now())+2000):(result.state==='DC'?62000:77000));
           window.postMessage({channel,direction:'request',id,request:result.desktop_evidence_request},location.origin);
         });
         sourceObservation={phase:'capture',reason:typeof captured.reason==='string'

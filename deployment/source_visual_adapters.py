@@ -197,6 +197,7 @@ def capture_selected_source(master,result,run,deadline):
     before=len(run.documents);capture=time.perf_counter()
     # Preserve RI's existing absolute visual stop inside the screenshot call.
     if run.state in {'RI','OR'}:run.page_capture_stop=stop
+    if run.state=='HI':run.page_capture_stop=min(stop,getattr(run,'page_capture_stop',float('inf')))
     # Owned ContextCaptureProxy captures once; its close must not capture again.
     workflow_call('deployment/source_visual_adapters.py:capture_selected_source:182:4:capture',context.capture,locals())
     fact['capture_ms']=round((time.perf_counter()-capture)*1000,2)
@@ -2007,6 +2008,16 @@ NJ_VISIBLE_GEOMETRY = '''()=>{
 
 def capture_selected_nj_source(master,result,run,deadline):
  """Original selected NJ detail; visible input values bind pixels, not API JSON."""
+ expected_ein=run.ein
+ review_credential=None
+ context=result.get('_worker_identity_review') or result.get('identity_review') or {}
+ rows=context.get('records',context.get('candidates',[]))
+ if rows:
+  if len(rows)!=1 or not master.nj_conflict_review_allowed(rows[0],result.get('organization_name',''),run.ein):return
+  row=rows[0];expected_ein=master.canonical_ein_digits(row['ein']);review_credential=row['identifier']
+  result={**result,'success':True,'status':row.get('status',row.get('interpreted_status','Needs Review')),
+          'matched_registry_identifier':row['identifier'],'matched_registry_name':row['name']}
+
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1644:5:get',result.get,locals(), 'state')!='NJ' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1644:54:get',result.get,locals(), 'ein','')))!=run.ein
      or workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1645:8:get',result.get,locals(), 'success') is not True or workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1645:45:get',result.get,locals(), 'status') in {'Not Registered','Unable to Confirm','Site Not Reachable'}
      or not workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1646:12:get',result.get,locals(), 'matched_registry_name') or getattr(run,'selected_visual_attempted',False)):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1646:99:return',None)
@@ -2021,7 +2032,7 @@ def capture_selected_nj_source(master,result,run,deadline):
       or [k for k,v in params] not in (['id','rid'],['id','rid','t'])
       or any(not re.fullmatch(r'[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}',value) for key,value in params if key in {'id','rid'})
       or any(not re.fullmatch(r'[0-9]{10,16}',value) for key,value in params if key=='t')
-      or identifier!=run.ein):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1657:30:return',None)
+      or identifier!=(review_credential or run.ein)):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1657:30:return',None)
  except (ValueError,TypeError,KeyError):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1658:40:return',None)
  run.selected_visual_attempted=True
  start=time.perf_counter();fact={'adapter':'NJ-selected-original-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
@@ -2053,13 +2064,14 @@ def capture_selected_nj_source(master,result,run,deadline):
      const n=document.querySelector('#name'),e=document.querySelector('#crsm_federalein'),r=document.querySelector('#accountnumber'),f=document.querySelector('#crsm_fiscalyearenddate_datepicker_description');
      const norm=x=>String(x).trim().replace(/^the\\s+/i,'').toLowerCase().replace(/[^a-z0-9]/g,'');
      return n&&e&&r&&f&&norm(n.value)===norm(name)&&e.value.replace(/\\D/g,'')===ein&&/^CH[0-9]+$/.test(r.value)&&(f.value||document.readyState!=='loading'&&f.hasAttribute('readonly')&&document.querySelector('#crsm_fiscalyearenddate')?.hasAttribute('readonly')&&!document.querySelector('#crsm_fiscalyearenddate')?.value);
-    }''',arg={'ein':run.ein,'name':result['matched_registry_name']},timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    }''',arg={'ein':expected_ein,'name':result['matched_registry_name']},timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
     fields=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1691:11:evaluate',page.evaluate,locals(), NJ_VISIBLE_FIELDS)
     if (not fields or norm(fields['name'])!=norm(result['matched_registry_name'])
-        or re.sub(r'\D','',fields['crsm_federalein'])!=run.ein
+        or re.sub(r'\D','',fields['crsm_federalein'])!=expected_ein
+        or (review_credential is not None and fields['accountnumber']!=review_credential)
         or not re.fullmatch(r'CH\d+',fields['accountnumber']) or not fields['crsm_filestanding']
-        or not (re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}',fields['crsm_fiscalyearenddate_datepicker_description']) or fields['crsm_fiscalyearenddate_datepicker_description']=='' and master.nj_completed_future_detail(page.content(),run.ein,fields['accountnumber']))):
+        or not (re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}',fields['crsm_fiscalyearenddate_datepicker_description']) or fields['crsm_fiscalyearenddate_datepicker_description']=='' and master.nj_completed_future_detail(page.content(),expected_ein,fields['accountnumber']))):
      fact['outcome']='record_binding_failed';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1696:45:return',None)
     if workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1697:7:evaluate',page.evaluate,locals(), NJ_VISIBLE_GEOMETRY) is not True:fact['outcome']='selected_fields_overlap';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1697:96:return',None)
     text=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1698:9:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
@@ -2082,7 +2094,7 @@ def capture_selected_nj_source(master,result,run,deadline):
        const d=root.ownerDocument,get=id=>d.querySelector('#'+id),n=get('name'),e=get('crsm_federalein'),r=get('accountnumber'),f=get('crsm_fiscalyearenddate_datepicker_description'),h=get('crsm_fiscalyearenddate');
        const norm=x=>String(x).trim().replace(/^the\\s+/i,'').toLowerCase().replace(/[^a-z0-9]/g,'');
        return {document_state:d.readyState,name_present:!!n,name_matches:!!n&&norm(n.value)===norm(args.name),ein_present:!!e,ein_matches:!!e&&e.value.replace(/\\D/g,'')===args.ein,registration_present:!!r,registration_valid:!!r&&/^CH[0-9]+$/.test(r.value),fiscal_display_present:!!f,fiscal_display_populated:!!f&&!!f.value,completed_empty_fiscal:!!f&&d.readyState!=='loading'&&f.hasAttribute('readonly')&&!!h&&h.hasAttribute('readonly')&&!h.value};
-      }""",{'ein':run.ein,'name':result['matched_registry_name']},timeout=max(1,int(min(.4,stop-time.monotonic()-.5)*1000)))
+      }""",{'ein':expected_ein,'name':result['matched_registry_name']},timeout=max(1,int(min(.4,stop-time.monotonic()-.5)*1000)))
      except Exception as probe_error:fact['selected_fields_probe_error']=type(probe_error).__name__
     if context is not None:context._captured=True;workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1712:50:close',context.close,locals())
     if browser is not None:workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1713:27:close',browser.close,locals())
@@ -2149,19 +2161,31 @@ def capture_selected_wv_source(master,result,run,deadline):
     def navigation_ended(req):pending_documents.pop(req,None)
     page.on('request',navigation_started);page.on('response',navigation_response)
     page.on('requestfinished',navigation_ended);page.on('requestfailed',navigation_ended)
-    def selected_click(stage,control):
+    def continue_pending_navigation(exc):
      nonlocal stop
+     if type(exc).__name__!='TimeoutError':raise exc
+     navigation_observation['pending']=list(pending_documents.values())
+     proposed=wv_pending_navigation_stop(navigation_observation,fact,stop,deadline,time.monotonic())
+     fact['navigation_boundary_observation']=navigation_observation.copy()
+     if proposed is None:raise exc
+     fact['navigation_continuation']={'count':1,'stage':fact['phase'],'extra_cap_seconds':15,
+       'extra_granted_seconds':round(proposed-stop,3),'completion_reserve_seconds':5}
+     stop=proposed
+    def selected_click(stage,control):
      try:workflow_call(stage,control.click,locals(),timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
      except Exception as exc:
-      if type(exc).__name__!='TimeoutError':raise
-      navigation_observation['pending']=list(pending_documents.values())
-      proposed=wv_pending_navigation_stop(navigation_observation,fact,stop,deadline,time.monotonic())
-      fact['navigation_boundary_observation']=navigation_observation.copy()
-      if proposed is None:raise
-      fact['navigation_continuation']={'count':1,'stage':fact['phase'],'extra_cap_seconds':15,
-        'extra_granted_seconds':round(proposed-stop,3),'completion_reserve_seconds':5}
-      stop=proposed
+      continue_pending_navigation(exc)
       # The caller waits for the original selected row/detail, without another click.
+    def wait_selected_navigation():
+     def wait():
+      workflow_call('deployment/source_visual_adapters.py:WV:selected_detail_navigation',page.wait_for_url,locals(),
+       'https://erls.wvsos.gov/OnlineCharitiesSearch/CharitiesInformation',wait_until='domcontentloaded',
+       timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
+     try:wait()
+     except Exception as exc:
+      continue_pending_navigation(exc)
+      # Continue waiting for the same outstanding document; never submit again.
+      wait()
     response=workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1746:13:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=result['source_url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1748:120:return',None)
@@ -2177,7 +2201,7 @@ def capture_selected_wv_source(master,result,run,deadline):
     if workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1758:7:count',link.count,locals())!=1 or not re.fullmatch(r'NavigateLienInfo\(\d+\)',link.get_attribute('onclick') or ''):fact['outcome']='source_detail_control_changed';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1758:155:return',None)
     begin=time.perf_counter();fact['phase']='detail'
     selected_click('deployment/source_visual_adapters.py:capture_selected_wv_source:1760:4:click',link)
-    page.wait_for_url('https://erls.wvsos.gov/OnlineCharitiesSearch/CharitiesInformation',wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
+    wait_selected_navigation()
     workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1762:4:wait_for_function',page.wait_for_function,locals(), '''({id,name})=>{
       const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9]/g,'');
       const text=document.body.innerText;
@@ -2707,7 +2731,7 @@ def capture_owned_mi_empty(run,result,context,deadline):
 def capture_va_unregistered_entity(master,result,run,deadline):
  """Photograph the proven entity, not an empty global search, without changing status."""
  if (run is None or run.state!='VA' or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2186:39:get',result.get,locals(), 'state')!='VA'
-     or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2187:8:get',result.get,locals(), 'success') is not True or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2187:45:get',result.get,locals(), 'status')!='Not Registered'
+     or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2187:8:get',result.get,locals(), 'success') is not True or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2187:45:get',result.get,locals(), 'status') not in {'Not Registered','Suspended'}
      or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2188:28:get',result.get,locals(), 'ein','')))!=run.ein
      or getattr(run,'negative_visual_attempted',False)):return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2189:56:return',None)
  proof=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2190:7:get',result.get,locals(), 'va_entity_evidence');identifier=str(workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2190:55:get',result.get,locals(), 'matched_registry_identifier') or '')
@@ -2715,8 +2739,8 @@ def capture_va_unregistered_entity(master,result,run,deadline):
  if (not isinstance(proof,dict) or not re.fullmatch(r'\d{1,12}',identifier)
      or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2193:8:get',proof.get,locals(), 'ein')!=run.ein or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2193:37:get',proof.get,locals(), 'id')!=identifier or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2193:68:get',proof.get,locals(), 'entity_id')!=identifier
      or not workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2194:12:get',result.get,locals(), 'matched_registry_name') or norm(workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2194:56:get',proof.get,locals(), 'name'))!=norm(result['matched_registry_name'])
-     or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2195:8:get',proof.get,locals(), 'status')!='Unregistered' or type(workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2195:52:get',proof.get,locals(), 'registration_count')) is not int
-     or proof['registration_count']!=0 or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2196:42:get',result.get,locals(), 'source_url')!=VA_FINAL_SEARCH):return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2196:85:return',None)
+     or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2195:8:get',proof.get,locals(), 'status')!={'Not Registered':'Unregistered','Suspended':'Not Authorized to Solicit'}[result['status']] or type(workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2195:52:get',proof.get,locals(), 'registration_count')) is not int
+     or proof['registration_count']!=0 or (result['status']=='Suspended' and result.get('status_reason')!='VA_CONFIRMED_SOLICITATION_RESTRICTION') or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2196:42:get',result.get,locals(), 'source_url')!=VA_FINAL_SEARCH):return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2196:85:return',None)
  run.negative_visual_attempted=True;started=time.perf_counter();held=False;browser=context=None
  url='https://vdacs.evokeplatform.com/app/publicPortal/entity/'+identifier
  fact={'adapter':'VA-original-unregistered-entity','phase':'admission','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'extra_registry_queries':0,'visual_detail_requests':0,'local_visual_budget_ms':16000};run.visual_adapter_facts.append(fact)
@@ -2750,7 +2774,7 @@ def capture_va_unregistered_entity(master,result,run,deadline):
       lines=[line.strip() for line in workflow_call('deployment/source_visual_adapters.py:read_bound:2227:38:inner_text',el.inner_text,locals(), timeout=400).splitlines() if line.strip()]
       if len(lines)<2 or lines[0]!=label:return trace_return('deployment/source_visual_adapters.py:read_bound:2228:41:return',(None))
       fields[key]=' '.join(lines[1:])
-     if (norm(fields['fullName'])!=norm(proof['name']) or fields['status']!='Unregistered'
+     if (norm(fields['fullName'])!=norm(proof['name']) or fields['status']!=proof['status']
          or re.sub(r'\D','',fields['ein'])!=run.ein):return trace_return('deployment/source_visual_adapters.py:read_bound:2231:53:return',(None))
      text=workflow_call('deployment/source_visual_adapters.py:read_bound:2232:10:inner_text',page.inner_text,locals(), 'body',timeout=400)
      if ('Registration Type' not in text or 'Registration ID' not in text or 'Expiration Date' not in text
@@ -2764,7 +2788,7 @@ def capture_va_unregistered_entity(master,result,run,deadline):
     after=read_bound()
     if after is None or after!=before:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2242:86:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2243:78:return',None)
-    count=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2244:29:document',run.document,locals(), url,raw,'image',before[1],note='Original selected Virginia entity page: explicit Unregistered standing and empty Registrations table. Same-run exact-EIN lookup confirmed zero registrations; this is not an empty organization search.')
+    count=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2244:29:document',run.document,locals(), url,raw,'image',before[1],note='Original selected Virginia entity page: explicit '+proof['status']+' standing and empty Registrations table. Same-run exact-EIN lookup confirmed zero registrations; this is not an empty organization search.')
     if len(run.documents)>count:
      digest=hashlib.sha256(raw).hexdigest()
      run.va_validated_empty_images=getattr(run,'va_validated_empty_images',set());run.va_validated_empty_images.add(digest)
