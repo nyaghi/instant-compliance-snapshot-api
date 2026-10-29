@@ -7115,7 +7115,7 @@ def final_four_license_result(org, state, records, deadline, source):
                  "charitable-solicitation registration with a source-confirmed filing history"
                  if selected.get("solicitation_statement_filed") else
                  "charitable-solicitation registration statement"
-                 if selected.get("entity_type") == "Charitable Solicitation Registration Statement" else
+                 if nv_entity_type_in(selected.get("entity_type"), {"Charitable Solicitation Registration Statement"}) else
                  "nonprofit corporation's Nevada record")
         result.source_note += (f"CharityClarity reports {result.status} based on the matched {scope}. "
                                "Registered-agent records and registered-agent addresses are excluded from organization identity evidence. ")
@@ -7149,6 +7149,12 @@ NV_CHARITY_ENTITY_TYPES = frozenset({
 })
 
 
+def nv_entity_type_in(value, allowed=NV_CHARITY_ENTITY_TYPES):
+    """Compare known source labels, preserving original evidence and type scope."""
+    return (isinstance(value, str)
+            and " ".join(value.split()).casefold() in {" ".join(label.split()).casefold() for label in allowed})
+
+
 def nv_untyped_search_row_can_read_detail(row):
     """An observed issued identity permits detail retrieval, never classification."""
     if (not isinstance(row, dict) or row.get("entity_type") != ""
@@ -7169,8 +7175,8 @@ def nv_entity_number_detail_allowed(identifier, entity_type, business_id, entity
             and re.fullmatch(r"E\d{7,14}-\d", identifier) is not None
             and entity_number.strip() == identifier
             and business_id.strip() in {"", "-"}
-            and entity_type.strip() in {"Foreign Entities Not Required to Register In Nevada",
-                                        "Charitable Solicitation Registration Statement"})
+            and nv_entity_type_in(entity_type, {"Foreign Entities Not Required to Register In Nevada",
+                                               "Charitable Solicitation Registration Statement"}))
 
 
 def nv_charity_detail_evidence(fields, expected_business_id):
@@ -7193,7 +7199,7 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     if not name or not fields["Entity Status"].strip():
         raise ValueError("Nevada entity identity or status is missing")
     entity_type = re.sub(r"\s+", " ", fields["Entity Type"]).strip()
-    if entity_type not in NV_CHARITY_ENTITY_TYPES:
+    if not nv_entity_type_in(entity_type):
         raise ValueError("Nevada record is not a supported nonprofit or charitable-registration type")
     ein_raw = fields["FEIN"].strip()
     ein = "" if ein_raw in {"", "-"} else canonical_ein_digits(ein_raw)
@@ -7368,7 +7374,7 @@ def nv_charity_filings_evidence(record, payload):
                     or int(fields["No. of Pages"]) < 1):
                 raise ValueError("Nevada exemption filing is incomplete")
             exemption_dates.append(filed)
-        elif (record.get("entity_type") == "Foreign Non-Profit Corporation (80)"
+        elif (nv_entity_type_in(record.get("entity_type"), {"Foreign Non-Profit Corporation (80)"})
               and fields["Filing Type"] == "Withdrawal of Foreign Non-Profit Corporation (80)"):
             filed = final_four_source_date(fields["Filed Date"], "Nevada withdrawal filed")
             effective = final_four_source_date(fields["Effective Date"], "Nevada withdrawal effective")
@@ -7606,7 +7612,7 @@ def final_four_search_candidate_scores(name, ein, state, row):
                     candidates.append({"score": 55, "decision": "possible", "reason": "REVIEW_NV_COMPOSITE_NAME"})
                     break
     if (state == "NV" and candidates and all(c["decision"] == "rejected" for c in candidates)
-            and row.get("entity_type") in NV_CHARITY_ENTITY_TYPES and not row.get("ein")
+            and nv_entity_type_in(row.get("entity_type")) and not row.get("ein")
             and len(distinctive_match_tokens(name)) >= 2
             and normalized_match_name(row["name"]).startswith(normalized_match_name(name) + " ")):
         # A bounded detail inspection only. The source domicile name must
@@ -7949,7 +7955,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                     row["identifier"], row["entity_type"], "", row.get("entity_number", ""))
                 missing_search_type = state == "NV" and nv_untyped_search_row_can_read_detail(row)
                 if state == "NV" and ((row.get("business_identifier_missing") is True and not entity_number_detail and not missing_search_type)
-                        or row["entity_type"] not in NV_CHARITY_ENTITY_TYPES and not missing_search_type):
+                        or not nv_entity_type_in(row["entity_type"]) and not missing_search_type):
                     # Unsupported filing categories need review, not a guess.
                     # Do not open a registered-agent/other entity detail.
                     missing_nv_business_id |= row.get("business_identifier_missing") is True
@@ -7983,7 +7989,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                             record["date_evidence_note"] = "Tennessee's financial history was incomplete; the last-filed period remains blank."
                 else:
                     record = nv_charity_detail_evidence(detail.get("fields"), row["identifier"])
-                    if ((not missing_search_type and record["entity_type"] != row["entity_type"])
+                    if ((not missing_search_type and not nv_entity_type_in(record["entity_type"], {row["entity_type"]}))
                             or normalized_match_name(record["name"]) != normalized_match_name(row["name"])):
                         raise ValueError("Nevada detail differs from the selected search identity")
                     url = urlparse(str(detail.get("source_url") or ""))
@@ -9635,7 +9641,7 @@ def licensed_charity_identity(org, row, state, deadline):
         row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
         return "accepted"
     if (state == "NV" and not row.get("ein")
-            and row.get("entity_type") in NV_CHARITY_ENTITY_TYPES
+            and nv_entity_type_in(row.get("entity_type"))
             and len(distinctive_match_tokens(org.organization_name)) >= 2
             and normalized_match_name(row.get("_nv_domicile_name", "")) == normalized_match_name(org.organization_name)
             and normalized_match_name(row["name"]).startswith(normalized_match_name(org.organization_name) + " ")):
@@ -9914,7 +9920,7 @@ def select_licensed_charity(org, rows, state, deadline):
     # Do not promote blank-EIN, officer/agent-address or unaccepted records.
     primary = [r for r in accepted if normalized_match_name(r["name"]) == normalized_match_name(org.organization_name)
                or (state == "NV"
-                   and ((r.get("entity_type") in NV_CHARITY_ENTITY_TYPES
+                   and ((nv_entity_type_in(r.get("entity_type"))
                          and len(canonical_ein_digits(org.ein)) == 9
                          and canonical_ein_digits(r.get("ein", "")) == canonical_ein_digits(org.ein))
                         or r.get("_user_identity_decision") == "accept"))]
