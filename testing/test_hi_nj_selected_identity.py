@@ -111,7 +111,7 @@ class NewJerseyGridAdmission(unittest.TestCase):
             org=m.checker.Organization('Control Relief '+str(i),str(100000000+i))
             names=['PFL','Control Relief '+str(i)]
             page=SimpleNamespace();seen=[]
-            def search(p,q):
+            def search(p,q,**kwargs):
                 seen.append(q)
                 if q==names[0]:
                     p._cc_nj_completed_data=grid([row('PFLAG MORRISTOWN-MORRIS COUNTY INC','393169244')])
@@ -128,7 +128,7 @@ class NewJerseyGridAdmission(unittest.TestCase):
             self.assertEqual(m.public_status(r),'Not Registered')
             self.assertEqual(r.queries_attempted,names)
             # A later incomplete response must never finalize that negative.
-            def incomplete(p,q):
+            def incomplete(p,q,**kwargs):
                 if q==names[-1]: return None
                 return search(p,q)
             with patch.object(m,'nj_same_lookup_zero_queries',return_value={org.ein}), \

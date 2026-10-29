@@ -24990,7 +24990,7 @@ def nj_exact_ein_exempt_row(data, query):
     return (re.sub(r"\s+", " ", name).strip(), "", query, "Exempt")
 
 
-def nj_completed_query_rows(request, query):
+def nj_completed_query_rows(request, query, page_number=1):
     """Bind a fully received portal grid to the exact search that produced it."""
     try:
         parsed = urllib.parse.urlsplit(request.url)
@@ -24999,7 +24999,8 @@ def nj_completed_query_rows(request, query):
                 or request.method != "POST"):
             return None
         sent = request.post_data_json
-        if (not isinstance(sent, dict) or sent.get("search") != query or sent.get("page") != 1
+        if (type(page_number) is not int or not 1 <= page_number <= 5
+                or not isinstance(sent, dict) or sent.get("search") != query or sent.get("page") != page_number
                 or any(sent.get(k) for k in ("filter", "metaFilter", "odataFilterQuery", "nlSearchFilter"))):
             return None
         response = request.response()
@@ -25009,7 +25010,7 @@ def nj_completed_query_rows(request, query):
         data = response.json()
         from deployment.completed_response_history import finish as _history_finish
         _history_finish(response,data)
-        exemption = nj_exact_ein_exempt_row(data, query)
+        exemption = nj_exact_ein_exempt_row(data, query) if page_number == 1 else None
         if exemption is not None:
             return [exemption]
         records = data.get("Records") if isinstance(data, dict) else None
@@ -25017,8 +25018,9 @@ def nj_completed_query_rows(request, query):
         if (not isinstance(records, list) or type(count) is not int or count < len(records)
                 or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
                 or data.get("Success") is False
-                or data.get("PageNumber") != 1 or type(data.get("MoreRecords")) is not bool
-                or (data["MoreRecords"] is False and count != len(records))):
+                or data.get("PageNumber") != page_number or type(data.get("MoreRecords")) is not bool
+                or (page_number > 1 and (data.get("PageSize") != 10 or not 11 <= count <= 50))
+                or (data["MoreRecords"] is False and count != (page_number-1)*10+len(records))):
             return None
         if not records:
             return [] if count == 0 and data["MoreRecords"] is False else None
@@ -25086,7 +25088,37 @@ def nj_name_exemption_result(data, org, deadline):
     return result
 
 
-def nj_search_body(page, query):
+def nj_join_query_pages(pages):
+    """Join only consecutive, consistent pages from one observed public query."""
+    if not pages or len(pages) > 5 or any(not isinstance(data, dict) for data in pages):
+        return None
+    first = pages[0]
+    total = first.get("ItemCount")
+    if type(total) is not int or not 11 <= total <= 50:
+        return None
+    page_count = (total+9)//10
+    records = []
+    ids = set()
+    for number, data in enumerate(pages, 1):
+        batch = data.get("Records")
+        if (data.get("ItemCount") != total or data.get("PageNumber") != number
+                or data.get("PageSize") != 10 or data.get("PageCount") != page_count
+                or data.get("MoreRecords") is not (number < page_count)
+                or not isinstance(batch, list) or len(batch) != min(10, total-(number-1)*10)
+                or data.get("Success") is False
+                or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))):
+            return None
+        for record in batch:
+            record_id = record.get("Id") if isinstance(record, dict) else None
+            if not isinstance(record_id, str) or not record_id or record_id in ids:
+                return None
+            ids.add(record_id)
+            records.append(record)
+    return {**first, "Records": records, "MoreRecords": len(records) < total,
+            "_cc_observed_pages": list(range(1, len(pages)+1))}
+
+
+def nj_search_body(page, query, identity_org=None):
     """Reuse only this page's ready form; never treat a prior grid as a new result."""
     observation_started = time.monotonic()
     page._cc_nj_query_incomplete = True
@@ -25119,7 +25151,13 @@ def nj_search_body(page, query):
     def on_finished(request):
         if request not in started_requests:
             return
-        rows = nj_completed_query_rows(request, query)
+        number = 1
+        if identity_org is not None:
+            try:
+                number = request.post_data_json.get("page", 1)
+            except Exception:
+                return
+        rows = nj_completed_query_rows(request, query, number)
         if rows is not None:
             completed.append((rows, request.response().json()))
             page._cc_nj_query_diagnostic["matching_responses"] = len(completed)
@@ -25135,11 +25173,33 @@ def nj_search_body(page, query):
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             if completed:
-                rows, data = completed[-1]
+                rows, data = completed[0] if identity_org is not None else completed[-1]
                 page._cc_nj_query_diagnostic["phase"] = "awaiting_matching_grid"
                 grid = page.locator('.public-search-grid')
                 text = re.sub(r"\s+", " ", grid.inner_text(timeout=1000))
                 rendered_rows = [re.sub(r"\s+", " ", value) for value in grid.locator('[role="row"]').all_inner_texts()]
+                # Broad fallback queries use the portal's own scrolling grid.
+                # A prefix can justify reading more, never a negative result.
+                prefix = {**data, "ItemCount": len(data.get("Records", [])), "MoreRecords": False}
+                if (identity_org is not None and data.get("MoreRecords") is True
+                        and type(data.get("ItemCount")) is int and 11 <= data["ItemCount"] <= 50
+                        and nj_complete_grid_excludes_org(prefix, identity_org)):
+                    joined = nj_join_query_pages([part for _, part in completed])
+                    if joined is None:
+                        page._cc_nj_query_diagnostic["phase"] = "inconsistent_grid_pages"
+                        return None
+                    current_rows = completed[-1][0]
+                    visible_page = all(any(all(value in rendered for value in row)
+                                           for rendered in rendered_rows) for row in current_rows)
+                    if joined["MoreRecords"]:
+                        page._cc_nj_query_diagnostic["phase"] = "awaiting_remaining_grid_pages"
+                        if visible_page and box.input_value() == query:
+                            grid.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+                        page.wait_for_timeout(100)
+                        continue
+                    rows = [row for batch, _ in completed for row in batch]
+                    data = joined
+                    page._cc_nj_query_diagnostic["completed_pages"] = len(completed)
                 # Read the page only after it renders this query's completed response.
                 visible = (bool(re.search(r"no records(?: to show| found)?", text, re.I)) if not rows
                            else all(any(all(value in rendered for value in row) for rendered in rendered_rows) for row in rows))
@@ -25667,7 +25727,7 @@ def search_nj_direct(page, org, identity_org=None):
     page._cc_nj_selected_record = None
     try:
         ein_digits = re.sub(r"\D", "", org.ein or "")
-        body = nj_search_body(page, ein_digits or org.organization_name)
+        body = nj_search_body(page, ein_digits or org.organization_name, identity_org=identity_org)
         if body is None:
             result.status = "Unable to Verify"
             result.source_note = "New Jersey did not finish the submitted search with a complete, matching response. Registration status could not be confirmed."
