@@ -24883,7 +24883,7 @@ def nj_detail_body(page, org) -> str:
     # A modal can finish loading after the first click/read or remain open on a retry.
     loaded_detail = nj_loaded_detail_body(page, org, wait_seconds=3.0)
     if loaded_detail:
-        pieces.append(loaded_detail)
+        return loaded_detail  # One validated original document; no duplicated form fields.
     return "\n".join(piece for piece in pieces if piece)
 
 
@@ -25636,7 +25636,7 @@ def nj_result_from_body(page, org, result, body, ein_digits):
         result.source_confidence = "raw_status_without_filing_period_evidence"
         result.status_reason = "NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE"
     else:
-        result.status = status or checker.STATUS_UNKNOWN
+        result.status = status or "Unable to Confirm"
     if not result.source_note:
         result.source_note = "New Jersey uses the public search result Status value."
     result.success = True
