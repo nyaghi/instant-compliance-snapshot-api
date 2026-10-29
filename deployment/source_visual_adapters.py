@@ -96,8 +96,13 @@ def capture_selected_source(master,result,run,deadline):
   if not callable(reader):return trace_return('deployment/source_visual_adapters.py:capture_selected_source:85:26:return',None)
   row=reader(run.ein);norm=lambda value:re.sub(r'[^a-z0-9]','',str(value).lower())
   if (not isinstance(row,list) or len(row)<16 or not re.fullmatch(r'\d+',str(row[0]))
-      or norm(str(row[6]).strip('"'))!=norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:88:44:get',result.get,locals(), 'matched_registry_name'))):return trace_return('deployment/source_visual_adapters.py:capture_selected_source:88:82:return',None)
-  result={**result,'source_url':'https://justice.oregon.gov/Charities/Charity/details?charityID='+str(row[0])}
+      or re.sub(r'\D','',str(row[4]))!=run.ein):return trace_return('deployment/source_visual_adapters.py:capture_selected_source:88:82:return',None)
+  detail_url='https://justice.oregon.gov/Charities/Charity/details?charityID='+str(row[0])
+  if norm(str(row[6]).strip('"'))!=norm(result.get('matched_registry_name')):
+   proof=result.get('or_live_evidence') or {};identity=proof.get('source_identity') if isinstance(proof,dict) else None
+   if (not isinstance(identity,dict) or identity!={'ein':run.ein,'registration':str(row[1]).strip(),'charity_id':str(row[0]),'url':detail_url}
+       or not proof.get('name') or norm(proof['name'])!=norm(result.get('matched_registry_name'))):return trace_return('OR changed-name identity not bound',None)
+  result={**result,'source_url':detail_url}
  if run.state=='WI':
   hint=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:91:7:get',getattr(run,'source_detail_hints',{}).get,locals(), str(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:91:53:get',result.get,locals(), 'matched_registry_identifier') or ''))
   norm=lambda value:re.sub(r'[^a-z0-9]','',str(value).lower())

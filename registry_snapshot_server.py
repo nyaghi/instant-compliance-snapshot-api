@@ -1849,6 +1849,11 @@ def or_confirm_snapshot_delinquency(org, result):
         log_event(f'OR live filing confirmation: {type(exc).__name__}')
         result.source_attempts = [*(getattr(result, 'source_attempts', []) or []), *locals().get('attempts', [])]
     result.or_live_evidence = {k: format_date(v) if k in {'period_start', 'period_end'} else v for k, v in evidence.items()}
+    if evidence:
+        result.or_live_evidence['source_identity'] = {
+            'ein': canonical_ein_digits(row[4]), 'registration': row[1].strip(),
+            'charity_id': str(row[0]), 'url': url,
+        }
     if not evidence:
         result.status = 'Unable to Confirm'
         result.status_reason = 'OR_LIVE_PERIOD_UNCONFIRMED'
@@ -24246,6 +24251,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "next_required_period",
         "computed_due_date",
         "ma_filing_evidence",
+        "or_live_evidence",
         "tax_period_evidence",
         "period_read_failure",
         "address_evidence",
