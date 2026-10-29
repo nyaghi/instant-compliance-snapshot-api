@@ -69,6 +69,32 @@ class ShortEvidenceName(unittest.TestCase):
             finally:
                 cc.REVIEWED_NAME_CONTEXT.reset(token)
 
+    def test_all_states_preserve_reviewed_typed_names_without_changing_status(self):
+        states='AL AK AR CA CO CT DC FL GA HI IL KS KY LA ME MD MA MI MN MS NV NH NJ NM NY NC ND OH OK OR PA RI SC TN VA WA WV WI'.split()
+        for state in states:
+            for status in ['Current','Upcoming Filing','Delinquent','Exempt','Revoked / Suspended']:
+                with self.subTest(state=state,status=status):
+                    org,r=self.result(state=state,status=status)
+                    data=self.format(org,r)
+                    self.assertEqual(r.matched_registry_name,'P4L')
+                    self.assertEqual(r.status,status)
+                    ref=dict(ein=org.ein,state=state,identifier=r.matched_registry_identifier,
+                             record_name='P4L',operation='detail',url='fixture.pdf')
+                    self.assertIs(matching_reference(data,[ref]),ref)
+                    self.assertIsNone(matching_reference(data,[{**ref,'record_name':'P4L unrelated'}]))
+
+    def test_all_states_reject_unreviewed_short_names_and_clear_negative_identity(self):
+        states='AL AK AR CA CO CT DC FL GA HI IL KS KY LA ME MD MA MI MN MS NV NH NJ NM NY NC ND OH OK OR PA RI SC TN VA WA WV WI'.split()
+        for state in states:
+            for name in ['PFL','DBA','INC','123']:
+                org,r=self.result(name=name,state=state)
+                self.format(org,r)
+                self.assertNotEqual(r.matched_registry_name,name)
+            for status in ['Not Registered','Unable to Confirm','Unable to Verify','Site Not Reachable']:
+                org,r=self.result(state=state,status=status)
+                self.format(org,r)
+                self.assertEqual((r.matched_registry_name,r.matched_registry_identifier),('',''))
+
 
 if __name__ == '__main__':
     unittest.main()
