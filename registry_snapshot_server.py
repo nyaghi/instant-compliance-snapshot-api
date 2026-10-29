@@ -15965,7 +15965,7 @@ def apply_confirmed_feedback_correction(result) -> str:
 def fill_registry_match_from_text(result, body: str, org) -> None:
     if (getattr(result, "matched_registry_name", "") or "").strip():
         result.matched_registry_name = (structured_registry_name(result.matched_registry_name, org.organization_name, org.ein)
-                                        if result.state in {"WV", "WI"} else useful_registry_name(result.matched_registry_name))
+                                        if result.state in {"WV", "WI", "NV"} else useful_registry_name(result.matched_registry_name))
         return
     if public_status(result) == "Not Registered":
         return
@@ -16069,7 +16069,7 @@ def normalize_registry_match_fields(result, org) -> None:
         result.matched_registry_identifier = ""
         return
     matched_name = useful_registry_name(getattr(result, "matched_registry_name", "") or "")
-    if result.state in {"WV", "WI"} and not matched_name:
+    if result.state in {"WV", "WI", "NV"} and not matched_name:
         matched_name = structured_registry_name(getattr(result, "matched_registry_name", ""), org.organization_name, org.ein)
     matched_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     submitted_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or getattr(result, "organization_name", "") or "").strip())
