@@ -2749,20 +2749,22 @@ def capture_va_unregistered_entity(master,result,run,deadline):
      or not workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2194:12:get',result.get,locals(), 'matched_registry_name') or norm(workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2194:56:get',proof.get,locals(), 'name'))!=norm(result['matched_registry_name'])
      or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2195:8:get',proof.get,locals(), 'status')!={'Not Registered':'Unregistered','Suspended':'Not Authorized to Solicit'}[result['status']] or type(workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2195:52:get',proof.get,locals(), 'registration_count')) is not int
      or proof['registration_count']!=0 or (result['status']=='Suspended' and result.get('status_reason')!='VA_CONFIRMED_SOLICITATION_RESTRICTION') or workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2196:42:get',result.get,locals(), 'source_url')!=VA_FINAL_SEARCH):return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2196:85:return',None)
+ selected_restriction=result['status']=='Suspended'
+ capture_allowance=30 if selected_restriction else 16
  run.negative_visual_attempted=True;started=time.perf_counter();held=False;browser=context=None
  url='https://vdacs.evokeplatform.com/app/publicPortal/entity/'+identifier
- fact={'adapter':'VA-original-unregistered-entity','phase':'admission','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'extra_registry_queries':0,'visual_detail_requests':0,'local_visual_budget_ms':16000};run.visual_adapter_facts.append(fact)
+ fact={'adapter':'VA-original-unregistered-entity','phase':'admission','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'extra_registry_queries':0,'visual_detail_requests':0,'local_visual_budget_ms':capture_allowance*1000,'budget_class':'selected_record' if selected_restriction else 'negative_entity'};run.visual_adapter_facts.append(fact)
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2202:52:return',None)
-  stop=time.monotonic()+min(16,remaining);held=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2203:47:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
+  stop=time.monotonic()+min(capture_allowance,remaining);held=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2203:47:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2204:61:return',None)
   with master.checker.sync_playwright() as pw:
    browser=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2206:11:launch_lookup_browser',master.launch_lookup_browser,locals(), pw,headless=True)
    try:
     options={'viewport':{'width':1600,'height':1400},'locale':'en-US'}
     if getattr(master,'BROWSER_USER_AGENT',None):options['user_agent']=master.BROWSER_USER_AGENT
-    context=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2210:12:new_context',browser.new_context,locals(), **options);page=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2210:48:new_page',context.new_page,locals());timeout=lambda:max(1,int((stop-time.monotonic()-1)*1000))
+    context=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2210:12:new_context',browser.new_context,locals(), **options);page=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2210:48:new_page',context.new_page,locals());timeout=lambda:max(1,int((stop-time.monotonic()-(3 if selected_restriction else 1))*1000))
     begin=time.perf_counter();fact['phase']='entity_navigation';response=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2211:73:goto',page.goto,locals(), url,wait_until='commit',timeout=timeout());fact['visual_detail_requests']=1
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=url:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2213:103:return',None)
@@ -2779,12 +2781,12 @@ def capture_va_unregistered_entity(master,result,run,deadline):
      for key,label in [('fullName','Name'),('status','Status'),('ein','FEIN')]:
       el=panel.locator('.formio-component-'+key)
       if workflow_call('deployment/source_visual_adapters.py:read_bound:2226:9:count',el.count,locals())!=1 or not workflow_call('deployment/source_visual_adapters.py:read_bound:2226:30:is_visible',el.is_visible,locals()):return trace_return('deployment/source_visual_adapters.py:read_bound:2226:46:return',(None))
-      lines=[line.strip() for line in workflow_call('deployment/source_visual_adapters.py:read_bound:2227:38:inner_text',el.inner_text,locals(), timeout=400).splitlines() if line.strip()]
+      lines=[line.strip() for line in workflow_call('deployment/source_visual_adapters.py:read_bound:2227:38:inner_text',el.inner_text,locals(), timeout=max(1,int((stop-time.monotonic()-(2 if fact['phase']!='capture' else .1))*1000)) if selected_restriction else 400).splitlines() if line.strip()]
       if len(lines)<2 or lines[0]!=label:return trace_return('deployment/source_visual_adapters.py:read_bound:2228:41:return',(None))
       fields[key]=' '.join(lines[1:])
      if (norm(fields['fullName'])!=norm(proof['name']) or fields['status']!=proof['status']
          or re.sub(r'\D','',fields['ein'])!=run.ein):return trace_return('deployment/source_visual_adapters.py:read_bound:2231:53:return',(None))
-     text=workflow_call('deployment/source_visual_adapters.py:read_bound:2232:10:inner_text',page.inner_text,locals(), 'body',timeout=400)
+     text=workflow_call('deployment/source_visual_adapters.py:read_bound:2232:10:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-(2 if fact['phase']!='capture' else .1))*1000)) if selected_restriction else 400)
      if ('Registration Type' not in text or 'Registration ID' not in text or 'Expiration Date' not in text
          or re.search('verify you are human|user validation required|access denied|just a moment',text,re.I)):return trace_return('deployment/source_visual_adapters.py:read_bound:2234:110:return',(None))
      return trace_return('deployment/source_visual_adapters.py:read_bound:2235:5:return',(fields,text))
@@ -2792,7 +2794,7 @@ def capture_va_unregistered_entity(master,result,run,deadline):
     if before is None:fact['outcome']='entity_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2237:57:return',None)
     remaining_capture=stop-time.monotonic()-.5
     if remaining_capture<.25:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2239:63:return',None)
-    fact['phase']='capture';begin=time.perf_counter();raw=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2240:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=min(1000,max(1,int(remaining_capture*1000))))
+    fact['phase']='capture';begin=time.perf_counter();raw=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2240:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=max(1,int((stop-time.monotonic()-1)*1000)) if selected_restriction else min(1000,max(1,int(remaining_capture*1000))))
     after=read_bound()
     if after is None or after!=before:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2242:86:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2243:78:return',None)
@@ -2810,6 +2812,7 @@ def capture_va_unregistered_entity(master,result,run,deadline):
  finally:
   if held:workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2256:10:release',master.BROWSER_LOOKUP_SEMAPHORE.release,locals())
   fact['total_ms']=round((time.perf_counter()-started)*1000,2)
+
 
 
 def capture_ar_review_page(page,org,candidates,parsed_rows):
