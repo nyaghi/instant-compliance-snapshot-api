@@ -24535,7 +24535,12 @@ def nj_completed_future_detail(body,ein,credential=None):
             return (field.get('data-ui')=='datetimepicker' and field.get('data-type')=='date'
                     and field.get('data-attribute')=='crsm_fiscalyearenddate'
                     and field.get('data-behavior')=='TimeZoneIndependent')
-        if not re.fullmatch(r'20\d{2}-\d{2}-\d{2}T00:00:00(?:\.0+)?',raw):return False
+        if not re.fullmatch(r'20\d{2}-\d{2}-\d{2}T00:00:00(?:\.0+)?',raw):
+            # Preserve the original midnight contract; the state also stores
+            # times on its date-only TimeZoneIndependent field. Completion
+            # does not turn a future date into an accepted filing period.
+            if values['crsm_fiscalyearenddate'].get('data-behavior')!='TimeZoneIndependent':return False
+            if not re.fullmatch(r'20\d{2}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,7})?',raw):return False
         return date.fromisoformat(raw[:10])>date.today()
     except (ValueError,TypeError):return False
 

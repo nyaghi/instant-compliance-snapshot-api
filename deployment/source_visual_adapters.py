@@ -1403,7 +1403,14 @@ def capture_owned_fl_page(master,run,result,page,context,deadline):
   if len(bound)!=1:fact['outcome']='credential_binding_failed';return trace_return('deployment/source_visual_adapters.py:capture_owned_fl_page:1028:63:return',None)
   if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_fl_page:1029:64:return',None)
   fact['phase']='capture'
-  before=len(run.documents);begin=time.perf_counter();workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:1031:54:capture',context.capture,locals());fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
+  before=len(run.documents);begin=time.perf_counter()
+  previous_stop=getattr(run,'fl_selected_capture_stop',None)
+  run.fl_selected_capture_stop=min(stop,previous_stop) if previous_stop is not None else stop
+  try:workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:1031:54:capture',context.capture,locals())
+  finally:
+   if previous_stop is None:del run.fl_selected_capture_stop
+   else:run.fl_selected_capture_stop=previous_stop
+  fact['capture_ms']=round((time.perf_counter()-begin)*1000,2)
   fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
  except Exception as exc:fact['outcome']='owned_visual_unavailable';fact['error_type']=type(exc).__name__;fact['error_summary']=str(exc).splitlines()[0][:180]
  finally:
