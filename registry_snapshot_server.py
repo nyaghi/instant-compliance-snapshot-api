@@ -20835,7 +20835,7 @@ def hi_direct_details_from_source(org, source: str, url: str):
         return None
     if len(canonical_ein_digits(org.ein)) != 9 or canonical_ein_digits(fields.get("FEIN", "")) != canonical_ein_digits(org.ein):
         return None
-    name = useful_registry_name(fields.get("Primary Name", ""))
+    name = structured_registry_name(fields.get("Primary Name", ""), org.organization_name, org.ein)
     status = fields.get("Registration Status", "")
     kind = fields.get("Registration Type", "")
     if not name or not status or not kind:
@@ -21012,10 +21012,11 @@ def search_hi_precise(page, org):
         exact_detail_ein_match = bool(ein_digits and detail_ein and re.sub(r"\D", "", detail_ein) == ein_digits)
         status_text = checker.extract_labeled_value(page, ["Registration Status", "Status"]) or checker.extract_labeled_value_from_text(detail_text, ["Registration Status", "Status"])
         registration_type = checker.extract_labeled_value(page, ["Registration Type"]) or checker.extract_labeled_value_from_text(detail_text, ["Registration Type"])
-        result.matched_registry_name = useful_registry_name(
+        result.matched_registry_name = structured_registry_name(
             checker.extract_labeled_value(page, ["Primary Name", "Organization Name", "Charity Name", "Legal Name"])
             or checker.extract_labeled_value_from_text(detail_text, ["Primary Name", "Organization Name", "Charity Name", "Legal Name"])
-            or clicked_result_name
+            or clicked_result_name,
+            org.organization_name, org.ein
         )
         result.matched_registry_identifier = detail_ein or clicked_result_identifier
         if not exact_detail_ein_match and not result_registry_name_is_safe(result, org.organization_name, org.ein):
@@ -25669,6 +25670,12 @@ def search_nj_direct(page, org, identity_org=None):
             result.lab_diagnostic = {"path": "browser", "stage": "search_grid", "query_kind": "ein" if ein_digits else "name",
                                      "observation": {k: v for k, v in result.queries_attempted[0].items() if k != "query"}}
             result.success = False
+            return result
+        if identity_org is not None and nj_complete_grid_excludes_org(getattr(page, "_cc_nj_completed_data", None), identity_org):
+            result.raw_status_text = "No matching record in completed search"
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.source_note = "Every record in this completed name search was excluded by the existing identity rules."
+            result.success = True
             return result
         exemption = nj_name_exemption_result(getattr(page, "_cc_nj_completed_data", None), identity_org or org, time.monotonic()+8)
         if exemption is not None:
