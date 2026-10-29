@@ -7315,6 +7315,8 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
 def nv_charity_filings_evidence(record, payload):
     """Read the selected entity's complete annual-list history, not its due date."""
     headers = ["Filed Date", "Effective Date", "Filing Number", "Filing Type", "Source", "No. of Pages"]
+    source_omitted = isinstance(payload,dict) and payload.get('headers') == [h for h in headers if h != 'Source']
+    if source_omitted: headers = [h for h in headers if h != 'Source']
     if (not isinstance(payload, dict) or payload.get("identifier") != record["identifier"]
             or normalized_match_name(payload.get("name", "")) != normalized_match_name(record["name"])
             or payload.get("headers") != headers or payload.get("complete") is not True
@@ -7338,7 +7340,7 @@ def nv_charity_filings_evidence(record, payload):
             # only when the rest of this row is populated, and continue to
             # require an explicitly named CSR for charitable scope below.
             filed = final_four_source_date(fields["Filed Date"], "Nevada unlabelled filing date")
-            if (filed is None or filed > date.today() or not fields["Source"]
+            if (filed is None or filed > date.today() or not fields.get("Source")
                     or not fields["No. of Pages"].isdigit()):
                 raise ValueError("Nevada unlabelled filing row is incomplete")
             unlabelled_filings += 1
@@ -7362,7 +7364,7 @@ def nv_charity_filings_evidence(record, payload):
             filed = final_four_source_date(fields["Filed Date"], "Nevada exemption filed")
             effective = final_four_source_date(fields["Effective Date"], "Nevada exemption effective")
             if (filed is None or effective is None or max(filed, effective) > date.today()
-                    or not fields["Source"] or not fields["No. of Pages"].isdigit()
+                    or (not source_omitted and not fields.get("Source")) or not fields["No. of Pages"].isdigit()
                     or int(fields["No. of Pages"]) < 1):
                 raise ValueError("Nevada exemption filing is incomplete")
             exemption_dates.append(filed)
