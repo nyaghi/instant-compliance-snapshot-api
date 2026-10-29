@@ -687,7 +687,9 @@ def capture_selected_wa_source(master,result,run,deadline):
     if not bounds or bounds['width']<=0 or bounds['height']<=0:fact['outcome']='renewal_not_visible';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:428:101:return',None)
     import math
     height=math.ceil(bounds['y']+bounds['height']+24)
-    if height<100 or height>1800:fact['outcome']='summary_exceeds_viewport';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:431:76:return',None)
+    from deployment.state_snapshots import MAX_PIXELS
+    fact['summary_height_px']=height;fact['summary_pixel_limit']=MAX_PIXELS
+    if height<100 or 1280*height>MAX_PIXELS:fact['outcome']='summary_exceeds_image_limit';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:431:76:return',None)
     fact['detail_ms']=round((time.perf_counter()-begin)*1000,2)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:433:66:return',None)
     from deployment.state_snapshots import wa_painted_result_ready
@@ -695,8 +697,14 @@ def capture_selected_wa_source(master,result,run,deadline):
     if not wa_painted_result_ready(page,max(1,int((stop-time.monotonic()-2)*1000))):fact['outcome']='source_overlay_visible';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:436:130:return',None)
     fact['painted_result_ready_ms']=round((time.perf_counter()-begin)*1000,2)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:438:66:return',None)
-    fact['phase']='capture';begin=time.perf_counter();raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:439:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,clip={'x':0,'y':0,'width':1280,'height':height},timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
+    fact['phase']='capture';begin=time.perf_counter();raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:439:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=height>1800,clip={'x':0,'y':0,'width':1280,'height':height},timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
     fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
+    import io
+    from PIL import Image
+    with Image.open(io.BytesIO(raw)) as captured:
+     if captured.size!=(1280,height):fact['outcome']='summary_image_incomplete';return
+    after_bounds=renewal.bounding_box()
+    if not after_bounds or any(abs(after_bounds[k]-bounds[k])>1 for k in ('x','y','width','height')):fact['outcome']='summary_geometry_changed';return
     if page.url!='https://ccfs.sos.wa.gov/#/organization' or workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:441:61:is_visible',page.locator('#loaderDiv').is_visible,locals()) or wa_summary_core(workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:441:120:inner_text',page.inner_text,locals(), 'body',timeout=400))!=core:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:441:211:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_wa_source:442:78:return',None)
     before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_wa_source:443:30:document',run.document,locals(), page.url,raw,'image',core[:20000],note='Original organization summary and state header through renewal date; lower financial history is outside this view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
