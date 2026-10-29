@@ -47,6 +47,13 @@ box.onkeydown=e=>{if(e.key==='Enter'){query=box.value;load(true);}};
 grid.onscroll=()=>{if(grid.scrollTop+grid.clientHeight>=grid.scrollHeight-2)load();};
 </script>'''
 
+# The real first page has no inner overflow. Its last row must enter the
+# browser viewport before page two creates an internal scrollbar.
+DOCUMENT_HTML = HTML.replace('<input placeholder="Search">','<div style="height:300px"></div><input placeholder="Search">').replace('height:180px','height:545px').replace(
+    "number=n;more=data.MoreRecords;busy=false;",
+    "number=n;more=data.MoreRecords;busy=false; observer.disconnect(); if(more)observer.observe(grid.lastElementChild);")
+DOCUMENT_HTML = DOCUMENT_HTML.replace("box.onkeydown=e=>", "const observer=new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting))load();}); box.onkeydown=e=>")
+
 
 class ScrollingGrid(unittest.TestCase):
     def setUp(self):
@@ -84,10 +91,10 @@ class ScrollingGrid(unittest.TestCase):
                 if a['Name']=='crsm_federalein':a['Value']=a['DisplayValue']=ein
             self.assertFalse(m.nj_complete_grid_excludes_org(m.nj_join_query_pages(changed),self.org))
 
-    def browser_case(self,browser,pages,org=None,malform_page=None,stale=False):
+    def browser_case(self,browser,pages,org=None,malform_page=None,stale=False,document_scroll=False):
         page=browser.new_page();requests=[]
         def route(r):
-            if r.request.url==URL:r.fulfill(status=200,content_type='text/html',body=HTML)
+            if r.request.url==URL:r.fulfill(status=200,content_type='text/html',body=DOCUMENT_HTML if document_scroll else HTML)
             elif r.request.url==API:
                 n=r.request.post_data_json['page'];requests.append(n)
                 data=copy.deepcopy(pages[n-1])
@@ -110,7 +117,7 @@ class ScrollingGrid(unittest.TestCase):
             try:
                 for i in range(30):
                     org=self.org if i==0 else m.checker.Organization('Retained Control '+str(i),str(100000000+i))
-                    body,data,requests,diag=self.browser_case(browser,pages,org)
+                    body,data,requests,diag=self.browser_case(browser,pages,org,document_scroll=(i%2==0))
                     self.assertIsNotNone(body,diag);self.assertEqual(requests,[1,2,3,4,5])
                     self.assertEqual(len(data['Records']),42)
                     self.assertTrue(m.nj_complete_grid_excludes_org(data,org))

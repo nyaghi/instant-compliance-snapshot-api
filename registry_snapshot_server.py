@@ -25194,7 +25194,11 @@ def nj_search_body(page, query, identity_org=None):
                     if joined["MoreRecords"]:
                         page._cc_nj_query_diagnostic["phase"] = "awaiting_remaining_grid_pages"
                         if visible_page and box.input_value() == query:
-                            grid.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+                            grid.evaluate("""el => {
+                                const rows = el.querySelectorAll('[role="row"]');
+                                rows[rows.length-1]?.scrollIntoView({block:'end',behavior:'instant'});
+                                el.scrollTop = el.scrollHeight;
+                            }""")
                         page.wait_for_timeout(100)
                         continue
                     rows = [row for batch, _ in completed for row in batch]
