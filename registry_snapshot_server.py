@@ -25696,6 +25696,24 @@ def search_nj_direct(page, org, identity_org=None):
 
 
 def search_nj_with_name_fallback(page, org):
+    observations = []
+    unresolved = False
+
+    def retain(value):
+        value.queries_attempted = [row['query'] for row in observations]
+        value.lab_diagnostic = {'path': 'browser', 'stage': 'name_plan',
+                                'queries': observations}
+        return value
+
+    def incomplete(value, cause):
+        value.status = "Unable to Confirm"
+        value.success = False
+        value.reason_code = "NJ_NAME_PLAN_INCOMPLETE"
+        value.raw_status_text = "New Jersey name search did not complete"
+        value.source_note = ("New Jersey's EIN search found no matching record, but "
+                             + cause + ". Registration status could not be confirmed.")
+        return retain(value)
+
     completed = nj_same_lookup_zero_queries(org)
     if canonical_ein_digits(org.ein) in completed:
         result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_NOT_REGISTERED,
@@ -25716,16 +25734,21 @@ def search_nj_with_name_fallback(page, org):
         if variant in completed:
             continue
         if time.monotonic() - fallback_started > fallback_budget_seconds:
-            result.source_note = (
-                (result.source_note or "New Jersey search returned no matching record.")
-                + " New Jersey name fallback was bounded to preserve bulk reliability."
-            )
-            return result
+            return incomplete(result, "the remaining name searches exceeded their existing allowance")
         fallback_org = SimpleNamespace(organization_name=variant, ein="")
+        query_started = time.monotonic()
         fallback = search_nj_direct(page, fallback_org, identity_org=org)
+        observations.append({'query': variant, 'status': public_status(fallback),
+            'reason_code': getattr(fallback, 'reason_code', '') or '',
+            'seconds': round(time.monotonic() - query_started, 2),
+            'selected_record': isinstance(getattr(page, '_cc_nj_selected_record', None), tuple),
+            'selected_fields': isinstance(getattr(fallback, '_cc_nj_selected_fields', None), dict),
+            'matched_name': getattr(fallback, 'matched_registry_name', '') or '',
+            'observed_ein': getattr(fallback, 'verified_registry_ein', '') or '',
+            'search_phase': getattr(page, '_cc_nj_query_diagnostic', {}).get('phase', '')})
         if (public_status(fallback) == "Site Not Reachable"
                 or getattr(fallback, "reason_code", "") == "NJ_INCOMPLETE_QUERY_RESPONSE"):
-            return copy_name_fallback_result(org, fallback)
+            return retain(copy_name_fallback_result(org, fallback))
         if public_status(fallback) == "Not Registered":
             continue
         observed=getattr(fallback,"verified_registry_ein","")
@@ -25753,18 +25776,24 @@ def search_nj_with_name_fallback(page, org):
                 fallback.source_note=(f"New Jersey lists {fallback.matched_registry_name} with EIN {observed}; "
                     f"the entered EIN is {canonical_ein_digits(org.ein)}. The identity conflict requires review; "
                     "the source standing is retained without automatically correcting either EIN.")
-                return copy_name_fallback_result(org,fallback)
+                return retain(copy_name_fallback_result(org,fallback))
             continue
         if result_registry_name_is_safe(fallback, org.organization_name, org.ein):
             fallback.source_note = (
                 (fallback.source_note or "New Jersey public search found a matching organization-name record.")
                 + " CharityClarity used a name fallback after the EIN search returned no matching record."
             )
-            return copy_name_fallback_result(org, fallback)
+            return retain(copy_name_fallback_result(org, fallback))
+        # A response that could not be interpreted or bound is not an excluded
+        # record and cannot support a completed negative after later empty aliases.
+        unresolved = True
+    if unresolved:
+        return incomplete(result, "at least one name result could not be verified")
     if completed:
         result.source_note = ("New Jersey's public EIN and planned organization-name queries completed "
                               "without a qualifying matching record.")
-    return result
+    return retain(result)
+
 
 
 def pa_guard_search_completion(result, org, observations):

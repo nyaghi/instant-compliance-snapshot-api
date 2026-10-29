@@ -251,19 +251,12 @@ def dataset_scope(names, *, records=None, record_name=None, name_score=None):
         for receipt in receipts:receipt.incomplete()
         raise
     else:
+        # History reports actual names evaluated by the matcher. It must not
+        # run a second scorer over the dataset to manufacture optional row counts.
+        # None means no row count recorded, never zero or a completed no-match.
         for receipt in receipts:
-            if records is None or run.state=='KY':
-                receipt.complete(None)
-                continue
-            # Observe a real local name filter over the loaded original rows.
-            # Keep unrelated candidates visible; this does not accept identity.
-            # Never invent zero from the overall Not Registered decision.
-            try:
-                matching=[row for row in records if record_name(row)
-                          and name_score(record_name(row),[receipt.query['name']])>=450]
-                complete_public_rows(receipt,len(matching),rows=matching)
-            except Exception:
-                receipt.complete(None)
+            receipt.complete(None)
+
 
 def observed_dataset_call(call,names,*args,**kwargs):
     with dataset_scope(names):return call(*args,**kwargs)
