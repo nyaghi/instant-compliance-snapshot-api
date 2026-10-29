@@ -25191,9 +25191,18 @@ def nj_search_body(page, query, identity_org=None):
                     current_rows = completed[-1][0]
                     visible_page = all(any(all(value in rendered for value in row)
                                            for rendered in rendered_rows) for row in current_rows)
+                    page._cc_nj_query_diagnostic.update({
+                        "accepted_pages": len(completed),
+                        "accepted_rows": len(joined["Records"]),
+                        "expected_rows": joined["ItemCount"],
+                        "rendered_rows": len(rendered_rows),
+                        "last_page_rendered": visible_page,
+                    })
                     if joined["MoreRecords"]:
                         page._cc_nj_query_diagnostic["phase"] = "awaiting_remaining_grid_pages"
                         if visible_page and box.input_value() == query:
+                            page._cc_nj_query_diagnostic["scroll_attempts"] = (
+                                page._cc_nj_query_diagnostic.get("scroll_attempts", 0) + 1)
                             grid.evaluate("""el => {
                                 const rows = el.querySelectorAll('[role="row"]');
                                 rows[rows.length-1]?.scrollIntoView({block:'end',behavior:'instant'});
@@ -25832,7 +25841,15 @@ def search_nj_with_name_fallback(page, org):
             'selected_fields': isinstance(getattr(fallback, '_cc_nj_selected_fields', None), dict),
             'matched_name': getattr(fallback, 'matched_registry_name', '') or '',
             'observed_ein': getattr(fallback, 'verified_registry_ein', '') or '',
-            'search_phase': getattr(page, '_cc_nj_query_diagnostic', {}).get('phase', '')})
+            'search_phase': getattr(page, '_cc_nj_query_diagnostic', {}).get('phase', ''),
+            'query_observation': {key: value for key, value in
+                (getattr(page, '_cc_nj_query_diagnostic', {}) if isinstance(
+                    getattr(page, '_cc_nj_query_diagnostic', None), dict) else {}).items()
+                if key in {'matching_responses', 'response_seconds', 'form_ready_seconds',
+                           'reused_form', 'accepted_pages', 'accepted_rows', 'expected_rows',
+                           'rendered_rows', 'last_page_rendered', 'scroll_attempts', 'elapsed_seconds'}
+                and (type(value) is bool or type(value) in (int, float)
+                     and 0 <= value <= 100000)}})
         if (public_status(fallback) == "Site Not Reachable"
                 or getattr(fallback, "reason_code", "") == "NJ_INCOMPLETE_QUERY_RESPONSE"):
             return retain(copy_name_fallback_result(org, fallback))
