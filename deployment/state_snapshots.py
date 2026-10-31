@@ -61,7 +61,12 @@ def public_url(value, state):
         from deployment.dc_native_capture import valid_viewer
         dc_viewer=valid_viewer(value)
         if not dc_viewer:raise ValueError('Unbound DC viewer URL')
-    if (u.scheme != 'https' or (u.hostname not in OFFICIAL_HOSTS.get(state, set()) and not dc_viewer)
+    co_dataset=False
+    if state=='CO' and u.hostname=='data.colorado.gov':
+        from deployment.co_dataset_evidence import dataset_ein
+        co_dataset=bool(dataset_ein(value))
+        if not co_dataset:raise ValueError('Unbound CO dataset URL')
+    if (u.scheme != 'https' or (u.hostname not in OFFICIAL_HOSTS.get(state, set()) and not dc_viewer and not co_dataset)
             or u.username or u.password or u.port not in (None,443)
             or re.search(r'(?:/auth/|/logout|/login|/signin|challenge-platform)',u.path,re.I)):
         raise ValueError('Snapshot must originate at this state public registry')
@@ -86,6 +91,9 @@ def validate_asset(asset, *, ein, state, run_id):
             or asset.get('run_id')!=run_id or not re.fullmatch(r'[a-zA-Z0-9_-]{16,100}',run_id)):
         raise ValueError('Snapshot belongs to a different run, EIN or state')
     url=public_url(asset.get('source_url',''),state)
+    if state=='CO' and urlsplit(url).hostname=='data.colorado.gov':
+        from deployment.co_dataset_evidence import dataset_ein
+        if dataset_ein(url)!=digits(ein):raise ValueError('CO dataset EIN differs from archive')
     kind=asset.get('kind')
     if kind not in {'image','image_pages','source_pdf'}:raise ValueError('Snapshot requires actual page pixels or original state PDF pages')
     raw=base64.b64decode(asset.get('content',''),validate=True)
@@ -720,6 +728,9 @@ class CaptureRun:
                 if self.state=='ME' and not negative and me_detail_name_bound(name,text,identifier):matched=True
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
                 if self.state=='OH' and not negative and oh_selected_grid_bound(self,raw,url,row):matched=True
+                if self.state=='CO' and urlsplit(str(row.get('source_url') or '')).hostname=='data.colorado.gov':
+                    from deployment.co_dataset_evidence import image_bound
+                    matched=not negative and image_bound(self,row,url,raw,kind)
                 if self.state=='ND' and review_rows:
                     matched=(kind=='image' and url=='https://firststop.sos.nd.gov/search/charitable'
                         and getattr(self,'nd_review_image_bindings',{}).get(hashlib.sha256(raw).hexdigest())==(name,identifier))

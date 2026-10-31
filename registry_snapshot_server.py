@@ -14708,6 +14708,11 @@ def co_api_fallback_result(org):
     result.raw_status_text = " | ".join(raw_parts) or raw_status or "Colorado registration data row found"
     result.source_note = "Colorado's public search page was unavailable, so CharityClarity used Colorado's official Information Marketplace registration dataset by FEIN."
     result.success = True
+    try:
+        from deployment.co_dataset_evidence import remember_lookup
+        remember_lookup(result, rows, row)
+    except Exception:
+        pass  # Evidence remains unavailable; the completed lookup stays unchanged.
     return result
 
 
@@ -25348,10 +25353,13 @@ def nj_complete_grid_excludes_org(data, org) -> bool:
         if not isinstance(attrs, list) or not all(isinstance(a, dict) for a in attrs):
             return False
         fields = {}
+        unnumbered = False
         for key in ("name", "accountnumber", "crsm_federalein"):
             values = [a for a in attrs if a.get("Name") == key]
-            if not values and key == "crsm_federalein":
+            if not values and key in {"crsm_federalein", "accountnumber"}:
                 fields[key] = ""
+                if key == "accountnumber":
+                    unnumbered = True
                 continue
             if len(values) != 1 or not isinstance(values[0].get("DisplayValue"), str):
                 return False
@@ -25361,10 +25369,28 @@ def nj_complete_grid_excludes_org(data, org) -> bool:
                 return False
             fields[key] = value
         name, credential, other = [fields[k] for k in ("name", "accountnumber", "crsm_federalein")]
-        if (not useful_registry_name(name) or not re.fullmatch(r"CH\d+", credential)
-                or credential in credentials):
+        if not useful_registry_name(name):
             return False
-        credentials.add(credential)
+        if unnumbered:
+            # A completed public grid can contain an unrelated unnumbered row.
+            # Its absent registration number is not an unknown identity when
+            # the source supplies a distinct valid EIN and both master name
+            # checks reject it. Preserve every matching or uncertain row.
+            record_id = row.get("Id")
+            if (not isinstance(record_id, str)
+                    or not re.fullmatch(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}", record_id)
+                    or sum(isinstance(item, dict) and item.get("Id") == record_id
+                           for item in data["Records"]) != 1
+                    or not re.fullmatch(r"\d{2}-?\d{7}", other)
+                    or canonical_ein_digits(other) in (ein, "000000000")
+                    or nj_strong_name_ein_conflict(name, other, org)
+                    or target_name_score(name, targets) >= 0
+                    or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein)):
+                return False
+        else:
+            if not re.fullmatch(r"CH\d+", credential) or credential in credentials:
+                return False
+            credentials.add(credential)
         if other:
             if nj_strong_name_ein_conflict(name,other,org):return False
             if (not re.fullmatch(r"\d{2}-?\d{7}", other)
@@ -28932,6 +28958,10 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         public_facing_status,
     )
     source_state = (getattr(result, "state", "") or "").upper()
+    if source_state == "CO":
+        from deployment.co_dataset_evidence import dataset_ein, NOTE
+        if dataset_ein(getattr(result, "source_url", "")) == canonical_ein_digits(result.ein):
+            comment += " " + NOTE
     if source_state == "MA":
         evidence = getattr(result, "ma_filing_evidence", {})
         if evidence.get("automatic_extension_inferred") and evidence.get("base_due") and evidence.get("extended_due"):

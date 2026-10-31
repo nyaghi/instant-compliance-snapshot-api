@@ -77,6 +77,9 @@ def selected_url(run,result):
 
 def capture_selected_source(master,result,run,deadline):
  """Best-effort, isolated visual work. Failure never modifies lookup result."""
+ if run is not None and run.state=='CO':
+  from deployment.co_dataset_evidence import capture
+  return capture(master,result,run,deadline)
  if run is not None and run.state=='KS':
   from deployment.kansas_row_evidence import capture_kansas_review_or_selected as capture_selected_kansas
   return trace_return('deployment/source_visual_adapters.py:capture_selected_source:71:2:return',(workflow_call('deployment/source_visual_adapters.py:capture_selected_source:71:9:capture_selected_kansas',capture_selected_kansas,locals(), master,result,run,deadline)))
