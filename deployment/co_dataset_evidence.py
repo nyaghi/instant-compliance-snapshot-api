@@ -60,7 +60,7 @@ def remember_lookup(result, rows, selected):
             or str(selected.get('entityid') or selected.get('documentid') or '') != binding[5]):
         return False
     try:
-        run.co_dataset_proof = {'run_id': run.run_id, 'binding': binding,
+        run.co_dataset_proof = {'run_id': run.run_id, 'binding': binding, 'serialized_binding': None,
                                 'response': digest(rows), 'selected': digest(selected)}
     except (TypeError, ValueError):
         return False
@@ -70,8 +70,31 @@ def remember_lookup(result, rows, selected):
 def bound_proof(run, result):
     proof = getattr(run, 'co_dataset_proof', None)
     return proof if (run.state == 'CO' and proof and proof['run_id'] == run.run_id
-                     and proof['binding'] == result_binding(result)
+                     and proof['serialized_binding' if isinstance(result, dict) else 'binding'] == result_binding(result)
                      and dataset_ein(proof['binding'][3]) == run.ein) else None
+
+
+def seal_public_result(source_result, data):
+    """Bind the existing serializer's result once, without reinterpreting status."""
+    from deployment.state_snapshots import CURRENT
+    run = CURRENT.get()
+    if run is None or run.state != 'CO':
+        return False
+    proof = getattr(run, 'co_dataset_proof', None)
+    if (not proof or proof['run_id'] != run.run_id or proof.get('serialized_binding') is not None
+            or proof['binding'] != result_binding(source_result) or not isinstance(data, dict)):
+        return False
+    published = result_binding(data)
+    # Every source identity/status-text field stays exact. Only the trusted
+    # existing formatter may translate the internal status into its public label.
+    if (any(published[i] != proof['binding'][i] for i in (0, 1, 2, 3, 4, 5, 7))
+            or not isinstance(published[6], str) or not published[6]
+            or published[6] in {'Not Registered', 'Unable to Confirm', 'Site Not Reachable',
+                                'Unable to Verify', 'Needs Review', 'Unknown'}
+            or data.get('confirmation_required')):
+        return False
+    proof['serialized_binding'] = published
+    return True
 
 
 def native_response(page, proof, timeout):
@@ -90,12 +113,18 @@ def image_bound(run, result, url, raw, kind):
     proof = bound_proof(run, result)
     return bool(proof and kind == 'image' and url == proof['binding'][3]
                 and getattr(run, 'co_dataset_image_bindings', {}).get(hashlib.sha256(raw).hexdigest())
-                == (proof['response'], proof['selected'], proof['binding']))
+                == (proof['response'], proof['selected'], proof['serialized_binding']))
 
 
 def capture(master, result, run, deadline):
     proof = bound_proof(run, result)
     if not proof or getattr(run, 'co_dataset_visual_attempted', False):
+        if (not proof and isinstance(result, dict) and dataset_ein(result.get('source_url')) == run.ein):
+            saved = getattr(run, 'co_dataset_proof', None)
+            run.visual_adapter_facts.append({'adapter': 'CO-official-dataset-original',
+                                            'outcome': 'lookup_proof_unbound',
+                                            'proof_present': bool(saved),
+                                            'serialized_proof_present': bool(saved and saved.get('serialized_binding'))})
         return
     run.co_dataset_visual_attempted = True
     start = time.monotonic()
@@ -151,7 +180,7 @@ def capture(master, result, run, deadline):
                 if not 0 < len(raw) <= 3_000_000:
                     raise ValueError('CO dataset image exceeds byte bound')
                 run.co_dataset_image_bindings = {
-                    hashlib.sha256(raw).hexdigest(): (proof['response'], proof['selected'], proof['binding'])}
+                    hashlib.sha256(raw).hexdigest(): (proof['response'], proof['selected'], proof['serialized_binding'])}
                 run.document(proof['binding'][3], raw, 'image', text[:20000],
                              'Original official Colorado dataset response, captured and checked against the same lookup response.')
                 fact['outcome'] = 'captured'

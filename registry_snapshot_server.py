@@ -24287,7 +24287,11 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     if getattr(result, "_cc_identity_review", None):
         attach_identity_review(data, result._cc_identity_review)
     log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
-    return confirmation_result_for_public(data)
+    public_data = confirmation_result_for_public(data)
+    if state == "CO":
+        from deployment.co_dataset_evidence import seal_public_result
+        seal_public_result(result, public_data)
+    return public_data
 
 
 def reason_code_for_result(result, status: str) -> str:

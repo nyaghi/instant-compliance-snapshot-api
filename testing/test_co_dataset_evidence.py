@@ -16,7 +16,10 @@ class DatasetEvidence(unittest.TestCase):
 
     def remember(self,rows=None):
         token=snapshots.CURRENT.set(self.run)
-        try:return evidence.remember_lookup(self.result,self.rows if rows is None else rows,self.rows[0])
+        try:
+            remembered=evidence.remember_lookup(self.result,self.rows if rows is None else rows,self.rows[0])
+            if remembered:evidence.seal_public_result(self.result,self.result)
+            return remembered
         finally:snapshots.CURRENT.reset(token)
 
     def test_only_exact_official_fein_dataset_url_is_accepted(self):
@@ -46,7 +49,7 @@ class DatasetEvidence(unittest.TestCase):
         raw=b'OFFLINE IMAGE HASH OWNERSHIP FIXTURE; NOT A PUBLISHABLE IMAGE'
         proof=self.run.co_dataset_proof
         self.run.co_dataset_image_bindings={hashlib.sha256(raw).hexdigest():
-            (proof['response'],proof['selected'],proof['binding'])}
+            (proof['response'],proof['selected'],proof['serialized_binding'])}
         self.assertTrue(evidence.image_bound(self.run,self.result,URL,raw,'image'))
         for url,data,kind in [(URL,raw+b'changed','image'),(URL,raw,'source_text'),
                               ('https://www.coloradosos.gov/',raw,'image')]:
