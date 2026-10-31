@@ -1,0 +1,23 @@
+{
+  "build-evidence.json": "98e1a4313bd38324d9861bfe3c52dc3a1fefdab68bc07b3284528c6e05ed8413",
+  "dc-boss-source.js": "b437e7385f395e32fd57d6e5a58f3f32f74e105b83c48eece2e838e8ac874010",
+  "desktop-source-bridge.js": "eff46cafb66ef682ba2d9ff1a5f1fa2ec0c12f11f4dca0ec4cff0b208b4ec613",
+  "desktop-source-worker.js": "a20cd8e9198e3dc6112d2389cef1ac3dcf01b1b9d2964c957262a6e146ad6a12",
+  "manifest.json": "b482a309b18473efb91ce349cf3a310ccebb9d9d8283aa045c47fc568a446de0",
+  "ny-content.js": "44dd8f169988893d17260e89507290e73dc20e741b829edc115841e7e1e3c963",
+  "ny-main.js": "bd88dd260c478f9591de2a2d539108caaf613174ae8f45aba18b403d030b6845",
+  "protocol.js": "0661db9d41a8ea1c8ef1303184ffc9b4e77af6c45291c47c6db032d21e52eb1e",
+  "recovery.js": "18763a72e1222f0045f803566d9901b41e07d376114bbba8330ab4163a0c01f2",
+  "registry-content.js": "ba58f427bbe4eeffc7cfb5749f1ebd11b312b3b9b7c9359fe5996e6af02b9495",
+  "registry-ga-main.js": "b3223ff6c67b05f79160349e02e1860282024985bf3f3e75ed7196bacdb3fe0c",
+  "registry-ms-main.js": "2db88a74a65d8bde145dbc9ed5885fb3a371ca95613427d66febdc0789891950",
+  "registry-tn-checkbox.js": "1f06b34358ec88c11888f4bff6134cea4b280fdb51f29c933b57469c6cb78420",
+  "registry-tn-main.js": "80b2c1f3308cc7d1663d5cd16b11e3d7b6e1c2de1da706ec1b1729baf092bc5a",
+  "registry-worker.js": "a48b4484918114ae6b5fbfb1b0f9294bd026811b92c39b888fc9469573463b0d",
+  "source-rail.js": "0efc754ca7e0ed431922a412e8bc06b46d4cb1da6b99515da1fe800b36324f7d",
+  "staging-bridge.js": "17a53bee1ec14d00e71387143858b70fdfb1f5a471f94cf07fbcd76db5791000",
+  "state-snapshot-worker.js": "d836077b6642210b46efbffd2a70c593c343aae4d897de470919b6bac6de803a",
+  "two-window-page.js": "4bf85ec59f5b1f2783c79c38fad74615c002b070fbcfd4a83df3d5ebad022a1e",
+  "worker.js": "328894471924feaa08647953825964f9c6c8dacbd487906152f3a7e53c7dd54c",
+  "workflow-observation.js": "4d8e61db4f16e98494999408d7f8e599ca33c36edb6ae8deae8fd9466f21c04b"
+}

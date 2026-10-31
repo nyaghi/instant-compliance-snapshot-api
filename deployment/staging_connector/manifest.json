@@ -1,0 +1,135 @@
+{
+  "manifest_version": 3,
+  "name": "CharityClarity \u2014 NC Complete Profile",
+  "version": "0.6.135",
+  "minimum_chrome_version": "132",
+  "description": "Staging: complete original North Carolina profile evidence with existing NV/WI/NY corrections.",
+  "permissions": [
+    "storage",
+    "browsingData",
+    "cookies",
+    "debugger"
+  ],
+  "host_permissions": [
+    "https://charityclarity-final-four-29-2.onrender.com/*",
+    "https://secure.nmdoj.gov/CharitySearch/*",
+    "https://ago.igovsolution.net/online/Lookups/Business.aspx*",
+    "https://www.sosnc.gov/online_services/search/*",
+    "https://orion.nv.gov/portal/public/*",
+    "https://tncab.tnsos.gov/portal/registered-charities-search*",
+    "https://charitable.illinoisattorneygeneral.gov/search*",
+    "https://verify.sos.ga.gov/verification/*",
+    "https://charities-search.ag.ny.gov/RegistrySearch*",
+    "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx*"
+  ],
+  "incognito": "not_allowed",
+  "background": {
+    "service_worker": "worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/*"
+      ],
+      "js": [
+        "registry-tn-checkbox.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://tncab.tnsos.gov/portal/registered-charities-search*"
+      ],
+      "js": [
+        "registry-tn-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://charities-search.ag.ny.gov/RegistrySearch*"
+      ],
+      "js": [
+        "ny-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://charities-search.ag.ny.gov/RegistrySearch*"
+      ],
+      "js": [
+        "ny-content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://charityclarity-final-four-29-2.onrender.com/*"
+      ],
+      "js": [
+        "protocol.js",
+        "staging-bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://charityclarity-final-four-29-2.onrender.com/*"
+      ],
+      "js": [
+        "two-window-page.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://verify.sos.ga.gov/verification/SearchResults.aspx*"
+      ],
+      "js": [
+        "registry-ga-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx*"
+      ],
+      "js": [
+        "registry-ms-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://secure.nmdoj.gov/CharitySearch/*",
+        "https://ago.igovsolution.net/online/Lookups/Business.aspx*",
+        "https://www.sosnc.gov/online_services/search/*",
+        "https://orion.nv.gov/portal/public/*",
+        "https://tncab.tnsos.gov/portal/registered-charities-search*",
+        "https://charitable.illinoisattorneygeneral.gov/search*",
+        "https://verify.sos.ga.gov/verification/*",
+        "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx*"
+      ],
+      "js": [
+        "registry-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://charityclarity-final-four-29-2.onrender.com/*"
+      ],
+      "js": [
+        "desktop-source-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "version_name": "0.6.135 NV Return + WI/NY + NC Profile"
+}

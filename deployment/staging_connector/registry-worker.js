@@ -1,0 +1,1448 @@
+/* Public-registry transport in the existing connector; no independent runtime. */
+const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov",MS:"https://charities.sos.ms.gov"})[state];
+const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/",MS:"/online/portal/ch/page/charities-search/Portal.aspx"})[state];
+const registryTnTraffic={nextAt:0,cooldownUntil:0};
+function registryTnCheckboxFrame(url){
+  try{const u=new URL(url);return u.origin==='https://challenges.cloudflare.com'
+    && u.pathname.startsWith('/cdn-cgi/challenge-platform/');}catch{return false;}
+}
+async function registryTnCheckboxMessage(message,sender){
+  if(!P.TRIAL_ORIGIN || sender.id!==chrome.runtime.id || !Number.isInteger(sender.frameId)
+      || sender.frameId<=0 || !P.validId(message.id) || !registryTnCheckboxFrame(sender.url))return {allowed:false};
+  const job=allJobs().find(j=>isActive(j)&&!j.closed&&j.registryState==='TN'
+    && j.tab===sender.tab?.id && owned.has(j.tab));
+  if(!job || !job.pending || Date.now()>=job.activeExpiresAt)return {allowed:false};
+  const tab=await chrome.tabs.get(job.tab);
+  if(tab.url!==registryStart('TN') || !tab.active || job.closed)return {allowed:false};
+  if(message.action==='tn-checkbox-observation'){
+    if(job.tnCheckboxObservationCount>=8 || message.phase!=='frame-observed'
+        || typeof message.visible!=='boolean' || typeof message.actionable!=='boolean'
+        || !Number.isInteger(message.controls) || message.controls<0 || message.controls>9)return {allowed:false};
+    job.tnCheckboxObservationCount=(job.tnCheckboxObservationCount||0)+1;
+    diagnostic('tn-verification',job,JSON.stringify({phase:'frame-observed',visible:message.visible,
+      controls:message.controls,actionable:message.actionable,
+      ...(typeof message.shadow_api==='boolean'&&typeof message.scan_complete==='boolean'
+        &&Number.isInteger(message.shadow_roots)&&message.shadow_roots>=0&&message.shadow_roots<=8
+        &&Number.isInteger(message.shadow_controls)&&message.shadow_controls>=0&&message.shadow_controls<=9
+        ?{shadow_api:message.shadow_api,shadow_roots:message.shadow_roots,
+          shadow_controls:message.shadow_controls,scan_complete:message.scan_complete}:{}),
+      ...(Number.isFinite(message.scan_ms)&&message.scan_ms>=0&&message.scan_ms<=60000
+        &&Number.isFinite(message.script_age_ms)&&message.script_age_ms>=0&&message.script_age_ms<=60000
+        ?{scan_ms:message.scan_ms,script_age_ms:message.script_age_ms}:{}),
+      ...(['frame_nav_ms','frame_response_end_ms','frame_dom_interactive_ms','frame_dom_ready_ms','frame_load_end_ms']
+        .every(k=>Number.isFinite(message[k])&&message[k]>=0&&message[k]<=600000)
+        ?{frame_nav_ms:message.frame_nav_ms,frame_response_end_ms:message.frame_response_end_ms,
+          frame_dom_interactive_ms:message.frame_dom_interactive_ms,
+          frame_dom_ready_ms:message.frame_dom_ready_ms,frame_load_end_ms:message.frame_load_end_ms}:{})}));
+    return {allowed:false};
+  }
+  if(Date.now()>=Math.min(job.activeExpiresAt,job.tnVerificationExpiresAt||0))return {allowed:false};
+  if(message.action==='tn-checkbox-outcome'){
+    if(job.tnCheckboxFrameId===sender.frameId && job.tnCheckboxRequestId===message.id
+        && ['clicked','changed-before-click','click-unavailable'].includes(message.phase))
+      diagnostic('tn-verification',job,JSON.stringify({phase:message.phase}));
+    return {allowed:false};
+  }
+  if(message.action!=='tn-checkbox-permission' || job.tnCheckboxAttempted)return {allowed:false};
+  // One ordinary visible-checkbox attempt per admitted workflow. Persist the
+  // used attempt before replying so a worker restart cannot grant it twice.
+  job.tnCheckboxAttempted=true;job.tnCheckboxFrameId=sender.frameId;job.tnCheckboxRequestId=message.id;
+  await saveRuntime();
+  const current=await chrome.tabs.get(job.tab);
+  if(job.closed || !owned.has(job.tab) || current.url!==registryStart('TN') || !current.active
+      || Date.now()>=Math.min(job.activeExpiresAt,job.tnVerificationExpiresAt||0))return {allowed:false};
+  diagnostic('tn-verification',job,JSON.stringify({phase:'checkbox-authorized'}));
+  return {allowed:true};
+}
+function registryTnTrafficRestore(value){
+  if(!P.TRIAL_ORIGIN||!value||typeof value!=='object')return;
+  for(const key of ['nextAt','cooldownUntil'])if(Number.isSafeInteger(value[key])&&value[key]>=0)registryTnTraffic[key]=value[key];
+}
+function registryTnTrafficSnapshot(){return {...registryTnTraffic};}
+async function registryTnBeforeCommand(job){
+  if(!P.TRIAL_ORIGIN)return wfReturn(job,"registry-worker.js:registryTnBeforeCommand:63:21:return",(null));
+  if(registryTnTraffic.cooldownUntil>Date.now()){
+    diagnostic('tn-cooldown',job,`remaining_ms=${registryTnTraffic.cooldownUntil-Date.now()}`);
+    return wfReturn(job,"registry-worker.js:registryTnBeforeCommand:66:4:return",({ok:false,reason:'NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED'}));
+  }
+  const delay=Math.max(0,registryTnTraffic.nextAt-Date.now());
+  if(Date.now()+delay>=job.activeExpiresAt)return wfReturn(job,"registry-worker.js:registryTnBeforeCommand:69:43:return",({ok:false,reason:'NY_CONNECTOR_TIMEOUT'}));
+  if(delay){diagnostic('tn-pacing',job,`wait_ms=${delay}`);await wfAwait(job,"registry-worker.js:registryTnBeforeCommand:70:59:await",()=>(new Promise(resolve=>setTimeout(resolve,delay))));}
+  if(job.closed)return wfReturn(job,"registry-worker.js:registryTnBeforeCommand:71:16:return",({ok:false,reason:'NY_CONNECTOR_INTERRUPTED'}));
+  if(Date.now()>=job.activeExpiresAt)return wfReturn(job,"registry-worker.js:registryTnBeforeCommand:72:37:return",({ok:false,reason:'NY_CONNECTOR_TIMEOUT'}));
+  return wfReturn(job,"registry-worker.js:registryTnBeforeCommand:73:2:return",(null));
+}
+async function registryTnAfterCommand(response){
+  if(!P.TRIAL_ORIGIN)return;
+  registryTnTraffic.nextAt=Date.now()+PACE_MS;
+  if(response?.reason==='NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED'){
+    // Honor the state's Retry-After. Without one, five minutes is a
+    // conservative operational cooldown, not a claimed registry limit.
+    const delay=Number.isSafeInteger(response.tn_retry_after_ms)&&response.tn_retry_after_ms>=0
+      ?response.tn_retry_after_ms:300000;
+    registryTnTraffic.cooldownUntil=Math.max(registryTnTraffic.cooldownUntil,Date.now()+delay);
+  }
+  await saveRuntime();
+}
+function registryTrialLayout(origin) {
+  const source=new URL(origin.url);
+  if(!P.TRIAL_ORIGIN || source.origin!==P.TRIAL_ORIGIN
+      || !['/','/instant-compliance-snapshot','/instant-compliance-snapshot/',
+        '/connector/final-four-validation.html'].includes(source.pathname))return '';
+  if(source.searchParams.get('collector_layout')==='duo')return 'duo';
+  if(source.pathname==='/connector/final-four-validation.html') {
+    const requested=source.searchParams.get('collector_layout');
+    if(requested==='visible')return 'visible'; // Preserve the four-state comparison.
+    if(requested && requested!=='coordinated')return '';
+  }
+  return 'coordinated';
+}
+async function registryTrialWindowOptions(job, origin) {
+  const options={type:'normal',focused:false};
+  // Active tabs can still be hidden when their windows cover one another.
+  // Keep owned trial collectors disjoint; never move the user's source window.
+  const layout=registryTrialLayout(origin);
+  if(!layout)return wfReturn(job,"registry-worker.js:registryTrialWindowOptions:105:13:return",(options));
+  const slot=(layout==='visible'?['NV','NY','IL','NC']
+    : layout==='duo'?['NV','NY','IL','NC','TN','MS','AL','GA','NM','DC','WI']
+      :['NV','NY','IL','NC','TN']).indexOf(job.registryState);
+  if(slot<0)return wfReturn(job,"registry-worker.js:registryTrialWindowOptions:109:12:return",(options));
+  let bounds;
+  try { bounds=await wfAwait(job,"registry-worker.js:registryTrialWindowOptions:111:15:await",()=>(chrome.windows.get(origin.windowId))); }
+  catch(error) { if(layout==='visible')throw error;return wfReturn(job,"registry-worker.js:registryTrialWindowOptions:112:51:return",(options)); }
+  const originalBounds={left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,state:bounds.state};
+  let boundsSource='origin';
+  // Existing full-size layouts stay unchanged. The ordinary trial may be
+  // launched from a small or minimized window; use its actual display work area
+  // rather than silently creating overlapping, unfocused collectors.
+  const usable=b=>['left','top','width','height'].every(k=>Number.isFinite(b?.[k]))
+    && b.width>=1080 && b.height>=700 && b.width<=16384 && b.height<=16384;
+  if(['coordinated','duo'].includes(layout) && (bounds?.state==='minimized' || !usable(bounds))) {
+    let timer;
+    try {
+      const display=await wfAwait(job,"registry-worker.js:registryTrialWindowOptions:123:20:await",()=>(Promise.race([
+        chrome.tabs.sendMessage(origin.id,{action:'trial-collector-display'},{frameId:0}),
+        new Promise(resolve=>{timer=setTimeout(()=>resolve(null),Math.max(1,Math.min(250,job.activeExpiresAt-Date.now())));})
+      ])));
+      if(usable(display) && Math.abs(display.left)<=65536 && Math.abs(display.top)<=65536)
+        {bounds={...display,state:'normal'};boundsSource='display-work-area';}
+    } catch {} finally {clearTimeout(timer);}
+  }
+  // The display work area can be wider than the source window. If Chrome
+  // reports the minimized source's last normal rectangle and that rectangle
+  // still matches the viewport captured at acquire, use the source rectangle
+  // for rail placement. Comparing that cache to the substituted work area
+  // incorrectly rejects it and tiles NC over the application.
+  if(layout==='duo' && boundsSource==='display-work-area' && usable(originalBounds)
+      && job.trialDisplay?.outerWidth===originalBounds.width
+      && job.trialDisplay?.outerHeight===originalBounds.height
+      && originalBounds.left>=bounds.left && originalBounds.top>=bounds.top
+      && originalBounds.left+originalBounds.width<=bounds.left+bounds.width
+      && originalBounds.top+originalBounds.height<=bounds.top+bounds.height) {
+    bounds={...originalBounds,state:'normal'};
+    boundsSource='cached-origin';
+  }
+  if(!['left','top','width','height'].every(k=>Number.isFinite(bounds?.[k]))
+      || bounds.width<1080 || bounds.height<700 || bounds.state==='minimized') {
+    if(layout!=='visible')return wfReturn(job,"registry-worker.js:registryTrialWindowOptions:147:26:return",(options));
+    throw new Error('NY_CONNECTOR_VISIBLE_LAYOUT_UNAVAILABLE');
+  }
+  if(job.closed || Date.now()>=job.activeExpiresAt)throw new Error('NY_CONNECTOR_INTERRUPTED');
+  const current=await wfAwait(job,"registry-worker.js:registryTrialWindowOptions:151:16:await",()=>(chrome.tabs.get(origin.id)));
+  if(current.windowId!==origin.windowId || current.url!==origin.url)
+    throw new Error('NY_CONNECTOR_VISIBLE_LAYOUT_UNAVAILABLE');
+  if(layout==='duo') {
+    // Two visible registry workspaces aligned to the opt-in page's right rail.
+    // The worker admits only two browser-dependent jobs at once.
+    if(!Number.isInteger(job.duoSlot) || ![0,1].includes(job.duoSlot))
+      throw new Error('NY_CONNECTOR_DUO_LAYOUT_UNAVAILABLE');
+    let chromeInsetTop=96, viewportWidth, timer, displaySource='live';
+    let liveReply='not-requested',liveElapsedMs=null;
+    if(bounds.width>=1600 && bounds.height>=900) try {
+      const startedAt=Date.now();
+      const display=await wfAwait(job,"registry-worker.js:registryTrialWindowOptions:163:20:await",()=>(Promise.race([
+        chrome.tabs.sendMessage(origin.id,{action:'trial-collector-display'},{frameId:0}),
+        // A busy Chrome process can delay this read-only reply beyond 250 ms.
+        // Normal replies return immediately; only a missing reply pays this wait.
+        new Promise(resolve=>{timer=setTimeout(()=>resolve(null),Math.max(1,Math.min(1000,job.activeExpiresAt-Date.now())));})
+      ])));
+      liveElapsedMs=Date.now()-startedAt;
+      liveReply=display?'received':'missing';
+      if(Number.isFinite(display?.chromeInsetTop))chromeInsetTop=display.chromeInsetTop;
+      if(Number.isFinite(display?.viewportWidth))viewportWidth=display.viewportWidth;
+    } catch(error) {liveReply=`error:${error?.name||'unknown'}`;} finally {clearTimeout(timer);}
+    if(job.registryState==='NC')diagnostic('nc-layout-inputs',job,JSON.stringify({
+      slot:job.duoSlot,origin:originalBounds,boundsSource,
+      chosen:{left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height},
+      liveReply,liveElapsedMs,liveViewportWidth:Number.isFinite(viewportWidth)?viewportWidth:null,
+      cached:job.trialDisplay?{outerWidth:job.trialDisplay.outerWidth,
+        outerHeight:job.trialDisplay.outerHeight,viewportWidth:job.trialDisplay.viewportWidth,
+        chromeInsetTop:job.trialDisplay.chromeInsetTop}:null
+    }));
+    // Acquire records the same viewport before concurrent registry work can
+    // delay the read-only response. Reuse only for the same outer window size.
+    if(!Number.isFinite(viewportWidth) && job.trialDisplay?.outerWidth===bounds.width
+        && job.trialDisplay?.outerHeight===bounds.height) {
+      viewportWidth=job.trialDisplay.viewportWidth;
+      chromeInsetTop=job.trialDisplay.chromeInsetTop;
+      displaySource='acquire';
+    }
+    // The rail is deliberately hidden below 1600 CSS pixels. At that size a
+    // popup cannot fit beside the app; retain the existing coordinated-window
+    // geometry instead of turning a valid registry lookup into an error.
+    if(Number.isFinite(viewportWidth) && viewportWidth>=1600
+        && bounds.width>=1600 && bounds.height>=900) {
+      const railLeft=820, inset=16, header=72, gap=12, footer=16;
+      const width=Math.min(bounds.width,viewportWidth)-railLeft-inset*2;
+      const height=Math.floor((bounds.height-chromeInsetTop-header-gap-footer)/2);
+    // The Compliance Express test profile docks its side panel on the left.
+    // Chrome's outer window includes that panel, while the page viewport and
+    // right rail begin after it. Account for the complete measured difference
+    // so the collector starts inside the rail. A right-docked panel can be
+    // tested explicitly without changing the ordinary connector layout.
+      const spareWidth=Math.max(0,bounds.width-viewportWidth);
+      const panelOnRight=new URL(origin.url).searchParams.get('collector_panel')==='right';
+      const viewportInset=panelOnRight?0:spareWidth;
+      diagnostic('duo-placement-source',job,displaySource);
+      return wfReturn(job,"registry-worker.js:registryTrialWindowOptions:207:6:return",({...options,type:'popup',focused:true,state:'normal',width,height,
+        left:bounds.left+viewportInset+railLeft+inset,
+        top:bounds.top+chromeInsetTop+header+job.duoSlot*(height+gap)}));
+    }
+    diagnostic('duo-layout-fallback',job,`viewport=${Number.isFinite(viewportWidth)?viewportWidth:'missing'} source=${bounds.width}x${bounds.height} slot=${job.duoSlot} cached=${Number.isFinite(job.trialDisplay?.viewportWidth)?job.trialDisplay.viewportWidth:'missing'}`);
+  }
+  const columns=layout==='visible'?2:3;
+  // AL is a seventh state, not a seventh screen tile. The two-slot queue
+  // leaves a free tile when viewport telemetry is absent or the rail is hidden.
+  // Preserve every existing state's fallback coordinates.
+  let fallbackSlot=slot;
+  if(layout==='duo' && ['AL','GA','NM','DC','WI'].includes(job.registryState)) {
+    const peers=['NV','NY','IL','NC','TN','MS'];
+    const occupied=new Set(allJobs().concat(typeof CCSourceRail==='undefined'?[]:CCSourceRail.jobs()).filter(other=>other!==job && (isActive(other)||other.sourceRailLease===true))
+      .map(other=>Number.isInteger(other.registryFallbackSlot)?other.registryFallbackSlot:peers.indexOf(other.registryState)).filter(value=>value>=0));
+    fallbackSlot=[0,1,2,3,4,5].find(value=>!occupied.has(value));
+    if(fallbackSlot===undefined)throw new Error('NY_CONNECTOR_DUO_LAYOUT_UNAVAILABLE');
+    job.registryFallbackSlot=fallbackSlot;
+    diagnostic(job.registryState==='AL'?'al-fallback-tile':'owned-fallback-tile',job,String(fallbackSlot));
+  }
+  const width=Math.floor((bounds.width-8*(columns+1))/columns),height=Math.floor((bounds.height-24)/2);
+  return wfReturn(job,"registry-worker.js:registryTrialWindowOptions:227:2:return",({...options,focused:true,state:'normal',width,height,
+    left:bounds.left+8+(fallbackSlot%columns)*(width+8),top:bounds.top+8+Math.floor(fallbackSlot/columns)*(height+8)}));
+}
+async function registryCreateOwnedTab(job,url,origin) {
+  let tab;
+  if(P.TRIAL_ORIGIN && job.registryState==='NV' && job.nvSourceInitiallyMinimized===undefined) {
+    try {job.nvSourceInitiallyMinimized=(await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:233:41:await",()=>(chrome.windows.get(origin.windowId)))).state==='minimized';}
+    catch {job.nvSourceInitiallyMinimized=false;}
+  }
+  // Tennessee needs its own visible document for Kendo modal transitions.
+  // In the opt-in rail, Mississippi also needs a visible document: repeated
+  // no-match searches in a hidden source tab delay its Kendo grid watchdog.
+  // The mature connector and unrelated trial states retain their existing path.
+  if(P.TRIAL_ORIGIN && (['NV','NY','IL','NC'].includes(job.registryState)
+      || job.registryState==='TN'&&['coordinated','duo'].includes(registryTrialLayout(origin))
+      || ['MS','AL','GA','NM'].includes(job.registryState)&&registryTrialLayout(origin)==='duo') && new URL(origin.url).origin===P.TRIAL_ORIGIN){
+    let placement=await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:243:20:await",()=>(registryTrialWindowOptions(job,origin)));
+    let window;
+    try {
+      window=await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:244:17:await",()=>(chrome.windows.create({url,...placement})));
+    } catch(error) {
+      // A source window may straddle the display edge. Chrome can reject a
+      // lower fallback tile before any source page or search exists.
+      // Retry only this explicit placement rejection, never an unknown error.
+      const rejectedBounds=error?.message==='Invalid value for bounds. Bounds must be at least 50% within visible screen space.';
+      if(!rejectedBounds || !['NC','TN','MS','GA','NM'].includes(job.registryState)
+          || job.closed || !isActive(job) || Date.now()>=job.activeExpiresAt
+          || !Number.isFinite(placement.left) || !Number.isFinite(placement.top))throw error;
+      diagnostic('source-window-placement-recovery',job,'Chrome rejected off-screen bounds; using browser-selected position');
+      const {left,top,...automaticPosition}=placement;
+      window=await wfAwait(job,'registryCreateOwnedTab:browser-selected-position',()=>chrome.windows.create({url,...automaticPosition}));
+      // Subsequent popup ownership checks use the actual browser placement.
+      placement={...automaticPosition,left:window.left,top:window.top};
+    }
+    tab=window?.tabs?.[0];
+    if(!Number.isInteger(tab?.id))throw new Error('NY_CONNECTOR_INCOMPLETE');
+    if(placement.type==='popup') {
+      // Chrome can enforce a minimum outer height and shift a lower popup.
+      // Recheck its actual rectangle and keep this owned window inside the
+      // measured rail without moving the source window or extending deadlines.
+      const right=placement.left+placement.width;
+      const bottom=placement.top+placement.height;
+      const left=Number.isFinite(window.width) && window.width<=placement.width
+        ? Math.min(Math.max(window.left,placement.left),right-window.width):window.left;
+      const top=Number.isFinite(window.height) && window.height<=placement.height+120
+        ? (job.duoSlot===1
+          ? Math.min(Math.max(window.top,placement.top-120),bottom-window.height)
+          : placement.top):window.top;
+      if((left!==window.left || top!==window.top) && !job.closed && Date.now()<job.activeExpiresAt)
+        try { await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:260:14:await",()=>(chrome.windows.update(window.id,{left,top}))); }
+        catch { diagnostic('duo-placement-adjustment-refused',job,'browser kept the original owned window'); }
+      diagnostic('duo-window',job,`slot=${job.duoSlot} planned=${placement.left},${placement.top},${placement.width},${placement.height} actual=${window.left},${window.top},${window.width},${window.height} adjusted=${left},${top}`);
+      if(job.registryState==='NC')try {
+        const final=await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:264:20:await",()=>(chrome.windows.get(window.id)));
+        diagnostic('nc-window-final',job,`slot=${job.duoSlot} source_window=${origin.windowId} planned=${placement.left},${placement.top},${placement.width},${placement.height} final=${final.left},${final.top},${final.width},${final.height}`);
+      }catch {diagnostic('nc-window-final',job,'owned window unavailable for final read');}
+    } else if(job.registryState==='NC') {
+      diagnostic('nc-window-fallback',job,`slot=${job.duoSlot} placement=${placement.left},${placement.top},${placement.width},${placement.height} actual=${window.left},${window.top},${window.width},${window.height}`);
+    }
+  } else tab=await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:270:13:await",()=>(chrome.tabs.create({windowId:origin.windowId,url,active:false})));
+  job.tab=tab.id;owned.add(tab.id);await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:271:35:await",()=>(saveRuntime()));
+}
+async function registryTennesseeOwnedWindow(tab,source) {
+  if(!owned.has(tab.id) || tab.url!==registryStart('TN'))return false;
+  if(tab.windowId===source.windowId)return true; // Existing same-window sessions.
+  const siblings=await chrome.tabs.query({windowId:tab.windowId});
+  return siblings.length===1 && siblings[0].id===tab.id && tab.active;
+}
+async function registryExposeReusedNyTab(job, origin) {
+  // The layout creates windows in front, but a retained NY or TN page
+  // can be covered when the validation page is brought forward for another
+  // run. Expose only its isolated window; preserve the document and session.
+  if(!P.TRIAL_ORIGIN || !['NY','TN','AL'].includes(job.registryState) || job.closed
+      || Date.now()>=job.activeExpiresAt || !owned.has(job.tab))return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:284:64:return",(false));
+  try {
+    const layout=registryTrialLayout(origin);
+    if(!layout)return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:287:15:return",(false));
+    const tab=await wfAwait(job,"registry-worker.js:registryExposeReusedNyTab:288:14:await",()=>(chrome.tabs.get(job.tab))),source=await wfAwait(job,"registry-worker.js:registryExposeReusedNyTab:288:52:await",()=>(chrome.tabs.get(origin.id)));
+    if(!(job.registryState==='NY'?nyRegistryPage(tab.url):tab.url===registryStart(job.registryState)) || !tab.active || tab.windowId===source.windowId
+        || source.windowId!==origin.windowId || source.url!==origin.url)return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:290:72:return",(false));
+    const siblings=await wfAwait(job,"registry-worker.js:registryExposeReusedNyTab:291:19:await",()=>(chrome.tabs.query({windowId:tab.windowId})));
+    if(siblings.length!==1 || siblings[0].id!==tab.id || !siblings[0].active
+        || siblings[0].url!==tab.url || job.closed || Date.now()>=job.activeExpiresAt
+        || job.tab!==tab.id || !owned.has(tab.id))return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:294:50:return",(false));
+    const placement=['coordinated','duo'].includes(layout)?await wfAwait(job,"registry-worker.js:registryExposeReusedNyTab:295:59:await",()=>(registryTrialWindowOptions(job,origin))):{focused:true};
+    if(!placement.focused)return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:296:26:return",(false));
+    const {type,...update}=placement;
+    const latest=await wfAwait(job,"registry-worker.js:registryExposeReusedNyTab:298:17:await",()=>(chrome.tabs.get(tab.id)));
+    if(job.closed || Date.now()>=job.activeExpiresAt || !owned.has(tab.id)
+        || latest.windowId!==tab.windowId || latest.url!==tab.url || !latest.active)return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:300:84:return",(false));
+    await wfAwait(job,"registry-worker.js:registryExposeReusedNyTab:301:4:await",()=>(chrome.windows.update(tab.windowId,update)));
+    diagnostic(job.registryState.toLowerCase()+'-reuse-visible',job,'same owned window and verified document');
+    return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:303:4:return",(true));
+  } catch { return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:304:12:return",(false)); } // No extra request or recovery when focus is unavailable.
+}
+async function registryNevadaVisibleSnapshot(job) {
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.nvVisibilityAttempted || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryNevadaVisibleSnapshot:307:103:return",(null));
+  try {
+    const tab=await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:309:14:await",()=>(chrome.tabs.get(job.tab))), source=await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:309:53:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+    let coordinatedPlacement=null;
+    if(tab.active && tab.windowId!==source.windowId && ['coordinated','duo'].includes(registryTrialLayout(source))) {
+      // Check the document before recomputing placement for a recovery it may not need.
+      let state,timer;
+      try {state=await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:321:19:await",()=>(Promise.race([
+        chrome.tabs.sendMessage(tab.id,{action:'registry-ready'},{frameId:0}),
+        new Promise(resolve=>{timer=setTimeout(()=>resolve(null),Math.max(1,Math.min(250,job.activeExpiresAt-Date.now())));})
+      ])));} catch {} finally {clearTimeout(timer);}
+      if(state?.page_visibility==='visible') {job.nvVisibilityOutcome='coordinated_window';return wfReturn(job,"registry-worker.js:registryNevadaVisibleSnapshot:325:93:return",(null));}
+      const planned=await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:312:20:await",()=>(registryTrialWindowOptions(job,source))),actual=await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:312:72:await",()=>(chrome.windows.get(tab.windowId)));
+      // Chrome may clamp a small collector to its minimum window size. The
+      // planned footprint is still valid for our isolated window; exact old
+      // coordinates must not disable bounded visibility recovery.
+      if(planned.focused){const {type,...placement}=planned;coordinatedPlacement=placement;}
+      if(planned.focused && ['left','top','width','height'].every(k=>actual[k]===planned[k])) {
+        // Matching coordinates do not prove that another application/window
+        // has not covered this document. Confirm visibility in the page.
+        const {type,...placement}=planned;coordinatedPlacement=placement;
+      }
+    }
+    if (!tab.active && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN)
+      return wfReturn(job,"registry-worker.js:registryNevadaVisibleSnapshot:330:6:return",((await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:330:14:await",()=>(chrome.tabs.query({active:true,windowId:tab.windowId}))))[0]||null));
+    if (tab.active && tab.windowId!==source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+      const focus=await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:332:18:await",()=>(chrome.windows.getLastFocused()));
+      const prior=(await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:333:19:await",()=>(chrome.tabs.query({active:true,windowId:focus.id}))))[0];
+      if(focus.focused && focus.id===tab.windowId){job.nvVisibilityOutcome='already_foreground';return wfReturn(job,"registry-worker.js:registryNevadaVisibleSnapshot:334:96:return",(null));}
+      // getLastFocused can describe a stale, unrelated tab while Chrome is
+      // not foreground at all. An explicit trial may expose its own isolated
+      // collector once in that case, without touching/restoring that old tab.
+      const initialMinimized=job.nvSourceInitiallyMinimized===true
+        && (await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:339:12:await",()=>(chrome.windows.get(source.windowId)))).state==='minimized';
+      const inactiveBrowser=(focus.focused===false||initialMinimized) && prior?.active===true
+        && !job.nvInactiveBrowserActivationUsed;
+      if(!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser){
+        job.nvVisibilityOutcome='user_window_or_tab';
+        // Keep only bounded ownership facts from reads already performed above.
+        // Do not export the unrelated tab's URL, title, or page contents.
+        let foregroundKind='other-tab';
+        try {
+          const foregroundOrigin=new URL(prior?.url).origin;
+          if(foregroundOrigin===P.TRIAL_ORIGIN)foregroundKind='other-staging-tab';
+          else if(['https://boss.dc.gov','https://apps.dfi.wi.gov'].includes(foregroundOrigin))foregroundKind='evidence-source-origin';
+          else if(nyRegistryPage(prior?.url)||['IL','GA','AL','NC','NV','TN','NM','MS'].some(s=>foregroundOrigin===registryOrigin(s)))foregroundKind='registry-source-origin';
+        } catch {}
+        job.nvVisibilityBlocker={foreground_kind:foregroundKind,
+          tab_id:Number.isInteger(prior?.id)?prior.id:null,
+          window_id:Number.isInteger(prior?.windowId)?prior.windowId:null,
+          source_tab_id:source.id,source_window_id:source.windowId,
+          prior_active:prior?.active===true,prior_owned:!!prior&&owned.has(prior.id),
+          browser_focused:focus.focused===true,coordinated_placement:!!coordinatedPlacement};
+        registryNevadaDiagnostic(job,'visibility-snapshot-refused',{
+          prior_present:!!prior,prior_active:prior?.active===true,prior_owned:!!prior&&owned.has(prior.id),
+          prior_is_source:prior?.id===source.id,browser_focused:focus.focused===true,
+          coordinated_placement:!!coordinatedPlacement,inactive_activation_used:!!job.nvInactiveBrowserActivationUsed});
+        return wfReturn(job,"registry-worker.js:registryNevadaVisibleSnapshot:348:8:return",(null));
+      }
+      // Starting an explicit trial already creates focused collector windows.
+      // Give this owned stalled window the same single bounded activation even
+      // when the initiating application (e.g. Codex) remains foreground. Keep
+      // the captured focus state so a subsequent browser/user switch cancels it.
+      job.nvVisibilityOutcome=focus.focused?'eligible_separate_window':'eligible_owned_browser_activation';
+      return wfReturn(job,"registry-worker.js:registryNevadaVisibleSnapshot:355:6:return",({mode:'window',id:prior.id,windowId:prior.windowId,url:prior.url,
+        nvWindowId:tab.windowId,sourceWindowId:source.windowId,sourceUrl:source.url,
+        browserFocused:focus.focused===true,coordinatedPlacement,
+        sourceWasMinimized:initialMinimized,
+        inactiveBrowser:inactiveBrowser&&!registryNevadaOwnedForeground(prior,source)}));
+    }
+  } catch {job.nvVisibilityOutcome='snapshot_unavailable';}
+  return wfReturn(job,"registry-worker.js:registryNevadaVisibleSnapshot:362:2:return",(null));
+}
+function registryNevadaOwnedForeground(tab,source) {
+  if(!tab?.active)return false;
+  if(tab.id===source.id)return tab.windowId===source.windowId&&tab.url===source.url;
+  if(!owned.has(tab.id))return false;
+  try {return nyRegistryPage(tab.url)||['IL','GA','AL','NC','NV','TN','NM','MS'].some(s=>new URL(tab.url).origin===registryOrigin(s));}
+  catch {return false;}
+}
+function registryNevadaDiagnostic(job, phase, detail={}) {
+  if(!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.closed || !job.pending
+      || !owned.has(job.tab) || (job.nvDiagnosticCount||0)>=96)return wfReturn(job,"registry-worker.js:registryNevadaDiagnostic:373:63:return",undefined);
+  job.nvDiagnosticCount=(job.nvDiagnosticCount||0)+1;
+  post(job,{id:job.pending,progress:true,nv_diagnostic:{phase,...detail}});
+}
+async function registryNevadaExposeWindow(job,previous) {
+  const tab=await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:378:12:await",()=>(chrome.tabs.get(job.tab))),source=await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:378:50:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+  const siblings=await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:379:17:await",()=>(chrome.tabs.query({windowId:tab.windowId})));
+  const bounds=await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:380:15:await",()=>(chrome.windows.get(source.windowId))),nv=await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:380:60:await",()=>(chrome.windows.get(tab.windowId)));
+  // Read foreground last: geometry reads may yield while the user switches.
+  const focus=await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:382:14:await",()=>(chrome.windows.getLastFocused()));
+  const prior=(await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:383:15:await",()=>(chrome.tabs.query({active:true,windowId:previous.windowId}))))[0];
+  if((focus.focused===true)!==(previous.browserFocused!==false) || focus.id!==previous.windowId){job.nvVisibilityOutcome='foreground_changed';registryNevadaDiagnostic(job,'foreground-changed',{browser_focused:focus.focused===true});return wfReturn(job,"registry-worker.js:registryNevadaExposeWindow:384:232:return",(null));}
+  // TN can legitimately activate its owned collector in the source window.
+  // Treat that as coordination, not as a user selecting an unrelated page.
+  // Record the actual owned foreground so completion restores that collector.
+  const ownedTransition=prior?.id!==previous.id && registryNevadaOwnedForeground(prior,source)
+    && owned.has(prior.id);
+  const minimizedSourceAllowed=job.nvSourceInitiallyMinimized===true
+    && previous.sourceWasMinimized===true && bounds.state==='minimized';
+  const inactiveBrowser=previous.inactiveBrowser===true && (focus.focused===false||minimizedSourceAllowed)
+    && !job.nvInactiveBrowserActivationUsed
+    && prior?.active===true && prior.id===previous.id && prior.url===previous.url;
+  if(!tab.active || tab.windowId!==previous.nvWindowId || tab.windowId===source.windowId
+      || source.windowId!==previous.sourceWindowId || source.url!==previous.sourceUrl
+      || new URL(source.url).origin!==P.TRIAL_ORIGIN || new URL(tab.url).origin!==registryOrigin('NV')
+      || !new URL(tab.url).pathname.startsWith('/portal/public/') || siblings.length!==1 || siblings[0].id!==tab.id
+      || (!ownedTransition && (prior?.id!==previous.id || prior.url!==previous.url))
+      || (!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser) || nv.state==='minimized'
+      || bounds.state==='minimized' && !minimizedSourceAllowed
+      || !['left','top','width','height'].every(k=>Number.isFinite(bounds[k]))
+      || !inactiveBrowser && !minimizedSourceAllowed && !previous.coordinatedPlacement && (bounds.width<1000 || bounds.height<700)
+      || job.closed || Date.now()>=job.activeExpiresAt || job.tab!==tab.id || !owned.has(tab.id)){
+    job.nvVisibilityOutcome='ownership_or_geometry_changed';
+    registryNevadaDiagnostic(job,'visibility-refused',{
+      inactive_tab:!tab.active, nv_window_changed:tab.windowId!==previous.nvWindowId,
+      shared_window:tab.windowId===source.windowId,
+      source_window_changed:source.windowId!==previous.sourceWindowId,
+      source_url_changed:source.url!==previous.sourceUrl,
+      source_origin_changed:new URL(source.url).origin!==P.TRIAL_ORIGIN,
+      nv_origin_changed:new URL(tab.url).origin!==registryOrigin('NV'),
+      nv_path_changed:!new URL(tab.url).pathname.startsWith('/portal/public/'),
+      siblings_changed:siblings.length!==1 || siblings[0].id!==tab.id,
+      prior_changed:!ownedTransition && (prior?.id!==previous.id || prior.url!==previous.url),
+      foreground_not_owned:!registryNevadaOwnedForeground(prior,source),
+      nv_minimized:nv.state==='minimized',source_minimized:bounds.state==='minimized',
+      invalid_bounds:!['left','top','width','height'].every(k=>Number.isFinite(bounds[k])),
+      source_width_small:bounds.width<1000,source_height_small:bounds.height<700,
+      source_width:bounds.width,source_height:bounds.height,
+      expired:Date.now()>=job.activeExpiresAt,closed:job.closed,
+      tab_changed:job.tab!==tab.id,not_owned:!owned.has(tab.id)});
+    return wfReturn(job,"registry-worker.js:registryNevadaExposeWindow:423:4:return",(null));
+  }
+  // Unlike the four-window experiment, move only our stalled NV window.
+  // A smaller foreground window leaves other full-size collectors exposed;
+  // never reload/resubmit the in-flight command or extend its deadline.
+  const width=Math.min(960,Math.floor(bounds.width*.7)),height=Math.min(700,Math.floor(bounds.height*.7));
+  const restore={...previous,id:prior.id,url:prior.url};
+  job.nvVisibilityAttempted=true;job.nvPreviousVisible=restore;
+  if(inactiveBrowser)job.nvInactiveBrowserActivationUsed=true;
+  // An already tiled collector must keep its footprint, not expand over peers.
+  // Missing layout information must not block exposure of an already owned
+  // isolated collector. Focus in place: no guessed geometry or other windows.
+  const placement=previous.coordinatedPlacement || (minimizedSourceAllowed||inactiveBrowser?{focused:true}:{focused:true,state:'normal',width,height,
+    left:bounds.left+bounds.width-width-8,top:bounds.top+bounds.height-height-8});
+  await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:437:2:await",()=>(chrome.windows.update(tab.windowId,placement)));
+  diagnostic('nv-visibility',job,'owned separate window; same document and deadline');
+  job.nvVisibilityOutcome=inactiveBrowser?'activated_from_inactive_browser':ownedTransition?'activated_after_owned_transition':'activated_separate_window';
+  registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:focus.focused===false,
+    kept_existing_bounds:!previous.coordinatedPlacement&&(minimizedSourceAllowed||inactiveBrowser),
+    coordinated_placement:!!previous.coordinatedPlacement,
+    source_remains_minimized:minimizedSourceAllowed});
+  await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:444:2:await",()=>(saveRuntime()));return wfReturn(job,"registry-worker.js:registryNevadaExposeWindow:444:22:return",(restore));
+}
+async function registryNevadaMakeVisible(job, initialVisible) {
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !initialVisible || job.closed || job.nvVisibilityAttempted
+      || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryNevadaMakeVisible:448:65:return",(null));
+  try {
+    if(initialVisible.mode==='window')return wfReturn(job,"registry-worker.js:registryNevadaMakeVisible:450:38:return",(await wfAwait(job,"registry-worker.js:registryNevadaMakeVisible:450:45:await",()=>(registryNevadaExposeWindow(job,initialVisible)))));
+    const tab=await wfAwait(job,"registry-worker.js:registryNevadaMakeVisible:451:14:await",()=>(chrome.tabs.get(job.tab))), source=await wfAwait(job,"registry-worker.js:registryNevadaMakeVisible:451:53:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+    const active=(await wfAwait(job,"registry-worker.js:registryNevadaMakeVisible:452:18:await",()=>(chrome.tabs.query({active:true,windowId:tab.windowId}))))[0];
+    if (tab.active || tab.windowId!==initialVisible.windowId || tab.windowId!==source.windowId
+        || active?.id!==initialVisible.id || new URL(source.url).origin!==P.TRIAL_ORIGIN
+        || new URL(tab.url).origin!==registryOrigin('NV')
+        || !new URL(tab.url).pathname.startsWith('/portal/public/')) return wfReturn(job,"registry-worker.js:registryNevadaMakeVisible:456:69:return",(null));
+    const previous={id:initialVisible.id,windowId:initialVisible.windowId};
+    job.nvVisibilityAttempted=true;job.nvPreviousVisible=previous;
+    diagnostic('nv-visibility',job,'same-document visibility recovery');
+    await wfAwait(job,"registry-worker.js:registryNevadaMakeVisible:460:4:await",()=>(chrome.tabs.update(tab.id,{active:true})));await wfAwait(job,"registry-worker.js:registryNevadaMakeVisible:460:51:await",()=>(saveRuntime()));
+    return wfReturn(job,"registry-worker.js:registryNevadaMakeVisible:461:4:return",(previous));
+  } catch {job.nvVisibilityOutcome='activation_unavailable';return wfReturn(job,"registry-worker.js:registryNevadaMakeVisible:462:60:return",(null));}
+}
+async function registryTnPendingDelivery(job,message,send) {
+  // Recover the same in-flight message, never resend the query. Wait until
+  // the other owned collector is idle so recovery cannot steal its surface.
+  let pending=true,timer=null;
+  const command=job.pending,tab=job.tab,deadline=job.activeExpiresAt;
+  const phase=message.action==='registry-ready'?'ready':'detail';
+  const current=()=>pending&&!job.closed&&owned.has(tab)&&job.tab===tab
+    &&job.pending===command&&job.activeExpiresAt===deadline&&Date.now()<deadline;
+  const peerBusy=()=>allJobs().some(other=>other!==job&&!other.closed&&isActive(other)&&other.pending);
+  const inspect=async()=>{
+    if(!current()||job.tnPendingDeliveryAttempts?.[phase])return;
+    if(peerBusy()){timer=setTimeout(()=>{inspect().catch(()=>{});},Math.min(3000,Math.max(1,deadline-Date.now())));return;}
+    (job.tnPendingDeliveryAttempts??={})[phase]=true;
+    try {
+      let activated=false;
+      await registryNorthCarolinaVisibility(job,()=>current()&&!peerBusy(),()=>{activated=true;});
+      diagnostic('tn-pending-delivery',job,JSON.stringify({action:message.action,
+        phase,activated,same_command:true,resubmitted:false}));
+    } catch { /* Observation/recovery failure cannot replace the real reply. */ }
+  };
+  timer=setTimeout(()=>{inspect().catch(()=>{});},Math.min(3000,Math.max(1,deadline-Date.now())));
+  try {return await send();}
+  finally {pending=false;clearTimeout(timer);}
+}
+
+async function registryMessage(job, message) {
+  if (job.closed || Date.now() >= job.activeExpiresAt) throw new Error("NY_CONNECTOR_TIMEOUT");
+  // Search and detail are separate hydration steps. Another owned collector
+  // may cover NV between them; allow one fresh guarded visibility check at
+  // the first detail, never a repeated focus loop or a new request/deadline.
+  if (P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'
+      && message.query?.operation==='detail' && !job.nvDetailVisibilityChecked) {
+    job.nvDetailVisibilityChecked=true;
+    if(job.nvVisibilityAttempted && owned.has(job.tab)) {
+      try {
+        const tab=await wfAwait(job,"registry-worker.js:registryMessage:474:18:await",()=>(chrome.tabs.get(job.tab)));
+        if(new URL(tab.url).origin===registryOrigin('NV')) {
+          const state=await wfAwait(job,"registry-worker.js:registryMessage:476:22:await",()=>(chrome.tabs.sendMessage(job.tab,{action:'registry-ready'},{frameId:0})));
+          if(state?.page_visibility==='hidden')job.nvVisibilityAttempted=false;
+        }
+      } catch { /* Observation failure must not prevent the original detail. */ }
+    }
+    await wfAwait(job,"registry-worker.js:registryMessage:481:4:await",()=>(saveRuntime()));
+  }
+  const send=async()=>{
+    const gaTimed = P.TRIAL_ORIGIN && job.registryState==='GA' && (message.action?.startsWith('registry-ga-') || message.action==='registry-ready');
+    const tnTimed=P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-tn'||message.action==='registry-ready');
+    const tnSentAt=tnTimed?Date.now():0;
+    const gaSentAt = gaTimed ? Date.now() : 0;
+    const tab = await wfAwait(job,"registry-worker.js:registryMessage:488:16:await",()=>(chrome.tabs.get(job.tab)));
+    const gaTabAt = gaTimed ? Date.now() : 0;
+    const tnTabAt=tnTimed?Date.now():0;
+    if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    const response = await wfAwait(job,"registry-worker.js:registryMessage:492:21:await",()=>(chrome.tabs.sendMessage(job.tab, {...message,...(tnTimed?{tnTiming:true}:{}),...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,includeSnapshotMetadata:message.query?.operation==='detail',captureDeadline:job.activeExpiresAt,skipHistory:message.query?.operation==='detail' && !/^E\d{7,14}-\d$/.test(message.query.identifier)}:{})}, {frameId:0})));
+    if(tnTimed){
+      const at=Date.now(),t=response?.tn_transport;
+      if((message.action==='registry-tn'||at-tnTabAt>=1000)&&(job.tnTransportCount||0)<32){
+        job.tnTransportCount=(job.tnTransportCount||0)+1;
+        diagnostic('tn-transport',job,JSON.stringify({action:message.action,operation:message.query?.operation||'',
+          tab_ms:tnTabAt-tnSentAt,roundtrip_ms:at-tnTabAt,
+          received_after_ms:Number.isFinite(t?.started_at)?t.started_at-tnTabAt:null,
+          content_ms:Number.isFinite(t?.finished_at)&&Number.isFinite(t?.started_at)?t.finished_at-t.started_at:null,
+          reply_after_ms:Number.isFinite(t?.finished_at)?at-t.finished_at:null,
+          visibility:['hidden','visible'].includes(t?.visibility)?t.visibility:'unknown',content_observed:!!t,
+          build:'nc-denied-row-1'}));
+      }
+      if(t){const {tn_transport,...clean}=response;return wfReturn(job,"registry-worker.js:registryMessage:505:51:return",(clean));}
+    }
+    if (gaTimed) {
+      const at=Date.now(), t=response?.ga_transport;
+      if(message.action!=='registry-ready' || at-gaTabAt>=1000)diagnostic('ga-transport',job,JSON.stringify({action:message.action,
+        tab_ms:gaTabAt-gaSentAt,roundtrip_ms:at-gaTabAt,
+        received_after_ms:Number.isFinite(t?.started_at)?t.started_at-gaTabAt:null,
+        content_ms:Number.isFinite(t?.finished_at)&&Number.isFinite(t?.started_at)?t.finished_at-t.started_at:null,
+        reply_after_ms:Number.isFinite(t?.finished_at)?at-t.finished_at:null,
+        visibility:['hidden','visible'].includes(t?.visibility)?t.visibility:'unknown',
+        content_observed:!!t,build:'nc-denied-row-1'}));
+      if (t) {const {ga_transport,...clean}=response;
+        if(message.action==='registry-ready') {
+          const n=t.navigation;
+          const sample={ready:response.ready===true,path:new URL(response.url).pathname,
+            changed_document:job.gaTraceDocument!==response.documentId,
+            transport_ms:at-gaTabAt,delivery_ms:Number.isFinite(t.started_at)?t.started_at-gaTabAt:null};
+          if(n)for(const key of ['request_start','response_start','response_end','dom_interactive','dom_complete','load_end','age_ms'])
+            if(Number.isFinite(n[key])&&n[key]>=0)sample[key]=Math.round(n[key]);
+          if(n&&['loading','interactive','complete'].includes(n.ready_state))sample.ready_state=n.ready_state;
+          const signature=JSON.stringify({...sample,age_ms:0,transport_ms:0,delivery_ms:0});
+          if(signature!==job.gaTraceSignature || sample.transport_ms>=1000 || sample.delivery_ms>=1000) {
+            diagnostic('ga-readiness',job,JSON.stringify(sample));job.gaTraceSignature=signature;
+          }
+          job.gaTraceDocument=response.documentId;
+        }
+        return wfReturn(job,"registry-worker.js:registryMessage:531:8:return",(clean));}
+    }
+    return wfReturn(job,"registry-worker.js:registryMessage:533:4:return",(response));
+  };
+  if(P.TRIAL_ORIGIN && job.registryState==='MS' && message.action==='registry-ms'
+      && message.requireFreshGrid===true && Number.isFinite(message.budgetMs)) {
+    // A reused Kendo grid is not evidence for a new query. Hidden-tab timers
+    // have taken 55s to report an absent response despite a 30s page budget.
+    // The worker can end this one wait early and use the existing same-query
+    // fresh-form recovery; neither old rows nor an extra name is accepted.
+    const waitMs=Math.max(1,Math.min(8000,message.budgetMs,job.activeExpiresAt-Date.now()));
+    let timer;
+    try {
+      return wfReturn(job,"registry-worker.js:registryMessage:544:6:return",(await wfAwait(job,"registry-worker.js:registryMessage:544:13:await",()=>(Promise.race([send(),new Promise(resolve=>{
+        timer=setTimeout(()=>{
+          diagnostic('ms-grid-watchdog',job,`reuse wait_ms=${waitMs}`);
+          resolve({ok:false,reason:'NY_CONNECTOR_INCOMPLETE',
+            ms_diagnostic:{source_error:'REGISTRY_GRID_WATCHDOG',reused_form:true,wait_ms:waitMs}});
+        },waitMs);
+      })])))));
+    } finally {clearTimeout(timer);}
+  }
+  if(P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-ready'||message.action==='registry-tn'&&message.query?.operation==='detail'))
+    return registryTnPendingDelivery(job,message,send);
+  if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return wfReturn(job,"registry-worker.js:registryMessage:553:70:return",(send()));
+  // Keep the overall job deadline as the transport bound. A second timer at
+  // exactly the page's allowance races its normal timeout reply and prevents
+  // the existing bounded fresh-form recovery from running. Page observers
+  // retain their own allowances; a hung message cannot outlive this job.
+  let timer, visibilityTimer, visibilityPending=null, previousVisible=null;
+  let settled=false;
+  // ORION's detail hydration can stall in a background tab. Keep the same
+  // in-flight command and document; expose only our owned trial tab once.
+  // Capture the active tab first so a later user switch is never overridden.
+  const initialVisible=await wfAwait(job,"registry-worker.js:registryMessage:563:23:await",()=>(registryNevadaVisibleSnapshot(job)));
+  visibilityTimer=setTimeout(()=>{
+    visibilityPending=(async()=>{
+      if (settled || job.closed || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryMessage:566:91:return",undefined);
+      // A concurrent owned collector can finish opening after the initial
+      // snapshot. Reassess a missing snapshot once; never override a changed
+      // foreground captured in a previously eligible snapshot.
+      previousVisible=await wfAwait(job,"registry-worker.js:registryMessage:570:22:await",async ()=>(registryNevadaMakeVisible(job,initialVisible || await wfAwait(job,"registry-worker.js:registryMessage:570:76:await",()=>(registryNevadaVisibleSnapshot(job))))));
+    })();
+  },Math.min(3000,Math.max(1,job.activeExpiresAt-Date.now())));
+  try {
+    return wfReturn(job,"registry-worker.js:registryMessage:574:4:return",(await wfAwait(job,"registry-worker.js:registryMessage:574:11:await",()=>(Promise.race([send(),new Promise((_,reject)=>{
+      timer=setTimeout(()=>reject(new Error('NY_CONNECTOR_REGISTRY_NV_COMMAND_TIMEOUT')),
+        Math.max(1,job.activeExpiresAt-Date.now()));
+    })])))));
+  } finally {
+    settled=true;clearTimeout(timer);clearTimeout(visibilityTimer);
+    if (visibilityPending) await wfAwait(job,"registry-worker.js:registryMessage:580:27:await",()=>(visibilityPending));
+    // Keep hydration visible through this state's continuation. Restoring
+    // after every command reintroduced hidden-page stalls and paid the same
+    // recovery delay repeatedly. Completion/cancellation restores the caller;
+    // a user switch is never reversed or followed by another activation.
+    if (job.closed || Date.now()>=job.activeExpiresAt) await wfAwait(job,"registry-worker.js:registryMessage:585:55:await",()=>(registryRestoreNevadaVisibility(job)));
+  }
+}
+async function registryRestoreNevadaVisibility(job) {
+  const previous=job.nvPreviousVisible;job.nvPreviousVisible=null;
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !previous || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryRestoreNevadaVisibility:590:87:return",undefined);
+  if(previous.inactiveBrowser||previous.sourceWasMinimized)return wfReturn(job,"registry-worker.js:registryRestoreNevadaVisibility:591:59:return",undefined); // Never restore unrelated or minimized source windows.
+  try {
+    const tab=await wfAwait(job,"registry-worker.js:registryRestoreNevadaVisibility:593:14:await",()=>(chrome.tabs.get(job.tab))),prior=await wfAwait(job,"registry-worker.js:registryRestoreNevadaVisibility:593:51:await",()=>(chrome.tabs.get(previous.id)));
+    const source=await wfAwait(job,"registry-worker.js:registryRestoreNevadaVisibility:594:17:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+    if(previous.mode==='window'){
+      const focus=await wfAwait(job,"registry-worker.js:registryRestoreNevadaVisibility:596:18:await",()=>(chrome.windows.getLastFocused()));
+      const siblings=await wfAwait(job,"registry-worker.js:registryRestoreNevadaVisibility:597:21:await",()=>(chrome.tabs.query({windowId:tab.windowId})));
+      if(focus.focused && focus.id===previous.nvWindowId && tab.active && tab.windowId===previous.nvWindowId
+          && siblings.length===1 && siblings[0].id===tab.id && prior.windowId===previous.windowId
+          && prior.url===previous.url && source.windowId===previous.sourceWindowId && source.url===previous.sourceUrl
+          && new URL(source.url).origin===P.TRIAL_ORIGIN && new URL(tab.url).origin===registryOrigin('NV')
+          && new URL(tab.url).pathname.startsWith('/portal/public/') && registryNevadaOwnedForeground(prior,source))
+        await wfAwait(job,"registry-worker.js:registryRestoreNevadaVisibility:603:8:await",()=>(chrome.windows.update(previous.windowId,{focused:true})));
+      return wfReturn(job,"registry-worker.js:registryRestoreNevadaVisibility:604:6:return",undefined);
+    }
+    if (tab.active && tab.windowId===previous.windowId && prior.windowId===tab.windowId
+        && source.windowId===tab.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN
+        && new URL(tab.url).origin===registryOrigin('NV') && new URL(tab.url).pathname.startsWith('/portal/public/'))
+      await wfAwait(job,"registry-worker.js:registryRestoreNevadaVisibility:609:6:await",()=>(chrome.tabs.update(prior.id,{active:true})));
+  } catch { /* Preserve a user switch, moved tab, or closure. */ }
+}
+// A read-only readiness message must not hold the caller beyond the existing
+// readiness deadline. Do not resend a timed-out message or accept its late reply.
+async function registryReadinessMessage(job, message, deadline) {
+  if (!P.TRIAL_ORIGIN) return registryMessage(job,message);
+  const tab=job.tab, generation=job.generation, pending=job.pending;
+  const expires=Math.min(deadline,job.activeExpiresAt);
+  if(job.closed || Date.now()>=expires) throw new Error('NY_CONNECTOR_READINESS_DEADLINE');
+  let timer;
+  try {
+    const value=await Promise.race([
+      registryMessage(job,message),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('NY_CONNECTOR_READINESS_DEADLINE')),
+        Math.max(1,expires-Date.now()));})
+    ]);
+    if(job.closed || Date.now()>=expires || job.tab!==tab || job.generation!==generation || job.pending!==pending)
+      throw new Error('NY_CONNECTOR_READINESS_DEADLINE');
+    return value;
+  } finally {clearTimeout(timer);}
+}
+async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null, nvRouteOnly = false) {
+  if (nvRouteOnly && (job.registryState!=='NV' || oldDocument!==null
+      || path!==new URL(registryStart('NV')).pathname)) throw registrySequenceError(job,null,'readiness-route-contract');
+  const started = Date.now();
+  const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
+  let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false, resubmissionAcknowledged=false;
+  let nvInitialVisible=await wfAwait(job,"registry-worker.js:registryReady:618:23:await",()=>(registryNevadaVisibleSnapshot(job))), nvVisibilityRechecked=false, ncVisibilityRechecked=false;
+  try { while (!job.closed && Date.now()<deadline) {
+    try {
+      if(P.TRIAL_ORIGIN && job.registryState==='NM') {
+        const tab=await wfAwait(job,"registry-worker.js:registryReady:622:18:await",()=>(chrome.tabs.get(job.tab))),url=new URL(tab.url);
+        // NM redirects failures to a lowercase route outside its normal
+        // content-script match. The exact public error route is authoritative
+        // even when there is no content-script receiver on that document.
+        if(url.origin===registryOrigin('NM') && /^\/charitysearch\/GenericError\.htm$/i.test(url.pathname))
+          throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
+      }
+      const value=await wfAwait(job,"registry-worker.js:registryReady:629:18:await",()=>(registryReadinessMessage(job,{action:"registry-ready",...(ncSubmittedQuery ? {query:ncSubmittedQuery} : {})},deadline)));
+      if(P.TRIAL_ORIGIN && job.registryState==='NC' && !ncSubmittedQuery) {
+        const observed={phase:'readiness',ready:value?.ready===true,
+          visible:value?.page_visibility==='visible',verification_pending:value?.verification_pending===true,
+          separate_window_activated:job.ncWindowVisibilityAttempted===true};
+        const signature=JSON.stringify(observed);
+        if(signature!==job.ncSubmissionSignature) {
+          job.ncSubmissionSignature=signature;job.ncSubmissionObservations ||= [];
+          const entry={seconds:(Date.now()-started)/1000,...observed};
+          if(job.ncSubmissionObservations.length<8)job.ncSubmissionObservations.push(entry);else job.ncSubmissionObservations[7]=entry;
+        }
+      }
+      if(P.TRIAL_ORIGIN && job.registryState==='NC' && ncSubmittedQuery && value?.nc_readiness) {
+        const observed=value.nc_readiness,signature=JSON.stringify(observed);
+        if(signature!==job.ncSubmissionSignature){
+          job.ncSubmissionSignature=signature;job.ncSubmissionObservations ||= [];
+          const entry={seconds:(Date.now()-started)/1000,...observed};
+          if(job.ncSubmissionObservations.length<8)job.ncSubmissionObservations.push(entry);
+          else job.ncSubmissionObservations[7]=entry;
+        }
+        // A rejected request is not an idle form awaiting a second click.
+        if (Array.isArray(observed.requests) && observed.requests.some(request =>
+            request?.search_route===true && request.status===429))
+          throw new Error('NY_CONNECTOR_NC_RATE_LIMITED');
+      }
+      if(job.registryState==='NC' && value?.source_failure==='REGISTRY_NC_PROFILE_SOURCE_ERROR')
+        throw new Error('NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR');
+      if(job.registryState==='NM' && value?.source_failure==='REGISTRY_NM_SOURCE_ERROR')
+        throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
+      if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness={...value.nv_readiness,page_visibility:value.page_visibility||'unknown'};
+      // Fast readiness polls never leave registryMessage's visibility timer
+      // pending long enough to fire. Recover a stalled initial form using the
+      // same owned-tab lease as detail commands, without a request or reload.
+      if(job.registryState==='NV'&&!value?.ready&&Date.now()-started>=3000) {
+        if(!nvInitialVisible && !nvVisibilityRechecked) {
+          nvVisibilityRechecked=true;nvInitialVisible=await wfAwait(job,"registry-worker.js:registryReady:662:54:await",()=>(registryNevadaVisibleSnapshot(job)));
+        }
+        await wfAwait(job,"registry-worker.js:registryReady:664:8:await",()=>(registryNevadaMakeVisible(job,nvInitialVisible)));
+      }
+      verificationPending=['NC','TN'].includes(job.registryState)&&value?.verification_pending===true;
+      if(P.TRIAL_ORIGIN && job.registryState==='TN'){
+        const observed={phase:'readiness-observed',ready:value?.ready===true,
+          verification_pending:verificationPending,visible:value?.page_visibility==='visible'};
+        const signature=JSON.stringify(observed);
+        if(signature!==job.tnCheckboxReadinessSignature && (job.tnCheckboxReadinessCount||0)<8){
+          job.tnCheckboxReadinessSignature=signature;
+          job.tnCheckboxReadinessCount=(job.tnCheckboxReadinessCount||0)+1;
+          diagnostic('tn-verification',job,signature);
+        }
+      }
+      if(P.TRIAL_ORIGIN && job.registryState==='TN')job.tnVerificationExpiresAt=verificationPending?deadline:0;
+      if(job.registryState==='TN'&&!value?.ready&&!visibilityAttempted&&Date.now()-started>=3000) {
+        visibilityAttempted=true;previousVisible=await wfAwait(job,"registry-worker.js:registryReady:679:49:await",()=>(registryNorthCarolinaVisibility(job)));
+      }
+        const observedRoute=nvRouteOnly&&typeof value?.documentId==='string'&&value.documentId.length>0;
+        if ((value?.ready || observedRoute) && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)
+            && (job.registryState!=='NV' || new URL(value.url).hash===new URL(registryStart('NV')).hash)) {
+          if(P.TRIAL_ORIGIN && job.registryState==='TN' && job.tnCheckboxAttempted)
+            diagnostic('tn-verification',job,JSON.stringify({phase:'registry-form-ready'}));
+          return wfReturn(job,"registry-worker.js:registryReady:686:10:return",(value));
+        }
+      // An acknowledged NC Search can leave the same ordinary, enabled form
+      // without navigating. Retry once only after observing that exact form;
+      // disabled Processing and verification pages are never resubmitted.
+      // The original deadline and expected results document stay unchanged.
+      if (ncSubmittedQuery && job.registryState==='NC' && !submissionRetried && !verificationPending
+          && Date.now()-started>=3000 && Date.now()<deadline && value?.ready && value.documentId===oldDocument
+          && new URL(value.url).pathname==='/online_services/search/by_title/search_charities') {
+        submissionRetried=true;
+        // A background form can acknowledge Search without its public async
+        // action navigating. Reuse the existing owned-tab visibility recovery
+        // before the single exact-query retry. No new query or time allowance.
+        if (P.TRIAL_ORIGIN && !visibilityAttempted) {
+          visibilityAttempted=true;
+          previousVisible=await wfAwait(job,"registry-worker.js:registryReady:701:26:await",()=>(registryNorthCarolinaVisibility(job)));
+        }
+        const retried=await wfAwait(job,"registry-worker.js:registryReady:703:22:await",()=>(registryMessage(job,{action:'registry-nc-retry',query:ncSubmittedQuery})));
+        resubmissionAcknowledged=retried?.ok===true&&retried.phase==='submitted';
+        diagnostic('nc-submit-recovery',job,retried?.phase==='submitted'?'same-query resubmitted':'form changed; no resubmission');
+      }
+      // Only a proven identical idle form can fail early. A disabled Processing
+      // action, verification, changed query or document retains normal waits.
+      // The master may recover once in a fresh page within the original expiry.
+      if (P.TRIAL_ORIGIN && job.registryState==='NC' && ncSubmittedQuery && resubmissionAcknowledged
+          && !verificationPending && Date.now()-started>=8000 && value?.ready && value.nc_search_idle===true
+          && value.documentId===oldDocument && new URL(value.url).pathname==='/online_services/search/by_title/search_charities')
+        throw new Error('NY_CONNECTOR_NC_SEARCH_NOT_STARTED');
+    } catch(error) {
+      if(error?.message==='NY_CONNECTOR_READINESS_DEADLINE') throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : 'NY_CONNECTOR_TAB_READY_TIMEOUT');
+      if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED','NY_CONNECTOR_NC_RATE_LIMITED'].includes(error?.message))throw error;
+      // The public challenge can precede content-script readiness. Its visible
+      // tab title is sufficient to describe a pending verification, not a result.
+      if (job.registryState==='NC') try {
+        const tab=await wfAwait(job,"registry-worker.js:registryReady:719:18:await",()=>(chrome.tabs.get(job.tab)));
+        verificationPending= new URL(tab.url).origin===registryOrigin('NC') && /^Just a moment/i.test(tab.title||'');
+      } catch {}
+    }
+    if (verificationPending && !visibilityAttempted && Date.now()<deadline) {
+      visibilityAttempted=true;
+      previousVisible=await wfAwait(job,"registry-worker.js:registryReady:725:22:await",()=>(registryNorthCarolinaVisibility(job)));
+    }
+    if(P.TRIAL_ORIGIN && job.registryState==='NC' && verificationPending
+        && !job.ncWindowVisibilityAttempted && !ncVisibilityRechecked && Date.now()-started>=3000 && Date.now()<deadline) {
+      ncVisibilityRechecked=true;await wfAwait(job,"registry-worker.js:registryReady:729:33:await",()=>(registryNorthCarolinaVisibility(job)));
+    }
+    await wfAwait(job,"registry-worker.js:registryReady:731:4:await",()=>(nap(200)));
+  }
+  throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : "NY_CONNECTOR_TAB_READY_TIMEOUT");
+  } finally {
+    if(job.registryState==='TN')job.tnVerificationExpiresAt=0;
+    if (previousVisible) try {
+      const tab=await wfAwait(job,"registry-worker.js:registryReady:737:16:await",()=>(chrome.tabs.get(job.tab))), prior=await wfAwait(job,"registry-worker.js:registryReady:737:54:await",()=>(chrome.tabs.get(previousVisible.id)));
+      if (owned.has(job.tab) && tab.active && tab.windowId===previousVisible.windowId && prior.windowId===tab.windowId
+          && new URL(tab.url).origin===registryOrigin(job.registryState) && (!path || new URL(tab.url).pathname===path))
+        await wfAwait(job,"registry-worker.js:registryReady:740:8:await",()=>(chrome.tabs.update(prior.id,{active:true})));
+    } catch { /* Preserve user navigation or closure during verification. */ }
+  }
+}
+async function registryNorthCarolinaVisibility(job,stillPending=()=>true,onActivated=()=>{}) {
+  // Same-document visibility recovery, as used for Illinois. The state's own
+  // scripts may finish a passive verification; no checkbox, challenge, token,
+  // cookie, reload, additional request, or budget extension is performed here.
+  if (!['NC','TN'].includes(job.registryState) || job.closed || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:748:85:return",(null));
+  try {
+    const tab=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:750:14:await",()=>(chrome.tabs.get(job.tab))), source=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:750:53:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+    if(arguments.length>1 && (!stillPending() || !tab.active || tab.windowId===source.windowId
+        || tab.url!==registryStart('TN')))return null;
+    // TN's separate window can be occluded while its tab remains active.
+    // Expose only this job's sole owned source tab; preserve its geometry,
+    // document, verification limit, requests and original deadline.
+    if(P.TRIAL_ORIGIN && job.registryState==='TN' && (arguments.length>1 || !job.tnWindowVisibilityAttempted)
+        && tab.active && tab.windowId!==source.windowId && tab.url===registryStart('TN')
+        && new URL(source.url).origin===P.TRIAL_ORIGIN && Date.now()<job.activeExpiresAt) {
+      const focus=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:757:18:await",()=>(chrome.windows.getLastFocused()));
+      const prior=(await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:758:19:await",()=>(chrome.tabs.query({active:true,windowId:focus.id}))))[0];
+      if(focus.focused && focus.id===tab.windowId || !registryNevadaOwnedForeground(prior,source))return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:759:98:return",(null));
+      const siblings=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:760:21:await",()=>(chrome.tabs.query({windowId:tab.windowId})));
+      const window=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:761:19:await",()=>(chrome.windows.get(tab.windowId)));
+      if(siblings.length!==1 || siblings[0].id!==tab.id || window.state==='minimized')return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:762:86:return",(null));
+      const latest=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:763:19:await",()=>(chrome.tabs.get(tab.id))),currentSource=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:763:63:await",()=>(chrome.tabs.get(source.id)));
+      const latestFocus=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:764:24:await",()=>(chrome.windows.getLastFocused()));
+      const active=(await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:765:20:await",()=>(chrome.tabs.query({active:true,windowId:focus.id}))))[0];
+      if(latest.windowId!==tab.windowId || latest.url!==tab.url || !latest.active
+          || currentSource.windowId!==source.windowId || currentSource.url!==source.url
+          || latestFocus.id!==focus.id || latestFocus.focused!==focus.focused
+          || active?.id!==prior.id || active.url!==prior.url || !owned.has(tab.id)
+          || job.closed || Date.now()>=job.activeExpiresAt || !stillPending())return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:770:59:return",(null));
+      job.tnWindowVisibilityAttempted=true;
+      await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:772:6:await",()=>(chrome.windows.update(tab.windowId,{focused:true})));
+      onActivated();
+      diagnostic('tn-verification',job,'owned separate window; unchanged geometry/document/deadline');
+      return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:774:6:return",(null));
+    }
+    if(P.TRIAL_ORIGIN && job.registryState==='NC' && !job.ncWindowVisibilityAttempted && tab.active && tab.windowId!==source.windowId
+        && new URL(source.url).origin===P.TRIAL_ORIGIN && new URL(tab.url).origin===registryOrigin('NC')
+        && new URL(tab.url).pathname.startsWith('/online_services/search/') && Date.now()<job.activeExpiresAt) {
+      const focus=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:779:18:await",()=>(chrome.windows.getLastFocused()));
+      const prior=(await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:780:19:await",()=>(chrome.tabs.query({active:true,windowId:focus.id}))))[0];
+      if(focus.focused && focus.id===tab.windowId || !registryNevadaOwnedForeground(prior,source))return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:781:98:return",(null));
+      const siblings=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:782:21:await",()=>(chrome.tabs.query({windowId:tab.windowId})));
+      if(siblings.length!==1 || siblings[0].id!==tab.id)return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:783:56:return",(null));
+      const placement=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:784:22:await",()=>(registryTrialWindowOptions(job,source)));
+      if(!placement.focused)return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:785:28:return",(null));
+      const latest=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:786:19:await",()=>(chrome.tabs.get(tab.id))),currentSource=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:786:63:await",()=>(chrome.tabs.get(source.id)));
+      const latestFocus=await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:787:24:await",()=>(chrome.windows.getLastFocused()));
+      const active=(await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:788:20:await",()=>(chrome.tabs.query({active:true,windowId:focus.id}))))[0];
+      if(latest.windowId!==tab.windowId || latest.url!==tab.url || !latest.active
+          || currentSource.windowId!==source.windowId || currentSource.url!==source.url
+          || latestFocus.id!==focus.id || latestFocus.focused!==focus.focused
+          || active?.id!==prior.id || active.url!==prior.url
+          || !owned.has(tab.id) || job.closed || Date.now()>=job.activeExpiresAt)return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:793:81:return",(null));
+      const {type,...update}=placement;
+      await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:795:6:await",()=>(chrome.windows.update(tab.windowId,update)));
+      job.ncWindowVisibilityAttempted=true;
+      diagnostic('nc-verification',job,'owned separate window; same document and deadline');
+      // Closing the collector releases this window. Do not activate a prior
+      // tab inside another collector while its own command is still running.
+      return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:800:6:return",(null));
+    }
+    if (tab.active || tab.windowId!==source.windowId || new URL(tab.url).origin!==registryOrigin(job.registryState)
+        || (job.registryState==='NC' ? !new URL(tab.url).pathname.startsWith('/online_services/search/') : tab.url!==registryStart('TN'))) return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:803:139:return",(null));
+    const prior=(await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:804:17:await",()=>(chrome.tabs.query({active:true,windowId:tab.windowId}))))[0];
+    if (!prior || prior.id===tab.id || job.closed || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:805:74:return",(null));
+    diagnostic('nc-verification',job,'same-document visibility recovery');
+    await wfAwait(job,"registry-worker.js:registryNorthCarolinaVisibility:807:4:await",()=>(chrome.tabs.update(tab.id,{active:true})));
+    return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:808:4:return",({id:prior.id,windowId:prior.windowId}));
+  } catch { return wfReturn(job,"registry-worker.js:registryNorthCarolinaVisibility:809:12:return",(null)); }
+}
+async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = false) {
+  if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+  if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV')
+      || !(job.nvReturnRecoveryUsed || job.nvReservationDetail || job.nvModeRecoveryUsed))) throw registrySequenceError(job,null,'navigation-recovery-contract');
+    const navigationStarted=Date.now();
+    const deadline=Math.min(job.activeExpiresAt,Date.now()+Math.max(1,Math.min(45000,budgetMs)));
+    let previous;
+  if (job.tab !== null) {
+    try { previous=(await wfAwait(job,"registry-worker.js:registryNavigate:819:20:await",()=>(registryMessage(job,{action:"registry-ready"})))).documentId; } catch {}
+    // Updating a tab to its current URL may leave the same document in place.
+    // Explicitly reload so the next search starts with a fresh public form.
+    const current = await wfAwait(job,"registry-worker.js:registryNavigate:822:20:await",()=>(chrome.tabs.get(job.tab)));
+    if (freshNvRecovery) {
+        if(current.url!==url) {
+          await wfAwait(job,"registry-worker.js:registryNavigate:825:10:await",()=>(chrome.tabs.update(job.tab,{url})));
+          // A tabs.update acknowledgement is not navigation completion. Wait
+          // for the public route before reloading, or Chrome can reload the
+          // old reservation document. The old form need not become usable:
+          // recovering that form is why this refresh is required. Only after
+          // reload must the fresh document and complete form be ready. Both
+          // waits share the original allowance.
+          const target=await wfAwait(job,"registry-worker.js:registryNavigate:832:23:await",()=>(registryReady(job,null,new URL(url).pathname,deadline-Date.now(),null,true)));
+          previous=target.documentId;
+          diagnostic('nv-navigation',job,'public route reached; refreshing form');
+        }
+      await wfAwait(job,"registry-worker.js:registryNavigate:836:6:await",()=>(chrome.tabs.reload(job.tab)));
+    } else if (current.url === url) await wfAwait(job,"registry-worker.js:registryNavigate:837:36:await",()=>(chrome.tabs.reload(job.tab)));
+    else {
+      const before=new URL(current.url),after=new URL(url);
+      await wfAwait(job,"registry-worker.js:registryNavigate:840:6:await",()=>(chrome.tabs.update(job.tab,{url})));
+      // ORION changes the hash to return from a detail to search. Chrome keeps
+      // the same document/content script, so waiting for a new document ID can
+      // never succeed. The NV ready check still requires the rendered Business
+      // search form; nvSearch separately binds filters and a fresh loading cycle.
+      if(job.registryState==='NV'&&before.origin===after.origin&&before.pathname===after.pathname
+          &&before.search===after.search&&before.hash!==after.hash)previous=null;
+    }
+  } else {
+    const origin=await wfAwait(job,"registry-worker.js:registryNavigate:849:17:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+    job.creating=(async()=>{
+      // A different state's verification can hide NV after its one visibility
+      // recovery. An active tab in a separate, unfocused normal window removes
+      // that competition without serializing states or extending their budgets.
+      // Existing owned-tab cleanup closes this window's only tab on completion.
+      // Record ownership before creation settles so cancellation can clean up
+      // a window that Chrome creates after the caller has already stopped.
+      await wfAwait(job,"registry-worker.js:registryNavigate:857:6:await",()=>(registryCreateOwnedTab(job,url,origin)));
+    })();
+    await wfAwait(job,"registry-worker.js:registryNavigate:859:4:await",()=>(job.creating));job.creating=null;
+    if(P.TRIAL_ORIGIN && job.registryState==='MS')
+      diagnostic('ms-tab-created',job,`ms=${Date.now()-navigationStarted}`);
+  }
+    const ready=await wfAwait(job,"registry-worker.js:registryNavigate:863:16:await",()=>(registryReady(job,previous,new URL(url).pathname,freshNvRecovery?Math.max(1,deadline-Date.now()):budgetMs)));
+    if(P.TRIAL_ORIGIN && job.registryState==='MS')
+      diagnostic('ms-page-ready',job,`ms=${Date.now()-navigationStarted} tab=${job.tab}`);
+    return wfReturn(job,"registry-worker.js:registryNavigate:866:4:return",(ready));
+
+}
+async function registryIllinoisOwnedVisibility(job) {
+  if (job.closed || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryIllinoisOwnedVisibility:870:41:return",undefined);
+  const observation={phase:'entry'};
+  try {
+    const tab=await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:873:14:await",()=>(chrome.tabs.get(job.tab))), source=await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:873:53:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+    Object.assign(observation,{phase:'tab-check',state:job.registryState,attempted:!!job.ilWindowVisibilityAttempted,active:tab.active,separate:tab.windowId!==source.windowId,route_match:tab.url===registryStart('IL'),source_match:new URL(source.url).origin===P.TRIAL_ORIGIN,deadline_open:Date.now()<job.activeExpiresAt});
+    if(P.TRIAL_ORIGIN && job.registryState==='IL' && !job.ilWindowVisibilityAttempted
+        && tab.active && tab.windowId!==source.windowId && tab.url===registryStart('IL')
+        && new URL(source.url).origin===P.TRIAL_ORIGIN && Date.now()<job.activeExpiresAt) {
+      const focus=await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:878:18:await",()=>(chrome.windows.getLastFocused()));
+      const prior=(await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:879:19:await",()=>(chrome.tabs.query({active:true,windowId:focus.id}))))[0];
+      Object.assign(observation,{phase:'foreground',focused:focus.focused,already_focused:focus.id===tab.windowId,owned_foreground:registryNevadaOwnedForeground(prior,source)});
+      if(focus.focused && focus.id===tab.windowId || !registryNevadaOwnedForeground(prior,source))return wfReturn(job,"registry-worker.js:registryIllinoisOwnedVisibility:881:98:return",(null));
+      const siblings=await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:882:21:await",()=>(chrome.tabs.query({windowId:tab.windowId})));
+      const window=await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:883:19:await",()=>(chrome.windows.get(tab.windowId)));
+      Object.assign(observation,{phase:'window',siblings:siblings.length,sole_owned:siblings[0]?.id===tab.id,minimized:window.state==='minimized'});
+      if(siblings.length!==1 || siblings[0].id!==tab.id || window.state==='minimized')return wfReturn(job,"registry-worker.js:registryIllinoisOwnedVisibility:885:86:return",(null));
+      const latest=await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:886:19:await",()=>(chrome.tabs.get(tab.id))),currentSource=await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:886:63:await",()=>(chrome.tabs.get(source.id)));
+      const latestFocus=await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:887:24:await",()=>(chrome.windows.getLastFocused()));
+      const active=(await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:888:20:await",()=>(chrome.tabs.query({active:true,windowId:focus.id}))))[0];
+      observation.phase='recheck';
+      if(latest.windowId!==tab.windowId || latest.url!==tab.url || !latest.active
+          || currentSource.windowId!==source.windowId || currentSource.url!==source.url
+          || latestFocus.id!==focus.id || latestFocus.focused!==focus.focused
+          || active?.id!==prior.id || active.url!==prior.url || !owned.has(tab.id)
+          || job.closed || Date.now()>=job.activeExpiresAt)return wfReturn(job,"registry-worker.js:registryIllinoisOwnedVisibility:894:59:return",(null));
+      observation.phase='focus';
+      job.ilWindowVisibilityAttempted=true;
+      await wfAwait(job,"registry-worker.js:registryIllinoisOwnedVisibility:897:6:await",()=>(chrome.windows.update(tab.windowId,{focused:true})));
+      diagnostic('il-verification',job,'owned separate window; unchanged geometry/document/deadline');
+      return wfReturn(job,"registry-worker.js:registryIllinoisOwnedVisibility:899:6:return",(null));
+    }
+  } catch { observation.phase+='-exception'; } finally {
+    if(P.TRIAL_ORIGIN&&job.registryState==='IL')try {diagnostic('il-visibility-guard',job,JSON.stringify(observation));} catch { /* Passive observation cannot alter recovery. */ }
+  }
+}
+async function registryIllinoisVerification(job, collect) {
+  // Preserve the verification document. Reloading here resets Illinois's
+  // normal challenge instead of recovering it. Only activate our owned tab;
+  // the state's own code must enable Search before collection can proceed.
+  if (job.closed || !owned.has(job.tab) || job.activeExpiresAt-Date.now() <= 45000)
+    return wfReturn(job,"registry-worker.js:registryIllinoisVerification:910:4:return",({ok:false,reason:"NY_CONNECTOR_IL_VERIFICATION_PENDING"}));
+  const tab = await wfAwait(job,"registry-worker.js:registryIllinoisVerification:911:14:await",()=>(chrome.tabs.get(job.tab)));
+  const origin = await wfAwait(job,"registry-worker.js:registryIllinoisVerification:912:17:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+  const activeTrialCollector=P.TRIAL_ORIGIN && new URL(origin.url).origin===P.TRIAL_ORIGIN && tab.active;
+  if (tab.url !== registryStart("IL") || (tab.windowId !== origin.windowId && !activeTrialCollector))
+    throw new Error("NY_CONNECTOR_INCOMPLETE");
+  const previous = (await wfAwait(job,"registry-worker.js:registryIllinoisVerification:916:20:await",()=>(chrome.tabs.query({active:true,windowId:tab.windowId}))))[0];
+  diagnostic("il-verification",job,"same-document visibility recovery");
+  try {
+    await wfAwait(job,"registry-worker.js:registryIllinoisVerification:919:4:await",()=>(registryIllinoisOwnedVisibility(job)));
+    if (job.closed || !owned.has(tab.id)) throw new Error("NY_CONNECTOR_INTERRUPTED");
+    if (!tab.active) await wfAwait(job,"registry-worker.js:registryIllinoisVerification:921:21:await",()=>(chrome.tabs.update(tab.id,{active:true})));
+    return wfReturn(job,"registry-worker.js:registryIllinoisVerification:922:4:return",(await wfAwait(job,"registry-worker.js:registryIllinoisVerification:922:11:await",()=>(collect(45000)))));
+  } finally {
+    // Do not override a user who switched elsewhere while the check ran.
+    try {
+      const current = await wfAwait(job,"registry-worker.js:registryIllinoisVerification:926:22:await",()=>(chrome.tabs.get(tab.id)));
+      const prior = previous && await wfAwait(job,"registry-worker.js:registryIllinoisVerification:927:32:await",()=>(chrome.tabs.get(previous.id)));
+      if (current.active && current.url === registryStart("IL") && prior && prior.id !== tab.id && prior.windowId === current.windowId)
+        await wfAwait(job,"registry-worker.js:registryIllinoisVerification:929:8:await",()=>(chrome.tabs.update(prior.id,{active:true})));
+    } catch { /* A user may close or move either tab during collection. */ }
+  }
+}
+function registryNvSequenceFailure(job, query, guard) {
+  const response={ok:false,reason:'NY_CONNECTOR_INVALID_SEQUENCE'};
+  if(P.TRIAL_ORIGIN && job?.registryState==='NV')response.nv_readiness={sequence:{
+    build:'nc-denied-row-1',guard,active:isActive(job),pending:!!job.pending,
+    pending_matches_request:job.pending===job.command?.id,
+    pending_operation:['search','detail'].includes(job.command?.query?.operation)?job.command.query.operation:'none',
+    operation:['search','detail'].includes(query?.operation)?query.operation:'other',
+    valid_query:P.validQuery(query),state_matches:query?.state===job.registryState,
+    tab_present:Number.isInteger(job.tab),search_complete:job.finalFourSearchComplete===true,
+    identifier_kind:typeof query?.identifier!=='string'?'absent':/^NV\d+$/.test(query.identifier)?'business-id':/^E\d{7,14}-\d$/.test(query.identifier)?'entity-number':'other'
+  }};
+  return wfReturn(job,"registry-worker.js:registryNvSequenceFailure:944:2:return",(response));
+}
+function registrySequenceError(job, query, guard) {
+  const error=new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+  error.nvSequence=registryNvSequenceFailure(job,query,guard).nv_readiness;
+  return wfReturn(job,"registry-worker.js:registrySequenceError:949:2:return",(error));
+}
+async function performRegistryQuery(job, query) {
+  if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw registrySequenceError(job,query,"registry-query-contract");
+  if(query.state==='MS') {
+    if(query.operation==='search') {
+      // Reuse a completed search form within this owned trial job. The page
+      // handler must see a new Kendo render after submission; its old grid is
+      // never evidence for the next signed query. Detail opens a modal and
+      // resets this allowance, so the next search uses a fresh public form.
+      const current=job.tab===null?null:await wfAwait(job,"registry-worker.js:performRegistryQuery:959:40:await",()=>(chrome.tabs.get(job.tab)));
+      const reuse=!!P.TRIAL_ORIGIN && job.msReusableForm===true && current?.url===registryStart('MS');
+      const navigationStarted=Date.now();
+      diagnostic('ms-navigation-start',job,reuse?'reuse ready form':'open fresh form');
+      if(reuse) await wfAwait(job,"registry-worker.js:performRegistryQuery:963:16:await",()=>(registryReady(job,null,new URL(registryStart('MS')).pathname,
+        Math.min(30000,job.activeExpiresAt-Date.now()))));
+      else await wfAwait(job,"registry-worker.js:performRegistryQuery:965:11:await",()=>(registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()))));
+      diagnostic('ms-navigation-done',job,`reuse=${reuse} ms=${Date.now()-navigationStarted}`);
+      job.msReusableForm=false;
+      const started=Date.now();
+      let result=await wfAwait(job,"registry-worker.js:performRegistryQuery:969:17:await",()=>(registryMessage(job,{action:'registry-ms',query,requireFreshGrid:reuse,
+        budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))})));
+      diagnostic('ms-command',job,`reuse=${reuse} ms=${Date.now()-started} ${result?.ok?'complete':result?.reason||'incomplete'}`);
+      if(P.TRIAL_ORIGIN && result?.ms_diagnostic)
+        diagnostic('ms-page',job,JSON.stringify(result.ms_diagnostic));
+      if(reuse && !result?.ok && job.activeExpiresAt-Date.now()>35000) {
+        diagnostic('ms-fresh-recovery',job,'repeating identical signed query on new public form');
+        await wfAwait(job,"registry-worker.js:performRegistryQuery:976:8:await",()=>(registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()))));
+        result=await wfAwait(job,"registry-worker.js:performRegistryQuery:977:15:await",()=>(registryMessage(job,{action:'registry-ms',query,
+          budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))})));
+      }
+      job.msReusableForm=result?.ok===true;
+      return wfReturn(job,"registry-worker.js:performRegistryQuery:981:6:return",(result));
+    }
+    if(job.tab===null)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+    job.msReusableForm=false;
+    const detail=await wfAwait(job,"registry-worker.js:ms-detail-observation",()=>registryMessage(job,{action:'registry-ms',query,budgetMs:Math.max(1,Math.min(20000,job.activeExpiresAt-Date.now()))}));
+    if(P.TRIAL_ORIGIN&&detail?.ms_diagnostic)diagnostic('ms-detail',job,JSON.stringify(detail.ms_diagnostic));
+    return wfReturn(job,"registry-worker.js:performRegistryQuery:985:4:return",detail);
+  }
+  if(query.state==='NM') {
+    if(query.operation==='search') {
+      // ASP.NET preserves the submitted filters when this URL is reloaded.
+      // Reuse the ready owned search form for the next fallback. The Search
+      // postback still must produce a new document and query-bound row count.
+      const current=job.tab===null?null:await wfAwait(job,"registry-worker.js:performRegistryQuery:992:40:await",()=>(chrome.tabs.get(job.tab)));
+      if(current?.url===registryStart('NM'))
+        await wfAwait(job,"registry-worker.js:performRegistryQuery:994:8:await",()=>(registryReady(job,null,'/CharitySearch/',Math.min(30000,job.activeExpiresAt-Date.now()))));
+      else await wfAwait(job,"registry-worker.js:performRegistryQuery:995:11:await",()=>(registryNavigate(job,registryStart('NM'),Math.min(30000,job.activeExpiresAt-Date.now()))));
+      for(let attempt=0;attempt<2;attempt++) {
+        const submitted=await wfAwait(job,"registry-worker.js:performRegistryQuery:997:24:await",()=>(registryMessage(job,{action:'registry-nm-form',query})));
+        if(!submitted?.ok)throw new Error('NY_CONNECTOR_INCOMPLETE');
+        await wfAwait(job,"registry-worker.js:performRegistryQuery:999:8:await",()=>(registryReady(job,submitted.documentId,'/CharitySearch/',Math.min(30000,job.activeExpiresAt-Date.now()))));
+        if(submitted.phase!=='page-size')return wfReturn(job,"registry-worker.js:performRegistryQuery:1000:41:return",(registryMessage(job,{action:'registry-nm-rows',query})));
+      }
+      throw new Error('NY_CONNECTOR_INCOMPLETE');
+    }
+    const url=registryStart('NM')+'CharityDetail.aspx?FEIN='+query.identifier.slice(0,2)+'-'+query.identifier.slice(2);
+    await wfAwait(job,"registry-worker.js:performRegistryQuery:1005:4:await",()=>(registryNavigate(job,url,Math.min(30000,job.activeExpiresAt-Date.now()))));
+    return wfReturn(job,"registry-worker.js:performRegistryQuery:1006:4:return",(registryMessage(job,{action:'registry-nm-detail',query})));
+  }
+  if (query.state === "AL") {
+    if (job.tab === null && trialAlIdle) {
+      const saved=trialAlIdle; trialAlIdle=null;
+      try {
+        const tab=await wfAwait(job,"registry-worker.js:performRegistryQuery:1012:18:await",()=>(chrome.tabs.get(saved.id))), source=await wfAwait(job,"registry-worker.js:performRegistryQuery:1012:58:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+        // An authorized trial page may run in another Chrome window. The
+        // owned tab, source origin and expiry are the security boundaries;
+        // moving the caller to a dedicated validation window must not discard
+        // the already verified public session.
+        if (owned.has(saved.id) && tab.url===registryStart('AL') && new URL(source.url).origin===P.TRIAL_ORIGIN && saved.expiresAt>Date.now()) {
+          job.tab=saved.id;
+          // A retained verified window can be covered by the calling page.
+          // Reuse its document, but place this isolated owned window in the
+          // current slot before the first readiness message. No new search.
+          await wfAwait(job,'registry-al:reuse-visible',()=>registryExposeReusedNyTab(job,source));
+        }
+        else await wfAwait(job,"registry-worker.js:performRegistryQuery:1018:13:await",()=>(removeOwned(saved.id)));
+      } catch { await wfAwait(job,"registry-worker.js:performRegistryQuery:1019:16:await",()=>(removeOwned(saved.id))); }
+      await wfAwait(job,"registry-worker.js:performRegistryQuery:1020:6:await",()=>(saveRuntime()));
+    }
+    if (job.tab===null) await wfAwait(job,"registry-worker.js:performRegistryQuery:1022:24:await",()=>(registryNavigate(job,registryStart('AL'))));
+    else await wfAwait(job,"registry-worker.js:performRegistryQuery:1023:9:await",()=>(registryReady(job,null,'/online/Lookups/Business.aspx')));
+    // Reuse only the connector-owned verified page. Each command must observe
+    // a fresh result; no verification code or previous result is shared.
+    return wfReturn(job,"registry-worker.js:performRegistryQuery:1026:4:return",(registryMessage(job,{action:'registry-al',query,automaticVerification:!!P.TRIAL_ORIGIN,
+      budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))})));
+  }
+  if (query.state === "NC") return wfReturn(job,"registry-worker.js:performRegistryQuery:1029:28:return",(registryNorthCarolinaQuery(job,query)));
+  if (["NV", "TN"].includes(query.state)) {
+    if(query.state==='TN'&&P.TRIAL_ORIGIN&&registryTnTraffic.cooldownUntil>Date.now())
+      return wfReturn(job,"registry-worker.js:performRegistryQuery:1032:6:return",(registryTnBeforeCommand(job)));
+    if (P.TRIAL_ORIGIN && query.state==='TN' && query.operation==='search' && job.tab===null && trialTnIdle) {
+      const saved=trialTnIdle;trialTnIdle=null;clearTimeout(trialTnIdleTimer);
+      try {
+        const tab=await wfAwait(job,"registry-worker.js:performRegistryQuery:1036:18:await",()=>(chrome.tabs.get(saved.id))),source=await wfAwait(job,"registry-worker.js:performRegistryQuery:1036:57:await",()=>(chrome.tabs.get(job.sender.tab.id)));
+        if(owned.has(saved.id) && saved.expiresAt>Date.now() && tab.url===registryStart('TN')
+            && tab.windowId===saved.windowId && source.windowId===(saved.sourceWindowId??saved.windowId)
+            && new URL(source.url).origin===P.TRIAL_ORIGIN
+            && await wfAwait(job,"registry-worker.js:performRegistryQuery:1040:15:await",()=>(registryTennesseeOwnedWindow(tab,source)))) {
+          job.tab=saved.id;job.finalFourReusableForm=true;
+          await wfAwait(job,"registry-worker.js:performRegistryQuery:1042:10:await",()=>(registryExposeReusedNyTab(job,source)));
+          // Reuse page initialization only. tnSearch closes any old dialog,
+          // clears observed rows and submits every new query afresh.
+          diagnostic('tn-session-reuse',job,'initialized owned page; fresh query required');
+        } else await wfAwait(job,"registry-worker.js:performRegistryQuery:1046:15:await",()=>(removeOwned(saved.id)));
+      } catch {await wfAwait(job,"registry-worker.js:performRegistryQuery:1047:15:await",()=>(removeOwned(saved.id)));}
+      await wfAwait(job,"registry-worker.js:performRegistryQuery:1048:6:await",()=>(saveRuntime()));
+    }
+    if (query.state==='NV' && job.nvReservationDetail) {
+      // ORION reservation Back leads to ExistingBusinessFilings and sign-in,
+      // not public search. Reopen the known public form, within this job's
+      // deadline. A second detail must first re-observe the entire same result
+      // set; it cannot reuse detached links or changed registration evidence.
+      const prior=job.nvLastSearch;
+      await wfAwait(job,"registry-worker.js:performRegistryQuery:1056:6:await",()=>(registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true)));
+      job.nvReservationDetail=false;job.finalFourReusableForm=true;
+      if (query.operation==='detail') {
+        if (!prior?.evidence?.complete) throw registrySequenceError(job,query,'reservation-prior-search');
+        const restored=await wfAwait(job,"registry-worker.js:performRegistryQuery:1060:23:await",()=>(registryMessage(job,{action:'registry-nv',query:prior.query,
+          budgetMs:Math.max(1,Math.min(150000,job.activeExpiresAt-Date.now()))})));
+        if (!restored?.ok || restored.evidence?.complete!==true || !P.sameQuery(restored.evidence.query,prior.query)
+            || restored.evidence.total!==prior.evidence.total
+            || JSON.stringify(restored.evidence.rows)!==JSON.stringify(prior.evidence.rows))
+          throw new Error('NY_CONNECTOR_REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+      }
+    }
+    if (query.operation === "search") {
+      if (query.state==='NV' && job.tab!==null && !job.finalFourReusableForm) {
+        if (P.TRIAL_ORIGIN && job.nvReturnRecoveryUsed) {
+          // This organization's native return has already stalled. Open the
+          // public form for each remaining signed search instead of spending
+          // another return allowance or failing after reading its records.
+          // No query is skipped, and the original active deadline still owns
+          // every navigation and response.
+          diagnostic('nv-return-known-stall',job,'fresh public form within original deadline');
+          await wfAwait(job,"registry-worker.js:performRegistryQuery:1077:10:await",()=>(registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true)));
+        } else {
+        // Form hydration shares the normal navigation allowance and the
+        // original job deadline. A ten-second sub-budget rejected a still
+        // loading public form despite remaining lookup time. Sales supplies
+        // its own one-minute cancellation; this never extends that limit.
+        const returned=await wfAwait(job,"registry-worker.js:performRegistryQuery:1083:23:await",()=>(registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(P.TRIAL_ORIGIN?8000:45000,job.activeExpiresAt-Date.now()))})));
+        if(returned?.nv_readiness)job.nvReadiness=returned.nv_readiness;
+        if (!returned?.ok) {
+          if (returned?.reason!=='NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT' || job.nvReturnRecoveryUsed
+              || job.activeExpiresAt-Date.now()<5000) throw new Error(returned?.reason||'NY_CONNECTOR_INCOMPLETE');
+          job.nvReturnRecoveryUsed=true;
+          diagnostic('nv-return-recovery',job,'fresh public form within original deadline');
+          await wfAwait(job,"registry-worker.js:performRegistryQuery:1090:10:await",()=>(registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true)));
+        } else await wfAwait(job,"registry-worker.js:performRegistryQuery:1091:15:await",()=>(registryReady(job,null,new URL(registryStart('NV')).pathname)));
+        }
+      } else if (job.tab === null || !job.finalFourReusableForm) await wfAwait(job,"registry-worker.js:performRegistryQuery:1093:65:await",()=>(registryNavigate(job,registryStart(query.state))));
+      else await wfAwait(job,"registry-worker.js:performRegistryQuery:1094:11:await",()=>(registryReady(job,null,new URL(registryStart(query.state)).pathname)));
+    } else if (job.tab === null || !job.finalFourSearchComplete) {
+      throw registrySequenceError(job,query,"detail-without-search");
+    }
+    job.finalFourReusableForm = false;
+    // A short reviewed alias can legitimately return thousands of entities.
+    // Give that complete paged search margin inside this job's existing
+    // deadline; never borrow another state's time or reset Sales' one minute.
+    const allowance=query.state==='NV'&&query.operation==='search'?150000:45000;
+    if(query.state==='TN'){
+      const blocked=await wfAwait(job,"registry-worker.js:performRegistryQuery:1104:20:await",()=>(registryTnBeforeCommand(job)));if(blocked)return wfReturn(job,"registry-worker.js:performRegistryQuery:1104:66:return",(blocked));
+    }
+    let response = await wfAwait(job,"registry-worker.js:performRegistryQuery:1106:19:await",()=>(registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))})));
+    if(query.state==='TN')await wfAwait(job,"registry-worker.js:performRegistryQuery:1107:26:await",()=>(registryTnAfterCommand(response)));
+    if(P.TRIAL_ORIGIN && query.state==='TN') {
+      const phases=['detail-start','prior-closed','detail-click','detail-retry','detail-incomplete','detail-ready','public-error','request-started','request-finished'];
+      for(const entry of Array.isArray(response?.tn_diagnostics)?response.tn_diagnostics.slice(0,16):[]) {
+        if(!phases.includes(entry?.phase)||!Number.isFinite(entry.elapsed_ms)||entry.elapsed_ms<0)continue;
+        const sample={phase:entry.phase,ms:Math.round(entry.elapsed_ms),
+          visibility:['visible','hidden'].includes(entry.visibility)?entry.visibility:'unknown'};
+        for(const key of ['dialog_visible','loading_visible','request_observed','retried','watch_ready'])
+          if(typeof entry[key]==='boolean')sample[key]=entry[key];
+        if(['grid-binding','details-handler','type-error','other'].includes(entry.category))sample.category=entry.category;
+        if(Number.isInteger(entry.http_status)&&entry.http_status>=0&&entry.http_status<=599)sample.http_status=entry.http_status;
+        if(Number.isSafeInteger(entry.retry_after_ms)&&entry.retry_after_ms>=0)sample.retry_after_ms=entry.retry_after_ms;
+        diagnostic('tn-dom',job,JSON.stringify(sample));
+      }
+    }
+    if(P.TRIAL_ORIGIN && query.state==='TN' && query.operation==='detail' && response?.ok===true && response.evidence?.fields) {
+      const fields=response.evidence.fields;
+      for(const key of ['Name','CO Number','Status','Registration Date','Expiration Date','Address']) {
+        const raw=fields[key];
+        diagnostic('tn-detail-field',job,JSON.stringify({identifier:query.identifier,key,
+          type:typeof raw,value:typeof raw==='string'?raw.slice(0,350):null,
+          truncated:typeof raw==='string'&&raw.length>350}));
+      }
+      const periods=fields.financial_periods;
+      diagnostic('tn-detail-history',job,JSON.stringify({identifier:query.identifier,
+        financial_count:fields.financial_count,financial_history_absent:fields.financial_history_absent,
+        periods_type:Array.isArray(periods)?'array':typeof periods,
+        periods:Array.isArray(periods)?periods.slice(0,20):null,truncated:Array.isArray(periods)&&periods.length>20}));
+    }
+    if (P.TRIAL_ORIGIN && query.state==='NV' && query.operation==='search'
+        && ['NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED','NY_CONNECTOR_REGISTRY_NV_FORM_NOT_SETTLED'].includes(response?.reason)
+        && !job.nvModeRecoveryUsed && job.activeExpiresAt-Date.now()>8000) {
+      // An unsettled public dropdown or bound filter form is not a completed
+      // search. Reopen only
+      // our public form once, retry the identical signed query and retain the
+      // original deadline. Never retry or invent detail/history evidence.
+      job.nvModeRecoveryUsed=true;
+      diagnostic('nv-mode-recovery',job,'fresh public form; same signed query');
+      await wfAwait(job,"registry-worker.js:performRegistryQuery:1145:6:await",()=>(registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true)));
+      response=await wfAwait(job,"registry-worker.js:performRegistryQuery:1146:15:await",()=>(registryMessage(job,{action:'registry-nv',query,
+        budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))})));
+    }
+    if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
+    if (query.state==='NV' && response?.ok===true) {
+      if (query.operation==='search') job.nvLastSearch={query,evidence:response.evidence};
+      job.nvReservationDetail=query.operation==='detail' && /^(?:NR|C)\d{8}-\d+$/.test(query.identifier);
+    }
+    // TN keeps its result grid behind the detail dialog. NV navigates to a
+    // detail route, so its next name search uses the public Return To Search.
+    job.finalFourReusableForm = response?.ok === true && (query.state === "TN" || query.operation === "search");
+    return wfReturn(job,"registry-worker.js:performRegistryQuery:1157:4:return",(response));
+  }
+  if (query.state === "IL") {
+    // Keep one ordinary search form through the same organization's fallbacks.
+    // Reloading for every name repeatedly discards normal page readiness and
+    // verification. The content handler clears all public filters each time.
+    // A previously opened detail or failed command still requires a fresh form.
+    if (job.tab === null || !job.ilReusableForm) await wfAwait(job,"registry-worker.js:performRegistryQuery:1164:49:await",()=>(registryNavigate(job, registryStart("IL"))));
+    else await wfAwait(job,"registry-worker.js:performRegistryQuery:1165:9:await",()=>(registryReady(job,null,"/search")));
+    job.ilReusableForm = false;
+    const collect = async (formWaitMs = 45000) => {
+      const started = Date.now();
+      const result = await wfAwait(job,"registry-worker.js:performRegistryQuery:1169:21:await",()=>(registryMessage(job,{action:"registry-il",query,formWaitMs})));
+      for (const entry of Array.isArray(result?.diagnostics) ? result.diagnostics.slice(0,32) : []) {
+        if (!["form","results","page-size","detail"].includes(entry.phase) || !["observed","ready","incomplete"].includes(entry.event)
+          || !Number.isFinite(entry.elapsed_ms) || entry.elapsed_ms < 0 || entry.elapsed_ms > 300000
+          || !["visible","hidden","unknown"].includes(entry.visibility)) continue;
+        diagnostic("il-dom",job,`${entry.phase}:${entry.event} ms=${entry.elapsed_ms} visibility=${entry.visibility}`);
+      }
+      diagnostic("il-command",job,`${query.identifier ? "detail" : query.ein ? "ein" : "name"} ms=${Date.now()-started} ${result?.ok ? "complete" : /^NY_CONNECTOR_[A-Z_]+$/.test(result?.reason) ? result.reason : "incomplete"}`);
+      return wfReturn(job,"registry-worker.js:performRegistryQuery:1177:6:return",(result));
+    };
+    let result = await wfAwait(job,"registry-worker.js:performRegistryQuery:1179:17:await",()=>(collect(0)));
+    if (result?.reason === "NY_CONNECTOR_IL_VERIFICATION_PENDING") {
+      result = await wfAwait(job,"registry-worker.js:performRegistryQuery:1181:15:await",()=>(registryIllinoisVerification(job, collect)));
+      job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
+      return wfReturn(job,"registry-worker.js:performRegistryQuery:1183:6:return",(result));
+    }
+    // One fresh-form retry for a search that never completed or an unopened
+    // detail. Loaded records with absent dates are complete evidence.
+    const retryable = ["NY_CONNECTOR_IL_FORM_READY_TIMEOUT", "NY_CONNECTOR_IL_FORM_DISABLED", "NY_CONNECTOR_IL_FORM_MISSING", "NY_CONNECTOR_IL_RESPONSE_TIMEOUT",
+      "NY_CONNECTOR_IL_DETAIL_NOT_OPENED", "NY_CONNECTOR_IL_DETAIL_BLANK", "NY_CONNECTOR_IL_DETAIL_RESPONSE_TIMEOUT"];
+    if (retryable.includes(result?.reason) && job.activeExpiresAt-Date.now()>50000) {
+      diagnostic("il-public-retry",job,result.reason);
+      await wfAwait(job,"registry-worker.js:performRegistryQuery:1191:6:await",()=>(registryNavigate(job, registryStart("IL"))));
+      result = await wfAwait(job,"registry-worker.js:performRegistryQuery:1192:15:await",()=>(collect()));
+      if (result?.reason === "NY_CONNECTOR_IL_VERIFICATION_PENDING")
+        result = await wfAwait(job,"registry-worker.js:performRegistryQuery:1194:17:await",()=>(registryIllinoisVerification(job, collect)));
+    }
+    job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
+    return wfReturn(job,"registry-worker.js:performRegistryQuery:1197:4:return",(result));
+  }
+  if (Object.hasOwn(query,"identifier")) {
+    // GA invalidates earlier-page detail links after another result page is
+    // visited. Reopen the same public search and locate the requested license
+    // before following its currently displayed link. The master still owns
+    // selection and confirms the requested license in the returned body.
+    const legacy = ["", "EXEMPT"].includes(query.identifier);
+    const source=job.gaSearchByIdentifier?.[legacy ? query.detail_key : query.identifier];
+    if(!source)throw new Error("NY_CONNECTOR_INCOMPLETE");
+    let current=null;
+    const visible=job.gaVisibleResults;
+    if(P.TRIAL_ORIGIN&&visible&&visible.tab===job.tab&&visible.generation===job.generation
+        &&P.sameQuery(visible.query,source)&&typeof visible.documentId==='string'
+        &&typeof visible.public_page_text==='string'&&visible.public_page_text.length>0&&visible.public_page_text.length<=20000) {
+      const selected=visible.rows.filter(row=>row.identifier===query.identifier&&(!legacy
+        ||row.name===query.record_name&&row.location===query.record_location));
+      if(selected.length===1) {
+        // A failed read falls back to the original ordinary search. It never
+        // turns a missing/changed page into a selected registration.
+        const proof=await registryMessage(job,{action:'registry-ga-visible-selection',
+          document_id:visible.documentId,page:visible.page,rows:visible.rows,selected:selected[0],public_page_text:visible.public_page_text}).catch(()=>null);
+        if(proof?.ok===true&&proof.document_id===visible.documentId
+            &&JSON.stringify(proof.row)===JSON.stringify(selected[0])) {
+          current=proof.row;
+          diagnostic('ga-visible-selection',job,'unchanged current result; redundant search skipped');
+        }
+      }
+    }
+    delete job.gaVisibleResults;
+    if(!current)current=await wfAwait(job,"registry-worker.js:performRegistryQuery:1207:18:await",()=>(registryGaSearch(job,source,query.identifier,legacy ? query : null)));
+    if(!current?.detail_key)throw new Error("NY_CONNECTOR_INCOMPLETE");
+    const detailStarted=Date.now();
+    if(P.TRIAL_ORIGIN)diagnostic('ga-detail-navigation-start',job,'open selected public detail');
+    await wfAwait(job,"registry-worker.js:performRegistryQuery:1211:4:await",()=>(registryNavigate(job,registryOrigin("GA")+"/verification/Details.aspx?result="+current.detail_key)));
+    if(P.TRIAL_ORIGIN)diagnostic('ga-detail-navigation-done',job,`ms=${Date.now()-detailStarted}`);
+    const result=await wfAwait(job,"registry-worker.js:performRegistryQuery:1213:17:await",()=>(registryMessage(job,{action:"registry-ga-detail",query})));
+    if(P.TRIAL_ORIGIN)diagnostic('ga-detail-command',job,`ms=${Date.now()-detailStarted} ${result?.ok?'complete':result?.reason||'incomplete'}`);
+    return wfReturn(job,"registry-worker.js:performRegistryQuery:1215:4:return",(result));
+  }
+  return wfReturn(job,"registry-worker.js:performRegistryQuery:1217:2:return",(registryGaSearch(job,query)));
+}
+async function registryNorthCarolinaQuery(job,query) {
+  const started=Date.now();
+  const phase=stage=>diagnostic('nc-phase',job,`${query.operation}:${stage} total_ms=${Date.now()-started}`);
+  phase('start');
+  if(query.operation==='search') {
+    job.ncSubmissionObservations=[];job.ncSubmissionSignature=null;
+    const prior=await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1225:16:await",()=>(registryNavigate(job,registryStart('NC'))));
+    phase('navigate');
+    const submitted=await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1227:20:await",()=>(registryMessage(job,{action:'registry-nc-form',query})));
+    phase(`form-${submitted?.phase||submitted?.reason||'incomplete'}`);
+    if(!submitted?.ok||submitted.phase!=='submitted')throw new Error('NY_CONNECTOR_INCOMPLETE');
+    await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1230:4:await",()=>(registryReady(job,prior.documentId,'/online_services/search/Charities_Results',45000,query)));
+    phase('results-ready');
+    const result=await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1232:17:await",()=>(registryMessage(job,{action:'registry-nc-rows',query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))})));
+    phase(`rows-${result?.ok?'complete':result?.reason||'incomplete'}`);
+    if(result?.ok && result.evidence?.complete===true) {
+      for(const entry of Array.isArray(result.diagnostics)?result.diagnostics.slice(0,1):[]) {
+        if(entry?.phase==='pending-count' && [entry.displayed,entry.cards,entry.groups].every(n=>Number.isInteger(n)&&n>=0&&n<=100))
+          diagnostic('nc-count',job,`Pending application cards retained: displayed=${entry.displayed}; cards=${entry.cards}; groups=${entry.groups}`);
+      }
+      job.ncProfiles ||= Object.create(null);
+      for(const row of result.evidence.rows||[]) {
+        const application=!row.License
+          && (row.Status==='In-Process'&&['In-Process','Charitable Organization'].includes(row['CSL Type'])
+            ||row.Status==='Withdrawn'&&row['CSL Type']==='In-Process')
+          && /^https:\/\/www\.sosnc\.gov\/online_services\/search\/charities_profile\/\d+$/.test(row.profile_url||'');
+        const identifier=application?'NCAPP-'+row.profile_url.split('/').pop():row.License;
+        if(identifier)job.ncProfiles[identifier]=row.profile_url;
+      }
+    }
+    return wfReturn(job,"registry-worker.js:registryNorthCarolinaQuery:1248:4:return",(result));
+  }
+  if(job.ncProfiles?.[query.identifier]!==query.url)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+  await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1251:2:await",()=>(registryNavigate(job,query.url)));
+  phase('profile-navigate');
+  const profile=await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1253:16:await",()=>(registryMessage(job,{action:'registry-nc-profile',query})));
+  phase(`profile-${profile?.ok?'complete':profile?.reason||'incomplete'}`);
+  if(!profile?.ok)return wfReturn(job,"registry-worker.js:registryNorthCarolinaQuery:1255:18:return",(profile));
+  const expected=query.url.replace('/charities_profile/','/charities_filings/');
+  const needsFilings=!/^NCAPP-\d+$/.test(query.identifier)&&profile.filings_url===expected;
+  // Save the selected original profile while it is still on screen. The
+  // following optional filings navigation must not replace its source pixels.
+  if(P.TRIAL_ORIGIN && job.command?.id && typeof captureStateSnapshot==='function') {
+    const commandId=job.command.id,generation=job.generation;
+    // Leave the original maximum8s history read plus its1s completion reserve
+    // intact alongside the NC3s capture allowance. Near expiry, preserve status work and omit optional pixels.
+    const snapshot=(!needsFilings||job.activeExpiresAt-Date.now()>12000)
+      ?await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1265:7:await",()=>(captureStateSnapshot(job,query,commandId))):null;
+    if(job.command?.id===commandId && job.generation===generation)
+      job.ncProfileSnapshot={commandId,generation,query:JSON.parse(JSON.stringify(query)),snapshot};
+  }
+
+  if(!/^NCAPP-\d+$/.test(query.identifier)&&profile.filings_url===expected) {
+    profile.evidence.filings={url:expected,complete:false,rows:[]};
+    if(job.activeExpiresAt-Date.now()>5000) {
+      try {
+        await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1274:8:await",()=>(registryNavigate(job,expected,Math.min(8000,job.activeExpiresAt-Date.now()-1000))));
+        phase('filings-navigate');
+        const history=await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1276:22:await",()=>(registryMessage(job,{action:'registry-nc-filings',query})));
+        phase(`filings-${history?.ok?'complete':history?.reason||'incomplete'}`);
+        if(history?.ok)profile.evidence.filings=history.filings;
+      } catch { /* Optional history cannot invalidate a complete profile. */ }
+    }
+  }
+  return wfReturn(job,"registry-worker.js:registryNorthCarolinaQuery:1282:2:return",({ok:true,evidence:profile.evidence}));
+}
+async function registryGaSearch(job, query, requestedIdentifier=null, selectedRecord=null) {
+  let phaseStarted=Date.now(), totalStarted=phaseStarted;
+  const phase=name=>{
+    const elapsed=Date.now()-phaseStarted;phaseStarted=Date.now();
+    if(P.TRIAL_ORIGIN)diagnostic('ga-phase',job,`${name} ms=${elapsed} total_ms=${phaseStarted-totalStarted}`);
+  };
+  if(P.TRIAL_ORIGIN)diagnostic('ga-search-start',job,requestedIdentifier===null?'name search':'record detail');
+  let document=await wfAwait(job,"registry-worker.js:registryGaSearch:1291:15:await",()=>(registryNavigate(job,registryStart("GA"))));
+  phase('navigate');
+  let form=await wfAwait(job,"registry-worker.js:registryGaSearch:1293:11:await",()=>(registryMessage(job,{action:"registry-ga-form",query})));
+  phase('form');
+  if (form.phase === "profession") {
+    document=await wfAwait(job,"registry-worker.js:registryGaSearch:1296:13:await",()=>(registryReady(job,document.documentId,"/verification/Search.aspx")));
+    phase('profession-ready');
+    form=await wfAwait(job,"registry-worker.js:registryGaSearch:1298:9:await",()=>(registryMessage(job,{action:"registry-ga-form",query})));
+    phase('profession-form');
+  }
+  if (!form.ok || form.phase!=="submitted") throw new Error("NY_CONNECTOR_INCOMPLETE");
+  document=await wfAwait(job,"registry-worker.js:registryGaSearch:1302:11:await",()=>(registryReady(job,document.documentId,"/verification/SearchResults.aspx")));
+  phase('results-ready');
+  const rows=[];
+  for(let page=1;page<=10;page++) {
+    const result=await wfAwait(job,"registry-worker.js:registryGaSearch:1306:17:await",()=>(registryMessage(job,{action:"registry-ga-rows"})));
+    phase('rows');
+    if(!result.ok || result.page!==page || !Array.isArray(result.rows)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    if(P.TRIAL_ORIGIN&&requestedIdentifier===null)job.gaVisibleResults={tab:job.tab,
+      generation:job.generation,documentId:document.documentId,query:{...query},
+      page:result.page,rows:result.rows.map(row=>({...row})),public_page_text:result.public_page_text};
+    if(requestedIdentifier !== null) {
+      const found=result.rows.filter(row=>row.identifier===requestedIdentifier && (!selectedRecord
+        || row.name===selectedRecord.record_name && row.location===selectedRecord.record_location));
+      if(found.length>1)throw new Error("NY_CONNECTOR_INCOMPLETE");
+      if(found.length===1)return wfReturn(job,"registry-worker.js:registryGaSearch:1313:26:return",(found[0]));
+    } else {
+      job.gaSearchByIdentifier ||= Object.create(null);
+      for(const row of result.rows)job.gaSearchByIdentifier[["", "EXEMPT"].includes(row.identifier) ? row.detail_key : row.identifier]={...query};
+    }
+    rows.push(...result.rows);
+    if(rows.length>100) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    if(!result.next) {
+      if(requestedIdentifier !== null)throw new Error("NY_CONNECTOR_INCOMPLETE");
+      return wfReturn(job,"registry-worker.js:registryGaSearch:1322:6:return",({ok:true,evidence:{query,complete:true,total:rows.length,rows}}));
+    }
+    const next=await wfAwait(job,"registry-worker.js:registryGaSearch:1324:15:await",()=>(registryMessage(job,{action:"registry-ga-next",page:page+1})));
+    phase('next-page');
+    if(!next.ok) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    document=await wfAwait(job,"registry-worker.js:registryGaSearch:1327:13:await",()=>(registryReady(job,document.documentId,"/verification/SearchResults.aspx")));
+    phase('page-ready');
+  }
+  throw new Error("NY_CONNECTOR_INCOMPLETE");
+}
