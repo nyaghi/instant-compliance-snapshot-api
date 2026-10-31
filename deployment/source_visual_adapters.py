@@ -2049,6 +2049,12 @@ def capture_selected_nj_source(master,result,run,deadline):
      or workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1645:8:get',result.get,locals(), 'success') is not True or workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1645:45:get',result.get,locals(), 'status') in {'Not Registered','Unable to Confirm','Site Not Reachable'}
      or not workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1646:12:get',result.get,locals(), 'matched_registry_name') or getattr(run,'selected_visual_attempted',False)):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1646:99:return',None)
  identifier=str(workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1647:16:get',result.get,locals(), 'matched_registry_identifier') or '')
+ # The selected public response can verify the EIN without populating the
+ # display identifier. Reuse only its same-run, exact-EIN retained hint.
+ retained_ein_hint=False
+ if (not identifier and review_credential is None and re.fullmatch(r'\d{9}',run.ein)
+     and re.sub(r'\D','',str(result.get('verified_registry_ein') or ''))==run.ein):
+  identifier=run.ein;retained_ein_hint=True
  hint=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1648:6:get',getattr(run,'source_detail_hints',{}).get,locals(), identifier)
  norm=lambda value:re.sub(r'[^a-z0-9]','',re.sub(r'^the\s+', '', str(value).strip(), flags=re.I).lower())
  if not hint or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1650:21:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name']):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1650:78:return',None)
@@ -2061,8 +2067,13 @@ def capture_selected_nj_source(master,result,run,deadline):
       or any(not re.fullmatch(r'[0-9]{10,16}',value) for key,value in params if key=='t')
       or identifier!=(review_credential or run.ein)):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1657:30:return',None)
  except (ValueError,TypeError,KeyError):return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1658:40:return',None)
+ # A previously bound original detail image remains the first choice.
+ if retained_ein_hint and any(d[0]==hint['url'] and d[2] in {'image','source_pdf'}
+     and run.ein in re.sub(r'\D','',d[3]) and norm(result['matched_registry_name']) in norm(d[3])
+     for d in run.documents):return
  run.selected_visual_attempted=True
  start=time.perf_counter();fact={'adapter':'NJ-selected-original-detail','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
+ if retained_ein_hint:fact['identity_source']='verified_same_run_ein_hint'
  held=False;browser=context=None
  try:
   remaining=deadline-time.monotonic()-1
