@@ -728,6 +728,9 @@ class CaptureRun:
                 if self.state=='ME' and not negative and me_detail_name_bound(name,text,identifier):matched=True
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
                 if self.state=='OH' and not negative and oh_selected_grid_bound(self,raw,url,row):matched=True
+                if self.state=='FL' and source_note=='Original verified FDACS response from this lookup, rendered without changing its source HTML.':
+                    from deployment.fl_response_evidence import image_bound as fl_response_image_bound
+                    matched=not negative and fl_response_image_bound(self,row,url,raw,kind)
                 if self.state=='CO' and urlsplit(str(row.get('source_url') or '')).hostname=='data.colorado.gov':
                     from deployment.co_dataset_evidence import image_bound
                     matched=not negative and image_bound(self,row,url,raw,kind)

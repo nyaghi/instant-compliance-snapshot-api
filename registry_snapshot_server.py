@@ -17357,7 +17357,13 @@ def fl_business_public_rows(query: str, deadline: float) -> list:
         # Explicitly exclude the active-only checkbox. An empty/incomplete
         # alternate result falls back to the original primary lookup.
         fields.pop("ctl00$cpMainContent$chkActive", None)
-        return fl_business_candidate_rows(read(urlencode(fields).encode("utf-8")))
+        source = read(urlencode(fields).encode("utf-8"))
+        try:
+            from deployment.fl_response_evidence import remember_response
+            remember_response(sys.modules[__name__], source, query)
+        except Exception:
+            pass  # Optional private evidence retention cannot change the lookup.
+        return fl_business_candidate_rows(source)
     except Exception:
         return []
 
@@ -17697,6 +17703,11 @@ def search_fl_with_transport(page, org, transport):
                     confirmed.source_note = "FL uses the charity license status and expiration date in the official FDACS Business Lookup."
                     confirmed._cc_registration_date_evidence = evidence
                     confirmed._cc_fl_business_source_verified = True
+                    try:
+                        from deployment.fl_response_evidence import bind_lookup
+                        bind_lookup(sys.modules[__name__], confirmed)
+                    except Exception:
+                        pass
                     return confirmed
     for variant in search_variants:
         if variant in completed_queries:
@@ -24291,6 +24302,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     if state == "CO":
         from deployment.co_dataset_evidence import seal_public_result
         seal_public_result(result, public_data)
+    if state == "FL":
+        from deployment.fl_response_evidence import seal_public_result as seal_fl_response
+        seal_fl_response(result, public_data)
     return public_data
 
 

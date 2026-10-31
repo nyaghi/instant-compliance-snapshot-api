@@ -1381,6 +1381,8 @@ def capture_owned_fl_page(master,run,result,page,context,deadline):
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_fl_page:999:52:return',None)
   stop=time.monotonic()+min(20.0,remaining)
+  from deployment.fl_response_evidence import capture as capture_fl_response
+  if capture_fl_response(master,run,result,page,stop,fact):return
   begin=time.perf_counter();fact['phase']='navigation'
   try:response=workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:1002:15:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
   except Exception as exc:
