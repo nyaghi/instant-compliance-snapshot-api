@@ -21065,8 +21065,10 @@ def search_hi_precise(page, org):
         result.source_attempts = [
             f"Hawaii attempted prioritized FEIN/name queries: {', '.join(attempted_queries)}."
         ] if attempted_queries else []
-        if exact_detail_ein_match and not hi_indicates_exempt_registration(detail_text):
+        if exact_detail_ein_match:
+            # Evidence needs the actual selected page even when filings are exempt.
             result.source_url = page.url
+        if exact_detail_ein_match and not hi_indicates_exempt_registration(detail_text):
             evidence = hi_public_filing_period(page, org.ein)
             annotate_irs_based_state_period(result, evidence)
         return result
