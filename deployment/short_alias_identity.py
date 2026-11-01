@@ -70,3 +70,30 @@ def apply(result,org,body,master):
             'raw_status':raw,'expiration':expiry,'status':status,
             '_identity_outcome':'conflict' if address.get('decision')=='conflict' else 'possible'}],
             'search_complete':False,'freshness':''}
+
+def preserves_review_match(result):
+    """Keep a bound pending candidate; never turn it into an accepted identity."""
+    state=getattr(result,'state','')
+    reason=getattr(result,'reason_code','')
+    if not ((state in STATES and reason=='SHORT_ALIAS_IDENTITY_REVIEW')
+            or (state=='WV' and reason=='WV_SHORT_NAME_IDENTITY_UNCONFIRMED')):return False
+    rows=(getattr(result,'_cc_identity_review',None) or {}).get('records',[])
+    return (len(rows)==1 and rows[0].get('status') in FINAL
+        and rows[0].get('name')==getattr(result,'matched_registry_name','')
+        and str(rows[0].get('identifier') or '')==str(getattr(result,'matched_registry_identifier',''))
+        and bool(rows[0].get('name')) and bool(rows[0].get('identifier')))
+
+def visual_result(data):
+    """Use the exact signed-review candidate for pixels, preserving the public result."""
+    if not isinstance(data,dict):return data
+    state=data.get('state');reason=data.get('reason_code')
+    if not ((state in {'ME','SC'} and reason=='SHORT_ALIAS_IDENTITY_REVIEW')
+            or (state=='WV' and reason=='WV_SHORT_NAME_IDENTITY_UNCONFIRMED')):return data
+    rows=(data.get('_worker_identity_review') or {}).get('records',[])
+    if len(rows)!=1:return data
+    row=rows[0];identifier=str(row.get('identifier') or '')
+    if (row.get('status') not in FINAL or row.get('name')!=data.get('matched_registry_name')
+        or identifier!=str(data.get('matched_registry_identifier') or '') or not identifier
+        or row.get('url')!=data.get('source_url')
+        or row.get('_identity_outcome') not in {'possible','conflict'}):return data
+    return {**data,'status':row['status'],'success':True}

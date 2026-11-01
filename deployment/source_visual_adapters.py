@@ -19,6 +19,8 @@ def completed_names_only_result(run,result):
 def capture_result_visuals(master,result,run,deadline):
  """Measure visual-only requests separately; never alter a completed status."""
  if completed_names_only_result(run,result):return None
+ from deployment.short_alias_identity import visual_result
+ result=visual_result(result)
  for capture in (capture_selected_source,capture_negative_search):
   try:workflow_call('deployment/source_visual_adapters.py:capture_result_visuals:12:6:capture',capture,locals(), master,result,run,deadline)
   except Exception:

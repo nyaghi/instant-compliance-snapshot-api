@@ -16223,6 +16223,9 @@ def normalize_registry_match_fields(result, org) -> None:
     matched_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     submitted_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or getattr(result, "organization_name", "") or "").strip())
 
+    from deployment.short_alias_identity import preserves_review_match
+    if preserves_review_match(result):
+        return  # Retain only the exact master-bound candidate for review and original evidence.
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         evidence = getattr(result, "va_entity_evidence", {})
         if (result.state == "VA" and getattr(result, "reason_code", "") == "VA_MATCHED_BY_EXACT_FEIN"
@@ -24304,6 +24307,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     if public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         md_registry_match_from_entries(result, body, org)
         fill_registry_match_from_text(result, body, org)
+    from deployment.short_alias_identity import apply as guard_short_alias_identity
+    guard_short_alias_identity(result, org, body, sys.modules[__name__])
     normalize_registry_match_fields(result, org)
     if (getattr(result, "state", "") or "").upper() == "NY":
         result = normalize_ny_registry_match_metadata(org, result)
@@ -24341,8 +24346,6 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             result.matched_registry_name = ""
             result.matched_registry_identifier = ""
             body = result.raw_status_text
-    from deployment.short_alias_identity import apply as guard_short_alias_identity
-    guard_short_alias_identity(result, org, body, sys.modules[__name__])
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
     if organization_name:
@@ -35921,11 +35924,14 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 try:
                     from deployment.state_snapshots import CURRENT,DEADLINE
                     from deployment.source_visual_adapters import capture_owned_me_page
-                    workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34729:20:capture_owned_me_page',capture_owned_me_page,locals(), workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34729:42:get',CURRENT.get,locals()),{
+                    from deployment.short_alias_identity import apply as guard_me_alias, visual_result
+                    guard_me_alias(result, org, body, sys.modules[__name__])
+                    workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34729:20:capture_owned_me_page',capture_owned_me_page,locals(), workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34729:42:get',CURRENT.get,locals()),visual_result({
                         'state':'ME','ein':ein,'status':public_status(result),'success':result.success,
                         'matched_registry_name':result.matched_registry_name,
                         'matched_registry_identifier':result.matched_registry_identifier,
-                        'source_url':result.source_url},page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34733:69:get',DEADLINE.get,locals()))
+                        'source_url':result.source_url,'reason_code':getattr(result,'reason_code',''),
+                        '_worker_identity_review':getattr(result,'_cc_identity_review',None)}),page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34733:69:get',DEADLINE.get,locals()))
                 except Exception:pass
             elif state == "ND":
                 result = search_nd_completed(page, org)

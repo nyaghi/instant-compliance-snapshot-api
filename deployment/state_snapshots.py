@@ -725,7 +725,14 @@ class CaptureRun:
                 ordered=select_oh_detail(self,ordered,row)
             if self.state=='OK' and not negative:
                 from deployment.ok_certificate_evidence import pair_selected_certificate
-                ordered=pair_selected_certificate(self,ordered,row)
+                certificate_row=row
+                if data.get('reason_code')=='SHORT_ALIAS_IDENTITY_REVIEW':
+                    from deployment.short_alias_identity import FINAL as complete_candidate_statuses
+                    bound=next((r for r in review_rows if r.get('name')==name and str(r.get('identifier') or '')==identifier and r.get('status') in complete_candidate_statuses),None)
+                    if bound:
+                        certificate_row={**row,'matched_registry_name':name,'matched_registry_identifier':identifier,
+                            'status':bound['status'],'success':True,'raw_status_text':bound.get('raw_status','')}
+                ordered=pair_selected_certificate(self,ordered,certificate_row)
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))
