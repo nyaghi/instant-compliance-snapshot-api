@@ -7702,9 +7702,29 @@ def foundation_suffix_review_candidate(original_name, registry_name):
         and score_candidate(original_name,"",{"name":registry_name})["decision"]=="possible")
 
 
+def nc_apostrophe_comparison_names(names, entered_name, ein):
+    """NC comparison only: an intra-word source backtick may be an apostrophe.
+
+    Admit only an existing exact full-name/reviewed-name match after that
+    one punctuation substitution. Preserve raw names, identity safeguards,
+    source bindings, search planning, and every other state's behavior.
+    """
+    alternatives = []
+    for name in names:
+        comparison = re.sub(r"(?<=[A-Za-z])`(?=[A-Za-z])", "'", name)
+        if comparison == name:
+            continue
+        decision = score_candidate(entered_name, ein, {"name": comparison})
+        if decision.get("reason") in {"MATCH_NAME_EXACT", "MATCH_REVIEWED_ALTERNATE_NAME"}:
+            alternatives.append(comparison)
+    return list(dict.fromkeys(alternatives))
+
+
 def final_four_search_candidate_scores(name, ein, state, row):
     """Shortlist source identities without changing master acceptance rules."""
     names = [row["name"], *row.get("aliases", [])]
+    if state == "NC" and trial_identity():
+        names += nc_apostrophe_comparison_names(names, name, ein)
     candidates = [score_candidate(name, ein, {"name": n, "ein": row.get("ein", "")}) for n in names if n]
     if state == "NV" and candidates and all(c["decision"] == "rejected" for c in candidates):
         # ORION can join a legal name and another name with punctuation. Test
@@ -9766,6 +9786,8 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
 def licensed_charity_identity(org, row, state, deadline):
     """Shared master name/EIN and cross-state office checks; never address-only."""
     names = [row["name"], *row.get("aliases", [])]
+    if state == "NC" and trial_identity():
+        names += nc_apostrophe_comparison_names(names, org.organization_name, org.ein)
     # DC relocates the definite article to a terminal parenthesis. Keep its
     # source label intact and retain all ordinary EIN/address safeguards.
     if state == "DC":
