@@ -182,14 +182,12 @@ def resolve(record,result,fresh=False,store=None):
     data['evidence_url']='';data['evidence_capture']='unavailable'
     try:
         payload=_load(record,store);doc=copy.deepcopy(payload['history'])
-        try:
-            data['evidence_url']=_rejected_original(record,payload,store)
-            data['evidence_capture']='saved'
-        except Exception:pass # Preserve history even when original is incomplete.
-        doc.update(result_at_completion=data['status'],completed_at=time.time(),snapshot_url=data['evidence_url'],snapshot_expected=not sh.history_only_result(data))
+        # Keep originals in the signed retained context for Undo and audit,
+        # but rejected identities are not evidence for this organization.
+        doc.update(result_at_completion=data['status'],completed_at=time.time(),snapshot_url='',snapshot_expected=False)
         doc['identity_decisions']=doc.get('identity_decisions',[])+_decisions(record)
         doc['source_limitations']+=' The state returned candidate records. The user rejected their identities; the original pages are not a zero-results search. Search completeness is determined separately.'
         data['search_history_url']=_save_history(doc,store)
-        data['evidence_basis']='Original retrieved records; all candidate identities rejected by the user.'
+        data['evidence_basis']='Actual search history; all candidate identities rejected by the user.'
     except Exception:data['search_history_capture']='unavailable'
     return data

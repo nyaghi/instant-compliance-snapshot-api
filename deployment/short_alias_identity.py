@@ -87,6 +87,21 @@ def visual_result(data):
     """Use the exact signed-review candidate for pixels, preserving the public result."""
     if not isinstance(data,dict):return data
     state=data.get('state');reason=data.get('reason_code')
+    if state=='RI':
+        # The master has retrieved this candidate but has not confirmed identity.
+        # Photograph only its validated official detail; never promote its status.
+        context=data.get('_worker_identity_review') or {}
+        rows=context.get('records',[])
+        if context.get('search_complete') is not True or len(rows)!=1:return data
+        row=rows[0]
+        if (row.get('status') not in FINAL or not row.get('name')
+            or row.get('_identity_outcome') not in {'possible','conflict'}
+            or row.get('ein') and re.sub(r'\D','',str(row['ein']))!=re.sub(r'\D','',str(data.get('ein','')))
+            or not re.fullmatch(r'CO\.\d+',str(row.get('identifier','')))
+            or not re.fullmatch(r'https://ridbrprod-search\.state-reg-eastern\.tylerapp\.com/search/C\d+/detail',str(row.get('url','')))):
+            return data
+        return {**data,'status':row['status'],'success':True,
+            'matched_registry_name':row['name'],'matched_registry_identifier':row['identifier'],'source_url':row['url']}
     if not ((state in {'ME','SC'} and reason=='SHORT_ALIAS_IDENTITY_REVIEW')
             or (state=='WV' and reason=='WV_SHORT_NAME_IDENTITY_UNCONFIRMED')):return data
     rows=(data.get('_worker_identity_review') or {}).get('records',[])
