@@ -382,17 +382,19 @@ def observe_selected_readiness(page, fact, expected_url, expected_name, expected
  for event,callback in [('request',request),('response',response),('requestfinished',ended),('requestfailed',lambda req:ended(req,True)),('pageerror',page_error)]:
   try:page.on(event,callback);callbacks.append((event,callback))
   except Exception:data['observer_error']=True
- def finish():
+ def finish(detach=True):
   nonlocal finalized
   if finalized:return
-  finalized=True
+  if detach:finalized=True
   try:
    data['elapsed_seconds']=round(time.monotonic()-started,3)
    data['remaining_seconds']=round(max(0,stop-time.monotonic()),3)
    data['pending_count']=len(pending)
    data['pending']=[{**item,'age_seconds':round(time.monotonic()-when,3)} for when,item in list(pending.values())[:12]]
    data['route_matches']=page.url==expected_url
-   if fact.get('outcome')=='captured':return
+   for key in ('terminal','terminal_read','terminal_read_timeout_ms','terminal_error_type'):data.pop(key,None)
+   if fact.get('outcome')=='captured':
+    data['terminal_read']='not_repeated_after_capture';return
    remaining=stop-time.monotonic()-.25
    if remaining<=0:data['terminal_read']='no_time_remaining';return
    labels=(['Registration Number','Registration Type','Registration Status','Initial Registration Date','Current Expiration Date']
@@ -417,9 +419,15 @@ def observe_selected_readiness(page, fact, expected_url, expected_name, expected
    except Exception as exc:data['terminal_read']='unavailable';data['terminal_error_type']=type(exc).__name__
   except Exception:data['observer_error']=True
   finally:
-   for event,callback in callbacks:
-    try:page.remove_listener(event,callback)
-    except Exception:pass
+   if detach:
+    for event,callback in callbacks:
+     try:page.remove_listener(event,callback)
+     except Exception:pass
+ def continue_until(new_stop):
+  nonlocal stop
+  stop=new_stop
+ finish.checkpoint=lambda:finish(detach=False)
+ finish.continue_until=continue_until
  return finish
 
 
@@ -453,6 +461,33 @@ def initialization_completion_stop(fact, old_stop, state_deadline, now):
  new_stop=min(old_stop+15,state_deadline-1)
  if new_stop-now<6:return None
  return new_stop
+
+def retry_selected_blank_initialization(master,page,fact,url,stop):
+ """One same-detail reload after an observed blank boot stall; no new clock."""
+ if (not master.trial_identity() or master.LAB_LOOKUP_MODE_CONTEXT.get()!='standard'
+     or fact.get('initialization_reload') or page.url!=url):return
+ observation=fact.get('initialization_boundary_observation',{})
+ terminal=observation.get('terminal',{})
+ if (observation.get('route_matches')is not True or observation.get('terminal_read')!='completed'
+     or observation.get('failed')!=0 or observation.get('errors')or observation.get('observer_error')
+     or observation.get('pending_overflow')!=0 or terminal.get('document_state')!='complete'
+     or terminal.get('body_text_chars')!=0 or terminal.get('form_count')!=0
+     or any(terminal.get(key)is not False for key in ('expected_name_present','expected_id_present','verification_present','error_present'))):return
+ host=urlsplit(url).hostname
+ paths={'/api/webContent/themes','/api/admin/environment/public','/api/webContent/apps/publicPortal/public','/api/webContent/apps/publicPortal'}
+ old=[item for item in observation.get('pending',[])if item.get('host')==host and item.get('path')in paths
+      and type(item.get('age_seconds'))in(int,float)and item['age_seconds']>=20
+      and 'status'not in item]
+ # The existing continuation predicate already proved a complete but empty
+ # document with no form, identity, source error, challenge or failed request.
+ if (not old or fact.get('initialization_continuation',{}).get('count')!=1
+     or stop-time.monotonic()<8):return
+ begin=time.perf_counter();fact['initialization_reload']={'count':1,'same_selected_url':True,
+     'pending_without_response_count':len(old),'within_existing_stop':True}
+ response=page.reload(wait_until='commit',timeout=max(1,int(min(5,stop-time.monotonic()-6)*1000)))
+ fact['initialization_reload']['seconds']=round(time.perf_counter()-begin,4)
+ if response is None or response.status!=200 or page.url!=url:
+  raise ValueError('Same-selected-detail initialization reload was not confirmed')
 
 def capture_selected_ca_source(master,result,run,deadline):
  """Photograph the selected actual registration, never the entity Listed label."""
@@ -505,13 +540,14 @@ def capture_selected_ca_source(master,result,run,deadline):
        workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:266:6:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
       except Exception as ready_error:
        if label!='Registration Number' or type(ready_error).__name__!='TimeoutError':raise
-       finish_readiness()
+       getattr(finish_readiness,'checkpoint',finish_readiness)()
        proposed_stop=initialization_completion_stop(fact,stop,deadline,time.monotonic())
        if proposed_stop is None:raise
        fact['initialization_continuation']={'count':1,'extra_cap_seconds':15,'extra_granted_seconds':round(proposed_stop-stop,3),'completion_reserve_seconds':5}
-       fact['initialization_boundary_observation']=fact['selected_readiness_observation']
+       fact['initialization_boundary_observation']=json.loads(json.dumps(fact['selected_readiness_observation']))
        stop=proposed_stop
-       finish_readiness=observe_selected_readiness(page,fact,hint['url'],result['matched_registry_name'],identifier,stop)
+       getattr(finish_readiness,'continue_until',lambda value:None)(stop)
+       retry_selected_blank_initialization(master,page,fact,hint['url'],stop)
        workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:266:6:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-5)*1000)))
      finally:
       fact.setdefault('label_wait_seconds',{})[label]=round(time.perf_counter()-label_started,6)
@@ -837,13 +873,14 @@ def capture_selected_va_source(master,result,run,deadline):
      workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:553:4:wait_for',page.get_by_role('heading',name='Registration Information',exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     except Exception as ready_error:
      if type(ready_error).__name__!='TimeoutError':raise
-     finish_readiness()
+     getattr(finish_readiness,'checkpoint',finish_readiness)()
      proposed_stop=initialization_completion_stop(fact,stop,deadline,time.monotonic())
      if proposed_stop is None:raise
      fact['initialization_continuation']={'count':1,'extra_cap_seconds':15,'extra_granted_seconds':round(proposed_stop-stop,3),'completion_reserve_seconds':5}
-     fact['initialization_boundary_observation']=fact['selected_readiness_observation']
+     fact['initialization_boundary_observation']=json.loads(json.dumps(fact['selected_readiness_observation']))
      stop=proposed_stop
-     finish_readiness=observe_selected_readiness(page,fact,hint['url'],result['matched_registry_name'],identifier,stop)
+     getattr(finish_readiness,'continue_until',lambda value:None)(stop)
+     retry_selected_blank_initialization(master,page,fact,hint['url'],stop)
      workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:553:4:wait_for',page.get_by_role('heading',name='Registration Information',exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-5)*1000)))
     labels=['Registration ID','Initial Registration Date','Current Registration Date']
     if hint.get('registration_type')!='ExemptCharity' or 'expirationDate' in hint.get('source_fields',{}):labels.append('Expiration Date')
