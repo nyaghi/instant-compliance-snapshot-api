@@ -87,6 +87,7 @@ def capture_dc(master,org,result,rows,deadline):
         expected=expected_record(targets[0])
         if expected:
             run.dc_boss_selected=expected
+            run.dc_boss_selected_activity=targets[0].get("license_category","")
             return
     start=time.perf_counter();browser=context=None;held=False;receipt=None
     fact={'adapter':'DC-native-original','outcome':'not_started','total_ms':0,'capture_ms':0,'records_requested':len(targets),'records_captured':0}

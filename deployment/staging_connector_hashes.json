@@ -1,9 +1,9 @@
 {
-  "build-evidence.json": "7bdb21ac4a320ea4239aab68eae531d3d13f22a6f7de042b3e1b05f37faaa633",
-  "dc-boss-source.js": "b437e7385f395e32fd57d6e5a58f3f32f74e105b83c48eece2e838e8ac874010",
+  "build-evidence.json": "1ce6ddb35bcfec7155985cea885582633ee0f47f14558574f51859d590120674",
+  "dc-boss-source.js": "f82d477e18fbdafc422f41a368d72638bce0196338857f4756c587250a80895a",
   "desktop-source-bridge.js": "eff46cafb66ef682ba2d9ff1a5f1fa2ec0c12f11f4dca0ec4cff0b208b4ec613",
   "desktop-source-worker.js": "a20cd8e9198e3dc6112d2389cef1ac3dcf01b1b9d2964c957262a6e146ad6a12",
-  "manifest.json": "bd22c76dabd0d3ad6e1742c711fb9f4d0a55f33d1cf0cb7eaed91114f932c2d9",
+  "manifest.json": "9ad909b4fbec0dd101c411baadd29c1450e59602517fd132ff9fe7a5b909036b",
   "ny-content.js": "44dd8f169988893d17260e89507290e73dc20e741b829edc115841e7e1e3c963",
   "ny-main.js": "bd88dd260c478f9591de2a2d539108caaf613174ae8f45aba18b403d030b6845",
   "protocol.js": "0661db9d41a8ea1c8ef1303184ffc9b4e77af6c45291c47c6db032d21e52eb1e",

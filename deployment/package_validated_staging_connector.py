@@ -25,7 +25,7 @@ def verified_files(source=SOURCE):
         if hashlib.sha256(data).hexdigest()!=expected[name]:
             raise ValueError('Staging connector bytes differ: '+name)
     manifest=json.loads(files['manifest.json'])
-    if (manifest['version']!='0.6.135' or manifest['name']!='CharityClarity — NC/AL Guard Repair'
+    if (manifest['version']!='0.6.135' or manifest['name']!='CharityClarity — DC License Period'
             or manifest['host_permissions'][0]!=ORIGIN+'/*'
             or any('compliance-express.com' in h for h in manifest['host_permissions'])):
         raise ValueError('Staging package identity or isolation changed')

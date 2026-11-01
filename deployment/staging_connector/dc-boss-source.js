@@ -5,7 +5,11 @@ const CCDCSource=(()=>{
  const DETAILS=['https://boss.dc.gov/licensing/license-details','https://boss.dc.gov/homepage/license-details'];
  const LABELS=['Licensee','Trade Name','License Category','License Activity','License Number','Premise Address','License Status','Issue Date','Expiration Date'];
  const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
- function valid(d){return d?.state==='DC'&&d.operation==='detail'&&d.url===SEARCH&&/^\d{9}$/.test(d.ein)&&/^[a-f0-9]{32}$/.test(d.run_id)&&/^\d{5,16}$/.test(d.identifier)&&typeof d.name==='string'&&d.name.length>0&&d.name.length<=300&&typeof d.raw_status==='string'&&d.raw_status.length>0&&d.raw_status.length<=100&&/^\d{4}-\d\d-\d\d$/.test(d.expiration)&&Number.isFinite(d.issued_at)&&Number.isFinite(d.expires_at)&&d.expires_at>d.issued_at&&(!Object.hasOwn(d,'deadline_schema')||d.deadline_schema===1)&&d.expires_at-d.issued_at<=(d.deadline_schema===1?300.1:60.1)&&Date.now()/1000>=d.issued_at-5&&Date.now()/1000<d.expires_at;}
+ function articleKey(s){s=String(s||'').trim();const leading=/^THE\s+/i.test(s),trailing=/\(\s*THE\s*\)\s*\.?$/i.test(s);if(leading&&trailing)return norm(s);return norm(leading?s.replace(/^THE\s+/i,''):trailing?s.replace(/,?\s*\(\s*THE\s*\)\s*\.?$/i,''):s);}
+ function reconcileRequest(d){return d.boss_reconcile_schema===1&&!Object.hasOwn(d,'review_candidate')&&['active','current','issued','approved'].includes(String(d.raw_status||'').toLowerCase())&&['charitable solicitation','charitable exempt'].includes(d.expected_activity)&&/^[a-f0-9]{64}$/.test(d.prior_comments_sha256||'')&&/^\d{4}-\d\d-\d\d$/.test(d.prior_renewal_date||'')&&['Current','Upcoming Filing','Delinquent','Exempt'].includes(d.prior_status);}
+ function sameName(a,b,d){return norm(a)===norm(b)||reconcileRequest(d)&&articleKey(a)===articleKey(b);}
+
+ function valid(d){return d?.state==='DC'&&d.operation==='detail'&&d.url===SEARCH&&/^\d{9}$/.test(d.ein)&&/^[a-f0-9]{32}$/.test(d.run_id)&&/^\d{5,16}$/.test(d.identifier)&&typeof d.name==='string'&&d.name.length>0&&d.name.length<=300&&typeof d.raw_status==='string'&&d.raw_status.length>0&&d.raw_status.length<=100&&/^\d{4}-\d\d-\d\d$/.test(d.expiration)&&Number.isFinite(d.issued_at)&&Number.isFinite(d.expires_at)&&d.expires_at>d.issued_at&&(!Object.hasOwn(d,'deadline_schema')||d.deadline_schema===1)&&d.expires_at-d.issued_at<=(d.deadline_schema===1?300.1:60.1)&&Date.now()/1000>=d.issued_at-5&&Date.now()/1000<d.expires_at&&(!Object.hasOwn(d,'boss_reconcile_schema')||reconcileRequest(d));}
  function fields(url,text,d){
   if(!DETAILS.includes(url)||typeof text!=='string'||text.length>20000||/user validation required|recaptcha timeout|verify you are human|access denied/i.test(text))return null;
   if(text.split('License Information').length!==2||text.split('Licensee Information').length!==2)return null;
@@ -15,7 +19,14 @@ const CCDCSource=(()=>{
   const f=Object.fromEntries(LABELS.map((k,i)=>[k,lines.slice(pos[i]+1,pos[i+1]??lines.length).join(' ')]));
   if(Object.entries(f).some(([k,v])=>!['Trade Name','Premise Address'].includes(k)&&(!v||v==='N/A')))return null;
   const exp=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(f['Expiration Date']);
-  if(f['License Number']!==d.identifier||norm(f.Licensee)!==norm(d.name)||!['charitable solicitation','charitable exempt'].includes(f['License Activity'].toLowerCase())||f['License Status']!==d.raw_status||!exp||`${exp[3]}-${exp[1]}-${exp[2]}`!==d.expiration||!/^\d\d\/\d\d\/\d{4}$/.test(f['Issue Date']))return null;
+  if(f['License Number']!==d.identifier||!sameName(f.Licensee,d.name,d)||!['charitable solicitation','charitable exempt'].includes(f['License Activity'].toLowerCase())||f['License Status']!==d.raw_status||!exp||!/^\d\d\/\d\d\/\d{4}$/.test(f['Issue Date']))return null;
+  const expiry=`${exp[3]}-${exp[1]}-${exp[2]}`,parts=f['Issue Date'].split('/'),issue=`${parts[2]}-${parts[0]}-${parts[1]}`;
+  const validDate=value=>{const parsed=new Date(value+'T00:00:00Z');return Number.isFinite(parsed.valueOf())&&parsed.toISOString().slice(0,10)===value;};
+  if(!validDate(expiry)||!validDate(issue))return null;
+  if(reconcileRequest(d)){
+   const observedDay=new Date(d.issued_at*1000).toISOString().slice(0,10);
+   if(f['License Activity'].toLowerCase()!==d.expected_activity||expiry<d.expiration||issue<d.prior_renewal_date||issue>expiry||issue>observedDay||(expiry>d.expiration&&issue<=d.prior_renewal_date))return null;
+  }else if(expiry!==d.expiration)return null;
   return f;
  }
  // Executed only in this capture's newly created source tab. Select the exact
@@ -40,28 +51,30 @@ const CCDCSource=(()=>{
    position:{x:scrollX,y:scrollY,width:innerWidth,content:[...document.querySelectorAll('mat-sidenav-content')].map(e=>({x:e.scrollLeft,y:e.scrollTop}))}};
   if(allowedDetail.includes(url))return {next:'metadata'};
   const one=(selector,test)=>{const matches=Array.from(document.querySelectorAll(selector)).filter(e=>visible(e)&&test(e));return matches.length===1?matches[0]:null;};
+  const reconcile=d.boss_reconcile_schema===1;
+  const searchType=reconcile?'License Number':'Business Name',query=reconcile?d.identifier:d.name,comparison=reconcile?'Exact Match':'Contains';
   if(phase==='type'){
    const select=document.getElementById('entityApplicantType');
    if(!visible(select))return {waiting:true};
-   if(select.innerText.trim()==='Business Name')return {next:'fill'};
+   if(select.innerText.trim()===searchType)return {next:'fill'};
    select.click();return {next:'option'};
   }
   if(phase==='option'){
-   const option=one('[role="option"]',e=>e.innerText.trim()==='Business Name');
+   const option=one('[role="option"]',e=>e.innerText.trim()===searchType);
    if(!option)return {waiting:true};option.click();return {next:'fill'};
   }
   if(phase==='fill'){
    const input=one('input',e=>e.id.startsWith('searchValue_no_autofill_'));
-   const contains=one('input[type="radio"]',e=>e.closest('mat-radio-button')?.innerText.trim()==='Contains');
+   const contains=one('input[type="radio"]',e=>e.closest('mat-radio-button')?.innerText.trim()===comparison);
    if(!input||!contains)return {waiting:true};
-   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,d.name);
+   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,query);
    input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));
    if(!contains.checked)contains.click();return {next:'submit'};
   }
   if(phase==='submit'){
    const input=one('input',e=>e.id.startsWith('searchValue_no_autofill_'));
    const button=one('button',e=>['Execute Business and License Search','Search records'].includes(e.getAttribute('aria-label')));
-   if(!input||input.value!==d.name||!button||button.disabled)return {waiting:true};
+   if(!input||input.value!==query||!button||button.disabled)return {waiting:true};
    button.click();return {next:'licensing'};
   }
   if(phase==='licensing'){
@@ -75,7 +88,8 @@ const CCDCSource=(()=>{
    if(!Array.from(document.querySelectorAll('.mat-column-licenseNumber')).some(visible))return {waiting:true};
    const clean=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
    const rows=Array.from(document.querySelectorAll('table[aria-label="grid-table"] tr')).filter(visible);
-   const matches=rows.filter(r=>r.querySelector('.mat-column-licenseNumber')?.innerText.trim()===d.identifier&&clean(r.querySelector('.mat-column-licenseeName')?.innerText)===clean(d.name)&&['Charitable Solicitation','Charitable Exempt'].includes(r.querySelector('.mat-column-licenseActivity')?.innerText.trim()));
+   const canonical=value=>{value=String(value||'').trim();const leading=/^THE\s+/i.test(value),trailing=/\(\s*THE\s*\)\s*\.?$/i.test(value);if(leading&&trailing)return clean(value);return clean(leading?value.replace(/^THE\s+/i,''):trailing?value.replace(/,?\s*\(\s*THE\s*\)\s*\.?$/i,''):value);};
+   const matches=rows.filter(r=>r.querySelector('.mat-column-licenseNumber')?.innerText.trim()===d.identifier&&(clean(r.querySelector('.mat-column-licenseeName')?.innerText)===clean(d.name)||reconcile&&canonical(r.querySelector('.mat-column-licenseeName')?.innerText)===canonical(d.name))&&['Charitable Solicitation','Charitable Exempt'].includes(r.querySelector('.mat-column-licenseActivity')?.innerText.trim())&&(!reconcile||r.querySelector('.mat-column-licenseActivity')?.innerText.trim().toLowerCase()===d.expected_activity));
    if(matches.length!==1)return {error:'selected_license_not_unique_or_absent'};
    const link=matches[0].querySelector('.mat-column-licenseeName a');if(!visible(link))return {error:'selected_license_link_unavailable'};
    link.click();return {next:'metadata'};

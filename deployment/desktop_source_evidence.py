@@ -163,6 +163,9 @@ def persist_completion(result,payload,store=None):
     # Validate the entire negative receipt before saving either artifact.
     ref=workflow_call('deployment/desktop_source_evidence.py:persist_completion:128:8:archive',archive,locals(), a,ein=a['ein'],state=a['state'],run_id=a['run_id'],store=store)
     update={'evidence_url':ref['url'],'evidence_capture':'captured','evidence_captured_at':ref['captured_at']}
+    if result.get('state')=='DC':
+        from deployment.dc_period_reconciliation import completed_update
+        update.update(completed_update(result,payload))
     if result.get('state')=='WI' and payload['request'].get('review_candidate') is True:
         from deployment.wi_review_evidence import attach_reference as wi_attach
         update.update(wi_attach(result,ref,store))
@@ -217,13 +220,19 @@ def handle_completion(master,handler,queue):
         result=jobs[0]['result']
         if re.sub(r'\D','',str(workflow_call('deployment/desktop_source_evidence.py:handle_completion:158:31:get',result.get,locals(), 'ein','')))!=record['ein'] or workflow_call('deployment/desktop_source_evidence.py:handle_completion:158:72:get',result.get,locals(), 'app_version')!=workflow_call('deployment/desktop_source_evidence.py:handle_completion:158:99:get',status.get,locals(), 'source_version'):
             raise ValueError('Source record identity mismatch')
+        if state=='DC' and result.get('evidence_url') and result.get('dc_source_reconciliation'):
+            from deployment.dc_period_reconciliation import public_completed_fields
+            saved={k:result[k] for k in ['evidence_url','evidence_capture','evidence_captured_at'] if k in result}
+            saved.update(public_completed_fields(result))
+            return handler._send_json(200,saved)
         if workflow_call('deployment/desktop_source_evidence.py:handle_completion:160:11:get',result.get,locals(), 'evidence_url'):return trace_return('deployment/desktop_source_evidence.py:handle_completion:160:38:return',(handler._send_json(200,{k:result[k] for k in ['evidence_url','evidence_capture','evidence_captured_at'] if k in result})))
         completion=workflow_call('deployment/desktop_source_evidence.py:handle_completion:161:19:get',p.get,locals(), 'completion');validate_completion(result,completion)
         import math
         seconds=workflow_call('deployment/desktop_source_evidence.py:handle_completion:163:16:get',workflow_call('deployment/desktop_source_evidence.py:handle_completion:163:16:get',completion.get,locals(), 'timing',{}).get,locals(), 'seconds')
         if not valid_capture_timing(state,completion.get('timing',{}),describe(result)):
             raise ValueError('Invalid capture duration')
-        # Serialization is bounded; no changes to phase, status, search or identity.
+        # One conditional result update pairs any validated DC period with its original image.
+        # Workflow phase, source search plan and identity decisions are unchanged.
         start=time.perf_counter();update=persist_completion(result,completion,PostgresStore(queue.pool))
         update['desktop_evidence_timing']={'archive_seconds':round(time.perf_counter()-start,4),
             'capture_seconds':seconds, **({k:completion['timing'][k] for k in ('queue_seconds','active_seconds')} if state in {'WI','DC'} and 'queue_seconds' in completion['timing'] else {})}

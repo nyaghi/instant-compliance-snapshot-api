@@ -1,7 +1,8 @@
 """Bind desktop BOSS evidence to the master's already confirmed DC license.
 
 This is an adapter of the existing master-owned evidence transport, not a new
-lookup service. It does not select identities or alter status interpretations.
+lookup service. Identity selection is unchanged; an explicit period schema
+uses the existing master policy to reconcile a renewed period atomically.
 """
 import math,re,time
 from datetime import datetime
@@ -22,9 +23,11 @@ def retained_request(run,result):
  if review:
   if review!=expected:return None
  elif str(result.get('matched_registry_identifier'))!=expected['identifier'] or norm(result.get('matched_registry_name'))!=norm(expected['name']):return None
+ from deployment.dc_period_reconciliation import request_fields
+ extra=request_fields(run,result,review)
  remaining=min(300.,DEADLINE.get()-time.monotonic()-1)
  if remaining<5:return None
- return dict(deadline_schema=1,state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'),**({'review_candidate':True} if review else {}))
+ return dict(deadline_schema=1,state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'),**({'review_candidate':True} if review else {}),**extra)
 def describe(result):
  d=result.get('_worker_desktop_evidence')
  if isinstance(d,dict) and 'deadline_schema' in d and (type(d['deadline_schema']) is not int or d['deadline_schema']!=1):return None
@@ -35,6 +38,8 @@ def describe(result):
  if not isinstance(d.get('name'),str) or not 1<=len(d['name'])<=300 or not isinstance(d.get('raw_status'),str) or not 1<=len(d['raw_status'])<=100:return None
  from deployment.dc_review_evidence import request_matches
  if not request_matches(result,d):return None
+ from deployment.dc_period_reconciliation import request_matches_period
+ if not request_matches_period(result,d):return None
  if any(type(d.get(k)) not in (int,float) or not math.isfinite(d[k]) for k in ('issued_at','expires_at')):return None
  if not 0<d['expires_at']-d['issued_at']<=(300.1 if d.get('deadline_schema')==1 else 60.1) or not -5<=time.time()-d['issued_at']<600:return None
  try:datetime.strptime(d['expiration'],'%Y-%m-%d')
@@ -50,9 +55,10 @@ def fields(url,text,d):
  if positions!=sorted(positions):return None
  f={label:' '.join(lines[positions[i]+1:positions[i+1] if i+1<len(positions) else len(lines)]) for i,label in enumerate(LABELS)}
  if any(not v or v=='N/A' for k,v in f.items() if k not in {'Trade Name','Premise Address'}):return None
- if f['License Number']!=d['identifier'] or norm(f['Licensee'])!=norm(d['name']) or f['License Activity'].lower() not in {'charitable solicitation','charitable exempt'} or f['License Status']!=d['raw_status']:return None
+ from deployment.dc_period_reconciliation import name_matches,period_allowed
+ if f['License Number']!=d['identifier'] or not name_matches(f['Licensee'],d['name'],d) or f['License Activity'].lower() not in {'charitable solicitation','charitable exempt'} or f['License Status']!=d['raw_status']:return None
  try:
-  if datetime.strptime(f['Expiration Date'],'%m/%d/%Y').date().isoformat()!=d['expiration']:return None
+  if not period_allowed(f,d):return None
   datetime.strptime(f['Issue Date'],'%m/%d/%Y')
  except ValueError:return None
  return f
@@ -65,4 +71,4 @@ def validate_completion(result,payload):
  if not f or payload.get('source_fields')!=f:raise ValueError('DC selected license changed')
  image=payload.get('image')
  if not isinstance(image,str) or not 1<=len(image)<=4_000_000:raise ValueError('Invalid DC source image')
- return dict(kind='image',state='DC',ein=d['ein'],run_id=d['run_id'],source_url=url,captured_at=stamp,content=image,identifier=d['identifier'],record_name=d['name'],organization_name=result.get('organization_name',''),public_text=text,capture_note='Original BOSS selected-license detail captured in this run. License fields matched the selected record; no status or identity change.')
+ return dict(kind='image',state='DC',ein=d['ein'],run_id=d['run_id'],source_url=url,captured_at=stamp,content=image,identifier=d['identifier'],record_name=d['name'],organization_name=result.get('organization_name',''),public_text=text,capture_note=('Original BOSS selected-license detail captured in this run. Stable renewal fields are interpreted and saved with this image by the master.'if d.get('boss_reconcile_schema')==1 else'Original BOSS selected-license detail captured in this run. License fields matched the selected record; no status or identity change.'))
