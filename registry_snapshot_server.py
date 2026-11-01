@@ -3866,7 +3866,70 @@ def form990_header_period(text: str, line: str, ein: str, label: int, url: str) 
 
 
 @release_native_memory_after
-def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float, *, require_complete: bool = False) -> dict:
+def irs_scanned_period_fields(picture, rows, ocr, ein, label, url, deadline):
+    """Re-read at most two uncertain fields on the same observed 990 date line."""
+    from PIL import ImageOps
+    if time.monotonic() >= deadline or len(rows) > 80: return {}
+    digits = canonical_ein_digits(ein)
+    trusted = [r for r in rows if float(r[2]) >= .95]
+    if not any(canonical_ein_digits(r[1]) == digits for r in trusted):
+        return {}
+    text = "\n".join(r[1] for r in trusted)
+    # Restore only spaces omitted from an independently recognized form title.
+    text = re.sub(r"Return\s*of\s*Organization\s*Exempt\s*From\s*Income\s*Tax",
+                  "Return of Organization Exempt From Income Tax", text, flags=re.I)
+    for anchor in trusted:
+        if not re.search(r"(?:tax|fiscal)\s*year\s*beginning", anchor[1], re.I):
+            continue
+        center = sum(p[1] for p in anchor[0])/4
+        height = max(p[1] for p in anchor[0])-min(p[1] for p in anchor[0])
+        same_line = sorted((r for r in rows if abs(sum(p[1] for p in r[0])/4-center) <= max(5,height*.65)),
+                           key=lambda r:min(p[0] for p in r[0]))
+        if not 1 <= len(same_line) <= 8:
+            continue
+        parts = []; rereads = 0
+        for index, row in enumerate(same_line):
+            value = row[1]
+            ambiguous_year = index == len(same_line)-1 and re.fullmatch(r"[, .]*20(?:20\d{2})",value)
+            if float(row[2]) < .95 or ambiguous_year:
+                if rereads >= 2 or time.monotonic() >= deadline:
+                    break
+                rereads += 1
+                box = row[0]
+                bounds = (max(0,int(min(p[0] for p in box))-1),max(0,int(min(p[1] for p in box))-1),
+                          min(picture.width,int(max(p[0] for p in box))+1),min(picture.height,int(max(p[1] for p in box))+1))
+                with picture.crop(bounds) as field:
+                    if field.width <= 0 or field.height <= 0:
+                        break
+                    with field.resize((field.width*2,field.height*2),Image.Resampling.LANCZOS) as enlarged:
+                        with ImageOps.expand(enlarged,border=8,fill='white') as framed:
+                            candidates,_ = ocr(framed,use_det=False,use_cls=False)
+                if time.monotonic() >= deadline or not candidates or len(candidates)!=1:
+                    break
+                value,confidence = candidates[0]
+                if float(confidence)<.95 or not isinstance(value,str) or len(value)>100:
+                    break
+                # The form prints20 before the year entry. Require both groups
+                # and their observed separating space; never trim fused digits.
+                if ambiguous_year:
+                    separated = re.fullmatch(r"[, .]*20\s+(20\d{2})\s*",value)
+                    if not separated:
+                        break
+                    value = separated[1]
+            if index == len(same_line)-1:
+                separated = re.fullmatch(r"[, .]*20\s+(20\d{2})\s*",value)
+                if separated: value = separated[1]
+            parts.append(value)
+        else:
+            line = re.sub(r"and\s*endin[gq]", "and ending", " ".join(parts),flags=re.I)
+            evidence = form990_header_period(text,line,ein,label,url)
+            if time.monotonic() >= deadline: return {}
+            if evidence and re.search(r"beginning\s*(?:[A-Z]{3,9}\s*\d|\d{1,2}[/.-]\d)",line,re.I):
+                return dict(evidence,period_extraction="Scanned IRS header with bounded field re-read")
+    return {}
+
+
+def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float, *, require_complete: bool = False, legacy_heights: dict | None = None) -> dict:
     """Read bounded header crops; OCR never treats empty boxes as calendar proof."""
     global IRS_HEADER_OCR, IRS_HEADER_TITLE_OCR
     acquired = False
@@ -3884,40 +3947,54 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
         if IRS_HEADER_TITLE_OCR is None:
             IRS_HEADER_TITLE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_type="max", det_limit_side_len=1600)
         ordered = sorted(images, key=lambda entry: entry[0])
-        for page_index, picture in ordered:
-            if time.monotonic() >= deadline: return incomplete("OCR header scan deadline reached")
-            title = picture.crop((0, 0, picture.width, int(picture.height*8/18)))
-            try: title_rows, _ = IRS_HEADER_TITLE_OCR(title, use_cls=False)
-            finally: title.close()
-            text = " ".join(r[1] for r in title_rows or [] if float(r[2]) >= .95)
-            title_ok = bool(re.search(r"8879-TE\b", text) or (re.search(r"990(?:-EZ|-PF)?\b", text) and "returnoforganization" in re.sub(r"\s", "", text.lower())))
-            clipped_form_number = any(float(r[2]) >= .95 and re.fullmatch(r"(?:Form\s+)?(?:990(?:-EZ|-PF)?|8879-TE)", r[1].strip(), re.I) for r in title_rows or [])
-            if not title_ok and clipped_form_number:
-                full_title_rows, _ = IRS_HEADER_TITLE_OCR(picture, use_cls=False)
-                text = " ".join(r[1] for r in full_title_rows or [] if float(r[2]) >= .95)
+        for page_index, full_picture in ordered:
+            original_height = (legacy_heights or {}).get(page_index)
+            picture = (full_picture if original_height is None else
+                       full_picture.crop((0,0,full_picture.width,original_height)))
+            try:
+                if time.monotonic() >= deadline: return incomplete("OCR header scan deadline reached")
+                title = picture.crop((0, 0, picture.width, int(picture.height*8/18)))
+                try: title_rows, _ = IRS_HEADER_TITLE_OCR(title, use_cls=False)
+                finally: title.close()
+                text = " ".join(r[1] for r in title_rows or [] if float(r[2]) >= .95)
                 title_ok = bool(re.search(r"8879-TE\b", text) or (re.search(r"990(?:-EZ|-PF)?\b", text) and "returnoforganization" in re.sub(r"\s", "", text.lower())))
-            if not title_ok: continue
-            if time.monotonic() >= deadline: return incomplete("OCR header extraction deadline reached")
-            rows, _ = IRS_HEADER_OCR(picture, use_cls=False)
-            rows = [r for r in rows or [] if float(r[2]) >= .95]
-            text = "\n".join(r[1] for r in rows)
-            header_read = header_read or (canonical_ein_digits(ein) in re.sub(r"\D", "", text) and str(label) in text)
-            for anchor in rows:
-                if not re.search(r"(?:tax|fiscal)\s+year\s+beginning", anchor[1], re.I): continue
-                center = sum(p[1] for p in anchor[0])/4
-                height = max(p[1] for p in anchor[0])-min(p[1] for p in anchor[0])
-                same_line = sorted((r for r in rows if abs(sum(p[1] for p in r[0])/4-center) <= max(5, height*.65)), key=lambda r:min(p[0] for p in r[0]))
-                line = " ".join(r[1] for r in same_line)
-                evidence = form990_header_period(text, line, ein, label, url)
-                if evidence and re.search(r"beginning\s*(?:[A-Z]{3,9}\s*\d|\d{1,2}[/.-]\d)", line, re.I):
-                    return dict(evidence, period_extraction="Scanned IRS header", pdf_page=page_index+1)
+                clipped_form_number = any(float(r[2]) >= .95 and re.fullmatch(r"(?:Form\s+)?(?:990(?:-EZ|-PF)?|8879-TE)", r[1].strip(), re.I) for r in title_rows or [])
+                if not title_ok and clipped_form_number:
+                    full_title_rows, _ = IRS_HEADER_TITLE_OCR(picture, use_cls=False)
+                    text = " ".join(r[1] for r in ([*(title_rows or []), *(full_title_rows or [])]
+                        if full_picture is not picture else full_title_rows or []) if float(r[2]) >= .95)
+                    title_ok = bool(re.search(r"8879-TE\b", text) or (re.search(r"990(?:-EZ|-PF)?\b", text) and "returnoforganization" in re.sub(r"\s", "", text.lower())))
+                if not title_ok: continue
+                if time.monotonic() >= deadline: return incomplete("OCR header extraction deadline reached")
+                raw_rows, _ = IRS_HEADER_OCR(picture, use_cls=False)
+                rows = [r for r in raw_rows or [] if float(r[2]) >= .95]
+                text = "\n".join(r[1] for r in rows)
+                header_read = header_read or (canonical_ein_digits(ein) in re.sub(r"\D", "", text) and str(label) in text)
+                for anchor in rows:
+                    if not re.search(r"(?:tax|fiscal)\s+year\s+beginning", anchor[1], re.I): continue
+                    center = sum(p[1] for p in anchor[0])/4
+                    height = max(p[1] for p in anchor[0])-min(p[1] for p in anchor[0])
+                    same_line = sorted((r for r in rows if abs(sum(p[1] for p in r[0])/4-center) <= max(5, height*.65)), key=lambda r:min(p[0] for p in r[0]))
+                    line = " ".join(r[1] for r in same_line)
+                    evidence = form990_header_period(text, line, ein, label, url)
+                    if evidence and re.search(r"beginning\s*(?:[A-Z]{3,9}\s*\d|\d{1,2}[/.-]\d)", line, re.I):
+                        return dict(evidence, period_extraction="Scanned IRS header", pdf_page=page_index+1)
+                if require_complete and full_picture is not picture:
+                    field_picture = full_picture
+                    if full_picture is not picture:
+                        if time.monotonic() >= deadline: return incomplete("OCR field extraction deadline reached")
+                        raw_rows, _ = IRS_HEADER_OCR(full_picture, use_cls=False)
+                    evidence = irs_scanned_period_fields(field_picture, raw_rows or [], IRS_HEADER_OCR, ein, label, url, deadline)
+                    if evidence: return dict(evidence, pdf_page=page_index+1)
+            finally:
+                if picture is not full_picture: picture.close()
     except Exception as exc:
         if require_complete:
             raise FilingPeriodReadIncomplete(str(exc)) from exc
     finally:
         if acquired: IRS_HEADER_OCR_LOCK.release()
         for _, picture in images: picture.close()
-    return {} if header_read or not require_complete else incomplete("The same-EIN filing header was not readable")
+    return incomplete("The same-EIN filing fiscal period was not readable")
 
 
 def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None, *, require_complete: bool = False) -> dict:
@@ -3940,6 +4017,7 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
     # row; a printed extension banner cannot become the fiscal period.
     if not IRS_PDF_TEXT_LOCK.acquire(timeout=min(2.0, max(.01, deadline-time.monotonic()))): return incomplete("PDF text reader remained busy")
     scanned_images = []
+    legacy_heights = {}
     header_read = False
     try:
         import pypdfium2 as pdfium
@@ -3978,7 +4056,13 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
                 if time.monotonic() >= deadline: return incomplete("PDF image extraction deadline reached")
                 page = document[page_index]
                 try:
-                    bitmap = page.render(scale=1.5, crop=(0, page.get_height()*.82, 0, 0))
+                    extended_first_header = require_complete and page_index == 0
+                    if extended_first_header:
+                        # Preserve PDFium's exact original18-percent raster height,
+                        # including its independent pixel rounding for each crop.
+                        from math import ceil
+                        legacy_heights[page_index] = ceil(page.get_height()*1.5)-ceil(page.get_height()*.82*1.5)
+                    bitmap = page.render(scale=1.5, crop=(0, page.get_height()*(.76 if extended_first_header else .82), 0, 0))
                     try: scanned_images.append((page_index, bitmap.to_pil().copy()))
                     finally: bitmap.close()
                 finally: page.close()
@@ -3990,7 +4074,8 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
         IRS_PDF_TEXT_LOCK.release()
     if not scanned_images:
         return {} if header_read or not require_complete else incomplete("The same-EIN filing header was not found")
-    return irs_scanned_header_period(scanned_images, ein, label, url, deadline, require_complete=require_complete)
+    return irs_scanned_header_period(scanned_images, ein, label, url, deadline, require_complete=require_complete,
+                                     legacy_heights=legacy_heights)
 
 
 def hi_group_return_period(body: bytes, ein: str, label: int, url: str, deadline: float) -> dict:
