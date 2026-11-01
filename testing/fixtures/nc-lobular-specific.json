@@ -1,0 +1,28 @@
+{
+  "provenance": "Actual packaged collector parsed retained public Lobular StartingWith HTML from October31; headless isolated document, no live registry query. No observed detail page is supplied.",
+  "evidence": {
+    "state": "NC",
+    "query": {
+      "state": "NC",
+      "operation": "search",
+      "name": "Lobular Breast Cancer Alliance"
+    },
+    "complete": true,
+    "verification_pending": false,
+    "search_mode": "STARTS_WITH",
+    "total": 1,
+    "rows": [
+      {
+        "CSL Type": "Charitable Organization",
+        "Status": "Current Active",
+        "Expiration Date": "11/15/2026",
+        "Extension End Date": "1/15/2027",
+        "License": "SL015410",
+        "CSL Legal Name": "Lobular Breast Cancer Alliance, Inc.",
+        "display_name": "Lobular Breast Cancer Alliance, Inc.",
+        "aliases": [],
+        "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/18496703"
+      }
+    ]
+  }
+}

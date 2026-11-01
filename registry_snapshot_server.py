@@ -7648,7 +7648,7 @@ def prioritized_registry_candidates(name, ein, state, rows):
     return sorted(rows, key=priority, reverse=True)
 
 
-def final_four_browser_lookup(org, state, evidence, deadline=None):
+def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specific_names=False):
     """Master-owned name plan and identity selection for the four new sources.
 
     The evidence callback collects public UI fields only. It cannot choose a
@@ -7662,6 +7662,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     if state not in sources:
         raise ValueError("Unsupported final-four lookup")
     deadline = time.monotonic() + 60 if deadline is None else deadline
+    nc_specific_names = bool(nc_specific_names and state == "NC" and trial_identity())
     required, generated = licensed_charity_names(org)
     if state == "NV":
         # Nevada's public form rejects typographic dashes before submitting.
@@ -7701,7 +7702,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             required = list(distinct_names.values())
     nc_reviewed_identity_names = list(required) if state == "NC" and trial_identity() else []
     nc_retrieval_coverage = {}
-    if state == "NC" and trial_identity():
+    if state == "NC" and trial_identity() and not nc_specific_names:
         # Coalesce only equivalent spellings of the same reviewed name, and
         # use the longest planned prefix covering that group. Promoting a
         # distinct alias to a generic word broadened successful exact-name
@@ -7731,9 +7732,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             generated = [name for name in generated if not any(
                 other != name and name.startswith(other) for other in planned)]
     nc_all_words_probes = (nc_grouped_all_words_probes(required, generated)
-                           if state == "NC" and trial_identity()
+                           if state == "NC" and trial_identity() and not nc_specific_names
                            and known_names_for_ein(org.ein) else {})
-    if state == "NC" and trial_identity() and required:
+    if state == "NC" and trial_identity() and required and not nc_specific_names:
         primary_probe = nc_primary_all_words_probe(required[0], generated)
         if primary_probe:
             nc_all_words_probes[required[0]] = primary_probe
@@ -7745,7 +7746,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         # single word (e.g. Education or Fitness) produces an unrelated grid;
         # it is not another reviewed identity that the master must search.
         generated = [name for name in generated if len(distinctive_match_tokens(name)) >= 2]
-    if state == "NC" and trial_identity():
+    if state == "NC" and trial_identity() and not nc_specific_names:
         required, covering_names, nc_all_words_probes, generated = nc_covering_query_plan(
             required, generated, nc_all_words_probes, org.organization_name)
         for probe, names in list(covering_names.items()):
@@ -8754,6 +8755,23 @@ def preserve_nc_identity_retry(data, record):
     return data
 
 
+def nc_specific_name_recovery(record, payload, now):
+    """Admit one signed retrieval fallback, never treating failed rows as evidence."""
+    pending = record.get("pending")
+    if (record.get("state") != "NC" or record.get("mode") != "standard"
+            or payload.get("reason") != "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH"
+            or record.get("nc_specific_name_recovery") or not pending
+            or payload.get("query_id") != pending.get("query_id")
+            or pending["query"].get("state") != "NC"
+            or pending["query"].get("operation") != "search"
+            or pending["query"].get("search_mode") != "ALL_WORDS"
+            or record["expires"] - now <= 20):
+        return False
+    record["nc_specific_name_recovery"] = {"attempt": 1,
+        "failed_query": dict(pending["query"]), "reason": payload["reason"]}
+    return True
+
+
 def final_four_connector_advance(record):
     """Replay only this organization's signed, query-bound source evidence."""
     remaining = record["expires"] - time.time()
@@ -8767,7 +8785,8 @@ def final_four_connector_advance(record):
     try:
         result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ())) if record['state'] == 'MS' else
                   nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
-                  final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining))
+                  final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining,
+                      nc_specific_names=bool(record.get("nc_specific_name_recovery"))))
     except NYConnectorQueryNeeded as pending:
         required, generated = licensed_charity_names(org)
         if len(record["completed"]) >= len(required) + len(generated) + 100:
@@ -8792,6 +8811,8 @@ def final_four_connector_advance(record):
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
     if record.get("nc_search_recovery"):
         result.source_note = result.source_note.rstrip() + " One stalled North Carolina search completed after a fresh-page retry within the original lookup time limit."
+    if record.get("nc_specific_name_recovery"):
+        result.source_note = result.source_note.rstrip() + " An incomplete broad North Carolina search was followed by specific reviewed-name searches within the original lookup time limit; the incomplete search did not establish absence."
     if record["state"] == "NM":
         result.queries_attempted = record.get("nm_search_audits", []) + [
             item for item in getattr(result, "queries_attempted", [])
@@ -9016,60 +9037,64 @@ def final_four_connector_request(payload, origin):
                              "check_token": ny_connector_pack(record),
                              "lookup_remaining_ms": max(0, int((record["expires"]-now)*1000)),
                              "expires_in": max(0, int(record["expires"]-now))}
-            return 200, {"phase": "complete", "result": final_four_connector_failure(record, reason if isinstance(reason, str) else "")}
-        pending = record["pending"]
-        if not pending or payload.get("query_id") != pending["query_id"]:
-            return 409, {"error": "The response is stale or belongs to another registry query."}
-        raw_evidence = payload.get('evidence')
-        if record['state'] == 'AL' and isinstance(raw_evidence, dict) and raw_evidence.get('verification_pending') is True:
-            if record.get('al_verification_attempts', 0) >= 2:
-                return 200, {'phase': 'complete', 'result': final_four_connector_failure(
-                    record, 'NY_CONNECTOR_AL_VERIFICATION_REQUIRED')}
+            if nc_specific_name_recovery(record, payload, now):
+                record["pending"] = None
+            else:
+                return 200, {"phase": "complete", "result": final_four_connector_failure(record, reason if isinstance(reason, str) else "")}
+        if action == "advance":
+            pending = record["pending"]
+            if not pending or payload.get("query_id") != pending["query_id"]:
+                return 409, {"error": "The response is stale or belongs to another registry query."}
+            raw_evidence = payload.get('evidence')
+            if record['state'] == 'AL' and isinstance(raw_evidence, dict) and raw_evidence.get('verification_pending') is True:
+                if record.get('al_verification_attempts', 0) >= 2:
+                    return 200, {'phase': 'complete', 'result': final_four_connector_failure(
+                        record, 'NY_CONNECTOR_AL_VERIFICATION_REQUIRED')}
+                try:
+                    return 200, al_verification_continuation(record, raw_evidence)
+                except Exception as exc:
+                    # OCR/native-runtime failures cannot become an HTTP failure or
+                    # a negative registry result. Never log image/code material.
+                    safe_reason = str(exc) if str(exc) in {
+                        'Invalid Alabama verification continuation', 'Alabama check expired before verification',
+                        'Invalid Alabama verification image', 'Invalid Alabama verification dimensions',
+                        'Alabama verification reader busy', 'Blank Alabama verification image',
+                        'Alabama verification image deadline', 'Alabama verification image is uncertain'} else type(exc).__name__
+                    log_event('AL verification reader incomplete: ' + safe_reason)
+                    if safe_reason == 'Alabama verification image is uncertain':
+                        recovery = al_uncertain_image_recovery(record, time.time())
+                        if recovery is not None:
+                            return 200, recovery
+                    reason = ('NY_CONNECTOR_AL_IMAGE_UNCERTAIN' if safe_reason in {
+                        'Invalid Alabama verification image', 'Invalid Alabama verification dimensions',
+                        'Blank Alabama verification image', 'Alabama verification image is uncertain'} else
+                        'NY_CONNECTOR_AL_READER_UNAVAILABLE')
+                    reader_stage = {
+                        'Invalid Alabama verification continuation': 'CONTINUATION_INVALID',
+                        'Alabama check expired before verification': 'STATE_EXPIRED',
+                        'Invalid Alabama verification image': 'IMAGE_INVALID',
+                        'Invalid Alabama verification dimensions': 'IMAGE_DIMENSIONS',
+                        'Alabama verification reader busy': 'READER_BUSY',
+                        'Blank Alabama verification image': 'IMAGE_BLANK',
+                        'Alabama verification image deadline': 'READER_DEADLINE',
+                        'Alabama verification image is uncertain': 'READS_UNCERTAIN',
+                    }.get(safe_reason, 'READER_EXCEPTION')
+                    return 200, {'phase': 'complete', 'result': final_four_connector_failure(
+                        record, reason, diagnostic=reader_stage)}
             try:
-                return 200, al_verification_continuation(record, raw_evidence)
-            except Exception as exc:
-                # OCR/native-runtime failures cannot become an HTTP failure or
-                # a negative registry result. Never log image/code material.
-                safe_reason = str(exc) if str(exc) in {
-                    'Invalid Alabama verification continuation', 'Alabama check expired before verification',
-                    'Invalid Alabama verification image', 'Invalid Alabama verification dimensions',
-                    'Alabama verification reader busy', 'Blank Alabama verification image',
-                    'Alabama verification image deadline', 'Alabama verification image is uncertain'} else type(exc).__name__
-                log_event('AL verification reader incomplete: ' + safe_reason)
-                if safe_reason == 'Alabama verification image is uncertain':
-                    recovery = al_uncertain_image_recovery(record, time.time())
-                    if recovery is not None:
-                        return 200, recovery
-                reason = ('NY_CONNECTOR_AL_IMAGE_UNCERTAIN' if safe_reason in {
-                    'Invalid Alabama verification image', 'Invalid Alabama verification dimensions',
-                    'Blank Alabama verification image', 'Alabama verification image is uncertain'} else
-                    'NY_CONNECTOR_AL_READER_UNAVAILABLE')
-                reader_stage = {
-                    'Invalid Alabama verification continuation': 'CONTINUATION_INVALID',
-                    'Alabama check expired before verification': 'STATE_EXPIRED',
-                    'Invalid Alabama verification image': 'IMAGE_INVALID',
-                    'Invalid Alabama verification dimensions': 'IMAGE_DIMENSIONS',
-                    'Alabama verification reader busy': 'READER_BUSY',
-                    'Blank Alabama verification image': 'IMAGE_BLANK',
-                    'Alabama verification image deadline': 'READER_DEADLINE',
-                    'Alabama verification image is uncertain': 'READS_UNCERTAIN',
-                }.get(safe_reason, 'READER_EXCEPTION')
-                return 200, {'phase': 'complete', 'result': final_four_connector_failure(
-                    record, reason, diagnostic=reader_stage)}
-        try:
-            evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
-        except (ValueError, TypeError, KeyError):
-            return 200, {"phase": "complete", "result": final_four_connector_failure(
-                record, diagnostic="SERVER_EVIDENCE_REJECTED")}
-        from deployment.state_snapshots import connector_archive
-        connector_archive(record,payload,pending['query'],evidence)
-        # Optional history counts the validated source response before the
-        # existing master compacts unrelated rows. Matching is unchanged.
-        history_evidence = evidence
-        evidence = final_four_compact_search_evidence(record, evidence)
-        from deployment.search_history import safe_complete_receipt
-        record["completed"].append({"query": pending["query"], "evidence": evidence, **safe_complete_receipt(record,pending,history_evidence,time.time())})
-        record["pending"] = None
+                evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
+            except (ValueError, TypeError, KeyError):
+                return 200, {"phase": "complete", "result": final_four_connector_failure(
+                    record, diagnostic="SERVER_EVIDENCE_REJECTED")}
+            from deployment.state_snapshots import connector_archive
+            connector_archive(record,payload,pending['query'],evidence)
+            # Optional history counts the validated source response before the
+            # existing master compacts unrelated rows. Matching is unchanged.
+            history_evidence = evidence
+            evidence = final_four_compact_search_evidence(record, evidence)
+            from deployment.search_history import safe_complete_receipt
+            record["completed"].append({"query": pending["query"], "evidence": evidence, **safe_complete_receipt(record,pending,history_evidence,time.time())})
+            record["pending"] = None
     names = {canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
     context = REVIEWED_NAME_CONTEXT.set(names)
     identity_context = USER_IDENTITY_CONTEXT.set(record.get("identity_context", {}))
