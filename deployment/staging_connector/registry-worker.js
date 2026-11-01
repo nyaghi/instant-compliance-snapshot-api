@@ -1090,7 +1090,7 @@ async function performRegistryQuery(job, query) {
     }
     const url=registryStart('NM')+'CharityDetail.aspx?FEIN='+query.identifier.slice(0,2)+'-'+query.identifier.slice(2);
     await wfAwait(job,"registry-worker.js:performRegistryQuery:1005:4:await",()=>(registryNavigate(job,url,Math.min(30000,job.activeExpiresAt-Date.now()))));
-    return wfReturn(job,"registry-worker.js:performRegistryQuery:1006:4:return",(registryMessage(job,{action:'registry-nm-detail',query,documentBudgetMs:Math.max(0,Math.min(6000,job.activeExpiresAt-Date.now()-2000))})));
+    return wfReturn(job,"registry-worker.js:performRegistryQuery:1006:4:return",(registryMessage(job,{action:'registry-nm-detail',query})));
   }
   if (query.state === "AL") {
     if (job.tab === null && trialAlIdle) {

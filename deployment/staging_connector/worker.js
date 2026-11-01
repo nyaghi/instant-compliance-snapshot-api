@@ -729,16 +729,10 @@ async function performSearch(job, query, id) {
     // A failed profile capture is not retried against the later filings page.
     const snapshot=useNc?preparedNc.snapshot:await wfAwait(job,"worker.js:performSearch:674:45:await",()=>(captureStateSnapshot(job,query,id,job.registryState==='AL'&&alCompletedSource&&Number.isInteger(response.evidence.total)&&response.evidence.total>0&&Array.isArray(response.evidence.rows)&&response.evidence.rows.length===response.evidence.total?{kind:'al-completed-record',command_id:id,query}:preparedNvMetadata)));
     if(snapshot){
-      if(P.TRIAL_ORIGIN && job.registryState==='NM' && query.operation==='detail' && response.nm_registration_document)
-        snapshot.registration_document=response.nm_registration_document;
       response.state_snapshot=snapshot;
       if(alEmptySource)job.alEmptySnapshotSaved=true;
     }
   }
-  if(P.TRIAL_ORIGIN && job.registryState==='NM' && response.nm_document_diagnostic)
-    diagnostic('nm-registration-document',job,JSON.stringify(response.nm_document_diagnostic));
-  delete response.nm_registration_document;
-  delete response.nm_document_diagnostic;
   if (job.closed) return wfReturn(job,"worker.js:performSearch:680:18:return",undefined);
   job.pending = null;
   if (P.TRIAL_ORIGIN && job.registryState === "NY" && response.ok && !Object.hasOwn(query, "orgID")) {
