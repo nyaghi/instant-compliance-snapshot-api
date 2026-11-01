@@ -3772,7 +3772,7 @@ def irs_latest_period(ein: str, deadline: float) -> dict:
     return {}
 
 
-def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
+def irs_period_for_label(ein: str, label: int, deadline: float, *, scanned_deadline: float | None = None) -> dict:
     """A same-year IRS return resolves the period, never proves another state received it."""
     ein = canonical_ein_digits(ein); key = (ein, label)
     with TAX_PERIOD_EVIDENCE_LOCK:
@@ -3814,7 +3814,8 @@ def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
             alternate_step = "Hawaii organization page"
             source = identity_fetch(url, deadline, headers={"Accept": "text/html"}).decode("utf-8", "replace")
             alternate_step = "Hawaii Form 990 attachment"
-            evidence = hi_attachment_period(source, ein, label, deadline)
+            evidence = hi_attachment_period(source, ein, label, deadline,
+                **({"scanned_deadline": scanned_deadline} if scanned_deadline is not None else {}))
             if evidence:
                 evidence["period_basis"] = "Same-EIN, same-tax-year Form 990 publicly filed in Hawaii"
         except urllib.error.HTTPError as exc:
@@ -3929,11 +3930,16 @@ def irs_scanned_period_fields(picture, rows, ocr, ein, label, url, deadline):
     return {}
 
 
-def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float, *, require_complete: bool = False, legacy_heights: dict | None = None) -> dict:
+def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float, *, require_complete: bool = False, legacy_heights: dict | None = None, first_page_deadline: float | None = None) -> dict:
     """Read bounded header crops; OCR never treats empty boxes as calendar proof."""
     global IRS_HEADER_OCR, IRS_HEADER_TITLE_OCR
     acquired = False
     header_read = False
+    original_deadline = deadline
+    first_stop = (first_page_deadline if require_complete and 0 in (legacy_heights or {})
+                  and isinstance(first_page_deadline, (int, float))
+                  and deadline < first_page_deadline <= deadline + 14.0 else deadline)
+    deadline = first_stop
     def incomplete(reason):
         if require_complete: raise FilingPeriodReadIncomplete(reason)
         return {}
@@ -3948,6 +3954,7 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
             IRS_HEADER_TITLE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_type="max", det_limit_side_len=1600)
         ordered = sorted(images, key=lambda entry: entry[0])
         for page_index, full_picture in ordered:
+            deadline = first_stop if page_index == 0 else original_deadline
             original_height = (legacy_heights or {}).get(page_index)
             picture = (full_picture if original_height is None else
                        full_picture.crop((0,0,full_picture.width,original_height)))
@@ -3997,7 +4004,7 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
     return incomplete("The same-EIN filing fiscal period was not readable")
 
 
-def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None, *, require_complete: bool = False) -> dict:
+def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None, *, require_complete: bool = False, scanned_deadline: float | None = None) -> dict:
     """Read only the return/8879 header; support separately positioned PDF text."""
     def incomplete(reason):
         if require_complete: raise FilingPeriodReadIncomplete(reason)
@@ -4074,8 +4081,19 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
         IRS_PDF_TEXT_LOCK.release()
     if not scanned_images:
         return {} if header_read or not require_complete else incomplete("The same-EIN filing header was not found")
-    return irs_scanned_header_period(scanned_images, ein, label, url, deadline, require_complete=require_complete,
-                                     legacy_heights=legacy_heights)
+    # Network and PDF-text work keep the original allowance. Only a fully
+    # retrieved/rendered first scanned header can use the KY completion reserve.
+    first_stop = (scanned_deadline if require_complete and 0 in legacy_heights
+                  and time.monotonic() < deadline and isinstance(scanned_deadline, (int, float))
+                  and deadline < scanned_deadline <= deadline + 14.0 else None)
+    evidence = irs_scanned_header_period(scanned_images, ein, label, url, deadline, require_complete=require_complete,
+        legacy_heights=legacy_heights, **({"first_page_deadline": first_stop} if first_stop is not None else {}))
+    if first_stop is not None:
+        if time.monotonic() >= first_stop: return incomplete("Scanned first-header completion allowance reached")
+        if evidence:
+            evidence = dict(evidence, scanned_completion_reserve={"maximum_extra_seconds": 14.0,
+                "original_deadline_exceeded": time.monotonic() >= deadline, "page": 1})
+    return evidence
 
 
 def hi_group_return_period(body: bytes, ein: str, label: int, url: str, deadline: float) -> dict:
@@ -4141,7 +4159,7 @@ def hi_group_return_period(body: bytes, ein: str, label: int, url: str, deadline
     return period
 
 
-def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> dict:
+def hi_attachment_period(source: str, ein: str, label: int, deadline: float, *, scanned_deadline: float | None = None) -> dict:
     digits = canonical_ein_digits(ein)
     pattern = r'<a\b[^>]*\brel="(/charity/attachments/irs/' + digits + '/' + str(label) + r'/[^"<>]+\.pdf)"[^>]*>([^<]+)'
     links = [(path, title) for path, title in re.findall(pattern, source, re.I) if re.search(r"IRSForm|990|Annual Financial", title, re.I)]
@@ -4156,7 +4174,8 @@ def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> 
                 cached = HI_DOCUMENT_PERIOD_CACHE.get(key)
             if cached and cached[0] > time.time(): return dict(cached[1])
             try:
-                evidence = form990_pdf_period(body, ein, label, url, deadline, require_complete=True)
+                evidence = form990_pdf_period(body, ein, label, url, deadline, require_complete=True,
+                    **({"scanned_deadline": scanned_deadline} if scanned_deadline is not None else {}))
             except FilingPeriodReadIncomplete as exc:
                 if str(exc) != "The same-EIN filing header was not found":
                     raise
@@ -29389,6 +29408,28 @@ def saint_university_canonical(value: str) -> tuple[str, ...]:
     return ()
 
 
+def ky_filed_period_evidence(org, label):
+    """Keep KY retrieval at14seconds; bound first scanned-header completion."""
+    started = time.monotonic()
+    original_stop = started + 14.0
+    scan_stop = None
+    if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
+        from deployment.state_snapshots import CURRENT, DEADLINE
+        from math import isfinite
+        run, parent = CURRENT.get(), DEADLINE.get()
+        if (run is not None and run.state == "KY" and run.ein == canonical_ein_digits(org.ein)
+                and run.name == org.organization_name and isinstance(parent, (int, float)) and isfinite(parent)):
+            original_stop = min(original_stop, parent - 1.0)
+            if original_stop <= started:
+                return {"ein": canonical_ein_digits(org.ein), "tax_year_label": label,
+                        "period_unconfirmed": True, "period_read_failure": "The original state lookup allowance was exhausted before the filing period could be read."}
+            bounded = min(started + 28.0, parent - 1.0)
+            if bounded > original_stop:
+                scan_stop = bounded
+    return irs_period_for_label(org.ein, label, original_stop,
+        **({"scanned_deadline": scan_stop} if scan_stop is not None else {}))
+
+
 def search_ky_strict_snapshot(org):
     result = checker.StateResult(
         org.organization_name,
@@ -29562,7 +29603,7 @@ def search_ky_strict_snapshot(org):
                else "under strict master-code validation.")
         )
         if filed_year and re.fullmatch(r"20\d{2}", filed_year):
-            evidence = irs_period_for_label(org.ein, int(filed_year), time.monotonic() + 14.0)
+            evidence = ky_filed_period_evidence(org, int(filed_year))
             if not evidence:
                 evidence = assumed_calendar_period(org.ein, int(filed_year), downloadable_data_info("KY").get("source_url", ""))
             evidence.update(state_source_url=downloadable_data_info("KY").get("source_url", ""))
