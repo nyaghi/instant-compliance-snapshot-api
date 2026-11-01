@@ -60,9 +60,19 @@
           ||p.selected_name!==before.matched_registry_name||p.selected_name!==d.name||p.prior_status!==before.status||p.prior_status!==d.prior_status
           ||p.prior_expiration!==d.expiration||p.prior_renewal_date!==before.renewal_date||p.prior_renewal_date!==d.prior_renewal_date
           ||p.prior_comments_sha256!==d.prior_comments_sha256||p.status!==after.status||p.expiration!==after.computed_due_date
-          ||p.issue_date!==after.renewal_date||p.source_url!==after.source_url||p.captured_at!==after.evidence_captured_at
+          ||p.source_url!==after.source_url||p.captured_at!==after.evidence_captured_at
           ||!Number.isFinite(p.captured_at)||p.captured_at<d.issued_at||p.captured_at>d.expires_at
           ||!['https://boss.dc.gov/licensing/license-details','https://boss.dc.gov/homepage/license-details'].includes(p.source_url)
+          )return false;
+      const filingKeys=['value','type','label','source_url','note'].map(k=>'renewal_filing_'+k);
+      if(p.period_effective_date_retained===true) {
+        if(d.prior_renewal_date_type!=='current_effective_date'||before.renewal_date_type!=='current_effective_date'
+            ||before.renewal_filing_type!=='current_effective_date'||before.renewal_filing_value!==d.prior_renewal_date
+            ||p.expiration!==d.expiration||typeof p.issue_date!=='string'||!/^\d{4}-\d\d-\d\d$/.test(p.issue_date)
+            ||p.issue_date>=d.prior_renewal_date||after.status!==before.status
+            ||['renewal_date','renewal_date_type','renewal_date_source_url','renewal_date_source_label','renewal_date_note',...filingKeys]
+              .some(k=>after[k]!==before[k]))return false;
+      } else if(Object.hasOwn(p,'period_effective_date_retained')||p.issue_date!==after.renewal_date
           ||after.renewal_date_type!=='current_issue_date'||after.renewal_date_source_label!=='Issue Date'
           ||after.renewal_filing_value!==p.issue_date||after.renewal_filing_type!=='current_issue_date'
           ||after.renewal_filing_label!=='Current registration issued'||after.renewal_filing_source_url!==p.source_url
