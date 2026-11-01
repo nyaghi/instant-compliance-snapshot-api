@@ -1951,8 +1951,8 @@
         const history=document.querySelector('#MainContent_GridViewStatuses');
         const financials=document.querySelector('#MainContent_GridViewFinancials');
         if(!history||!financials)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
-        // Only the public status history and fiscal periods are needed. Do
-        // not copy financial amounts, officers, contacts or documents.
+        // Status evidence remains unchanged. The optional original submitted
+        // registration is transported separately, never interpreted as status.
         const historyRows=[...history.rows].slice(1).map(r=>{
           if(r.cells.length!==3)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
           return [...r.cells].map(text);
@@ -1963,8 +1963,11 @@
           if(!period)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
           return {tax_year:Number(period[1]),period_start:period[2],period_end:period[3]};
         });
+        const filing=window.CCNmRegistrationDocument
+          ? await window.CCNmRegistrationDocument.capture(q,m.documentBudgetMs) : null;
         return {ok:true,evidence:{query:q,complete:true,name:match[1].trim(),ein:q.identifier,
-          history_rows:historyRows,financial_periods:periods}};
+          history_rows:historyRows,financial_periods:periods},
+          ...(filing?{nm_registration_document:filing.document,nm_document_diagnostic:filing.diagnostic}:{})};
       }
       throw new Error('REGISTRY_COMMAND_INVALID');
     }

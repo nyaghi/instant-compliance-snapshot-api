@@ -118,7 +118,8 @@ def validate_asset(asset, *, ein, state, run_id):
                 if high-low<8:raise ValueError('Blank source screenshot')
     elif kind=='source_pdf':
         from pypdf import PdfReader
-        if not raw.startswith(b'%PDF-') or not 1<=len(PdfReader(io.BytesIO(raw)).pages)<=12:raise ValueError('Invalid source PDF')
+        page_limit=101 if state=='NM' and asset.get('operation')=='detail_registration' else 12
+        if not raw.startswith(b'%PDF-') or not 1<=len(PdfReader(io.BytesIO(raw)).pages)<=page_limit:raise ValueError('Invalid source PDF')
     meta={k:asset.get(k,'') for k in ('organization_name','identifier','record_name','public_text','capture_note','query_id')}
     if any(not isinstance(v,str) or len(v)>20000 for v in meta.values()):raise ValueError('Invalid archive metadata')
     meta.update(state=state,ein=digits(ein),run_id=run_id,kind=kind,source_url=url,
@@ -1131,6 +1132,9 @@ def _connector_archive(record,payload,query,evidence):
                 source_url=url,captured_at=incoming['captured_at'],content=content,
                 identifier=ident,record_name=name,organization_name=record['organization_name'],operation='detail' if il_detail else query.get('operation',''),
                 public_text=text,query_id=str(payload['query_id']))
+            if record['state']=='NM' and query.get('operation')=='detail':
+                from deployment.nm_registration_document import append_to_asset
+                asset=append_to_asset(asset,incoming.get('registration_document'),record,query,evidence)
             ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id)
             # The complete metadata stays in persistent storage. Continuations
             # carry short references, never images or repeated source URLs.

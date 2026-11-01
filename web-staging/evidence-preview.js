@@ -70,7 +70,9 @@ try {
   if (bytes.byteLength > 25000000 || new TextDecoder().decode(bytes.subarray(0, 5)) !== '%PDF-') throw new Error('The saved PDF could not be previewed.');
   original = bytes.slice(); controls();
   pdf = await getDocument({data: bytes, isEvalSupported: false, enableXfa: false,
-    cMapUrl: './assets/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: './assets/pdfjs/standard_fonts/', wasmUrl: './assets/pdfjs/wasm/'}).promise;
+    cMapUrl: new URL('./assets/pdfjs/cmaps/', import.meta.url).href, cMapPacked: true,
+    standardFontDataUrl: new URL('./assets/pdfjs/standard_fonts/', import.meta.url).href,
+    wasmUrl: new URL('./assets/pdfjs/wasm/', import.meta.url).href}).promise;
   if (pdf.numPages > 100) { pdf = null; throw new Error('This PDF is too long to preview. Download the original PDF to view it.'); }
   await show(1);
 } catch (error) { setStatus(error.message || 'The saved PDF could not be opened.'); controls(); }
