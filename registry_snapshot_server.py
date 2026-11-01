@@ -8759,6 +8759,8 @@ def nc_specific_name_recovery(record, payload, now):
     """Admit one signed retrieval fallback, never treating failed rows as evidence."""
     pending = record.get("pending")
     if (record.get("state") != "NC" or record.get("mode") != "standard"
+            or record.get("recovery_protocol") != "nc-fresh-search-v1"
+            or record.get("nc_search_recovery")
             or payload.get("reason") != "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH"
             or record.get("nc_specific_name_recovery") or not pending
             or payload.get("query_id") != pending.get("query_id")
@@ -8950,6 +8952,7 @@ def final_four_connector_request(payload, origin):
         return 400, {"error": "A valid browser session identifier is required."}
     action = payload.get("action")
     now = time.time()
+    specific_nc_fresh_transport = False
     if action == "start":
         state, name, ein = payload.get("state"), payload.get("organization_name"), payload.get("ein")
         mode = payload.get("mode", "standard")
@@ -9025,6 +9028,7 @@ def final_four_connector_request(payload, origin):
             # verification challenge, detail lookup, or completed search.
             if (record["state"] == "NC" and record.get("recovery_protocol") == "nc-fresh-search-v1"
                     and reason in {"NY_CONNECTOR_TAB_READY_TIMEOUT", "NY_CONNECTOR_NC_SEARCH_NOT_STARTED"} and not record.get("nc_search_recovery")
+                    and not record.get("nc_specific_name_recovery")
                     and pending and pending["query"].get("operation") == "search"
                     and payload.get("query_id") == pending["query_id"]
                     and record["expires"] - now > (15 if record.get("mode") == "sales"
@@ -9039,6 +9043,7 @@ def final_four_connector_request(payload, origin):
                              "expires_in": max(0, int(record["expires"]-now))}
             if nc_specific_name_recovery(record, payload, now):
                 record["pending"] = None
+                specific_nc_fresh_transport = True
             else:
                 return 200, {"phase": "complete", "result": final_four_connector_failure(record, reason if isinstance(reason, str) else "")}
         if action == "advance":
@@ -9109,6 +9114,11 @@ def final_four_connector_request(payload, origin):
     if response["phase"] == "search":
         from deployment.search_history import mark_issued
         mark_issued(record,response,time.time())
+        if specific_nc_fresh_transport:
+            # Failed collectors close their owned connection. The existing NC
+            # recovery protocol must admit the replacement before its query.
+            response["recovery"] = {"action": "fresh_browser", "attempt": 1,
+                                    "reason": "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH"}
         try:
             response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"]-time.time())),
                             lookup_remaining_ms=max(0, int((record["expires"]-time.time())*1000)))
