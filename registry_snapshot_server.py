@@ -6951,7 +6951,7 @@ def nc_charity_record_evidence(fields):
                   and (kind in {"Charitable Organization", "CSL Exempt Organization"}
                        or kind == "In-Process" and raw == "In-Process"))
     unsupported_scope = kind == "Sponsor Organization" and bool(re.fullmatch(r"SL\d+", identifier))
-    unsupported_denied = kind == "Not Determined" and raw == "Denied" and not identifier
+    unsupported_denied = kind in {"Not Determined", "CSL Exempt Organization"} and raw == "Denied" and not identifier
     unsupported_inactive = kind == "In-Process" and raw == "Expired Inactive" and not identifier
     if not name or (not valid_kind and not unissued and not non_charity_scope and not unsupported_scope and not unsupported_denied and not unsupported_inactive):
         raise ValueError("North Carolina result is not an identified charity license")

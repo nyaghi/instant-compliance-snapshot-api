@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity \u2014 NC Complete Profile",
+  "name": "CharityClarity \u2014 NC/AL Guard Repair",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
-  "description": "Staging: complete original North Carolina profile evidence with existing NV/WI/NY corrections.",
+  "description": "Staging: retain source-bound denied NC exemption applications and complete tall positive AL source grids.",
   "permissions": [
     "storage",
     "browsingData",
@@ -131,5 +131,5 @@
       "run_at": "document_start"
     }
   ],
-  "version_name": "0.6.135 NV Return + WI/NY + NC Profile"
+  "version_name": "0.6.135 NC Denied + AL Tall Grid"
 }

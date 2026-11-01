@@ -1330,7 +1330,7 @@
           (fields.Status==='In-Process'||fields.Status==='Expired Inactive'||/\bWithdrawn\b/i.test(fields.Status||'')||
            /^(?:expired license|denied)$/i.test((fields.Status||'').trim()))||
         fields['CSL Type']==='Charitable Organization'&&fields.Status==='In-Process');
-      const unsupportedDenied=!fields.License&&fields['CSL Type']==='Not Determined'&&fields.Status==='Denied';
+      const unsupportedDenied=!fields.License&&['Not Determined','CSL Exempt Organization'].includes(fields['CSL Type'])&&fields.Status==='Denied';
       const unsupportedInactive=!fields.License&&fields['CSL Type']==='In-Process'&&fields.Status==='Expired Inactive';
       const numberless=pending||unsupportedDenied;
       if((unsupportedDenied||unsupportedInactive)&&(fields['Expiration Date']||fields['Extension End Date']))

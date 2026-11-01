@@ -504,7 +504,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
         // Layout clientWidth excludes that gutter; reusing it shrinks the page.
         if((nmRequiredDetail||alRequiredGrid||nyRequiredDetail||ncSelectedDetail)&&(!Number.isInteger(meta.source_viewport_width)||meta.source_viewport_width<view.clientWidth||meta.source_viewport_width>2400))return null;
         const width=(nyRequiredDetail||ncSelectedDetail)?meta.source_viewport_width:Math.ceil(Math.max(content.width,nmRequiredDetail?1000:0,(nmRequiredDetail||alRequiredGrid||nyRequiredDetail)?meta.source_viewport_width:view.clientWidth)),height=nmRequiredDetail?meta.source_record_bottom:Math.ceil(Math.max(content.height+32,view.clientHeight));
-        if(width<320||width>2400||height<200||height>(nmRequiredDetail?16000:nyRequiredDetail?20000000/width:3000)||width*height>20000000)return null;
+        if(width<320||width>2400||height<200||height>((nmRequiredDetail||alRequiredGrid)?16000:nyRequiredDetail?20000000/width:3000)||width*height>20000000)return null;
         desktopViewport=true;job.snapshotViewportBusy=true;
         observed.phase=state+'-full-viewport';
         await sampled(state+'-full-viewport',()=>chrome.debugger.sendCommand({tabId},'Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:0,mobile:false}));
