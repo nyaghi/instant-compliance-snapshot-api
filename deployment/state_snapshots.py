@@ -1085,6 +1085,9 @@ def _connector_archive(record,payload,query,evidence):
             rows=[('@completed-search',record['organization_name']),*rows]
         if al_completed_results_snapshot(record,query,evidence,url,text):
             rows=[('@completed-search',''),*rows]
+            # Retain exact reviewed-name references before the existing12-row archive cap.
+            reviewed={key(v) for v in [record.get('organization_name',''),*record.get('alternate_names',[])] if isinstance(v,str) and key(v)}
+            rows=sorted(rows,key=lambda row:key(row[1]) not in reviewed)
         if ga_completed_results_snapshot(record,query,evidence,url,text):
             # Search-only evidence must never compete with a numberless positive
             # registration by organization name. It is selected only for NR.
