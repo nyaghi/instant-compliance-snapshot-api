@@ -26347,7 +26347,14 @@ def pa_name_search_plan(org):
         if name and name.casefold() not in seen:
             names.append(name)
             seen.add(name.casefold())
-    return names[:10]
+    bounded = names[:10]
+    if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
+        reviewed_keys = {re.sub(r"\s+", " ", value).strip().casefold() for value in reviewed}
+        full_names = [value for value in bounded if value.casefold() in reviewed_keys]
+        # Reorder only this existing bounded list. A literal completed Contains
+        # response may cover a longer reviewed name; punctuation stays intact.
+        return sorted(full_names,key=len) + [value for value in bounded if value.casefold() not in reviewed_keys]
+    return bounded
 
 
 
@@ -26481,15 +26488,27 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
     try: budget = min(15.0, max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "15"))))
     except (ValueError, TypeError): budget = 15.0
     from deployment.state_snapshots import DEADLINE
-    deadline = min(time.monotonic() + budget, DEADLINE.get() - 1.0)
+    base_deadline = time.monotonic() + budget
+    deadline = min(base_deadline, DEADLINE.get() - 1.0)
+    progress_reserve_used = False
     attempts, attempted, collected = [], [], []
     for variant in pa_name_search_plan(org):
         # Only a completed contains response can cover a later literal extension.
         # A truncated broad response must never prune a more specific query.
         if any(entry.get("complete") and entry["name"].casefold() in variant.casefold() for entry in attempts):
             continue
+        reserve_added = 0.0
+        if (not progress_reserve_used and trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard"
+                and deadline-time.monotonic() <= 5 and len(attempts) >= 3
+                and all(entry.get("complete") and entry.get("row_count") == 0 for entry in attempts)):
+            extended = min(base_deadline+5.0, DEADLINE.get()-1.0)
+            if extended > deadline and time.monotonic() < extended:
+                reserve_added = extended-deadline
+                deadline = extended
+                progress_reserve_used = True
         attempted.append(variant)
         entry = {"step": "search", "ein": "", "name": variant, "complete": False}
+        if reserve_added: entry["progress_reserve_seconds"] = round(reserve_added,3)
         attempts.append(entry)
         started = time.monotonic()
         try:
