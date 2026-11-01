@@ -29,7 +29,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
   if(job.registryState==='GA'&&!Object.hasOwn(query,'identifier')&&(job.snapshotCaptures||0)>=3){observed.phase='detail-slot-reserved';trace();return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:29:143:return",(null));}
   const ilDetail=job.registryState==='IL'&&Object.hasOwn(query,'identifier');
   if(job.registryState==='IL'&&!ilDetail&&(job.snapshotCaptures||0)>=3){observed.phase='detail-slot-reserved';trace();return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:31:118:return",(null));}
-  if(!alive() || job.snapshotCleanupBusy || job.snapshotViewportBusy || job.ilTnSnapshotCleanupBusy || (job.registryState==='AL'&&job.alSnapshotCaptureBusy) || !chrome.debugger || (job.snapshotCaptures||0)>=(((job.registryState==='GA'&&Object.hasOwn(query,'identifier'))||(['NC','TN'].includes(job.registryState)&&query.operation==='detail'))?24:4)
+  if(!alive() || job.snapshotCleanupBusy || job.snapshotViewportBusy || job.ilTnSnapshotCleanupBusy || (job.registryState==='AL'&&job.alSnapshotCaptureBusy) || !chrome.debugger || (job.snapshotCaptures||0)>=(((job.registryState==='GA'&&Object.hasOwn(query,'identifier'))||(['NC','TN','NM'].includes(job.registryState)&&query.operation==='detail'))?24:4)
 
       || job.activeExpiresAt-Date.now()<4000){observed.phase='entry-rejected';trace();return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:34:86:return",(null));}
 

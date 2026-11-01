@@ -24341,6 +24341,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             result.matched_registry_name = ""
             result.matched_registry_identifier = ""
             body = result.raw_status_text
+    from deployment.short_alias_identity import apply as guard_short_alias_identity
+    guard_short_alias_identity(result, org, body, sys.modules[__name__])
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
     if organization_name:
@@ -24567,6 +24569,8 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
 
 
 def enrich_me_result_from_body(result, body: str) -> None:
+    if getattr(result, 'status_reason', '') == 'REGISTRY_ADDRESS_CONFLICT' or getattr(result, '_cc_identity_review', None):
+        return  # A readable Active label cannot erase unresolved identity.
     if getattr(result, "reason_code", "") == "ME_DETAIL_INCOMPLETE":
         return  # A search-row ACTIVE label cannot erase a failed expiration read.
     existing_status = " ".join([result.status or "", result.raw_status_text or ""])
@@ -28816,7 +28820,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return result.source_note
     if result.state == "ND" and getattr(result, "status_reason", "") == "ND_MATCHING_RECORDS_INACTIVE":
         return result.source_note
-    if getattr(result, "status_reason", "") == "REGISTRY_ADDRESS_CONFLICT":
+    if getattr(result, "status_reason", "") in {"REGISTRY_ADDRESS_CONFLICT", "SHORT_ALIAS_IDENTITY_UNCONFIRMED"}:
         return result.source_note
     evidence = getattr(result, "tax_period_evidence", {})
     if result.state in {"KY", "HI"} and evidence and getattr(result, "status_reason", "") == f"{result.state}_CONFIRMED_TAX_PERIOD":
@@ -33832,7 +33836,8 @@ def search_wv_public_details(org):
     result = search_wv_precise(None, org, public_lookup=lookup)
     # Keep the established browser completion path for negative searches,
     # incomplete data and any unexpected public-page format.
-    if not result.success or public_status(result) == "Not Registered":
+    if (not result.success and not (getattr(result, "reason_code", "") == "WV_SHORT_NAME_IDENTITY_UNCONFIRMED"
+            and getattr(result, "_cc_identity_review", None))) or public_status(result) == "Not Registered":
         return None
     return result, lookup.body
 
@@ -34142,10 +34147,23 @@ def search_wv_precise(page, org, *, public_lookup=None):
             address = reconciled_registry_address(org.ein, matched_name, location, registry_state="WV",
                 deadline=time.monotonic() + max(0, deadline - time.perf_counter()))
             if address.get("decision") == "conflict" or not (dba_confirmed or address.get("decision") == "corroborated"):
+                status_text = text_between_labels(detail_text, "Status", ["Street Address", "County", "DBA", "Tax Information", "Restrictions"]) or row_status
+                expiration_text = text_between_labels(detail_text, "Expiration Date", ["Contact Name", "Status", "Street Address", "County"]) or ""
                 result.status = "Needs Review"
                 result.reason_code = "WV_SHORT_NAME_IDENTITY_UNCONFIRMED"
-                result.source_note = "West Virginia returned a short organization name, but its detail DBA and organization address did not establish a consistent identity."
-                result.success = True
+                result.source_note = "West Virginia returned a short organization name, but its detail DBA and organization address did not establish a consistent identity. Review the original record and accept or reject its identity."
+                result.success = False
+                result.address_evidence = address
+                result.matched_registry_name = matched_name
+                result.matched_registry_identifier = registry_id
+                result.raw_status_text = f"Status: {status_text} | Expiration Date: {expiration_text} | WV ID: {registry_id}"
+                result.queries_attempted = completed_queries or searched_queries
+                candidate_status = wv_status_from_fields(status_text, expiration_text)
+                if registry_id and status_text and candidate_status not in {"Unknown", "Unable to Confirm", "Unable to Verify", "Needs Review"}:
+                    result._cc_identity_review = {"search_complete": False, "freshness": "", "records": [{
+                        "name": matched_name, "identifier": registry_id, "ein": "", "location": location,
+                        "url": WV_SEARCH_URL, "raw_status": status_text, "expiration": expiration_text,
+                        "license_category": "Charity", "status": candidate_status, "_identity_outcome": "conflict" if address.get("decision") == "conflict" else "possible"}]}
                 return result
             result.identity_evidence = {"detail_dba_confirmed": dba_confirmed, "address": address}
 
@@ -37014,7 +37032,7 @@ def attach_identity_review(data, context):
         if data['state']=='NJ' and row.get('nj_ein_conflict') is True:
             clean['nj_ein_conflict']=True
         clean["suggested"] = row.get("suggested") is True
-        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ"}:
+        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY"}:
             # Keep the master interpretation of complete state evidence in the
             # signed snapshot. Identity acceptance cannot substitute a generic
             # Active label for a filing-history or charity-scope decision.
@@ -37067,7 +37085,7 @@ def identity_review_wi_status(row):
 
 
 def identity_review_state_status(state, row):
-    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ"}:
+    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY"}:
         status = row.get("interpreted_status")
         return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
             "Pending", "Suspended", "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",

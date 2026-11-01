@@ -6,7 +6,7 @@ const CCDCSource=(()=>{
  const LABELS=['Licensee','Trade Name','License Category','License Activity','License Number','Premise Address','License Status','Issue Date','Expiration Date'];
  const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
  function articleKey(s){s=String(s||'').trim();const leading=/^THE\s+/i.test(s),trailing=/\(\s*THE\s*\)\s*\.?$/i.test(s);if(leading&&trailing)return norm(s);return norm(leading?s.replace(/^THE\s+/i,''):trailing?s.replace(/,?\s*\(\s*THE\s*\)\s*\.?$/i,''):s);}
- function reconcileRequest(d){return d.boss_reconcile_schema===1&&!Object.hasOwn(d,'review_candidate')&&['active','current','issued','approved'].includes(String(d.raw_status||'').toLowerCase())&&['charitable solicitation','charitable exempt'].includes(d.expected_activity)&&/^[a-f0-9]{64}$/.test(d.prior_comments_sha256||'')&&/^\d{4}-\d\d-\d\d$/.test(d.prior_renewal_date||'')&&['Current','Upcoming Filing','Delinquent','Exempt'].includes(d.prior_status);}
+ function reconcileRequest(d){return (!Object.hasOwn(d,'prior_renewal_date_type')||d.prior_renewal_date_type==='current_effective_date')&&d.boss_reconcile_schema===1&&!Object.hasOwn(d,'review_candidate')&&['active','current','issued','approved'].includes(String(d.raw_status||'').toLowerCase())&&['charitable solicitation','charitable exempt'].includes(d.expected_activity)&&/^[a-f0-9]{64}$/.test(d.prior_comments_sha256||'')&&/^\d{4}-\d\d-\d\d$/.test(d.prior_renewal_date||'')&&['Current','Upcoming Filing','Delinquent','Exempt'].includes(d.prior_status);}
  function sameName(a,b,d){return norm(a)===norm(b)||reconcileRequest(d)&&articleKey(a)===articleKey(b);}
 
  function valid(d){return d?.state==='DC'&&d.operation==='detail'&&d.url===SEARCH&&/^\d{9}$/.test(d.ein)&&/^[a-f0-9]{32}$/.test(d.run_id)&&/^\d{5,16}$/.test(d.identifier)&&typeof d.name==='string'&&d.name.length>0&&d.name.length<=300&&typeof d.raw_status==='string'&&d.raw_status.length>0&&d.raw_status.length<=100&&/^\d{4}-\d\d-\d\d$/.test(d.expiration)&&Number.isFinite(d.issued_at)&&Number.isFinite(d.expires_at)&&d.expires_at>d.issued_at&&(!Object.hasOwn(d,'deadline_schema')||d.deadline_schema===1)&&d.expires_at-d.issued_at<=(d.deadline_schema===1?300.1:60.1)&&Date.now()/1000>=d.issued_at-5&&Date.now()/1000<d.expires_at&&(!Object.hasOwn(d,'boss_reconcile_schema')||reconcileRequest(d));}
@@ -25,7 +25,7 @@ const CCDCSource=(()=>{
   if(!validDate(expiry)||!validDate(issue))return null;
   if(reconcileRequest(d)){
    const observedDay=new Date(d.issued_at*1000).toISOString().slice(0,10);
-   if(f['License Activity'].toLowerCase()!==d.expected_activity||expiry<d.expiration||issue<d.prior_renewal_date||issue>expiry||issue>observedDay||(expiry>d.expiration&&issue<=d.prior_renewal_date))return null;
+   if(f['License Activity'].toLowerCase()!==d.expected_activity||expiry<d.expiration||issue>expiry||issue>observedDay||(!(d.prior_renewal_date_type==='current_effective_date'&&expiry===d.expiration)&&(issue<d.prior_renewal_date||(expiry>d.expiration&&issue<=d.prior_renewal_date))))return null;
   }else if(expiry!==d.expiration)return null;
   return f;
  }

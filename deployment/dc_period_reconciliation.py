@@ -37,7 +37,8 @@ def request_fields(run,result,review):
     try:date.fromisoformat(result['renewal_date'])
     except (KeyError,ValueError,TypeError):return {}
     return {'boss_reconcile_schema':1,'expected_activity':activity,'prior_status':result['status'],
-        'prior_renewal_date':result['renewal_date'],'prior_comments_sha256':digest(result.get('comments'))}
+        'prior_renewal_date':result['renewal_date'],'prior_comments_sha256':digest(result.get('comments')),
+        **({'prior_renewal_date_type':'current_effective_date'} if result.get('renewal_date_type')=='current_effective_date' else {})}
 
 def request_matches_period(result,request):
     if 'boss_reconcile_schema'not in request:return True
@@ -47,6 +48,7 @@ def request_matches_period(result,request):
         or result.get('address_evidence',{}).get('decision')!='corroborated'
         or result.get('status')!=request.get('prior_status')
         or result.get('renewal_date')!=request.get('prior_renewal_date')
+        or ('prior_renewal_date_type' in request and (request['prior_renewal_date_type']!='current_effective_date' or result.get('renewal_date_type')!='current_effective_date'))
         or digest(result.get('comments'))!=request.get('prior_comments_sha256')):return False
     try:date.fromisoformat(request['prior_renewal_date'])
     except (ValueError,KeyError,TypeError):return False
@@ -60,8 +62,9 @@ def period_allowed(fields,request):
         prior=date.fromisoformat(request['expiration']);prior_issue=date.fromisoformat(request['prior_renewal_date'])
         observed_day=datetime.fromtimestamp(request['issued_at'],timezone.utc).date()
         return (fields['License Activity'].lower()==request['expected_activity']
-            and expiry>=prior and prior_issue<=issue<=min(expiry,observed_day)
-            and (expiry==prior or issue>prior_issue))
+            and expiry>=prior and issue<=min(expiry,observed_day)
+            and ((request.get('prior_renewal_date_type')=='current_effective_date' and expiry==prior)
+                 or (prior_issue<=issue and (expiry==prior or issue>prior_issue))))
     except (ValueError,KeyError,TypeError,OverflowError,OSError):return False
 
 def completed_update(result,payload):
@@ -92,6 +95,17 @@ def completed_update(result,payload):
         'renewal_date_source_label':'Issue Date','renewal_date_source_url':payload['url'],
         'renewal_date_note':'Current license issue date from BOSS; not the date a renewal application was submitted.',
         'dc_source_reconciliation':proof}
+    if request.get('prior_renewal_date_type')=='current_effective_date' and issue.isoformat()<request['prior_renewal_date']:
+        # BOSS Issue Date and extract License Start Date are different facts.
+        # Keep the existing sourced period-effective projection; do not relabel
+        # an older license issue as the current renewal. The image still binds
+        # to this exact license, activity, standing and nonregressing expiry.
+        for key in ('renewal_date','renewal_date_type','renewal_date_note',
+                    'renewal_date_source_url','renewal_date_source_label'):
+            if key in result:update[key]=result[key]
+        proof['period_effective_date_retained']=True
+        update['comments'] += (f" BOSS labels its license Issue Date {issue.isoformat()}; the extract's separately sourced "
+            f"current-period effective date {request['prior_renewal_date']} is retained.")
     # Public results already contain a separate renewal/filing projection used
     # by the table and Excel export. Recompute it with the existing master
     # policy in this same atomic update; retaining it would display an old date.
