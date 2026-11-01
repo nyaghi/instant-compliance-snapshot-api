@@ -1,5 +1,5 @@
 {
-  "provenance": "Original MT failed run result fields, plus visible public BOSS detail transcription observed2026-10-31T22:04:08Z; exact portal publication time relative to initial run unknown. Request timestamps rebased only in offline tests.",
+  "provenance": "Original MT failed run result fields, plus visible public BOSS detail transcription observed2026-10-31T22:04:08Z; exact portal publication time relative to initial run unknown. Request timestamps rebased only in offline tests. Five existing renewal_filing presentation fields retained from November1 NB baseline; these fields were omitted in the original local fixture.",
   "result": {
     "state": "DC",
     "ein": "23-2792333",
@@ -22,7 +22,12 @@
     "identity_anchor": "MATCH_NAME_EXACT",
     "registration_date": "2014-11-20",
     "renewal_date": "2024-11-01",
-    "app_version": "2026.09.29.2-performance-lab"
+    "app_version": "2026.09.29.2-performance-lab",
+    "renewal_filing_value": "2024-11-01",
+    "renewal_filing_type": "current_effective_date",
+    "renewal_filing_label": "Current period effective",
+    "renewal_filing_source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/FEEDS/DCRA/FeatureServer/0/query?where=CUSTOMERNUMBER%3D%27400215000055%27&outFields=%2A&returnGeometry=false&f=pjson",
+    "renewal_filing_note": "Effective date of the current registration period; the state does not separately identify a completed renewal date."
   },
   "fields": {
     "Licensee": "ERM GROUP FOUNDATION, INC. (THE)",

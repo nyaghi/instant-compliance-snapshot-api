@@ -35,6 +35,17 @@ class PeriodReconciliation(unittest.TestCase):
         self.assertNotIn('registration_date',update);self.assertNotIn('matched_registry_name',update)
         self.assertIn('2026-10-31',update['comments']);self.assertIn('2028-10-31',update['comments'])
         self.assertEqual(self.result,original);self.assertNotIn('evidence_url',update)
+    def test_existing_display_projection_is_recomputed_with_the_source_period(self):
+        # The original fixture omitted these five fields present in the public
+        # result. They take precedence over renewal_date in the real UI/export.
+        self.assertEqual(self.result['renewal_filing_value'],'2024-11-01')
+        update=p.completed_update(self.result,self.payload)
+        self.assertEqual(update['renewal_filing_value'],'2026-10-30')
+        self.assertEqual(update['renewal_filing_type'],'current_issue_date')
+        self.assertEqual(update['renewal_filing_label'],'Current registration issued')
+        self.assertEqual(update['renewal_filing_source_url'],self.payload['url'])
+        self.assertEqual(update['renewal_filing_note'],update['renewal_date_note'])
+        self.assertEqual(p.public_completed_fields({**self.result,**update})['renewal_filing_value'],'2026-10-30')
     def test_period_and_evidence_share_one_persisted_update_and_failed_archive_changes_nothing(self):
         original=copy.deepcopy(self.result)
         with tempfile.TemporaryDirectory()as folder:
@@ -84,6 +95,8 @@ class PeriodReconciliation(unittest.TestCase):
         public=p.public_completed_fields(settled)
         self.assertEqual(public['status'],'Current');self.assertEqual(public['comments'],update['comments'])
         self.assertEqual(public['renewal_date'],'2026-10-30');self.assertEqual(public['dc_source_reconciliation'],update['dc_source_reconciliation'])
+        self.assertEqual(public['renewal_filing_value'],'2026-10-30')
+        self.assertEqual(public['renewal_filing_label'],'Current registration issued')
         self.assertEqual(p.public_completed_fields(self.result),{})
     def test_actual_public_poll_projection_retains_the_new_period_and_source_together(self):
         from deployment.staging_workflows import public_result
@@ -94,6 +107,8 @@ class PeriodReconciliation(unittest.TestCase):
                 public=public_result(m,{'phase':'done','state':'DC','result':settled},{'ein':self.run.ein,'states':['DC']})
             self.assertEqual(public['status'],'Current');self.assertEqual(public['comments'],update['comments'])
             self.assertEqual(public['renewal_date'],'2026-10-30');self.assertEqual(public['evidence_url'],update['evidence_url'])
+            self.assertEqual(public['renewal_filing_value'],'2026-10-30')
+            self.assertEqual(public['renewal_filing_label'],'Current registration issued')
             self.assertFalse(public['confirmation_required']);self.assertNotIn('desktop_evidence_request',public)
             self.assertEqual(public['registration_date'],self.result['registration_date'])
 

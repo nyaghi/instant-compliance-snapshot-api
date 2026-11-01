@@ -48,7 +48,8 @@
         && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(y.evidence_url||'');
     }
     const dcPeriodKeys=['status','success','comments','computed_due_date','source_url','renewal_date',
-      'renewal_date_type','renewal_date_note','renewal_date_source_url','renewal_date_source_label','dc_source_reconciliation'];
+      'renewal_date_type','renewal_date_note','renewal_date_source_url','renewal_date_source_label',
+      'renewal_filing_value','renewal_filing_type','renewal_filing_label','renewal_filing_source_url','renewal_filing_note','dc_source_reconciliation'];
     function sameDcPeriod(before,after) {
       const d=before.desktop_evidence_request,p=after.dc_source_reconciliation;
       if(before.state!=='DC'||d?.boss_reconcile_schema!==1||d.review_candidate||before.confirmation_required||before.identity_review
@@ -62,7 +63,10 @@
           ||p.issue_date!==after.renewal_date||p.source_url!==after.source_url||p.captured_at!==after.evidence_captured_at
           ||!Number.isFinite(p.captured_at)||p.captured_at<d.issued_at||p.captured_at>d.expires_at
           ||!['https://boss.dc.gov/licensing/license-details','https://boss.dc.gov/homepage/license-details'].includes(p.source_url)
-          ||after.renewal_date_type!=='current_issue_date'||after.renewal_date_source_label!=='Issue Date')return false;
+          ||after.renewal_date_type!=='current_issue_date'||after.renewal_date_source_label!=='Issue Date'
+          ||after.renewal_filing_value!==p.issue_date||after.renewal_filing_type!=='current_issue_date'
+          ||after.renewal_filing_label!=='Current registration issued'||after.renewal_filing_source_url!==p.source_url
+          ||typeof after.renewal_date_note!=='string'||!after.renewal_date_note||after.renewal_filing_note!==after.renewal_date_note)return false;
       return ['state','ein','organization_name','matched_registry_identifier','matched_registry_name','raw_status_text','execution_version']
         .every(key=>!Object.hasOwn(after,key)||after[key]===before[key]);
     }

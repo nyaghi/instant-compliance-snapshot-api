@@ -5,9 +5,11 @@ standing/activity keep the strict legacy path; no evidence-only date override.
 """
 import hashlib,re
 from datetime import date,datetime,timezone
+from types import SimpleNamespace
 
 PUBLIC_KEYS=('status','success','comments','computed_due_date','source_url','renewal_date',
  'renewal_date_type','renewal_date_note','renewal_date_source_url','renewal_date_source_label',
+ 'renewal_filing_value','renewal_filing_type','renewal_filing_label','renewal_filing_source_url','renewal_filing_note',
  'dc_source_reconciliation')
 ACTIVITIES={'charitable solicitation','charitable exempt'}
 STANDINGS={'active','current','issued','approved'}
@@ -85,11 +87,16 @@ def completed_update(result,payload):
         'prior_renewal_date':request['prior_renewal_date'],'prior_comments_sha256':request['prior_comments_sha256'],
         'issue_date':issue.isoformat(),'expiration':expiry.isoformat(),'status':standing,
         'captured_at':payload['captured_at'],'source_url':payload['url']}
-    return {'status':standing,'success':True,'comments':comments,'computed_due_date':expiry.isoformat(),
+    update={'status':standing,'success':True,'comments':comments,'computed_due_date':expiry.isoformat(),
         'source_url':payload['url'],'renewal_date':issue.isoformat(),'renewal_date_type':'current_issue_date',
         'renewal_date_source_label':'Issue Date','renewal_date_source_url':payload['url'],
         'renewal_date_note':'Current license issue date from BOSS; not the date a renewal application was submitted.',
         'dc_source_reconciliation':proof}
+    # Public results already contain a separate renewal/filing projection used
+    # by the table and Excel export. Recompute it with the existing master
+    # policy in this same atomic update; retaining it would display an old date.
+    update.update(master.renewal_filing_metadata(SimpleNamespace(**{**result,**update}),update,standing))
+    return update
 
 def public_completed_fields(result):
     proof=result.get('dc_source_reconciliation')
