@@ -538,6 +538,7 @@ ORG_NAME_CACHE: dict[str, str] = {}
 PUBLIC_PROFILE_CACHE: dict[str, dict] = {}
 SALES_PROFILE_CONTEXT = ContextVar("sales_same_workflow_profile", default={})
 LAB_LOOKUP_MODE_CONTEXT = ContextVar("lab_lookup_mode", default="standard")
+NJ_NAME_QUERY_DEADLINE = ContextVar("nj_name_query_deadline", default=float("inf"))
 def load_checker():
     spec = importlib.util.spec_from_file_location("charity_state_checker_v9", CHECKER_PATH)
     if spec is None or spec.loader is None:
@@ -24723,7 +24724,7 @@ def nj_completed_future_detail(body,ein,credential=None):
 
 def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
     """Read a matched, populated detail frame, including one already open."""
-    deadline = time.monotonic() + wait_seconds
+    deadline = min(time.monotonic() + wait_seconds,NJ_NAME_QUERY_DEADLINE.get())
     while True:
         for frame in page.frames:
             if "CHR-Public-Details-Page" not in (frame.url or ""):
@@ -24783,7 +24784,7 @@ def nj_reload_detail_body(page, org) -> str:
     """Recover one stalled, already-selected NJ detail document without re-searching."""
     try:
         iframe = page.locator('iframe#modalIframe').first
-        source = iframe.get_attribute("src", timeout=1000) or ""
+        source = iframe.get_attribute("src", timeout=nj_query_timeout_ms(1000)) or ""
         url = urllib.parse.urljoin(page.url, source)
         parsed = urllib.parse.urlparse(url)
         parameters = urllib.parse.parse_qs(parsed.query)
@@ -24795,11 +24796,11 @@ def nj_reload_detail_body(page, org) -> str:
             or not parameters.get("rid")
         ):
             return ""
-        frame = iframe.element_handle(timeout=1000).content_frame()
+        frame = iframe.element_handle(timeout=nj_query_timeout_ms(1000)).content_frame()
         if frame is None:
             return ""
         try:
-            frame.goto(url, wait_until="domcontentloaded", timeout=15000)
+            frame.goto(url, wait_until="domcontentloaded", timeout=nj_query_timeout_ms(15000))
         except Exception:
             # A navigation timeout can still leave a usable populated document.
             pass
@@ -24833,7 +24834,7 @@ def nj_selected_public_detail(page, target, org) -> str:
         name, credential = row.get("name", "").strip(), row.get("credential", "").strip()
         if not name or not re.fullmatch(r"CH\d+", credential):
             return ""
-        deadline = time.monotonic() + 6.0
+        deadline = min(time.monotonic() + 6.0,NJ_NAME_QUERY_DEADLINE.get())
 
         def get(path: str, content_type: str) -> str:
             remaining = deadline - time.monotonic()
@@ -24904,7 +24905,7 @@ def nj_detail_body(page, org) -> str:
             and not getattr(org, "evidence_mode", False)
             and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
         return cached[1]
-    pieces = [registry_page_body(page)]
+    pieces = [nj_query_page_body(page)]
     loaded_detail = nj_loaded_detail_body(page, org)
     if loaded_detail:
         return "\n".join([*pieces, loaded_detail])
@@ -24940,8 +24941,8 @@ def nj_detail_body(page, org) -> str:
                 button = buttons.nth(i)
                 try:
                     row = button.locator("xpath=ancestor::*[@role='row'][1]")
-                    row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip() if row.count() else ""
-                    button_text = re.sub(r"\s+", " ", button.inner_text(timeout=1500)).strip()
+                    row_text = re.sub(r"\s+", " ", row.inner_text(timeout=nj_query_timeout_ms(1500))).strip() if row.count() else ""
+                    button_text = re.sub(r"\s+", " ", button.inner_text(timeout=nj_query_timeout_ms(1500))).strip()
                     score = score_nj_candidate(row_text, button_text, i)
                     if score[0] < 0:
                         continue
@@ -24957,9 +24958,9 @@ def nj_detail_body(page, org) -> str:
             for i in range(min(rows.count(), 80)):
                 row = rows.nth(i)
                 try:
-                    if not row.is_visible(timeout=750):
+                    if not row.is_visible(timeout=nj_query_timeout_ms(750)):
                         continue
-                    row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                    row_text = re.sub(r"\s+", " ", row.inner_text(timeout=nj_query_timeout_ms(1500))).strip()
                     score = score_nj_candidate(row_text, "", i)
                     if score[0] < 0:
                         continue
@@ -24981,7 +24982,7 @@ def nj_detail_body(page, org) -> str:
             page._cc_nj_selected_detail = (cache_key, body)
             return body
         try:
-            candidates[0][1].click(timeout=5000)
+            candidates[0][1].click(timeout=nj_query_timeout_ms(5000))
             clicked = True
         except Exception:
             clicked = False
@@ -24991,25 +24992,25 @@ def nj_detail_body(page, org) -> str:
         if loaded_detail:
             return "\n".join([*pieces, loaded_detail])
         try:
-            checker.safe_wait_for_network_idle(page, timeout=8000)
+            checker.safe_wait_for_network_idle(page, timeout=nj_query_timeout_ms(8000))
         except Exception:
             pass
-        time.sleep(1)
+        nj_query_sleep(1)
         for frame in page.frames:
             try:
                 if "CHR-Public-Details-Page" not in (frame.url or ""):
                     continue
-                frame.locator("body").wait_for(state="visible", timeout=3000)
+                frame.locator("body").wait_for(state="visible", timeout=nj_query_timeout_ms(3000))
                 for selector in ["#crsm_fiscalyearenddate", "text=/Fiscal Year End/i", "text=/Financial Statement/i"]:
                     try:
-                        frame.locator(selector).first.wait_for(state="attached", timeout=3000)
+                        frame.locator(selector).first.wait_for(state="attached", timeout=nj_query_timeout_ms(3000))
                         break
                     except Exception:
                         continue
                 for y in [0, 600, 1200, 1800, 2400]:
                     try:
                         frame.evaluate("(value) => window.scrollTo(0, value)", y)
-                        time.sleep(0.2)
+                        nj_query_sleep(0.2)
                     except Exception:
                         pass
                     try:
@@ -25020,7 +25021,7 @@ def nj_detail_body(page, org) -> str:
                     except Exception:
                         pass
                 try:
-                    pieces.append(frame.locator("body").inner_text(timeout=3000))
+                    pieces.append(frame.locator("body").inner_text(timeout=nj_query_timeout_ms(3000)))
                     pieces.append(frame.content())
                 except Exception:
                     pieces.append(frame.content())
@@ -25029,14 +25030,14 @@ def nj_detail_body(page, org) -> str:
                 continue
         for label in ["Filings", "Annual Filings", "Financial", "Documents", "View Details"]:
             try:
-                page.get_by_text(re.compile(label, re.I)).first.click(timeout=3000)
-                time.sleep(0.75)
+                page.get_by_text(re.compile(label, re.I)).first.click(timeout=nj_query_timeout_ms(3000))
+                nj_query_sleep(0.75)
                 break
             except Exception:
                 continue
         try:
             page.locator("body").evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(0.5)
+            nj_query_sleep(0.5)
         except Exception:
             pass
         for selector in ["[role='dialog']", ".ms-Dialog-main", ".ms-Modal-scrollableContent", ".ms-Panel-scrollableContent", ".modal-content"]:
@@ -25045,21 +25046,21 @@ def nj_detail_body(page, org) -> str:
                 for i in range(min(containers.count(), 5)):
                     container = containers.nth(i)
                     try:
-                        if not container.is_visible(timeout=750):
+                        if not container.is_visible(timeout=nj_query_timeout_ms(750)):
                             continue
                         container.evaluate("el => { el.scrollTop = el.scrollHeight; }")
-                        time.sleep(0.5)
+                        nj_query_sleep(0.5)
                     except Exception:
                         continue
             except Exception:
                 continue
         try:
-            page.get_by_text(re.compile(r"20\d{2}|Filing|Annual|Renewal|Financial", re.I)).last.scroll_into_view_if_needed(timeout=5000)
+            page.get_by_text(re.compile(r"20\d{2}|Filing|Annual|Renewal|Financial", re.I)).last.scroll_into_view_if_needed(timeout=nj_query_timeout_ms(5000))
             page.locator("body").evaluate("window.scrollBy(0, -140)")
-            time.sleep(0.5)
+            nj_query_sleep(0.5)
         except Exception:
             pass
-        pieces.append(registry_page_body(page))
+        pieces.append(nj_query_page_body(page))
 
     # A modal can finish loading after the first click/read or remain open on a retry.
     loaded_detail = nj_loaded_detail_body(page, org, wait_seconds=3.0)
@@ -25233,10 +25234,12 @@ def nj_name_exemption_result(data, org, deadline):
            "location": ", ".join(x for x in (city, region) if x), "region": region,
            "street": str(fields.get("crsm_addressline1") or ""),
            "postal_code": str(fields.get("crsm_mailingzip") or ""), "status": "Exempt", "raw_status": "Exempt"}
-    if licensed_charity_identity(org, row, "NJ", deadline) != "accepted":
-        return None
+    identity = licensed_charity_identity(org, row, "NJ", min(deadline,NJ_NAME_QUERY_DEADLINE.get()))
     exact_ein = canonical_ein_digits(row["ein"]) == canonical_ein_digits(org.ein)
-    if not exact_ein and row.get("address_evidence", {}).get("decision") != "corroborated":
+    if identity != "accepted" or not exact_ein and row.get("address_evidence", {}).get("decision") != "corroborated":
+        if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
+            from deployment.nj_unnumbered_review import candidate
+            return candidate(sys.modules[__name__],org,row,identity)
         return None
     result = checker.StateResult(org.organization_name, org.ein, "NJ", "Exempt",
         "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/")
@@ -25296,14 +25299,14 @@ def nj_search_body(page, query, identity_org=None):
     if ready:
         try:
             if page.locator('#modalIframe').is_visible():
-                page.locator('[role="dialog"]:has(#modalIframe) button[title="Close"]').click(timeout=1000)
-                page.locator('#modalIframe').wait_for(state="hidden", timeout=1000)
+                page.locator('[role="dialog"]:has(#modalIframe) button[title="Close"]').click(timeout=nj_query_timeout_ms(1000))
+                page.locator('#modalIframe').wait_for(state="hidden", timeout=nj_query_timeout_ms(1000))
             ready = box.is_visible()
         except Exception:
             ready = False
     if not ready:
-        page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    box.wait_for(state="visible", timeout=10000)
+        page.goto(url, wait_until="domcontentloaded", timeout=nj_query_timeout_ms(60000))
+    box.wait_for(state="visible", timeout=nj_query_timeout_ms(10000))
     page._cc_nj_query_diagnostic["reused_form"] = ready
     page._cc_nj_query_diagnostic["form_ready_seconds"] = round(time.monotonic() - observation_started, 2)
     started_requests = set()
@@ -25332,15 +25335,15 @@ def nj_search_body(page, query, identity_org=None):
     page.on("request", on_request)
     page.on("requestfinished", on_finished)
     try:
-        box.fill(query)
+        box.fill(query,**({"timeout":nj_query_timeout_ms(30000)} if NJ_NAME_QUERY_DEADLINE.get()!=float("inf") else {}))
         page.keyboard.press("Enter")
-        deadline = time.monotonic() + 12
+        deadline = min(time.monotonic() + 12,NJ_NAME_QUERY_DEADLINE.get())
         while time.monotonic() < deadline:
             if completed:
                 rows, data = completed[0] if identity_org is not None else completed[-1]
                 page._cc_nj_query_diagnostic["phase"] = "awaiting_matching_grid"
                 grid = page.locator('.public-search-grid')
-                text = re.sub(r"\s+", " ", grid.inner_text(timeout=1000))
+                text = re.sub(r"\s+", " ", grid.inner_text(timeout=nj_query_timeout_ms(1000)))
                 rendered_rows = [re.sub(r"\s+", " ", value) for value in grid.locator('[role="row"]').all_inner_texts()]
                 # Broad fallback queries use the portal's own scrolling grid.
                 # A prefix can justify reading more, never a negative result.
@@ -25372,7 +25375,7 @@ def nj_search_body(page, query, identity_org=None):
                                 rows[rows.length-1]?.scrollIntoView({block:'end',behavior:'instant'});
                                 el.scrollTop = el.scrollHeight;
                             }""")
-                        page.wait_for_timeout(100)
+                        page.wait_for_timeout(nj_query_timeout_ms(100))
                         continue
                     rows = [row for batch, _ in completed for row in batch]
                     data = joined
@@ -25386,8 +25389,8 @@ def nj_search_body(page, query, identity_org=None):
                     page._cc_nj_completed_data = data
                     page._cc_nj_query_diagnostic["phase"] = "complete"
                     page._cc_nj_query_diagnostic["elapsed_seconds"] = round(time.monotonic() - observation_started, 2)
-                    return page.locator("body").inner_text(timeout=1000)
-            page.wait_for_timeout(100)
+                    return page.locator("body").inner_text(timeout=nj_query_timeout_ms(1000))
+            page.wait_for_timeout(nj_query_timeout_ms(100))
         page._cc_nj_query_diagnostic["elapsed_seconds"] = round(time.monotonic() - observation_started, 2)
         return None
     finally:
@@ -25417,8 +25420,49 @@ def nj_zero_reuse_enabled() -> bool:
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
 
+def nj_query_timeout_ms(cap):
+    remaining = NJ_NAME_QUERY_DEADLINE.get()-time.monotonic()
+    if remaining <= 0: raise TimeoutError("NJ name query allowance exhausted")
+    return cap if remaining == float("inf") else max(1,min(cap,int(remaining*1000)))
+
+
+def nj_query_check():
+    if time.monotonic() >= NJ_NAME_QUERY_DEADLINE.get():
+        raise TimeoutError("NJ name query allowance exhausted")
+
+
+def nj_query_sleep(seconds):
+    remaining = NJ_NAME_QUERY_DEADLINE.get()-time.monotonic()
+    if remaining <= 0: raise TimeoutError("NJ name query allowance exhausted")
+    time.sleep(min(seconds,remaining))
+    nj_query_check()
+
+
+def nj_query_page_body(page):
+    if NJ_NAME_QUERY_DEADLINE.get() == float("inf"):
+        return registry_page_body(page)
+    pieces = []
+    try: pieces.append(page.locator("body").inner_text(timeout=nj_query_timeout_ms(8000)))
+    except Exception: pass
+    nj_query_check()
+    try: pieces.append(page.content())
+    except Exception: pass
+    nj_query_check()
+    return "\n".join(pieces)
+
+
+def nj_bounded_name_query(page, fallback_org, original_org, deadline):
+    token = NJ_NAME_QUERY_DEADLINE.set(deadline)
+    try:
+        nj_query_check()
+        result = search_nj_direct(page,fallback_org,identity_org=original_org)
+        nj_query_check()
+        return result
+    finally: NJ_NAME_QUERY_DEADLINE.reset(token)
+
+
 def nj_name_fallback_queries(org):
-    return build_search_queries(
+    queries = build_search_queries(
         org.organization_name,
         org.ein,
         include_ein=False,
@@ -25428,6 +25472,12 @@ def nj_name_fallback_queries(org):
         include_leading_article_variants=True,
         max_queries=int(os.environ.get("CE_NJ_NAME_FALLBACK_MAX_VARIANTS", "10")),
     )
+
+    if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
+        reviewed = {normalized_match_name(name) for name in [org.organization_name,*known_names_for_ein(org.ein)]}
+        return sorted(queries,key=lambda name:(normalized_match_name(name) not in reviewed,
+                                             len(distinctive_match_tokens(name)) < 2))
+    return queries
 
 
 def nj_complete_public_zero(data) -> bool:
@@ -25943,6 +25993,13 @@ def search_nj_direct(page, org, identity_org=None):
             return result
         exemption = nj_name_exemption_result(getattr(page, "_cc_nj_completed_data", None), identity_org or org, time.monotonic()+8)
         if exemption is not None:
+            if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
+                from deployment.nj_unnumbered_review import capture
+                try: capture(sys.modules[__name__],page,identity_org or org,getattr(page,"_cc_nj_completed_data",None))
+                except Exception:
+                    from deployment.state_snapshots import CURRENT
+                    run = CURRENT.get()
+                    if run is not None and run.state == "NJ": run.errors.append("nj_unnumbered_capture_unavailable")
             return exemption
         if re.search(r"no records found|no records|no matching|0 results", body, re.I):
             result.raw_status_text = "No record found"
@@ -26011,14 +26068,24 @@ def search_nj_with_name_fallback(page, org):
         fallback_budget_seconds = float(os.environ.get("CE_NJ_NAME_FALLBACK_SECONDS", "32"))
     except Exception:
         fallback_budget_seconds = 32.0
+    from deployment.state_snapshots import DEADLINE
+    bounded_trial = trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard"
+    fallback_deadline = (min(fallback_started+fallback_budget_seconds,DEADLINE.get()-1.0) if bounded_trial
+                         else fallback_started+fallback_budget_seconds)
     for variant in nj_name_fallback_queries(org):
         if variant in completed:
             continue
-        if time.monotonic() - fallback_started > fallback_budget_seconds:
+        if time.monotonic() >= fallback_deadline:
             return incomplete(result, "the remaining name searches exceeded their existing allowance")
         fallback_org = SimpleNamespace(organization_name=variant, ein="")
         query_started = time.monotonic()
-        fallback = search_nj_direct(page, fallback_org, identity_org=org)
+        try:
+            fallback = (nj_bounded_name_query(page,fallback_org,org,fallback_deadline) if bounded_trial
+                        else search_nj_direct(page,fallback_org,identity_org=org))
+        except TimeoutError:
+            observations.append({'query':variant,'status':'Unable to Confirm','reason_code':'NJ_NAME_PLAN_INCOMPLETE',
+                                 'seconds':round(time.monotonic()-query_started,2)})
+            return incomplete(result,"a name search reached the existing shared allowance")
         observations.append({'query': variant, 'status': public_status(fallback),
             'reason_code': getattr(fallback, 'reason_code', '') or '',
             'seconds': round(time.monotonic() - query_started, 2),
@@ -26036,7 +26103,7 @@ def search_nj_with_name_fallback(page, org):
                 and (type(value) is bool or type(value) in (int, float)
                      and 0 <= value <= 100000)}})
         if (public_status(fallback) == "Site Not Reachable"
-                or getattr(fallback, "reason_code", "") == "NJ_INCOMPLETE_QUERY_RESPONSE"):
+                or getattr(fallback, "reason_code", "") in {"NJ_INCOMPLETE_QUERY_RESPONSE","NJ_UNNUMBERED_EXEMPTION_REVIEW"}):
             return retain(copy_name_fallback_result(org, fallback))
         if public_status(fallback) == "Not Registered":
             continue
@@ -35545,7 +35612,10 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             elif state == "NJ":
                 result = search_nj_with_name_fallback(page, org)
                 if (public_status(result) != "Not Registered"
-                        and getattr(result, "reason_code", "") != "NJ_COMPLETE_UNNUMBERED_EXEMPTION"):
+                        and getattr(result, "reason_code", "") != "NJ_COMPLETE_UNNUMBERED_EXEMPTION"
+                        and not (trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard"
+                            and getattr(result,"reason_code","") in {"NJ_UNNUMBERED_EXEMPTION_REVIEW",
+                                "NJ_NAME_PLAN_INCOMPLETE","NJ_INCOMPLETE_QUERY_RESPONSE","NJ_INCOMPLETE_EIN_SEARCH"})):
                     body = nj_detail_body(page, org)
                     if nj_missing_period_result(result) and not workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34462:64:get',nj_filing_context_from_body(body).get,locals(), "computed_due_date"):
                         recovered_body = nj_reload_detail_body(page, org)

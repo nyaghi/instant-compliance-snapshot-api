@@ -613,6 +613,7 @@ class CaptureRun:
         except (ValueError,UnicodeError):return trace_return('deployment/state_snapshots.py:document:417:41:return',None)
     def page(self,page):
         """Capture before its existing context closes; do not navigate or scroll."""
+        if self.state=='NJ' and getattr(self,'nj_unnumbered_capture_guard',False):return
         started=time.perf_counter()
         ma_capture_end=min(DEADLINE.get()-1,getattr(self,'page_capture_stop',float('inf'))-1,time.monotonic()+8) if self.state=='MA' else None
         co_capture_end=min(DEADLINE.get()-1,getattr(self,'page_capture_stop',float('inf'))-1,time.monotonic()+8) if self.state=='CO' else None
@@ -722,6 +723,9 @@ class CaptureRun:
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))
+                if self.state=='NJ' and not negative and getattr(self,'nj_unnumbered_capture_guard',False):
+                    matched=(kind=='image' and url=='https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/'
+                        and getattr(self,'nj_unnumbered_image_bindings',{}).get(hashlib.sha256(raw).hexdigest())==(name,identifier))
                 if self.state=='SC' and not negative and getattr(self,'selected_visual_attempted',False):
                     matched=(kind=='image' and url=='https://search.scsos.com/charities'
                         and getattr(self,'sc_selected_image_bindings',{}).get(hashlib.sha256(raw).hexdigest())==(name,identifier))

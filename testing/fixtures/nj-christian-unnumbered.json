@@ -1,0 +1,58 @@
+{
+  "provenance": "Current public DOM transcription with completed visible1record result and observedHTTP200. No retained raw response JSON; response envelope below is modeled existingpublicschema. Source buttonproduced id=undefined/rid=undefined. No useridentitydecision.",
+  "fields": {
+    "accountnumber": "",
+    "crsm_addressline1": "17 HUGHES",
+    "crsm_federalein": "",
+    "crsm_filestanding": "Exempt",
+    "crsm_mailingcity": "IRVINE",
+    "crsm_mailingstate": "CA",
+    "crsm_mailingzip": "",
+    "name": "CHRISTIAN RESEARCH INSTITUTE"
+  },
+  "modeled_response": {
+    "ItemCount": 1,
+    "PageNumber": 1,
+    "MoreRecords": false,
+    "Success": true,
+    "Records": [
+      {
+        "Id": "fixture-public-record",
+        "Attributes": [
+          {
+            "Name": "accountnumber",
+            "DisplayValue": ""
+          },
+          {
+            "Name": "crsm_addressline1",
+            "DisplayValue": "17 HUGHES"
+          },
+          {
+            "Name": "crsm_federalein",
+            "DisplayValue": ""
+          },
+          {
+            "Name": "crsm_filestanding",
+            "DisplayValue": "Exempt"
+          },
+          {
+            "Name": "crsm_mailingcity",
+            "DisplayValue": "IRVINE"
+          },
+          {
+            "Name": "crsm_mailingstate",
+            "DisplayValue": "CA"
+          },
+          {
+            "Name": "crsm_mailingzip",
+            "DisplayValue": ""
+          },
+          {
+            "Name": "name",
+            "DisplayValue": "CHRISTIAN RESEARCH INSTITUTE"
+          }
+        ]
+      }
+    ]
+  }
+}
