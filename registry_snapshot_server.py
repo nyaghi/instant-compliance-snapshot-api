@@ -21010,6 +21010,29 @@ def hi_submit_completed_search(page, name, fein, deadline):
 
 
 
+def hi_exact_ein_source_status(result):
+    """User-approved staging rule: a period read failure does not erase exact-EIN status."""
+    if (not trial_identity() or result.state != "HI"
+            or getattr(result, "status_reason", "") != "HI_TAX_PERIOD_UNCONFIRMED"
+            or canonical_ein_digits(getattr(result, "matched_registry_identifier", "")) != canonical_ein_digits(result.ein)
+            or len(canonical_ein_digits(result.ein)) != 9
+            or not getattr(result, "matched_registry_name", "")):
+        return result
+    match = re.search(r"(?:^|\|)\s*Registration Status:\s*([^|]+)", result.raw_status_text or "", re.I)
+    status = licensed_charity_status(match[1].strip(), None) if match else "Unable to Confirm"
+    if status in {"Unable to Confirm", "Not Registered"}:
+        return result
+    result.status = status
+    result.success = True
+    result.status_reason = "HI_EXACT_EIN_SOURCE_STATUS"
+    result.reason_code = "MATCH_EIN_EXACT"
+    result.computed_due_date = ""
+    result.source_note = ("Hawaii confirms the organization's EIN and lists its registration status as "
+        + match[1].strip() + ". CharityClarity reports that state status. "
+        "The filing period could not be confirmed; no filing deadline has been inferred.")
+    return result
+
+
 def hi_direct_details_from_source(org, source: str, url: str):
     """Accept a complete, same-EIN public detail document; otherwise use search."""
     if not re.search(r"</html\s*>", source, re.I) or not re.search(r"<h2[^>]*>.*?Documents.*?</h2>", source, re.I | re.S):
@@ -21042,6 +21065,7 @@ def hi_direct_details_from_source(org, source: str, url: str):
         # year, attachment, IRS fallback and incomplete-document rules intact.
         document = SimpleNamespace(content=lambda: source, url=url)
         annotate_irs_based_state_period(result, hi_public_filing_period(document, org.ein))
+        hi_exact_ein_source_status(result)
     return result, body
 
 
@@ -21236,6 +21260,7 @@ def search_hi_precise(page, org):
         if exact_detail_ein_match and not hi_indicates_exempt_registration(detail_text):
             evidence = hi_public_filing_period(page, org.ein)
             annotate_irs_based_state_period(result, evidence)
+            hi_exact_ein_source_status(result)
         return result
     except Exception as e:
         result.error = f"HI error: {e}"
@@ -26592,6 +26617,9 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
             entry["seconds"] = round(time.monotonic() - started, 3)
         match = pa_completed_name_rows(org, collected, url)
         if match:
+            if trial_identity() and match.success:
+                from deployment.pa_selected_evidence import capture
+                capture(page, org, match, rows, variant, deadline)
             match.queries_attempted = list(attempted)
             match.source_attempts = [{k:v for k,v in row.items() if k != "row_eins"} for row in attempts]
             return match
@@ -28419,6 +28447,8 @@ def true_status_from_body(result, body: str) -> str:
     if (getattr(result, "state", "") in {"KY", "HI"}
             and getattr(result, "status_reason", "") == f"{result.state}_CONFIRMED_TAX_PERIOD"):
         return public_status(result)
+    if result.state == "HI" and getattr(result, "status_reason", "") == "HI_EXACT_EIN_SOURCE_STATUS":
+        return public_status(result)
     if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
         return "Unable to Confirm"
     if getattr(result, "reason_code", "") == "FISCAL_PERIOD_UNCONFIRMED":
@@ -28861,6 +28891,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 f"{comment_date_conclusion(due, public_facing_status)} {timing} No IRS extension has been assumed. "
                 "An earlier IRS filing can trigger the state submission requirement earlier. "
                 f"Period evidence: {evidence['period_basis']}. {transition} IRS information is used to interpret the period; the state’s own listing establishes the year on record.")
+    if result.state == "HI" and getattr(result, "status_reason", "") == "HI_EXACT_EIN_SOURCE_STATUS":
+        return result.source_note
     if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
         state_name = "Kentucky" if result.state == "KY" else "Hawaii"
         if getattr(result, "period_read_failure", ""):
