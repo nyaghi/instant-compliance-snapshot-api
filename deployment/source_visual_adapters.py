@@ -780,10 +780,12 @@ def remember_va_selected(run,result):
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if (not isinstance(proof,dict) or proof.get('ein')!=run.ein or proof.get('id')!=identifier
      or norm(proof.get('name'))!=norm(name) or not re.fullmatch(r'\d+',identifier)
-     or not re.fullmatch(r'\d+',str(proof.get('entity_id') or ''))):return
- rows=[r for r in getattr(result,'_cc_registration_records',[]) if isinstance(r,dict) and str(r.get('id') or '')==identifier]
+     or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}',str(proof.get('entity_id') or ''))):return
+ rows=[r for r in getattr(result,'_cc_registration_records',[]) if isinstance(r,dict) and str(r.get('registrationNumber') or '')==identifier]
  if len(rows)!=1:return
  row=rows[0];entity=row.get('entity') or {};kind=row.get('registrationType') or {}
+ record_id=str(row.get('id') or '')
+ if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}',record_id):return
  if (str(row.get('registrationNumber') or '')!=identifier or row.get('type')!='Registration'
      or not isinstance(kind,dict) or kind.get('name') not in {'Charity','ExemptCharity','Exempt Charity'}
      or str(entity.get('id') or '')!=proof['entity_id'] or norm(entity.get('name'))!=norm(name)):return
@@ -800,8 +802,10 @@ def remember_va_selected(run,result):
  status=row.get('status') or {}
  expected['calculatedRegistrationStatusLabel']=str(row.get('calculatedRegistrationStatusLabel') or (status.get('name') if isinstance(status,dict) else '') or '')
  expected['renewalStatus']=str(row.get('renewalStatus') or '')
- run.remember_detail(identifier,name,'https://vdacs.evokeplatform.com/app/publicPortal/registration/'+identifier)
+ # The public registration number and the detail route's internal ID can differ.
+ run.remember_detail(identifier,name,'https://vdacs.evokeplatform.com/app/publicPortal/registration/'+record_id)
  if identifier in run.source_detail_hints:
+  run.source_detail_hints[identifier]['source_record_id']=record_id
   if kind['name'] in {'ExemptCharity','Exempt Charity'}:
    # This official page omits these date components when their values are empty.
    # A populated source date must still be visible and match exactly.
@@ -861,7 +865,8 @@ def capture_selected_va_source(master,result,run,deadline):
  identifier=str(workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:530:16:get',result.get,locals(), 'matched_registry_identifier') or '');hint=workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:530:70:get',getattr(run,'source_detail_hints',{}).get,locals(), identifier)
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if (not re.fullmatch(r'\d+',identifier) or not hint or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:532:61:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name'])
-     or workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:533:8:get',hint.get,locals(), 'url')!='https://vdacs.evokeplatform.com/app/publicPortal/registration/'+identifier):return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:533:102:return',None)
+     or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}',str(hint.get('source_record_id') or ''))
+     or workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:533:8:get',hint.get,locals(), 'url')!='https://vdacs.evokeplatform.com/app/publicPortal/registration/'+hint['source_record_id']):return trace_return('deployment/source_visual_adapters.py:capture_selected_va_source:533:102:return',None)
  run.selected_visual_attempted=True;start=time.perf_counter();held=False;browser=context=None;detach_observer=lambda:None
  finish_readiness=lambda:None
  fact={'adapter':'VA-selected-original-registration','outcome':'not_started','navigation_ms':0,'capture_ms':0,'total_ms':0,'phase':'admission','local_visual_budget_ms':30000};run.visual_adapter_facts.append(fact)
