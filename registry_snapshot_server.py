@@ -7143,14 +7143,21 @@ def nc_charity_record_evidence(fields):
                 license_category=fields["CSL Type"].strip())
 
 
+def nc_application_detail_allowed(card):
+    """Read the selected numberless profile without reinterpreting its standing."""
+    return bool(card.get("unissued_application") is True and (
+        card.get("raw_status") in {"In-Process", "Withdrawn"}
+        or trial_identity() and card.get("raw_status") == "Expired License"
+        and card.get("license_category") == "In-Process" and card.get("status") == "Pending"))
+
+
 def nc_charity_profile_evidence(card, profile, filings=None):
     """Bind NC profile and renewal history to the selected charity record."""
     required = {"Name", "Registration #", "Status", "Expiration Date", "Last Application Date",
                 "Street", "City", "State", "Zip", "profile_url"}
     if not isinstance(profile, dict) or not required.issubset(profile) or not all(isinstance(profile[k], str) for k in required):
         raise ValueError("North Carolina profile is incomplete")
-    application = (card.get("unissued_application") is True
-                   and card.get("raw_status") in {"In-Process", "Withdrawn"}
+    application = (nc_application_detail_allowed(card)
                    and card.get("identifier") == "NCAPP-" + card["url"].rsplit("/", 1)[-1])
     expected_number = "" if application else card["identifier"]
     if (profile["profile_url"] != card["url"] or profile["Registration #"].strip() != expected_number
@@ -8096,7 +8103,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 # or non-registration and must retain the conservative hold.
                 raise ValueError("North Carolina matching unsupported category needs scope confirmation")
             if (state == "NC" and row.get("unissued_application")
-                    and (not trial_identity() or row.get("raw_status") not in {"In-Process", "Withdrawn"})):
+                    and (not trial_identity() or not nc_application_detail_allowed(row))):
                 # Unsupported application states retain their existing coverage rules.
                 records.append(row)
                 seen.add(row["identifier"])
@@ -16201,6 +16208,9 @@ def apply_confirmed_feedback_correction(result) -> str:
 
 
 def fill_registry_match_from_text(result, body: str, org) -> None:
+    from deployment.ny_confirmed_evidence import preserves_confirmed_detail as preserves_ny_detail
+    if preserves_ny_detail(result):
+        return  # Keep the original accepted detail name for exact evidence binding.
     from deployment.nv_confirmed_evidence import preserves_confirmed_detail
     if preserves_confirmed_detail(result):
         return  # Preserve source-bound NV names before free-text cleanup, too.
@@ -16302,6 +16312,9 @@ def md_registry_match_from_entries(result, body: str, org) -> None:
 
 
 def normalize_registry_match_fields(result, org) -> None:
+    from deployment.ny_confirmed_evidence import preserves_confirmed_detail as preserves_ny_detail
+    if preserves_ny_detail(result):
+        return
     if result.state == "IL" and public_status(result) == "Not Registered / Non-Compliant":
         # A completed empty compliant-directory search has no matched record.
         # Do not substitute the submitted name as registry evidence.
@@ -27585,6 +27598,7 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                     or identity["decision"] != "accepted"
                     or (selected_ein and selected_ein != "000000000" and detail_ein != selected_ein)):
                 raise ValueError("New York detail identity did not confirm the selected organization")
+            result._ny_confirmed_detail = {"org_id": str(detail["orgID"]), "ein": detail_ein, "name": detail["orgName"]}
             result.matched_registry_name = detail["orgName"]
             result.matched_registry_identifier = detail_ein or str(detail["orgID"])
             result.source_url = "https://charities-search.ag.ny.gov/RegistrySearch/" + str(detail["orgID"])
@@ -28137,6 +28151,9 @@ def ny_safe_due_status_from_evidence(org, result, body: str = "") -> str:
 
 def normalize_ny_registry_match_metadata(org, result):
     """Trim NY row metadata out of the public registry name and expose embedded EIN."""
+    from deployment.ny_confirmed_evidence import preserves_confirmed_detail
+    if preserves_confirmed_detail(result):
+        return result
     registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
     if not registry_name:
         return result
