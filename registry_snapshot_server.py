@@ -29999,6 +29999,18 @@ def nh_parse_pdf_table_records(pdf_bytes: bytes) -> tuple[list[dict], str]:
                 table = tables[0]
                 rows = table.extract()
                 header = [re.sub(r"\s+", " ", value or "").strip() for value in rows[0]]
+                if (header == ["", "Charity Name", "Address", "City", "State", "Zip", "Status", "Report Due"]
+                        and table.rows[0].cells[0] is None):
+                    # The October 31 source omits the left border of its header
+                    # cell, while printing Reg. No. at the same column position.
+                    # Extend only the observed table boundary; extraction must
+                    # recover the literal header and every original ID below.
+                    repaired = page.find_tables({"explicit_vertical_lines": [table.bbox[0]]})
+                    if len(repaired) != 1:
+                        raise ValueError(f"NH table structure changed on page {page.page_number}")
+                    table = repaired[0]
+                    rows = table.extract()
+                    header = [re.sub(r"\s+", " ", value or "").strip() for value in rows[0]]
                 if len(header) != 8 or [header[i] for i in (0, 1, 6, 7)] != ["Reg. No.", "Charity Name", "Status", "Report Due"]:
                     raise ValueError(f"NH table columns changed on page {page.page_number}")
                 first_cell = table.rows[0].cells[0]
@@ -30010,6 +30022,11 @@ def nh_parse_pdf_table_records(pdf_bytes: bytes) -> tuple[list[dict], str]:
                 for row in rows[1:]:
                     if len(row) != 8:
                         raise ValueError(f"NH incomplete row on page {page.page_number}")
+                    # The October 31 PDF ends with a visibly empty grid row.
+                    # Only an entirely blank eight-cell row is spacing; every
+                    # populated row must still parse and reconcile its source ID.
+                    if not any(str(value or "").strip() for value in row):
+                        continue
                     page_records.append(nh_record_from_cells([row[i] for i in (0, 1, 6, 7)]))
                 if not page_records or Counter(source_ids) != Counter(row["registry_id"] for row in page_records if row["registry_id"]):
                     raise ValueError(f"NH registration-column reconciliation failed on page {page.page_number}")
