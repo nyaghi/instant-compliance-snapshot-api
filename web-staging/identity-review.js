@@ -2,6 +2,10 @@
 (() => {
   'use strict';
   const unresolvedStatuses = new Set(['Needs Review', 'Unable to Confirm', 'Unable to Verify', 'Site Not Reachable', 'No Confirmed Match', 'Unknown']);
+  function boundedSourceFailure(result) {
+    return result.state === 'OR' && result.status === 'Site Not Reachable'
+      && ['OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'].includes(result.reason_code);
+  }
   function add(parent, tag, value, classes = '') {
     const el = document.createElement(tag); el.textContent = value; el.className = classes; parent.appendChild(el); return el;
   }
@@ -59,7 +63,7 @@
     const message = add(box, 'p', '', 'text-sm text-slate-600'); message.setAttribute('role', 'status');
     const buttons = [];
     if (inconclusive && !review?.candidates?.length) {
-      add(box, 'p', 'Review required', 'font-semibold text-slate-900');
+      add(box, 'p', boundedSourceFailure(result) ? 'Site Not Reachable' : 'Review required', 'font-semibold text-slate-900');
       add(box, 'p', result.source_note || 'The state lookup did not provide enough confirmed information to establish a status. Review the explanation and available evidence, then retry this state or check its official lookup.', 'mt-1 text-xs text-slate-600');
       try {
         const url = new URL(result.source_url);
@@ -111,6 +115,7 @@
     }
   }
   function statusLabel(result) {
+    if (boundedSourceFailure(result)) return result.status;
     const inconclusive = unresolvedStatuses.has(result.status);
     if (inconclusive && result.identity_review?.candidates?.some(candidate => !candidate.decision)) return 'Confirm match';
     return inconclusive ? 'Review required' : result.status || 'Unknown';

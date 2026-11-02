@@ -500,6 +500,11 @@ class Supervisor:
                         if result is None and not error: error = 'WORKER_TASK_FAILED'
                         r['tree'].stop()  # Must succeed before releasing capacity.
                         log_failure_trace(r,error)
+                        if error == 'TASK_TIME_LIMIT' and r['job']['state'] == 'OR':
+                            from deployment.or_reachability import unavailable_result, task_allowance
+                            result = unavailable_result(r['job']['payload'], r['job']['version'],
+                                                        'OR_SOURCE_TIME_LIMIT', elapsed=task_allowance(r['job']))
+                            error = None  # Terminal source result after actual process-tree cleanup.
                         if self.browser_pool:
                             self.observations.observe('browser_cleanup', time.monotonic(), True)
                             self.browser_pool.release(r['owner'])
@@ -529,7 +534,8 @@ class Supervisor:
                         output = Path(temp.name)/'result.json'
                         owner = Path(temp.name)/'browser-owner.json'
                         try:
-                            deadline = claim_started+job['run_seconds']
+                            from deployment.or_reachability import task_allowance
+                            deadline = claim_started+task_allowance(job)
                             child_job = {**job, 'run_seconds': max(0, deadline-time.monotonic()),
                                          '_deadline_monotonic': deadline}
                             child_env = task_environment(os.environ if self.env is None else self.env)

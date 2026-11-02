@@ -513,6 +513,18 @@ def execute(master, job, source_finished=None, trace_path=None):
         p = {**p, 'alternate_names': aliases}
     organizations = master.normalize_organization_requests(p, privileged=False)
     if len(organizations) != 1: raise ValueError('Exactly one organization required')
+    or_probe = None
+    if job['state'] == 'OR':
+        from deployment.or_reachability import check, unavailable_result, SOURCE
+        try: row = master.or_snapshot_row_for_ein(p['ein'])
+        except (OSError, ValueError, RuntimeError): row = None
+        source = SOURCE
+        if row and str(row[0]).isdigit():
+            source = SOURCE+'/Charity/details?charityID='+str(row[0])
+        reachable, reason, attempts, elapsed = check(source, deadline=job['_deadline_monotonic'])
+        or_probe = {'attempts': attempts, 'elapsed_seconds': round(elapsed, 3)}
+        if not reachable:
+            return unavailable_result(p, job['version'], reason, attempts, elapsed)
     trace = FloridaTrace(trace_path) if job['state'] == 'FL' else None
     original = master.search_fl if trace else None
     if trace: master.search_fl = trace.wrap(original)
@@ -527,6 +539,7 @@ def execute(master, job, source_finished=None, trace_path=None):
             if trace: master.search_fl = original
             if mode_context is not None: mode_context.reset(mode_token)
     if len(results) != 1: raise ValueError('Unexpected result count')
+    if or_probe is not None: results[0]['or_reachability'] = or_probe
     if transport_trace: results[0]['lab_transport_trace'] = transport_trace.events
     if browser_trace: results[0]['lab_browser_trace'] = browser_trace.events
     if trace: results[0]['lab_fl_trace'] = trace.events
