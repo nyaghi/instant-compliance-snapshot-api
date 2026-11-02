@@ -7292,7 +7292,7 @@ def nv_entity_number_detail_allowed(identifier, entity_type, business_id, entity
                                                "Charitable Solicitation Registration Statement"}))
 
 
-def nv_charity_detail_evidence(fields, expected_business_id):
+def nv_charity_detail_evidence(fields, expected_business_id, filings=None):
     """Confirmed NV charity scope plus matched entity status and renewal due.
 
     Keep corporate and charity-specific evidence labeled accurately. Never use
@@ -7312,7 +7312,8 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     if not name or not fields["Entity Status"].strip():
         raise ValueError("Nevada entity identity or status is missing")
     entity_type = re.sub(r"\s+", " ", fields["Entity Type"]).strip()
-    if not nv_entity_type_in(entity_type):
+    missing_type = bool(trial_identity()) and entity_type in {"", "-"}
+    if not nv_entity_type_in(entity_type) and not missing_type:
         raise ValueError("Nevada record is not a supported nonprofit or charitable-registration type")
     ein_raw = fields["FEIN"].strip()
     ein = "" if ein_raw in {"", "-"} else canonical_ein_digits(ein_raw)
@@ -7321,6 +7322,9 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     solicitation = fields["Solicits Charitable Contribution?"].strip().casefold()
     if solicitation not in {"yes", "no"}:
         raise ValueError("Nevada charitable solicitation field did not load")
+    if missing_type and (solicitation != "yes"
+            or normalized_match_name(fields["IRS Registered Name"]) != normalized_match_name(name)):
+        raise ValueError("Nevada untyped detail does not establish charitable identity")
     aliases = [fields[k].strip() for k in ("IRS Registered Name", "Campaign Name") if fields[k].strip() not in {"", "-"}]
     raw_status = fields["Entity Status"].strip()
     expiration = final_four_source_date(fields["Annual Renewal Due Date/Expiration Date"], "Nevada entity expiration")
@@ -7332,7 +7336,7 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     # Existing trial scope is unchanged. This new recovery path additionally
     # needs the actual charity filing; the foreign entity category alone is
     # not evidence of a charitable-solicitation exemption.
-    requires_solicitation_history = entity_number_detail or not bool(trial_identity())
+    requires_solicitation_history = missing_type or entity_number_detail or not bool(trial_identity())
     if not requires_solicitation_history:
         if raw_status.casefold() == "registered":
             status = licensed_charity_status("Active", expiration)
@@ -7347,7 +7351,7 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     domicile = fields.get("Domicile Name", "")
     if not isinstance(domicile, str):
         raise ValueError("Nevada domicile identity field is malformed")
-    return dict(name=name, identifier=expected_business_id, ein=ein, aliases=list(dict.fromkeys(aliases)),
+    record = dict(name=name, identifier=expected_business_id, ein=ein, aliases=list(dict.fromkeys(aliases)),
                 _nv_domicile_name=domicile.strip(),
                 raw_status=raw_status, status=status, expiration=expiration,
                 initial=None, renewal=None, street="", location="",
@@ -7356,6 +7360,19 @@ def nv_charity_detail_evidence(fields, expected_business_id):
                 entity_formation=(final_four_source_date(fields["Formation Date in Nevada"], "Nevada formation")
                                   if requires_solicitation_history else None),
                 entity_expiration=expiration)
+    if missing_type:
+        # A blank category alone cannot admit a business record. Require the
+        # existing complete, same-entity CSR history validator before exposing
+        # any conclusion; keep the state's original blank category unchanged.
+        record = nv_charity_filings_evidence(record, filings)
+        if not record.get("solicitation_statement_filed"):
+            raise ValueError("Nevada untyped detail has no confirmed charity registration filing")
+        record["_nv_type_from_bound_charity_history"] = True
+        record["date_evidence_note"] = (
+            "The state leaves Entity Type blank. Charitable registration is established by the "
+            "complete same-entity history's Charitable Solicitation Registration Statement, "
+            f"filed {record['solicitation_statement_filed'].isoformat()}; no entity type was inferred.")
+    return record
 
 
 def tn_charity_detail_evidence(fields, expected_identifier, search_row):
@@ -8122,8 +8139,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                         except ValueError:
                             record["date_evidence_note"] = "Tennessee's financial history was incomplete; the last-filed period remains blank."
                 else:
-                    record = nv_charity_detail_evidence(detail.get("fields"), row["identifier"])
-                    if ((not missing_search_type and not nv_entity_type_in(record["entity_type"], {row["entity_type"]}))
+                    record = nv_charity_detail_evidence(detail.get("fields"), row["identifier"], detail.get("filings"))
+                    if ((not missing_search_type and not record.get("_nv_type_from_bound_charity_history")
+                            and not nv_entity_type_in(record["entity_type"], {row["entity_type"]}))
                             or normalized_match_name(record["name"]) != normalized_match_name(row["name"])):
                         raise ValueError("Nevada detail differs from the selected search identity")
                     url = urlparse(str(detail.get("source_url") or ""))

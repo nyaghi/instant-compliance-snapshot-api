@@ -563,7 +563,7 @@ test('Nevada waits for a delayed complete filing grid after entity fields load',
  const grid={getAttribute:()=> '2',querySelector:()=>null,querySelectorAll:q=>q==='[role="columnheader"]'
   ?filingHeaders.map(label=>({getAttribute:()=>label})):q==='tbody > tr[role="row"]'
   ?[{querySelector:()=>({}),querySelectorAll:()=>cells.map(innerText=>({innerText,querySelector:()=>null}))}]:[]};
- const table={querySelectorAll:()=>[{innerText:'Filing History Details'}],querySelector:q=>q==='[role="grid"]'?grid:
+ const table={querySelectorAll:q=>q==='h4'?[{innerText:'Filing History Details'}]:q==='[role="columnheader"]'?grid.querySelectorAll(q):[],querySelector:q=>q==='[role="grid"]'?grid:
   q==='kendo-datapager'?{getAttribute:()=> 'Page 1 of 1'}:q==='kendo-datapager-info'?{innerText:'1 - 1 of 1 items'}:null};
  h.context.document.querySelectorAll=q=>q==='casex-data-table'&&h.context.location.hash.includes('Manage-Business')
   ?gridReady?[table]:[]:read(q);
@@ -589,7 +589,7 @@ function filingHistoryFixture({stale=false,placeholder=false,empty=false,spinner
  const grid={getAttribute:()=>emptyNow?'1':'2',querySelector:q=>q==='.k-grid-norecords'&&emptyNow?{}:null,
   querySelectorAll:q=>q==='[role="columnheader"]'?headers.map(label=>({getAttribute:()=>label})):
    q==='tbody > tr[role="row"]'?emptyNow?[]:[row]:[]};
- const table={querySelectorAll:q=>q==='h4'?[{innerText:'Filing History Details'}]:[],querySelector:q=>q==='[role="grid"]'?grid:
+ const table={querySelectorAll:q=>q==='h4'?[{innerText:'Filing History Details'}]:q==='[role="columnheader"]'?grid.querySelectorAll(q):[],querySelector:q=>q==='[role="grid"]'?grid:
   q==='kendo-datapager'&&!emptyNow?{getAttribute:()=> 'Page 1 of 1'}:
   q==='kendo-datapager-info'&&!emptyNow?{innerText:'1 - 1 of 1 items'}:null};
  h.context.document.querySelectorAll=q=>{
@@ -804,6 +804,26 @@ test('NV streams click and filing checkpoints with real frontend command IDs wit
  assert.ok(messages.every(m=>m.id===diagnosticId&&!('name' in m.nv_diagnostic)&&!('identifier' in m.nv_diagnostic)));
 });
 
+
+test('NV trial blank detail type reads bound history within the original deadline',async()=>{
+ for(const type of ['', '-']) {
+  const h=filingHistoryFixture();h.fieldValues['Entity Type']=type;
+  await h.search();const started=h.time,deadline=h.time+45000;
+  const detail=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},deadline,{skipHistory:true}));
+  assert.equal(detail.fields['Entity Type'],type);assert.equal(detail.filings.complete,true);
+  assert.equal(detail.filings.identifier,observed[1][1]);
+  assert.equal(detail.filings.rows[0][3],'Charitable Solicitation Registration Statement');
+  assert.ok(h.time-started<1000);assert.ok(h.time<deadline);
+ }
+});
+
+test('NV trial blank detail type cannot reuse a stale filing table',async()=>{
+ const h=filingHistoryFixture({stale:true});h.fieldValues['Entity Type']='-';
+ await h.search();const deadline=h.time+45000;
+ const detail=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},deadline,{skipHistory:true}));
+ assert.equal(detail.filings.complete,false);assert.equal(detail.filings.failure_code,'REGISTRY_NV_FILINGS_NOT_REFRESHED');
+ assert.ok(h.time<=deadline);
+});
 
 test('NV trial detail completes without a filing table or history wait',async()=>{
  const h=fixture({rows:observed.slice(0,2)}),messages=[];

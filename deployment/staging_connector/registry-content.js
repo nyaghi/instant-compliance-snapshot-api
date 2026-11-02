@@ -867,8 +867,11 @@
       return {query,complete:true,source_url:location.href,fields};
     }
     const evidence = {query,complete:true,source_url:location.href,fields};
-    // Trial scope uses the matched entity and displayed renewal date only.
-    if (skipHistory && !entityNumberDetail) return evidence;
+    // Populated trial categories keep the existing short path. A blank type
+    // requires the existing bound filing-history reader to establish charity
+    // scope; it receives no new query, retry, or time allowance.
+    const missingEntityType=['','-'].includes(String(fields['Entity Type']||'').trim());
+    if (skipHistory && !entityNumberDetail && !missingEntityType) return evidence;
     try {
       // ORION mounts the entity fields before its filing-history request has
       // rendered. Reading the table immediately can discard the solicitation
