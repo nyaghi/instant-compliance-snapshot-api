@@ -461,7 +461,8 @@ def capture_ak_selected_before_recheck(page,year,ein,deadline):
                 '(rs)=>rs.slice(0,201).map(r=>Array.from(r.querySelectorAll("td")).map(c=>c.innerText.trim()))')
             if len(rows)>200:return None
             hits=[r for r in rows if len(r)>=4 and r[0]==str(year) and digits(r[1])==run.ein and r[2]]
-            return hits[0] if len(hits)==1 else None
+            unique = {tuple(r) for r in hits}
+            return list(next(iter(unique))) if len(unique)==1 else None
         row=selected()
         if row is None:return
         run.page_capture_stop=min(prior_stop or float('inf'),time.monotonic()+remaining)
@@ -744,6 +745,9 @@ class CaptureRun:
                         and getattr(self,'sc_selected_image_bindings',{}).get(hashlib.sha256(raw).hexdigest())==(name,identifier))
                 if self.state=='ME' and not negative and me_detail_name_bound(name,text,identifier):matched=True
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
+                if self.state=='PA' and not negative:
+                    from deployment.pa_selected_evidence import image_bound
+                    if image_bound(self,row,url,raw,kind):matched=True
                 if self.state=='OH' and not negative and oh_selected_grid_bound(self,raw,url,row):matched=True
                 if self.state=='FL' and source_note=='Original verified FDACS response from this lookup, rendered without changing its source HTML.':
                     from deployment.fl_response_evidence import image_bound as fl_response_image_bound
