@@ -55,6 +55,21 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
     observed.phase='required-capture-budget-exhausted';trace();return null;
   }
   let captureBudgetMs=state==='NV'&&query.operation==='detail'?2500:1500;
+  // A previously bound NV detail needs its existing completion allowance from
+  // entry: the first tab lookup itself can exceed the old 2.5-second setup cap.
+  // Fresh metadata and image binding below remain mandatory for publication.
+  if(state==='NV'&&completionRequired&&prepared?.command_id===commandId
+      &&P.sameQuery(prepared.query,query)&&prepared.metadata?.source_detail===true
+      &&typeof prepared.metadata.public_text==='string'&&prepared.metadata.public_text.trim().length>0
+      &&prepared.metadata.public_text.length<=20000
+      &&typeof prepared.metadata.source_binding==='string'
+      &&prepared.metadata.source_binding.length>0&&prepared.metadata.source_binding.length<=20000
+      &&typeof prepared.document_id==='string'&&prepared.document_id.length>0&&prepared.document_id.length<=100
+      &&prepared.metadata.document_id===prepared.document_id
+      &&Number.isFinite(prepared.observed_at)&&Date.now()-prepared.observed_at>=0
+      &&Date.now()-prepared.observed_at<=45000) {
+    captureBudgetMs=Math.min(20000-completionSpent,job.activeExpiresAt-started-500);
+  }
   const workerSettledDetail=(state==='IL'&&ilDetail)||(state==='TN'&&query.operation==='detail');
   if(workerSettledDetail) {
     const spentKey=state==='IL'?'ilSnapshotSpentMs':'tnSnapshotSpentMs';
@@ -331,7 +346,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
         layout=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:258:15:await",()=>(sampled('NV-ready-layout',()=>chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics'))));
       }
 
-      if(((state==='TN'&&query.operation==='detail')||ilDetail)&&layout.cssLayoutViewport?.clientWidth<800) {
+      if(((state==='TN'&&query.operation==='detail')||ilDetail)&&(layout.cssLayoutViewport?.clientWidth<800||(ilDetail&&layout.cssLayoutViewport?.clientHeight<900))) {
 
         // TN's financial column and IL's long selected record need the native desktop layout.
 

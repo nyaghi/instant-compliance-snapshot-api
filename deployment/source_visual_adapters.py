@@ -19,6 +19,9 @@ def completed_names_only_result(run,result):
 def capture_result_visuals(master,result,run,deadline):
  """Measure visual-only requests separately; never alter a completed status."""
  if completed_names_only_result(run,result):return None
+ if run is not None and run.state=='CA' and getattr(run,'ca_review_candidates',None):
+  from deployment.ca_review_evidence import capture as capture_ca_review
+  if capture_ca_review(master,result,run,deadline):return None
  from deployment.short_alias_identity import visual_result
  result=visual_result(result)
  for capture in (capture_selected_source,capture_negative_search):
@@ -248,16 +251,20 @@ def ca_exempt_entity_core(text,name,ein):
  shown=re.search(r'Entity Name\s+(.*?)\s+DBA\b',text,re.S)
  fein=re.search(r'\bFEIN:\s*(\d{2}-?\d{7})(?!\d)',text)
  if (not heading or not shown or norm(heading[1])!=norm(name) or norm(shown[1])!=norm(name)
-     or not fein or re.sub(r'\D','',fein[1])!=ein or not core
+     or (not fein or re.sub(r'\D','',fein[1])!=ein if ein else
+         bool(fein) or not re.search(r'\bFEIN:\s*Entity Detail\b',text))
+     or not core
      or not re.search(r'Entity Status\s+Exempt\b',core[0])
      or re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I)):return None
- return heading[0]+'\nFEIN: '+fein[1]+'\n'+core[0]
+ return heading[0]+'\nFEIN: '+(fein[1] if fein else '')+'\n'+core[0]
 
 def capture_ca_exempt_entity(master,result,run,deadline,hint):
  identifier=str(result.get('matched_registry_identifier') or '')
  url='https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/'+identifier
  if (not re.fullmatch(r'\d+',identifier) or result.get('status')!='Exempt'
-     or hint.get('url')!=url or hint.get('exempt_entity_ein')!=run.ein):return
+     or hint.get('url')!=url
+     or not (hint.get('exempt_entity_ein')==run.ein or hint.get('exempt_entity_review') is True)):return
+ expected_ein='' if hint.get('exempt_entity_review') is True else run.ein
  run.selected_visual_attempted=True
  fact={'adapter':'CA-exempt-entity-detail','phase':'admission','outcome':'not_started','total_ms':0}
  run.visual_adapter_facts.append(fact);start=time.perf_counter();held=False;browser=context=None
@@ -284,7 +291,7 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     core=None
     while time.monotonic()+1<stop:
      text=page.inner_text('body',timeout=timeout())
-     core=ca_exempt_entity_core(text,result['matched_registry_name'],run.ein)
+     core=ca_exempt_entity_core(text,result['matched_registry_name'],expected_ein)
      if core:break
      fact['waiting_for_field']='bound_entity_values'
      page.wait_for_timeout(min(100,timeout()))
@@ -300,11 +307,13 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     fact['phase']='capture';begin=time.perf_counter()
     raw=page.screenshot(type='jpeg',quality=80,clip={'x':0,'y':0,'width':1600,'height':height},timeout=max(1,min(5000,timeout())))
     run.capture_ms+=(time.perf_counter()-begin)*1000
-    if page.url!=url or ca_exempt_entity_core(page.inner_text('body',timeout=timeout()),result['matched_registry_name'],run.ein)!=core:
+    if page.url!=url or ca_exempt_entity_core(page.inner_text('body',timeout=timeout()),result['matched_registry_name'],expected_ein)!=core:
      fact['outcome']='source_changed_during_capture';return
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
     before=len(run.documents)
-    run.document(url,raw,'image',core,note='Original state entity page: explicit Exempt standing, organization name and EIN. No registration record exists in the completed lookup.')
+    note=('Original state entity candidate: explicit Exempt standing and organization name. Source EIN is blank; identity confirmation is required.'
+          if not expected_ein else 'Original state entity page: explicit Exempt standing, organization name and EIN. No registration record exists in the completed lookup.')
+    run.document(url,raw,'image',core,note=note)
     fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
     if context is not None:context._captured=True;context.close()
@@ -317,6 +326,8 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
 
 
 def remember_ca_selected(run,result):
+ from deployment.ca_review_evidence import remember as remember_ca_review
+ remember_ca_review(run,result)
  remember_ca_exempt_entity(run,result)
  """Retain only the already selected registration's original public detail ID."""
  if run is None or run.state!='CA' or not getattr(result,'success',False):return
@@ -500,7 +511,7 @@ def capture_selected_ca_source(master,result,run,deadline):
  hint=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:228:6:get',getattr(run,'source_detail_hints',{}).get,locals(), identifier)
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if not hint or not re.fullmatch(r'(?:CT)?\d+',identifier) or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:230:67:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name']):return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:230:124:return',None)
- if hint.get('exempt_entity_ein'):
+ if hint.get('exempt_entity_ein') or hint.get('exempt_entity_review') is True:
   return capture_ca_exempt_entity(master,result,run,deadline,hint)
  try:
   u=urlsplit(hint['url'])

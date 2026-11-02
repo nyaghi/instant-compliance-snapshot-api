@@ -1910,6 +1910,11 @@
           ? {source_failure:'REGISTRY_NM_SOURCE_ERROR'} : {})};
       const q=m.query;
       if(q?.state!=='NM')throw new Error('REGISTRY_COMMAND_INVALID');
+      if(m.action==='registry-nm-registration-document'&&q.operation==='detail') {
+        return window.CCNmRegistrationDocument
+          ? window.CCNmRegistrationDocument.capture(q,Math.min(m.documentBudgetMs||0,(m.documentDeadline||0)-Date.now()))
+          : {document:null,diagnostic:{outcome:'unavailable'}};
+      }
       if(m.action==='registry-nm-form'&&q.operation==='search') {
         const size=document.querySelector('#MainContent_DropDownListPageSize');
         if(!size)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
@@ -1951,8 +1956,8 @@
         const history=document.querySelector('#MainContent_GridViewStatuses');
         const financials=document.querySelector('#MainContent_GridViewFinancials');
         if(!history||!financials)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
-        // Only the public status history and fiscal periods are needed. Do
-        // not copy financial amounts, officers, contacts or documents.
+        // Status evidence remains unchanged. The optional original submitted
+        // registration is transported separately, never interpreted as status.
         const historyRows=[...history.rows].slice(1).map(r=>{
           if(r.cells.length!==3)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
           return [...r.cells].map(text);

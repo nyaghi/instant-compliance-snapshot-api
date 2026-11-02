@@ -730,6 +730,29 @@ async function performSearch(job, query, id) {
     const snapshot=useNc?preparedNc.snapshot:await wfAwait(job,"worker.js:performSearch:674:45:await",()=>(captureStateSnapshot(job,query,id,job.registryState==='AL'&&alCompletedSource&&Number.isInteger(response.evidence.total)&&response.evidence.total>0&&Array.isArray(response.evidence.rows)&&response.evidence.rows.length===response.evidence.total?{kind:'al-completed-record',command_id:id,query}:preparedNvMetadata)));
     if(snapshot){
       response.state_snapshot=snapshot;
+      // Save the original detail first. An optional filing cannot consume its
+      // capture allowance; late/failed attachments leave this snapshot intact.
+      if(P.TRIAL_ORIGIN&&job.registryState==='NM'&&query.operation==='detail'
+          &&!job.closed&&isActive(job)&&job.pending===id&&job.command?.id===id
+          &&P.sameQuery(job.command.query,query)&&owned.has(job.tab)) {
+        const tabId=job.tab,generation=job.generation;
+        const budget=Math.max(0,Math.min(6000,job.activeExpiresAt-Date.now()-1000));
+        let timer;
+        if(budget>=500)try {
+          const filing=await Promise.race([
+            chrome.tabs.sendMessage(tabId,{action:'registry-nm-registration-document',query,
+              documentBudgetMs:budget,documentDeadline:Date.now()+budget},{frameId:0}),
+            new Promise(resolve=>{timer=setTimeout(()=>resolve(null),budget);})
+          ]);
+          if(!job.closed&&isActive(job)&&job.tab===tabId&&job.generation===generation
+              &&job.pending===id&&job.command?.id===id&&P.sameQuery(job.command.query,query)
+              &&owned.has(tabId)&&Date.now()<job.activeExpiresAt&&filing?.document)
+            snapshot.registration_document=filing.document;
+          diagnostic('nm-registration-document',job,JSON.stringify(filing?.diagnostic||{outcome:'deadline'}));
+        } catch {
+          diagnostic('nm-registration-document',job,JSON.stringify({outcome:'unavailable'}));
+        } finally {clearTimeout(timer);}
+      }
       if(alEmptySource)job.alEmptySnapshotSaved=true;
     }
   }

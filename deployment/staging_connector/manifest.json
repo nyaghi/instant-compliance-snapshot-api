@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity \u2014 Combined Evidence & Identity",
+  "name": "CharityClarity \u2014 Combined Source Evidence",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
-  "description": "Staging: retain source-bound denied NC exemption applications and complete tall positive AL source grids.",
+  "description": "Staging: preserve Nevada detail capture allowance and attach the available New Mexico submitted registration.",
   "permissions": [
     "storage",
     "browsingData",
@@ -117,6 +117,7 @@
         "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx*"
       ],
       "js": [
+        "nm-registration-document.js",
         "registry-content.js"
       ],
       "run_at": "document_idle"
@@ -131,5 +132,5 @@
       "run_at": "document_start"
     }
   ],
-  "version_name": "0.6.135 NC Denied + AL Tall Grid"
+  "version_name": "0.6.135 Combined Source Evidence"
 }

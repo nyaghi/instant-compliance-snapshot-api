@@ -2530,16 +2530,19 @@ def search_ca_master(page, org):
             return result
         rows = []
         registrations_by_id = {}
+        name_sources = {}
         for entity, outcome in plausible:
             registrations = checker.ca_evoke_registrations_for_entity(str(entity.get("id") or ""))
             standing, raw, identifier, expiry = checker.ca_evoke_status_from_record(entity, registrations)
             if not identifier or standing in {checker.STATUS_UNKNOWN, "Unknown", "Unable to Confirm"}:
                 raise ValueError("California name-fallback registration details are incomplete")
             registrations_by_id[str(identifier)] = registrations
+            name_sources[str(identifier)] = dict(entity=entity, registrations=registrations)
             rows.append(dict(name=checker.ca_evoke_display_name(entity), identifier=str(identifier),
                 ein=canonical_ein_digits(str(entity.get("fein") or "")), raw_status=raw, status=standing,
                 expiration=expiry, url=result.source_url, location="", _identity_outcome=outcome))
         if any(row["_identity_outcome"] == "possible" for row in rows):
+            result._cc_ca_name_sources = name_sources
             result._cc_identity_review = dict(records=rows, search_complete=False)
             result.status = "Needs Review"; result.success = False
             result.source_note = "California's completed EIN search found no record. Exact legal-name records were retrieved, but their missing source EIN requires identity confirmation before using the verified registration standing."
@@ -8802,7 +8805,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "Alabama presented another verification challenge after two bounded code submissions; the search remains incomplete." if state == "AL" and attempts >= 2 and reason == "NY_CONNECTOR_AL_VERIFICATION_REQUIRED" else
            "Alabama's verification image could not be read with sufficient confidence; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_IMAGE_UNCERTAIN" else
            "Alabama's verification reader was unavailable or ran out of time; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_READER_UNAVAILABLE" else
-           "North Carolina limited this search (HTTP 429). CharityClarity retained completed records and did not restart the rejected search in another page." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
+           "North Carolina temporarily limited requests before all required searches finished. Completed records were retained, but the remaining search could not be completed. Retry after North Carolina allows requests again, or review its official lookup." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
            "Tennessee temporarily limited registry requests (HTTP 429). CharityClarity stopped further Tennessee requests during the source cooldown; retry after the registry permits requests again." if state == "TN" and reason == "NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED" else
            "New Mexico returned its public unexpected-error page for the submitted search." if state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR' else
            "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
@@ -10168,6 +10171,12 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
         if result.status == "Pending":
             result.source_note += "The state reports a pending application or renewal. Review state communications for outstanding requirements; the displayed expiration alone does not establish delinquency while this pending status is shown. "
         result.source_note += f"CharityClarity reports {result.status}. The public record does not display an EIN; matching uses the organization name, reviewed alternate names, and available organization-location evidence."
+        if (state == "NC" and result.status == "Unable to Confirm"
+                and selected.get("raw_status") == "Denied"
+                and re.fullmatch(r"EX\d+", str(selected.get("identifier", "")))):
+            result.source_note += (" North Carolina lists this exemption record as Denied. "
+                "The available record does not establish the organization's current registration standing. "
+                "Review the captured state record or contact North Carolina to resolve this.")
         address = selected.get("address_evidence", {})
         if selected.get("_optional_identity_review"):
             result.source_note += " The full name matches, but Georgia supplies no usable organization address to corroborate identity. Review the record and use Accept or Reject match if you can confirm its identity."
@@ -16248,6 +16257,9 @@ def normalize_registry_match_fields(result, org) -> None:
     from deployment.short_alias_identity import preserves_review_match
     if preserves_review_match(result):
         return  # Retain only the exact master-bound candidate for review and original evidence.
+    from deployment.nc_confirmed_evidence import preserves_confirmed_record
+    if preserves_confirmed_record(result):
+        return  # NC identity is known even when its source standing is unresolved.
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         evidence = getattr(result, "va_entity_evidence", {})
         if (result.state == "VA" and getattr(result, "reason_code", "") == "VA_MATCHED_BY_EXACT_FEIN"

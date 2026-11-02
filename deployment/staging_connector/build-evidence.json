@@ -1,5 +1,5 @@
 {
-  "build": "combined-evidence-identity-1",
+  "build": "combined-source-evidence-1",
   "version": "0.6.135",
-  "scope": "Combined staging package: typed DC period-date evidence and existing NM detail reserve. Backend uses corroborated short-alias identity review, WV review evidence, and available original OH/OK evidence. Existing permissions, queue, source geometry and deadlines retained."
+  "scope": "Staging: bound NV detail uses its existing completion allowance from entry; optional NM filing is fetched only after original detail capture, within six seconds and the existing state deadline. Permissions, matching, queue and window placement unchanged."
 }

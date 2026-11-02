@@ -1,6 +1,7 @@
 /* Candidate identity decisions. Status interpretation remains in the master. */
 (() => {
   'use strict';
+  const unresolvedStatuses = new Set(['Needs Review', 'Unable to Confirm', 'Unable to Verify', 'Site Not Reachable', 'No Confirmed Match', 'Unknown']);
   function add(parent, tag, value, classes = '') {
     const el = document.createElement(tag); el.textContent = value; el.className = classes; parent.appendChild(el); return el;
   }
@@ -52,11 +53,22 @@
   }
   function render(parent, result, decide, retry) {
     const review = result.identity_review;
-    const inconclusive = ['Needs Review', 'Unable to Confirm', 'Site Not Reachable', 'No Confirmed Match'].includes(result.status);
+    const inconclusive = unresolvedStatuses.has(result.status);
     if (!review?.candidates?.length && !inconclusive) return;
     const box = add(parent, 'div', '', 'mt-3 border-t border-slate-200 pt-3 whitespace-normal');
     const message = add(box, 'p', '', 'text-sm text-slate-600'); message.setAttribute('role', 'status');
     const buttons = [];
+    if (inconclusive && !review?.candidates?.length) {
+      add(box, 'p', 'Review required', 'font-semibold text-slate-900');
+      add(box, 'p', result.source_note || 'The state lookup did not provide enough confirmed information to establish a status. Review the explanation and available evidence, then retry this state or check its official lookup.', 'mt-1 text-xs text-slate-600');
+      try {
+        const url = new URL(result.source_url);
+        if (url.protocol === 'https:' && !url.username && !url.password) {
+          const link = add(box, 'a', 'Open state lookup', 'mt-2 block text-xs underline');
+          link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        }
+      } catch { /* No unverified replacement URL. */ }
+    }
     let busy = false;
     function action(parent, label, run, selected = false) {
       const button = add(parent, 'button', label, 'rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50');
@@ -99,9 +111,9 @@
     }
   }
   function statusLabel(result) {
-    const inconclusive = ['Needs Review', 'Unable to Confirm', 'Site Not Reachable', 'No Confirmed Match'].includes(result.status);
+    const inconclusive = unresolvedStatuses.has(result.status);
     if (inconclusive && result.identity_review?.candidates?.some(candidate => !candidate.decision)) return 'Confirm match';
-    return result.status === 'Needs Review' ? 'Unable to Confirm' : result.status || 'Unknown';
+    return inconclusive ? 'Review required' : result.status || 'Unknown';
   }
   window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel});
 })();
