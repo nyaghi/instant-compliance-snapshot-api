@@ -7322,8 +7322,7 @@ def nv_charity_detail_evidence(fields, expected_business_id, filings=None):
     solicitation = fields["Solicits Charitable Contribution?"].strip().casefold()
     if solicitation not in {"yes", "no"}:
         raise ValueError("Nevada charitable solicitation field did not load")
-    if missing_type and (solicitation != "yes"
-            or normalized_match_name(fields["IRS Registered Name"]) != normalized_match_name(name)):
+    if missing_type and normalized_match_name(fields["IRS Registered Name"]) != normalized_match_name(name):
         raise ValueError("Nevada untyped detail does not establish charitable identity")
     aliases = [fields[k].strip() for k in ("IRS Registered Name", "Campaign Name") if fields[k].strip() not in {"", "-"}]
     raw_status = fields["Entity Status"].strip()
