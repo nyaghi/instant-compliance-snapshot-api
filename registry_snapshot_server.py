@@ -7057,7 +7057,8 @@ def nc_charity_record_evidence(fields):
     non_charity_scope = kind in {"Fund-Raising Consultant", "Solicitor"} and bool(re.fullmatch(r"SL\d+", identifier))
     valid_kind = (re.fullmatch(r"(?:SL|EX)\d+", identifier)
                   and (kind in {"Charitable Organization", "CSL Exempt Organization"}
-                       or kind == "In-Process" and raw == "In-Process"))
+                       or kind == "In-Process" and (raw == "In-Process"
+                           or bool(trial_identity()) and raw == "Cancelled")))
     unsupported_scope = kind == "Sponsor Organization" and bool(re.fullmatch(r"SL\d+", identifier))
     unsupported_denied = kind in {"Not Determined", "CSL Exempt Organization"} and raw == "Denied" and not identifier
     unsupported_inactive = kind == "In-Process" and raw == "Expired Inactive" and not identifier
@@ -7322,8 +7323,11 @@ def nv_charity_detail_evidence(fields, expected_business_id, filings=None):
     solicitation = fields["Solicits Charitable Contribution?"].strip().casefold()
     if solicitation not in {"yes", "no"}:
         raise ValueError("Nevada charitable solicitation field did not load")
-    if missing_type and normalized_match_name(fields["IRS Registered Name"]) != normalized_match_name(name):
-        raise ValueError("Nevada untyped detail does not establish charitable identity")
+    # ORION's entity label may contain a DBA, an acronym, or an older name;
+    # its IRS-name field may also be blank. Neither field is an identity
+    # decision. For untyped records, the bound CSR history establishes the
+    # record's charitable scope; the existing organization matcher still
+    # decides identity using the parsed names, FEIN and corroboration.
     aliases = [fields[k].strip() for k in ("IRS Registered Name", "Campaign Name") if fields[k].strip() not in {"", "-"}]
     raw_status = fields["Entity Status"].strip()
     expiration = final_four_source_date(fields["Annual Renewal Due Date/Expiration Date"], "Nevada entity expiration")
@@ -7363,7 +7367,16 @@ def nv_charity_detail_evidence(fields, expected_business_id, filings=None):
         # A blank category alone cannot admit a business record. Require the
         # existing complete, same-entity CSR history validator before exposing
         # any conclusion; keep the state's original blank category unchanged.
-        record = nv_charity_filings_evidence(record, filings)
+        try:
+            record = nv_charity_filings_evidence(record, filings)
+        except ValueError as exc:
+            if str(exc) != "Nevada charitable solicitation scope is unconfirmed":
+                raise
+            # A complete but empty legacy history must not abort a separate,
+            # fully documented candidate. Retain this record for the existing
+            # scope-review path; it establishes no charity status by itself.
+            record["status"] = "Unable to Confirm"
+            return record
         if not record.get("solicitation_statement_filed"):
             raise ValueError("Nevada untyped detail has no confirmed charity registration filing")
         record["_nv_type_from_bound_charity_history"] = True
@@ -7475,7 +7488,8 @@ def nv_charity_filings_evidence(record, payload):
             # only when the rest of this row is populated, and continue to
             # require an explicitly named CSR for charitable scope below.
             filed = final_four_source_date(fields["Filed Date"], "Nevada unlabelled filing date")
-            if (filed is None or filed > date.today() or not fields.get("Source")
+            if (filed is None or filed > date.today()
+                    or (not fields.get("Source") and not (source_omitted and trial_identity()))
                     or not fields["No. of Pages"].isdigit()):
                 raise ValueError("Nevada unlabelled filing row is incomplete")
             unlabelled_filings += 1
@@ -8818,7 +8832,10 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     if re.fullmatch(r"NY_CONNECTOR_[A-Z_]{1,60}", reason or ""):
         result.status_reason = reason
     attempts = record.get('al_verification_attempts', 0) if state == 'AL' else 0
-    why = ("The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
+    from deployment.registry_validation_reason import public_validation_reason
+    validation_note = public_validation_reason(state, diagnostic)
+    why = (validation_note if validation_note else
+           "The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
            "Alabama presented another verification challenge after two bounded code submissions; the search remains incomplete." if state == "AL" and attempts >= 2 and reason == "NY_CONNECTOR_AL_VERIFICATION_REQUIRED" else
            "Alabama's verification image could not be read with sufficient confidence; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_IMAGE_UNCERTAIN" else
            "Alabama's verification reader was unavailable or ran out of time; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_READER_UNAVAILABLE" else
@@ -8867,7 +8884,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
                           'IMAGE_DIMENSIONS', 'READER_BUSY', 'IMAGE_BLANK',
                           'READER_DEADLINE', 'READS_UNCERTAIN', 'READER_EXCEPTION'}:
             data['lab_diagnostic']['verification_reader_stage'] = diagnostic
-    if state in {"NM", "MS", "NC"}:
+    if state in {"NM", "MS", "NC"} or state == "NV" and trial_identity():
         pending = (record.get("pending") or {}).get("query") or {}
         data["lab_diagnostic"] = {
             "code": diagnostic or reason or "INCOMPLETE_EVIDENCE",
@@ -8951,7 +8968,8 @@ def final_four_connector_advance(record):
             'Mississippi detail identity or status changed',
             'Mississippi expiration date is malformed', 'No safe Mississippi name search',
         }
-        diagnostic = str(exc) if str(exc) in safe_errors else type(exc).__name__
+        from deployment.registry_validation_reason import public_validation_reason
+        diagnostic = str(exc) if str(exc) in safe_errors or public_validation_reason(record["state"], str(exc)) else type(exc).__name__
         return {"phase": "complete", "result": final_four_connector_failure(
             record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "", diagnostic)}
     if time.time() >= record["expires"]:
@@ -16277,6 +16295,9 @@ def normalize_registry_match_fields(result, org) -> None:
     from deployment.nc_confirmed_evidence import preserves_confirmed_record
     if preserves_confirmed_record(result):
         return  # NC identity is known even when its source standing is unresolved.
+    from deployment.nv_confirmed_evidence import preserves_confirmed_detail
+    if preserves_confirmed_detail(result):
+        return  # Keep the selected source's full DBA/name for its original image.
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         evidence = getattr(result, "va_entity_evidence", {})
         if (result.state == "VA" and getattr(result, "reason_code", "") == "VA_MATCHED_BY_EXACT_FEIN"
