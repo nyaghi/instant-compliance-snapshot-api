@@ -8690,10 +8690,17 @@ def final_four_clean_evidence(payload, query):
             and query["url"] == "https://www.sosnc.gov/online_services/search/charities_profile/"
                 + query["identifier"].removeprefix("NCAPP-"))
         expected_number = "" if application_detail else query.get("identifier")
+        # Transport admission only: the master still binds category, name,
+        # status and profile URL to the previously validated search card.
+        expired_application = (application_detail and trial_identity() and isinstance(fields, dict)
+            and fields.get("Status") == "Expired License"
+            and final_four_source_date(fields.get("Expiration Date"), "North Carolina expiration") is not None)
+        if expired_application:
+            final_four_source_date(fields.get("Extension End Date"), "North Carolina extension")
         if (not isinstance(fields, dict) or set(fields) - allowed or fields.get(identity_key) != expected_number
                 or application_detail and (fields.get("profile_url") != query["url"]
-                    or fields.get("Status") not in {"In-Process", "Withdrawn"}
-                    or fields.get("Expiration Date") or fields.get("Extension End Date"))):
+                    or not expired_application and (fields.get("Status") not in {"In-Process", "Withdrawn"}
+                        or fields.get("Expiration Date") or fields.get("Extension End Date")))):
             raise ValueError("Unexpected or mismatched detail identity fields")
         if state == "TN" and "financial_history_absent" in fields:
             if (fields["financial_history_absent"] is not True or type(fields.get("financial_count")) is not int
