@@ -7917,6 +7917,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
     missing_nv_business_id = False
     scope_reviews = []
     excluded_nc_entities = []
+    nc_deferred_applications = []
     nv_scope_records = {}
     excluded_nv_entities = []
     def collect(query):
@@ -8083,6 +8084,13 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 seen.add(row["identifier"])
                 continue
             if state == "NC" and row.get("unsupported_registration_scope"):
+                if (trial_identity() and row["identifier"].startswith("NCAPP-")
+                        and row["raw_status"] in {"Denied", "Expired Inactive"}):
+                    # Read the remaining candidates before a historical
+                    # application can block a confirmed in-process application.
+                    nc_deferred_applications.append(row)
+                    seen.add(row["identifier"])
+                    continue
                 # Full identity rejection above may discard an unrelated public
                 # sponsor row. A possible/exact sponsor cannot prove registration
                 # or non-registration and must retain the conservative hold.
@@ -8217,6 +8225,17 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                         completed_searches=completed_searches):
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state])
+    if nc_deferred_applications:
+        selected = getattr(result, "_cc_license_record", {})
+        from deployment.nc_pending_precedence import confirmed_pending
+        if (not result.success or not confirmed_pending(selected)
+                or any(normalized_match_name(row["name"]) != normalized_match_name(selected["name"])
+                       for row in nc_deferred_applications)):
+            raise ValueError("North Carolina matching unsupported category needs scope confirmation")
+        result.source_attempts = list(getattr(result, "source_attempts", [])) + [
+            {"superseded_application": {k: row[k] for k in ("name", "identifier", "raw_status", "url")}}
+            for row in nc_deferred_applications]
+        result.source_note += " A confirmed matching In-Process application takes precedence over the other application status; CharityClarity reports Pending."
     if excluded_nc_entities:
         result.source_attempts = list(getattr(result, "source_attempts", [])) + [
             {"excluded_non_charity_record": item} for item in excluded_nc_entities[:20]]
@@ -10113,8 +10132,11 @@ def select_licensed_charity(org, rows, state, deadline):
         return None, ""
     if state in {"AL", "NC", "NV", "TN"} and any(r.get("match", {}).get("reason") == "ALIAS_IDENTITY_UNCONFIRMED" for r in possible):
         return None, f"{state} returned an alternate-name record that could not be tied to the requested organization's EIN and full office address. Review the identity before using its status; a matching city alone does not establish that it is the same organization."
+    from deployment.nc_pending_precedence import confirmed_pending
+    explicit_nc_pending = ([r for r in accepted if confirmed_pending(r)]
+                           if state == "NC" and trial_identity() else [])
     current = [r for r in accepted if r["status"] in {"Current", "Upcoming Filing", "Exempt", "Pending"}]
-    if current:
+    if current and not explicit_nc_pending:
         latest_current = max(r.get("expiration") or date.min for r in current)
         adverse = [r for r in accepted if r["status"] in {"Suspended", "Revoked"}
                    and (r.get("expiration") or date.min) >= latest_current]
@@ -10140,7 +10162,7 @@ def select_licensed_charity(org, rows, state, deadline):
     # The adverse suspension/revocation conflict guard above still applies.
     explicit_ga_exempt = [r for r in current if state == "GA" and r["status"] == "Exempt"
                           and r["raw_status"].strip().casefold() == "exempt"]
-    pool = explicit_ga_exempt or current_primary or corroborated_current or primary_open or current or primary or accepted
+    pool = explicit_nc_pending or explicit_ga_exempt or current_primary or corroborated_current or primary_open or current or primary or accepted
     if len(pool) > 1:
         keys = {normalized_match_name(r["name"]) for r in pool}
         addresses_agree = all(r.get("address_evidence", {}).get("decision") == "corroborated" for r in pool)
@@ -16179,6 +16201,9 @@ def apply_confirmed_feedback_correction(result) -> str:
 
 
 def fill_registry_match_from_text(result, body: str, org) -> None:
+    from deployment.nv_confirmed_evidence import preserves_confirmed_detail
+    if preserves_confirmed_detail(result):
+        return  # Preserve source-bound NV names before free-text cleanup, too.
     if (getattr(result, "matched_registry_name", "") or "").strip():
         result.matched_registry_name = structured_registry_name(result.matched_registry_name, org.organization_name, org.ein)
         return
