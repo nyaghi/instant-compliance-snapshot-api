@@ -12,7 +12,9 @@ def target(result):
     ctx=result.get('_worker_identity_review')
     if not isinstance(ctx,dict) or ctx.get('search_complete') is not True:return None
     rows=ctx.get('records')
-    if not isinstance(rows,list) or not 1<=len(rows)<=100 or any(not isinstance(r,dict) for r in rows):return None
+    # Rejected search hits do not count as review candidates. The source may
+    # retain hundreds of them; the single-candidate binding below still applies.
+    if not isinstance(rows,list) or not rows or any(not isinstance(r,dict) for r in rows):return None
     candidates=[r for r in rows if r.get('_identity_outcome') in {'accepted','possible','conflict'}]
     if len(candidates)!=1 or candidates[0].get('_identity_outcome') not in {'possible','conflict'}:return None
     row=candidates[0]

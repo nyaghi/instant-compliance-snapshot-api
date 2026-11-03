@@ -25668,6 +25668,20 @@ def nj_name_fallback_queries(org):
 
     if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
         reviewed = {normalized_match_name(name) for name in [org.organization_name,*known_names_for_ein(org.ein)]}
+        # A generated geographic-only query adds broad unrelated hits after the
+        # full name and distinctive terms. Preserve literal names and reviewed
+        # aliases, including organizations whose entire name is a state name.
+        geography = {normalized_match_name(name) for name in (
+            "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|"
+            "District of Columbia|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|"
+            "Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|"
+            "Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|"
+            "New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|"
+            "Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|"
+            "Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming"
+        ).split("|")}
+        queries = [name for name in queries if normalized_match_name(name) in reviewed
+                   or (normalized_match_name(name) not in geography and distinctive_match_tokens(name))]
         return sorted(queries,key=lambda name:(normalized_match_name(name) not in reviewed,
                                              len(distinctive_match_tokens(name)) < 2))
     return queries
