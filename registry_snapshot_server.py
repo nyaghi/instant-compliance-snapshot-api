@@ -17663,12 +17663,22 @@ def fl_business_public_rows(query: str, deadline: float) -> list:
         return []
 
 
+def fl_shared_lookup_deadline(organization_name, ein):
+    from deployment.state_snapshots import CURRENT
+    run = CURRENT.get()
+    if (run is not None and run.state == 'FL' and run.ein == canonical_ein_digits(ein)
+            and run.name == organization_name and getattr(run, 'semantic_history_scope', False)):
+        return getattr(run, 'fl_lookup_deadline', float('inf'))
+    return float('inf')
+
+
 def search_fl_with_transport(page, org, transport):
     url = FL_CHECK_A_CHARITY_URL
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
     lookup_started = time.monotonic()
-    deadline = lookup_started + FL_LOOKUP_MAX_SECONDS
+    deadline = min(lookup_started + FL_LOOKUP_MAX_SECONDS,
+                   fl_shared_lookup_deadline(org.organization_name, org.ein))
     transport.deadline = deadline
 
     def remaining_seconds() -> float:
@@ -36836,6 +36846,8 @@ def _run_single_state_lookup_reliably_source(organization_name: str, ein: str, s
     me_progress = {"deadline": time.perf_counter() + 265, "completed": set()} if state == "ME" else None
     wi_progress = {"attempted": [], "completed": set()} if state == "WI" else None
     for attempt in range(1, attempts + 1):
+        if state == 'FL' and result is not None and time.monotonic()+1 >= fl_shared_lookup_deadline(organization_name, ein):
+            break
         result = (run_state_lookup(organization_name, ein, state, mi_progress=mi_progress)
                   if state == "MI" else run_me_lookup_with_lane(organization_name, ein, me_progress)
                   if state == "ME" else run_state_lookup(organization_name, ein, state, wi_progress=wi_progress)
@@ -36904,6 +36916,8 @@ def _run_single_state_lookup_reliably_source(organization_name: str, ein: str, s
                 # Release the registry session/lock before waiting. Other state
                 # futures continue; no successful or completed-empty query is retried.
                 delay = 8.0
+            if state == 'FL':
+                delay = min(delay, max(0, fl_shared_lookup_deadline(organization_name, ein)-time.monotonic()-1))
             time.sleep(delay)
     if state == "AK" and best_ak_identity_result and result:
         final_status = (result.get("status") or "").strip().lower()
@@ -36940,6 +36954,8 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     from deployment.state_snapshots import CaptureRun
     with CaptureRun(organization_name,ein,(state or '').upper()) as capture:
         capture.semantic_history_scope=True
+        if state.upper() == 'FL' and LAB_LOOKUP_MODE_CONTEXT.get() == 'standard':
+            capture.fl_lookup_deadline=time.monotonic()+FL_LOOKUP_MAX_SECONDS
         capture.known_names=[organization_name,*known_names_for_ein(ein)]
         data=_run_single_state_lookup_reliably_source(organization_name,ein,state)
         if state.upper() == 'FL':

@@ -260,6 +260,11 @@ def generate(payload,supported,store=None):
     for block in range(index_count):
         frame(c,org,ein,'State status and evidence index');y=HEIGHT-105
         y=para(c,'State index',MARGIN,y,WIDTH-2*MARGIN,'title')-18
+        c.setFillColor(NAVY);c.setFont('Helvetica-Bold',8)
+        for heading,x in [('State',MARGIN+6),('Status',MARGIN+160),('Evidence',MARGIN+360)]:
+            c.drawString(x,y-9,heading)
+        c.drawRightString(WIDTH-MARGIN-5,y-9,'Page')
+        y-=22
         for local,section in enumerate(sections[block*19:(block+1)*19]):
             r=section['row'];num=offset+section['start']+1
             c.setFillColor(PALE if local%2==0 else colors.white);c.rect(MARGIN,y-27,WIDTH-2*MARGIN,30,fill=1,stroke=0)

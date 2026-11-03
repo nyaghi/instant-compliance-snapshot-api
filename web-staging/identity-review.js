@@ -3,8 +3,9 @@
   'use strict';
   const unresolvedStatuses = new Set(['Needs Review', 'Unable to Confirm', 'Unable to Verify', 'Site Not Reachable', 'No Confirmed Match', 'Unknown']);
   function boundedSourceFailure(result) {
-    return result.state === 'OR' && result.status === 'Site Not Reachable'
-      && ['OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'].includes(result.reason_code);
+    return result.status === 'Site Not Reachable' && !result.identity_review?.candidates?.length
+      && (result.state === 'OR' && ['OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'].includes(result.reason_code)
+        || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH');
   }
   function add(parent, tag, value, classes = '') {
     const el = document.createElement(tag); el.textContent = value; el.className = classes; parent.appendChild(el); return el;

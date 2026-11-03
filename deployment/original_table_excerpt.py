@@ -16,7 +16,19 @@ def row_regions(page,state,identifier,name):
  tables=page.find_tables();matches=[]
  for table in tables:
   rows=table.extract()
-  if not rows or [re.sub(r'\s+',' ',v or '').strip() for v in rows[0]]!=HEADERS[state]:continue
+  if not rows:continue
+  labels=[re.sub(r'\s+',' ',v or '').strip() for v in rows[0]]
+  expected=HEADERS[state]
+  if state=='NH' and len(labels)==8:
+   # Current publisher uses City/Zip and omits the top-left cell border.
+   # Verify its printed Reg. No. label in that column before accepting it.
+   if labels[3]=='City':labels[3]='City/Town'
+   if labels[5]=='Zip':labels[5]='Zip Code'
+   if not labels[0] and len(table.rows)>1 and table.rows[1].cells[0]:
+    cell=table.rows[1].cells[0];header=table.rows[0].bbox
+    printed=page.crop((cell[0],header[1],cell[2],header[3])).extract_text() or ''
+    if re.sub(r'\s+',' ',printed).strip()=='Reg. No.':labels[0]='Reg. No.'
+  if labels!=expected:continue
   for index,row in enumerate(rows[1:],1):
    if str(row[0] or '').strip()!=str(identifier):continue
    parts=str(name).split(' | DBA: ') if state=='KY' else [str(name)]

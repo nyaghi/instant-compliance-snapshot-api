@@ -6,7 +6,9 @@ import urllib.request
 from urllib.parse import urlsplit
 
 SOURCE = 'https://justice.oregon.gov/Charities'
-PROBE_SECONDS = 16.0
+CONNECT_SECONDS = 8.0
+# Give recovery twice the initial allowance; retain the existing task ceiling.
+PROBE_SECONDS = CONNECT_SECONDS * 3
 TASK_SECONDS = 75.0
 REASONS = {'OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'}
 
@@ -60,7 +62,7 @@ def check(url=SOURCE, *, deadline=float('inf'), opener=None, clock=None):
         attempt = {'attempt': number}
         try:
             request = urllib.request.Request(url, headers={'User-Agent': 'ComplianceExpressRegistrySnapshot/1.0'})
-            with opener(request, timeout=min(8.0, remaining)) as response:
+            with opener(request, timeout=min(CONNECT_SECONDS * number, remaining)) as response:
                 if clock() >= stop:
                     attempt['error_type'] = 'LateResponse'
                     attempts.append(attempt)
