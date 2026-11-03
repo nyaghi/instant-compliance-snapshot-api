@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from xml.sax.saxutils import escape
+from urllib.parse import urlsplit
 
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import RectangleObject
@@ -131,7 +132,16 @@ def evidence(row,store):
         if expected and str(meta.get('identifier') or '')!=str(expected):
             # The existing strict matcher already supports state-specific IDs.
             ref={**meta,'url':path}
-            if not ss.matching_reference(row,[ref]):raise ValueError('Evidence does not match the selected record.')
+            # Archived image metadata predates the operation field carried by
+            # live references. NY's observed detail URL independently proves it.
+            if row['state']=='NY':
+                source=urlsplit(meta.get('source_url') or '')
+                selected=urlsplit(row.get('source_url') or '')
+                record=re.fullmatch(r'/RegistrySearch/(\d{2}-\d{2}-\d{2})/?',source.path)
+                if (record and source.scheme=='https' and source.hostname=='charities-search.ag.ny.gov'
+                        and source.hostname==selected.hostname and source.path.rstrip('/')==selected.path.rstrip('/')
+                        and meta.get('identifier')==record[1]):ref['operation']='detail'
+            if not ss.matching_reference(row,[ref]):raise ValueError(row['state']+': evidence does not match the selected record.')
     return raw,'Names searched' if negative else 'State snapshot'
 
 def generate(payload,supported,store=None):

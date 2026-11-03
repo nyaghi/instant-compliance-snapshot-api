@@ -2512,7 +2512,25 @@ def ca_master_name_identity(org, entity):
 
 
 def search_ca_master(page, org):
-    result = checker.search_ca(page, org)
+    # Observe the exact EIN operation that this checker always executes first.
+    # This records actual work, not the planned alias list, and issues no query.
+    receipt = None
+    if trial_identity() and len(canonical_ein_digits(org.ein)) == 9:
+        from deployment.state_snapshots import CURRENT
+        from deployment.search_history import SourceQueryReceipt
+        run = CURRENT.get()
+        if run is not None and run.state == "CA":
+            receipt = SourceQueryReceipt(run, {"state":"CA", "operation":"search",
+                "ein":org.ein, "url":checker.CA_EVOKE_PUBLIC_PORTAL_URL,
+                "source_kind":"state_portal", "filter_label":"Exact FEIN; public entity and registration lookup"})
+    try:
+        result = checker.search_ca(page, org)
+    except BaseException:
+        if receipt: receipt.incomplete()
+        raise
+    if receipt:
+        if result.success is True: receipt.complete()
+        else: receipt.incomplete()
     # A completed empty registration list is different from unavailable detail.
     # The public entity directory can retain shells that have no registration.
     entity = getattr(result, "_cc_selected_entity", None)
@@ -26230,12 +26248,13 @@ def search_nj_with_name_fallback(page, org):
     if public_status(result) != "Not Registered":
         return result
     fallback_started = time.monotonic()
-    try:
-        fallback_budget_seconds = float(os.environ.get("CE_NJ_NAME_FALLBACK_SECONDS", "32"))
-    except Exception:
-        fallback_budget_seconds = 32.0
-    from deployment.state_snapshots import DEADLINE
     bounded_trial = trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard"
+    default_fallback_seconds = 48.0 if bounded_trial else 32.0
+    try:
+        fallback_budget_seconds = float(os.environ.get("CE_NJ_NAME_FALLBACK_SECONDS", default_fallback_seconds))
+    except Exception:
+        fallback_budget_seconds = default_fallback_seconds
+    from deployment.state_snapshots import DEADLINE
     fallback_deadline = (min(fallback_started+fallback_budget_seconds,DEADLINE.get()-1.0) if bounded_trial
                          else fallback_started+fallback_budget_seconds)
     for variant in nj_name_fallback_queries(org):
