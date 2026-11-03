@@ -51,6 +51,19 @@ def frame(c, org, ein, title='Compliance package'):
 def page_bytes(draw, org, ein, title='Compliance package'):
     b=io.BytesIO();c=canvas.Canvas(b,pagesize=(WIDTH,HEIGHT));frame(c,org,ein,title);draw(c);c.save();return b.getvalue()
 
+def compact_history_page(page):
+    """Remove only the generated history's repeated footer and trailing space."""
+    bottoms=[]
+    def observe(value,cm,tm,font,size):
+        if not value.strip():return
+        y=tm[4]*cm[1]+tm[5]*cm[3]+cm[5]
+        if y<40 and (value.strip().isdigit() or value.startswith('Compliance Express |')):return
+        bottoms.append(y-abs(size)*0.4-5)
+    page.extract_text(visitor_text=observe)
+    if bottoms and all(40<y<float(page.cropbox.top) for y in bottoms):
+        page.cropbox=RectangleObject((page.cropbox.left,min(bottoms),page.cropbox.right,page.cropbox.top))
+    return page
+
 def label(row):
     review=row.get('identity_review')
     if isinstance(review,dict) and not row.get('identity_review_decision') and row.get('status') in {'Needs Review','Unable to Confirm','Unknown'}:
@@ -192,7 +205,9 @@ def generate(payload,supported,store=None):
         for page in list(intro_reader.pages)[:-1]:body.add_page(page)
         current=intro_reader.pages[-1];available=y-44
         for source_index,original in enumerate(source.pages):
-            original.transfer_rotation_to_content();box=original.cropbox
+            original.transfer_rotation_to_content()
+            if kind=='Names searched':original=compact_history_page(original)
+            box=original.cropbox
             sw,shh=float(box.width),float(box.height);scale=min(1,(WIDTH-2*MARGIN)/sw);top=float(box.top)
             # Avoid an almost-empty extra page for a small trailing image strip.
             # Reduce the whole original uniformly by at most 15%; never crop it.
@@ -257,7 +272,9 @@ def generate(payload,supported,store=None):
     c.save();writer=PdfWriter();writer.append(front_reader);writer.append(PdfReader(io.BytesIO(index_stream.getvalue())));writer.append(body)
     for section in sections:writer.add_outline_item(STATE_NAMES[section['row']['state']]+' - '+label(section['row']),offset+section['start'])
     from pypdf.annotations import Link
-    for page,target,rect in links:writer.add_annotation(page,Link(rect=rect,target_page_index=target))
+    for page,target,rect in links:
+        annotation=writer.add_annotation(page,Link(rect=rect,target_page_index=target))
+        annotation['/Dest'][0]=writer.pages[target].indirect_reference
     for i,page in enumerate(writer.pages):
         b=io.BytesIO();cv=canvas.Canvas(b,pagesize=(WIDTH,HEIGHT));cv.setFont('Helvetica',7);cv.setFillColor(GRAY);cv.drawCentredString(WIDTH/2,12,f'{i+1} / {len(writer.pages)}');cv.save();page.merge_page(PdfReader(io.BytesIO(b.getvalue())).pages[0])
     writer.add_metadata({'/Title':org+' - Compliance Package','/Author':'Compliance Express','/Subject':'CharityClarity results and original saved evidence'})
