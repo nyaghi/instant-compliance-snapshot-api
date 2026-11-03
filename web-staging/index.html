@@ -1200,7 +1200,7 @@
       } finally {
         clearTimeout(timeout);
         generateReportButton.disabled = submitButton.disabled || !latestResults.length;
-        downloadPackageButton.disabled = generateReportButton.disabled;
+        downloadPackageButton.disabled = !latestResults.length || submitButton.disabled;
       }
     }
 
