@@ -240,12 +240,12 @@ def generate(payload,supported,store=None):
     para(c,'Based on the displayed CharityClarity results and saved source documents. This is a registration lookup snapshot, not a complete compliance review or legal/tax advice. No new registry searches were run to create this package.',MARGIN,y,WIDTH-2*MARGIN,'small')
     c.save();front_reader=PdfReader(io.BytesIO(front.getvalue()));front_count=len(front_reader.pages)
     # Fixed-height index rows produce deterministic page targets and links.
-    index_count=(len(rows)+17)//18;offset=front_count+index_count
+    index_count=(len(rows)+18)//19;offset=front_count+index_count
     index_stream=io.BytesIO();c=canvas.Canvas(index_stream,pagesize=(WIDTH,HEIGHT));links=[]
     for block in range(index_count):
         frame(c,org,ein,'State status and evidence index');y=HEIGHT-105
         y=para(c,'State index',MARGIN,y,WIDTH-2*MARGIN,'title')-18
-        for local,section in enumerate(sections[block*18:(block+1)*18]):
+        for local,section in enumerate(sections[block*19:(block+1)*19]):
             r=section['row'];num=offset+section['start']+1
             c.setFillColor(PALE if local%2==0 else colors.white);c.rect(MARGIN,y-27,WIDTH-2*MARGIN,30,fill=1,stroke=0)
             para(c,STATE_NAMES[r['state']],MARGIN+6,y,149,'small')
