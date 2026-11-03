@@ -2002,6 +2002,25 @@ def reviewed_retrieval_key(value: str) -> tuple[str, bool]:
     return search_spelling_key(value), bool(re.search(r"(?:\b[A-Za-z]\.){2,}", value or ""))
 
 
+def nv_search_name(value: str) -> str:
+    """Equivalent public-search spelling only; identity targets stay intact."""
+    import unicodedata
+    return "".join(char for char in unicodedata.normalize("NFD", ascii_dash_search_name(value))
+                   if not unicodedata.combining(char))
+
+
+def leading_possessive_search_root(value: str) -> str:
+    """A distinctive leading possessive root, never an identity decision."""
+    literal = nv_search_name(canonical_name_punctuation(value))
+    match = re.match(r"^([A-Za-z]{5,})'s\b", literal, re.I)
+    if not match:
+        return ""
+    root = match[1]
+    common = {"children", "child", "people", "women", "woman", "men", "veteran", "veterans",
+              "patient", "patients", "friend", "friends", "american", "america", "national"}
+    return root if root.casefold() not in common and distinctive_match_tokens(root) else ""
+
+
 def ascii_dash_search_name(value: str) -> str:
     """One punctuation-only retrieval alternative; acceptance stays unchanged."""
     return re.sub(r"[\u2010-\u2015\u2212]", "-", value)
@@ -7863,14 +7882,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         raise ValueError("Unsupported final-four lookup")
     deadline = time.monotonic() + 60 if deadline is None else deadline
     nc_specific_names = bool(nc_specific_names and state == "NC" and trial_identity())
-    required, generated = licensed_charity_names(org)
+    required, generated = licensed_charity_names(org, possessive_root_priority=state == "AL" and bool(trial_identity()))
     if state == "NV":
-        # Nevada's public form rejects typographic dashes before submitting.
-        # Reuse the master punctuation alternative for retrieval only; org,
+        # Nevada rejects typographic dashes and diacritics before submitting.
+        # Use an equivalent public-search spelling for retrieval only; org,
         # EIN and reviewed identity targets retain their original values.
-        required = list(dict.fromkeys(ascii_dash_search_name(name) for name in required))
-        generated = list(dict.fromkeys(ascii_dash_search_name(name) for name in generated
-            if ascii_dash_search_name(name) not in required))
+        required = list(dict.fromkeys(nv_search_name(name) for name in required))
+        generated = list(dict.fromkeys(nv_search_name(name) for name in generated
+            if nv_search_name(name) not in required))
     if not required:
         raise ValueError("A reviewed organization name is required for this registry")
     if state in {"NC", "NV"} and trial_identity():
@@ -9610,7 +9629,7 @@ def licensed_dash_retrieval_forms(name):
     return list(dict.fromkeys(forms))
 
 
-def licensed_charity_names(org, *, literal_suffix_priority=False, literal_name_priority=False):
+def licensed_charity_names(org, *, literal_suffix_priority=False, literal_name_priority=False, possessive_root_priority=False):
     """Every reviewed name precedes bounded generated spelling/search variants."""
     primary = [org.organization_name, *known_names_for_ein(org.ein)]
     required, generated = [], []
@@ -9635,7 +9654,8 @@ def licensed_charity_names(org, *, literal_suffix_priority=False, literal_name_p
         literal_forms = literal_name_retrieval_forms(name)
         # Only the full literal name with its legal suffix removed gets this
         # priority; the helper's shorter prefix retains its previous position.
-        forms = ((literal_forms[:1] if literal_name_priority else [])
+        root = leading_possessive_search_root(name) if possessive_root_priority else ""
+        forms = (([root] if root else []) + (literal_forms[:1] if literal_name_priority else [])
                  + licensed_dash_retrieval_forms(name) + possessive_search_phrases(name)
                  + (literal_forms if literal_suffix_priority else [])
                  + high_signal_search_phrases(name) + literal_forms)
@@ -33771,6 +33791,22 @@ def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list
     if (literal in planned and not licensed_compound_retrieval_names(name)
             and not re.search(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$", name.strip(), re.I)):
         planned = [literal, *[q for q in planned if q != literal]]
+    if trial_identity():
+        root = leading_possessive_search_root(name)
+        if root and planned:
+            prioritized = [planned[0], root, *[q for q in planned[1:] if q.casefold() != root.casefold()]]
+            if len(prioritized) > len(planned):
+                # Replace a generated spelling, never a reviewed identity or
+                # the first literal query. Keep the existing query allowance.
+                protected = {canonical_name_punctuation(q).casefold()
+                             for q in [name, *known_names_for_ein(ein)]}
+                protected.add(root.casefold())
+                removable = next((i for i in range(len(prioritized)-1, 1, -1)
+                                  if prioritized[i].casefold() not in protected), None)
+                if removable is not None:
+                    prioritized.pop(removable)
+            if len(prioritized) <= len(planned):
+                planned = prioritized
     return planned
 
 
