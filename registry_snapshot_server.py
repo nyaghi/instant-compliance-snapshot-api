@@ -25749,7 +25749,11 @@ def nj_complete_grid_excludes_org(data, org) -> bool:
     targets = organization_match_target_variants(org.organization_name, org.ein)
     if not targets:
         return False
-    credentials = set()
+    record_ids = [row.get("Id") if isinstance(row,dict) else None for row in data["Records"]]
+    expanded = (nj_browser_grid_limit()>50 and len(data.get("_cc_observed_pages", []))>5
+                and all(isinstance(value,str) and value for value in record_ids)
+                and len(set(record_ids))==data["ItemCount"])
+    credentials = {}
     for row in data["Records"]:
         attrs = row.get("Attributes") if isinstance(row, dict) else None
         if not isinstance(attrs, list) or not all(isinstance(a, dict) for a in attrs):
@@ -25773,26 +25777,30 @@ def nj_complete_grid_excludes_org(data, org) -> bool:
         name, credential, other = [fields[k] for k in ("name", "accountnumber", "crsm_federalein")]
         if not useful_registry_name(name):
             return False
+        if expanded and unnumbered and canonical_ein_digits(other)=="000000000":
+            other = ""  # The portal's zero placeholder is missing identity data.
         if unnumbered:
             # A completed public grid can contain an unrelated unnumbered row.
-            # Its absent registration number is not an unknown identity when
-            # the source supplies a distinct valid EIN and both master name
-            # checks reject it. Preserve every matching or uncertain row.
+            # Both master name checks must reject it. In a fully joined large
+            # grid, a missing EIN uses that same conservative name exclusion
+            # already applied to numbered records; it never establishes a match.
             record_id = row.get("Id")
             if (not isinstance(record_id, str)
                     or not re.fullmatch(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}", record_id)
                     or sum(isinstance(item, dict) and item.get("Id") == record_id
                            for item in data["Records"]) != 1
-                    or not re.fullmatch(r"\d{2}-?\d{7}", other)
-                    or canonical_ein_digits(other) in (ein, "000000000")
+                    or (not (expanded and not other) and not re.fullmatch(r"\d{2}-?\d{7}", other))
+                    or (other and canonical_ein_digits(other) in (ein, "000000000"))
                     or nj_strong_name_ein_conflict(name, other, org)
                     or target_name_score(name, targets) >= 0
                     or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein)):
                 return False
         else:
-            if not re.fullmatch(r"CH\d+", credential) or credential in credentials:
+            same_excluded_identity = (expanded and credentials.get(credential)==(name,other)
+                and re.fullmatch(r"\d{2}-?\d{7}",other) and canonical_ein_digits(other) not in (ein,"000000000"))
+            if not re.fullmatch(r"CH\d+", credential) or (credential in credentials and not same_excluded_identity):
                 return False
-            credentials.add(credential)
+            credentials[credential] = (name,other)
         if other:
             if nj_strong_name_ein_conflict(name,other,org):return False
             if (not re.fullmatch(r"\d{2}-?\d{7}", other)
