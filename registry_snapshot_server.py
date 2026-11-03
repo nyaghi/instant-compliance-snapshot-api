@@ -7437,6 +7437,7 @@ def nv_charity_detail_evidence(fields, expected_business_id, filings=None):
             # fully documented candidate. Retain this record for the existing
             # scope-review path; it establishes no charity status by itself.
             record["status"] = "Unable to Confirm"
+            record["_nv_complete_empty_history"] = filings.get("total") == 0 and filings.get("rows") == []
             return record
         if not record.get("solicitation_statement_filed"):
             raise ValueError("Nevada untyped detail has no confirmed charity registration filing")
@@ -8320,7 +8321,22 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         for candidate in scope_reviews:
             record = nv_scope_records.get(candidate["identifier"])
             identity = licensed_charity_identity(org, record, state, deadline) if record else None
-            if identity == "possible" and record["match"].get("reason") != "ALIAS_IDENTITY_UNCONFIRMED":
+            historical_empty = (record and record.get("_nv_complete_empty_history") is True
+                and record.get("raw_status", "").casefold() == "terminated"
+                and record.get("expiration") and identity != "conflict"
+                and record.get("address_evidence", {}).get("decision") not in {"conflict", "different_ein"}
+                and not record.get("ein")
+                and any(other.get("_identity_outcome") == "accepted"
+                    and normalized_match_name(other["name"]) == normalized_match_name(record["name"])
+                    and other.get("solicitation_statement_filed")
+                    and other.get("expiration") and other["expiration"] > record["expiration"]
+                    and other.get("match", {}).get("decision") == "accepted"
+                    and other.get("address_evidence", {}).get("decision") not in {"conflict", "different_ein"}
+                    for other in records))
+            if historical_empty:
+                result.rejected_candidates = list(getattr(result, "rejected_candidates", [])) + [{
+                    **candidate, "reason": "Older terminated record has a complete empty filing history; a later charitable registration is independently confirmed."}]
+            elif identity == "possible" and record["match"].get("reason") != "ALIAS_IDENTITY_UNCONFIRMED":
                 result.rejected_candidates = list(getattr(result, "rejected_candidates", [])) + [{
                     **candidate, "reason": "Partial name was not corroborated; a separate full record was confirmed."}]
             else:
@@ -10367,10 +10383,11 @@ def dc_license_query_patterns(names):
             if not any(other != plan and covered_by(other, plan) for other in plans)]
 
 
-def dc_charity_records(org, deadline):
+def dc_charity_records(org, deadline, query_patterns=None):
     required, generated = licensed_charity_names(org)
+    patterns = dc_license_query_patterns(required + generated) if query_patterns is None else query_patterns
     clauses = []
-    for pattern in dc_license_query_patterns(required + generated):
+    for pattern in patterns:
         for field in ("ENTITYNAME", "ENTITYTRADENAME"):
             clause = f"UPPER({field}) LIKE '{pattern}'"
             if clause not in clauses: clauses.append(clause)
@@ -10379,7 +10396,7 @@ def dc_charity_records(org, deadline):
     fields = "OBJECTID,CUSTOMERNUMBER,ENTITYNAME,ENTITYTRADENAME,LICENSESTATUS,BUSINESSACTIVITY,PREMISEADDRESS,PREMISEINDC,LICENSEENDDATE,LICENSESTARTDATE,INITIALISSUEDATE,DATAREFRESHEDON"
     where = "UPPER(BUSINESSACTIVITY) LIKE '%CHARITABLE%' AND (" + " OR ".join(clauses) + ")"
     from deployment.search_history import begin_source_query
-    history_receipts=[receipt for pattern in dc_license_query_patterns(required + generated)
+    history_receipts=[receipt for pattern in patterns
         if (receipt:=begin_source_query('DC',' '.join(pattern.strip('%').split('%')),
             'Term included in the combined ENTITYNAME / ENTITYTRADENAME LIKE request',DC_LICENSE_API))]
     try:
@@ -10439,7 +10456,7 @@ def dc_charity_records(org, deadline):
             evidence_run=CURRENT.get()
             if evidence_run is not None and evidence_run.state=='DC':
                 evidence_run.dc_completed_query={'complete':True,'where':where,'row_count':len(raw_rows),
-                    'query_name':' OR '.join(dc_license_query_patterns(required + generated)),
+                    'query_name':' OR '.join(patterns),
                     'raw_rows':raw_rows if len(raw_rows)<=32 else []}
         except Exception:pass
         return rows, f"Data freshness: DC's public business-license extract was refreshed {refreshed.isoformat()}. It may lag the licensing portal; confirm time-sensitive decisions in DC's BOSS license search (https://boss.dc.gov/business/business-license-search)."
@@ -10450,8 +10467,21 @@ def dc_charity_records(org, deadline):
 def search_dc(org):
     deadline = time.monotonic() + 75
     try:
-        rows, freshness = dc_charity_records(org, deadline)
-        result=licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
+        # Complete primary-name spelling first. Never collapse it into a
+        # generated one-word predicate before the first source request.
+        primary = literal_name_retrieval_forms(org.organization_name)[:1]
+        patterns = dc_license_query_patterns(primary)
+        required, generated = licensed_charity_names(org)
+        fallback = dc_license_query_patterns(required + generated)
+        rows, freshness = dc_charity_records(org, deadline, patterns)
+        result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
+        selected = getattr(result, "_cc_license_record", {})
+        if patterns != fallback and not (result.success and not getattr(result, "_cc_identity_review", None)
+                and licensed_primary_positive_complete(org, selected, rows, state="DC")):
+            # No negative/adverse/alias-only conclusion from the primary
+            # search. The complete old alias/fallback coverage is retained.
+            rows, freshness = dc_charity_records(org, deadline, fallback)
+            result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         try:
             from deployment.dc_native_evidence import capture_dc
             capture_dc(sys.modules[__name__],org,result,rows,deadline)
@@ -16374,6 +16404,15 @@ def md_registry_match_from_entries(result, body: str, org) -> None:
 
 
 def normalize_registry_match_fields(result, org) -> None:
+    ct_bound = getattr(result, "_cc_ct_source_identity", None)
+    if (result.state == "CT" and getattr(result, "success", False) is True
+            and isinstance(ct_bound, tuple) and len(ct_bound) == 4
+            and ct_bound == (getattr(result, "matched_registry_name", ""),
+                             getattr(result, "matched_registry_identifier", ""),
+                             getattr(result, "raw_status_text", ""), result.source_url)
+            and ct_bound[0] and re.fullmatch(r"CHR\.\d{7}(?:-EXEMPT)?", ct_bound[1])
+            and ct_bound[3] == "https://www.elicense.ct.gov/lookup/licenselookup.aspx"):
+        return
     from deployment.ny_confirmed_evidence import preserves_confirmed_detail as preserves_ny_detail
     if preserves_ny_detail(result):
         return
@@ -16744,6 +16783,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     else:
         result.source_note = "Connecticut public registry AJAX search result row selected by strict organization-name match."
     result.success = True
+    result._cc_ct_source_identity = (row_name, result.matched_registry_identifier, result.raw_status_text, result.source_url)
     score = name_score
     if re.search(r"\bPUBLIC\s+CHARITY\b|\bCHR\.", combined, re.I):
         score += 80
@@ -17032,6 +17072,10 @@ def search_ct_direct(org):
         list(dict.fromkeys([*literal_registry_name_queries(original_name, org.ein), *equivalent_name_queries(original_name, org.ein, preserve_at=True),
                            *ct_shortened_institutional_queries(original_name, org.ein), *variants])), limit=CT_NAME_VARIANT_LIMIT,
         transform=lambda value: canonical_name_punctuation(value).strip())
+    # The entered full identity, with only its legal suffix removed, precedes
+    # alternate identities. This is retrieval priority, not relaxed matching.
+    primary_forms = literal_name_retrieval_forms(original_name)[:1]
+    variants = list(dict.fromkeys([*primary_forms, *variants]))
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -25594,6 +25638,8 @@ def nj_search_body(page, query, identity_org=None):
                                 const rows = el.querySelectorAll('[role="row"]');
                                 rows[rows.length-1]?.scrollIntoView({block:'end',behavior:'instant'});
                                 el.scrollTop = el.scrollHeight;
+                                if(el.scrollHeight <= el.clientHeight + 1)
+                                    el.dispatchEvent(new Event('scroll', {bubbles:true}));
                             }""")
                         page.wait_for_timeout(nj_query_timeout_ms(100))
                         continue

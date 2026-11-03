@@ -2568,7 +2568,7 @@ def mi_selected_grid_values(page,result):
     if (u.scheme!='https' or u.hostname!='www.ag.state.mi.us' or u.port not in (None,443)
         or u.username or u.password or u.query or u.fragment or u.path!='/CharitableTrust/frmSearchResults.aspx'
         or not re.fullmatch(r'\d{3,8}',identifier)):return None
-    raw=re.fullmatch(r'License / Registration Expiration: (\d{1,2}/\d{1,2}/\d{4}) \| AG File#: '+re.escape(identifier),str(result.get('raw_status_text','')))
+    raw=re.fullmatch(r'(?:Status: Registration Pending \| )?License / Registration Expiration: (\d{1,2}/\d{1,2}/\d{4}) \| AG File#: '+re.escape(identifier),str(result.get('raw_status_text','')))
     if not raw:return None
     clean=lambda s:re.sub(r'\s+',' ',s).strip()
     echo=page.locator('#ctl00_MainContent_lblSearchResults')
