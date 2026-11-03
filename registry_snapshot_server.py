@@ -25339,6 +25339,10 @@ def nj_exact_ein_exempt_row(data, query):
     return (re.sub(r"\s+", " ", name).strip(), "", query, "Exempt")
 
 
+def nj_browser_grid_limit():
+    return 200 if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard" else 50
+
+
 def nj_completed_query_rows(request, query, page_number=1):
     """Bind a fully received portal grid to the exact search that produced it."""
     try:
@@ -25348,7 +25352,7 @@ def nj_completed_query_rows(request, query, page_number=1):
                 or request.method != "POST"):
             return None
         sent = request.post_data_json
-        if (type(page_number) is not int or not 1 <= page_number <= 5
+        if (type(page_number) is not int or not 1 <= page_number <= nj_browser_grid_limit()//10
                 or not isinstance(sent, dict) or sent.get("search") != query or sent.get("page") != page_number
                 or any(sent.get(k) for k in ("filter", "metaFilter", "odataFilterQuery", "nlSearchFilter"))):
             return None
@@ -25368,7 +25372,7 @@ def nj_completed_query_rows(request, query, page_number=1):
                 or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
                 or data.get("Success") is False
                 or data.get("PageNumber") != page_number or type(data.get("MoreRecords")) is not bool
-                or (page_number > 1 and (data.get("PageSize") != 10 or not 11 <= count <= 50))
+                or (page_number > 1 and (data.get("PageSize") != 10 or not 11 <= count <= nj_browser_grid_limit()))
                 or (data["MoreRecords"] is False and count != (page_number-1)*10+len(records))):
             return None
         if not records:
@@ -25441,11 +25445,11 @@ def nj_name_exemption_result(data, org, deadline):
 
 def nj_join_query_pages(pages):
     """Join only consecutive, consistent pages from one observed public query."""
-    if not pages or len(pages) > 5 or any(not isinstance(data, dict) for data in pages):
+    if not pages or len(pages) > nj_browser_grid_limit()//10 or any(not isinstance(data, dict) for data in pages):
         return None
     first = pages[0]
     total = first.get("ItemCount")
-    if type(total) is not int or not 11 <= total <= 50:
+    if type(total) is not int or not 11 <= total <= nj_browser_grid_limit():
         return None
     page_count = (total+9)//10
     records = []
@@ -25533,8 +25537,10 @@ def nj_search_body(page, query, identity_org=None):
                 # A prefix can justify reading more, never a negative result.
                 prefix = {**data, "ItemCount": len(data.get("Records", [])), "MoreRecords": False}
                 if (identity_org is not None and data.get("MoreRecords") is True
-                        and type(data.get("ItemCount")) is int and 11 <= data["ItemCount"] <= 50
+                        and type(data.get("ItemCount")) is int and 11 <= data["ItemCount"] <= nj_browser_grid_limit()
                         and nj_complete_grid_excludes_org(prefix, identity_org)):
+                    if data["ItemCount"]>50:
+                        deadline=min(observation_started+32,NJ_NAME_QUERY_DEADLINE.get())
                     joined = nj_join_query_pages([part for _, part in completed])
                     if joined is None:
                         page._cc_nj_query_diagnostic["phase"] = "inconsistent_grid_pages"
@@ -25561,7 +25567,10 @@ def nj_search_body(page, query, identity_org=None):
                             }""")
                         page.wait_for_timeout(nj_query_timeout_ms(100))
                         continue
-                    rows = [row for batch, _ in completed for row in batch]
+                    # Large grids virtualize older rows. Every response is bound
+                    # and joined above; the final page must still be rendered.
+                    rows = (completed[-1][0] if joined["ItemCount"]>50
+                            else [row for batch, _ in completed for row in batch])
                     data = joined
                     page._cc_nj_query_diagnostic["completed_pages"] = len(completed)
                 # Read the page only after it renders this query's completed response.
@@ -25729,7 +25738,7 @@ def nj_complete_grid_excludes_org(data, org) -> bool:
     """
     ein = canonical_ein_digits(org.ein)
     if (not re.fullmatch(r"\d{9}", ein) or not isinstance(data, dict)
-            or type(data.get("ItemCount")) is not int or not 1 <= data["ItemCount"] <= 50
+            or type(data.get("ItemCount")) is not int or not 1 <= data["ItemCount"] <= nj_browser_grid_limit()
             or not isinstance(data.get("Records"), list)
             or len(data["Records"]) != data["ItemCount"]
             or data.get("MoreRecords") is not False
@@ -26175,6 +26184,16 @@ def search_nj_direct(page, org, identity_org=None):
             result.source_note = "Every record in this completed name search was excluded by the existing identity rules."
             result.success = True
             return result
+        completed_data = getattr(page, "_cc_nj_completed_data", None)
+        if (identity_org is not None and isinstance(completed_data, dict)
+                and len(completed_data.get("_cc_observed_pages", []))>5):
+            # A possible match on a later page must never fall through to the
+            # legacy first-row detail picker and become a false negative.
+            result.status = "Unable to Confirm"
+            result.reason_code = "NJ_LARGE_GRID_IDENTITY_REVIEW"
+            result.source_note = "New Jersey returned a large completed name search containing a possible identity match. The candidate requires review; no unrelated record was used to determine status."
+            result.success = False
+            return result
         exemption = nj_name_exemption_result(getattr(page, "_cc_nj_completed_data", None), identity_org or org, time.monotonic()+8)
         if exemption is not None:
             if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
@@ -26269,7 +26288,11 @@ def search_nj_with_name_fallback(page, org):
                         else search_nj_direct(page,fallback_org,identity_org=org))
         except TimeoutError:
             observations.append({'query':variant,'status':'Unable to Confirm','reason_code':'NJ_NAME_PLAN_INCOMPLETE',
-                                 'seconds':round(time.monotonic()-query_started,2)})
+                                 'seconds':round(time.monotonic()-query_started,2),
+                                 'search_phase':getattr(page,'_cc_nj_query_diagnostic',{}).get('phase',''),
+                                 'query_observation':{key:value for key,value in getattr(page,'_cc_nj_query_diagnostic',{}).items()
+                                     if key in {'accepted_pages','accepted_rows','expected_rows','matching_responses'}
+                                     and type(value) is int and 0<=value<=100000}})
             return incomplete(result,"a name search reached the existing shared allowance")
         observations.append({'query': variant, 'status': public_status(fallback),
             'reason_code': getattr(fallback, 'reason_code', '') or '',

@@ -194,6 +194,17 @@ def generate(payload,supported,store=None):
         for source_index,original in enumerate(source.pages):
             original.transfer_rotation_to_content();box=original.cropbox
             sw,shh=float(box.width),float(box.height);scale=min(1,(WIDTH-2*MARGIN)/sw);top=float(box.top)
+            # Avoid an almost-empty extra page for a small trailing image strip.
+            # Reduce the whole original uniformly by at most 15%; never crop it.
+            continued_capacity=HEIGHT-130-44
+            first_capacity=available if available>=110 else continued_capacity
+            scaled_height=shh*scale
+            if scaled_height>first_capacity:
+                full_continuations=int((scaled_height-first_capacity)/continued_capacity)
+                compact_capacity=first_capacity+full_continuations*continued_capacity
+                remainder=scaled_height-compact_capacity
+                if 0<remainder<96 and compact_capacity/scaled_height>=0.85:
+                    scale=compact_capacity/shh
             while top>float(box.bottom)+0.01:
                 if available<110:
                     body.add_page(current)
