@@ -434,6 +434,7 @@
                 <div class="mt-3 flex flex-wrap gap-2 sm:mt-0">
 
                   <button type="button" id="downloadExcelButton" class="hidden rounded-full bg-[#0B2A5B] px-4 py-2 text-xs font-semibold text-white hover:bg-[#081F43]">Download Excel</button>
+                  <button type="button" id="downloadPackageButton" class="hidden rounded-full bg-[#C8202E] px-4 py-2 text-xs font-semibold text-white hover:bg-[#A41B26] disabled:opacity-50">Download compliance package</button>
                   <button type="button" id="generateReportButton" class="hidden rounded-full bg-[#0B2A5B] px-4 py-2 text-xs font-semibold text-white hover:bg-[#081F43] disabled:opacity-50">Generate report</button>
                   <span id="reportMessage" role="status" class="text-xs text-slate-600"></span>
 
@@ -602,6 +603,7 @@
     const paidOfferLink = document.getElementById("paidOfferLink");
     const complimentaryAccessNote = document.getElementById("complimentaryAccessNote");
     const generateReportButton = document.getElementById("generateReportButton");
+    const downloadPackageButton = document.getElementById("downloadPackageButton");
     const reportMessage = document.getElementById("reportMessage");
     let latestResults = [];
     let lastNyInput = null;
@@ -1072,6 +1074,8 @@
 
     function renderResults(results, onlyNewYorkRefreshed = false) {
       latestResults = results;
+      downloadPackageButton.classList.toggle("hidden", !results.length);
+      downloadPackageButton.disabled = false;
       generateReportButton.classList.toggle("hidden", !results.length);
       generateReportButton.disabled = false;
       reportMessage.textContent = "";
@@ -1154,12 +1158,16 @@
 
 
 
-    async function generateReport() {
-      if (!latestResults.length || generateReportButton.disabled) return;
+    async function generateReport(packageMode = false) {
+      const activeButton = packageMode ? downloadPackageButton : generateReportButton;
+      if (!latestResults.length || activeButton.disabled || submitButton.disabled) return;
       const reportFields = ["organization_name", "ein", "state", "status", "comments", "raw_status_text", "source_note", "source_url", "matched_registry_identifier", "app_version", "computed_due_date", "checked_at_epoch", "registration_date", "registration_date_type", "registration_date_source_label", "registration_date_source_url", "registration_date_note", "renewal_date", "renewal_date_type", "renewal_date_source_label", "renewal_date_source_url", "renewal_date_note", "renewal_filing_value", "renewal_filing_type", "renewal_filing_label", "renewal_filing_source_url", "renewal_filing_note"];
-      const results = latestResults.map(result => Object.fromEntries(reportFields.map(key => [key, result[key]])));
+      if (packageMode) reportFields.push("success", "evidence_url", "search_history_url", "matched_registry_name", "identity_review_decision", "identity_review_evidence_final");
+      const results = latestResults.map(result => ({...Object.fromEntries(reportFields.map(key => [key, result[key]])),
+        ...(packageMode ? {display_status: window.CCIdentityReview?.statusLabel(result) || result.status, identity_review: result.identity_review ? {candidates: result.identity_review.candidates?.map(({name, identifier, decision, evidence_url}) => ({name, identifier, decision, evidence_url}))} : undefined} : {})}));
+      downloadPackageButton.disabled = true;
       generateReportButton.disabled = true;
-      reportMessage.textContent = "Generating report from these results...";
+      reportMessage.textContent = packageMode ? "Preparing your compliance package and saved evidence..." : "Generating report from these results...";
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 45000);
       try {
@@ -1167,7 +1175,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim() })
+          body: JSON.stringify({ results, ...(packageMode ? {package: true} : {}), email: email.value.trim(), admin_passcode: adminPasscode.value.trim() })
         });
         if (!response.ok) {
           const detail = await response.json().catch(() => ({}));
@@ -1181,7 +1189,7 @@
         const link = document.createElement("a");
         link.href = url;
         const reportEin = String(results[0].ein || "").replace(/\D/g, "");
-        link.download = `CharityClarity Aurora-${reportEin}-${new Date().toISOString().slice(0, 10)}.pdf`;
+        link.download = packageMode ? `Compliance Express-${reportEin}-Compliance Package-${new Date().toISOString().slice(0, 10)}.pdf` : `CharityClarity Aurora-${reportEin}-${new Date().toISOString().slice(0, 10)}.pdf`;
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -1192,6 +1200,7 @@
       } finally {
         clearTimeout(timeout);
         generateReportButton.disabled = submitButton.disabled || !latestResults.length;
+        downloadPackageButton.disabled = generateReportButton.disabled;
       }
     }
 
@@ -1631,7 +1640,8 @@
 
 
     downloadExcelButton.addEventListener("click", downloadExcel);
-    generateReportButton.addEventListener("click", generateReport);
+    generateReportButton.addEventListener("click", () => generateReport(false));
+    downloadPackageButton.addEventListener("click", () => generateReport(true));
     downloadLeadLogButton.addEventListener("click", downloadLeadLog);
     let formStartTracked = false;
     form.addEventListener("input", () => {
@@ -1703,6 +1713,8 @@
       latestResults = [];
       generateReportButton.disabled = true;
       generateReportButton.classList.add("hidden");
+      downloadPackageButton.disabled = true;
+      downloadPackageButton.classList.add("hidden");
       reportMessage.textContent = "";
       const total = states.length;
 

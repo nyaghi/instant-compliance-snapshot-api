@@ -6,8 +6,8 @@ import urllib.request
 from urllib.parse import urlsplit
 
 SOURCE = 'https://justice.oregon.gov/Charities'
-PROBE_SECONDS = 8.0
-TASK_SECONDS = 30.0
+PROBE_SECONDS = 16.0
+TASK_SECONDS = 75.0
 REASONS = {'OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'}
 
 
@@ -19,7 +19,7 @@ def task_allowance(job):
 def unavailable_result(payload, version, reason, attempts=(), elapsed=0):
     assert reason in REASONS
     if reason == 'OR_SOURCE_TIME_LIMIT':
-        explanation = 'Oregon reached its available public-registry time limit (at most 30 seconds). The check was stopped instead of restarting its waits.'
+        explanation = 'Oregon reached its available public-registry time limit (at most 75 seconds). The check was stopped instead of restarting its waits.'
     elif reason == 'OR_SOURCE_ACCESS_REFUSED':
         explanation = 'Oregon did not provide the requested public-registry page during this check.'
     else:
@@ -60,7 +60,7 @@ def check(url=SOURCE, *, deadline=float('inf'), opener=None, clock=None):
         attempt = {'attempt': number}
         try:
             request = urllib.request.Request(url, headers={'User-Agent': 'ComplianceExpressRegistrySnapshot/1.0'})
-            with opener(request, timeout=min(4.0, remaining)) as response:
+            with opener(request, timeout=min(8.0, remaining)) as response:
                 if clock() >= stop:
                     attempt['error_type'] = 'LateResponse'
                     attempts.append(attempt)

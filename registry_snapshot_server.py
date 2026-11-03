@@ -2513,6 +2513,23 @@ def ca_master_name_identity(org, entity):
 
 def search_ca_master(page, org):
     result = checker.search_ca(page, org)
+    # A completed empty registration list is different from unavailable detail.
+    # The public entity directory can retain shells that have no registration.
+    entity = getattr(result, "_cc_selected_entity", None)
+    registrations = getattr(result, "_cc_registration_records", None)
+    if (trial_identity() and result.success is True and result.status == checker.STATUS_UNKNOWN
+            and isinstance(entity, dict) and entity.get("entityStatus") == "Listed"
+            and canonical_ein_digits(str(entity.get("fein") or "")) == canonical_ein_digits(org.ein)
+            and len(canonical_ein_digits(org.ein)) == 9 and registrations == []
+            and isinstance(registrations, list)):
+        result.status = checker.STATUS_NOT_REGISTERED
+        result.raw_status_text = "Matching public entity; completed registration search returned zero records"
+        result.source_note = ("California's exact EIN search found an organization entry, but the completed "
+                              "registration lookup returned no registrations. CharityClarity reports Not Registered; "
+                              "the organization directory entry alone is not a charity registration.")
+        result.matched_registry_name = ""
+        result.matched_registry_identifier = ""
+        return result
     if not result.success or result.status != checker.STATUS_NOT_REGISTERED or len(canonical_ein_digits(org.ein)) != 9:
         return result
     try:
@@ -37658,8 +37675,12 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             if not admitted:
                 self._send_json(429, {"error": "Report generation is busy. Try again shortly."})
                 return
-            from charity_clarity_report import generate_report
-            pdf = generate_report(payload, SUPPORTED_STATES)
+            if payload.get("package") is True and trial_identity():
+                from deployment.compliance_package import generate
+                pdf = generate(payload, SUPPORTED_STATES)
+            else:
+                from charity_clarity_report import generate_report
+                pdf = generate_report(payload, SUPPORTED_STATES)
             self.send_response(200)
             self.send_header("Content-Type", "application/pdf")
             self.send_header("Content-Disposition", 'attachment; filename="CharityClarity-report.pdf"')
