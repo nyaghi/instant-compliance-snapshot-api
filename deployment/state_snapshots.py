@@ -1011,7 +1011,7 @@ def al_completed_results_snapshot(record,query,evidence,url,text):
     return True
 
 
-def il_selected_detail_snapshot(query,evidence,url,text):
+def il_selected_detail_snapshot(query,evidence,url,text,expected_ein=None):
     """Bind the validated detail body to its original photographed IL modal."""
     try:
         source=urlsplit(url)
@@ -1031,7 +1031,13 @@ def il_selected_detail_snapshot(query,evidence,url,text):
             if values:
                 if shown.count(values[0])!=1:return None
                 fields[label]=values[0][len(label):].strip()
-        if (fields['CO Number:']!=identifier or len(digits(fields['FEIN:']))!=9
+        fein=digits(fields['FEIN:'])
+        # Illinois omits a leading zero for some EINs. Accept that source form
+        # only when it equals the already validated nine-digit requested EIN.
+        expected=digits(expected_ein) if expected_ein is not None else None
+        if len(fein)==8 and expected is not None:fein='0'+fein
+        if (fields['CO Number:']!=identifier or len(fein)!=9
+                or (expected is not None and (len(expected)!=9 or fein!=expected))
                 or not fields['Status:'] or shown.count(lines[0])!=1):return None
         return identifier,lines[0]
     except (AttributeError,TypeError,ValueError,KeyError):return None
@@ -1087,8 +1093,10 @@ def _connector_archive(record,payload,query,evidence):
                     if field!='query' and isinstance(item,(dict,list)):walk(item)
         walk(evidence)
         if il_detail:
-            selected=il_selected_detail_snapshot(query,evidence,url,text)
-            if selected is None:return
+            selected=il_selected_detail_snapshot(query,evidence,url,text,record.get('ein',''))
+            if selected is None:
+                record['snapshot_capture_rejection']='IL_DETAIL_BINDING_REJECTED'
+                return
             rows=[selected]
         if record['state']=='AL' and isinstance(evidence,dict):
             headers=evidence.get('headers',[])

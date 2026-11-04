@@ -17672,7 +17672,35 @@ def fl_business_candidate_rows(source: str) -> list:
     return rows
 
 
+def _fl_transient_public_error(exc):
+    """Retry transport failures only; never TLS validation or source/schema refusal."""
+    import http.client
+    import ssl
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in {408, 429, 500, 502, 503, 504}
+    if isinstance(exc, urllib.error.URLError):
+        return _fl_transient_public_error(exc.reason)
+    if isinstance(exc, ssl.SSLError):
+        return False
+    return isinstance(exc, (TimeoutError, ConnectionResetError, ConnectionAbortedError,
+                            http.client.RemoteDisconnected, http.client.IncompleteRead))
+
+
 def fl_business_public_rows(query: str, deadline: float) -> list:
+    """One fresh transient recovery, sharing the existing overall lookup deadline."""
+    attempts = 2 if fl_business_lookup_enabled() else 1
+    for attempt in range(attempts):
+        if time.monotonic() >= deadline:
+            return []
+        try:
+            return _fl_business_public_rows_once(query, deadline)
+        except Exception as exc:
+            if not _fl_transient_public_error(exc) or attempt + 1 == attempts:
+                return []
+    return []
+
+
+def _fl_business_public_rows_once(query: str, deadline: float) -> list:
     """One TLS-verified public search, bounded by the remaining lookup time."""
     url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
     http_seconds = 8.0 if fl_business_lookup_enabled() and os.environ.get("CE_LAB_FL_HTTP_PATIENT") == "1" else 4.0
@@ -17723,7 +17751,9 @@ def fl_business_public_rows(query: str, deadline: float) -> list:
         except Exception:
             pass  # Optional private evidence retention cannot change the lookup.
         return fl_business_candidate_rows(source)
-    except Exception:
+    except Exception as exc:
+        if _fl_transient_public_error(exc):
+            raise
         return []
 
 

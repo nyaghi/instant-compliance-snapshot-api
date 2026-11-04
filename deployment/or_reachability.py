@@ -7,8 +7,8 @@ from urllib.parse import urlsplit
 
 SOURCE = 'https://justice.oregon.gov/Charities'
 CONNECT_SECONDS = 8.0
-# Give recovery twice the initial allowance; retain the existing task ceiling.
-PROBE_SECONDS = CONNECT_SECONDS * 3
+# Retain the 8/16-second attempts and add one fresh 8-second transient recovery.
+PROBE_SECONDS = CONNECT_SECONDS * 4
 TASK_SECONDS = 75.0
 REASONS = {'OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'}
 
@@ -25,8 +25,8 @@ def unavailable_result(payload, version, reason, attempts=(), elapsed=0):
     elif reason == 'OR_SOURCE_ACCESS_REFUSED':
         explanation = 'Oregon did not provide the requested public-registry page during this check.'
     else:
-        explanation = ('Oregon\'s public-registry page could not be reached after two short connection attempts.'
-                       if len(attempts) == 2 else 'Oregon\'s public-registry page could not be reached within the available connection time.')
+        explanation = (f'Oregon\'s public-registry page could not be reached after {len(attempts)} bounded connection attempts.'
+                       if attempts else 'Oregon\'s public-registry page could not be reached within the available connection time.')
     if attempts and attempts[-1].get('http_status'):
         explanation += ' The source returned HTTP '+str(attempts[-1]['http_status'])+'.'
     elif attempts and attempts[-1].get('error_type') in {'TimeoutError', 'LateResponse'}:
@@ -55,14 +55,14 @@ def check(url=SOURCE, *, deadline=float('inf'), opener=None, clock=None):
     start = clock()
     stop = min(start+PROBE_SECONDS, deadline-1)
     attempts = []
-    for number in (1, 2):
+    for number, allowance in enumerate((CONNECT_SECONDS, CONNECT_SECONDS * 2, CONNECT_SECONDS), 1):
         remaining = stop-clock()
         if remaining <= 0:
             break
         attempt = {'attempt': number}
         try:
             request = urllib.request.Request(url, headers={'User-Agent': 'ComplianceExpressRegistrySnapshot/1.0'})
-            with opener(request, timeout=min(CONNECT_SECONDS * number, remaining)) as response:
+            with opener(request, timeout=min(allowance, remaining)) as response:
                 if clock() >= stop:
                     attempt['error_type'] = 'LateResponse'
                     attempts.append(attempt)
