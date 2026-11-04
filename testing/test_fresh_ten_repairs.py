@@ -15,6 +15,8 @@ class Repairs(unittest.TestCase):
                 stack.enter_context(patch.object(m.checker,name,return_value=value))
             result=m.checker.search_pa(page,org)
         self.assertEqual(result.status,'Exempt');self.assertTrue(result.success)
+        comment=m.comments_for_result(result,'','Exempt')
+        self.assertIn('"Excluded"',comment);self.assertNotIn('Confirmation with the state is needed',comment)
 
     def test_nd_navigation_recovery_stays_once_and_does_not_fabricate_negative(self):
         org=m.checker.Organization('Example Medical Board','123456789')

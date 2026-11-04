@@ -7,6 +7,47 @@ import registry_snapshot_server as m
 from deployment import dc_boss_evidence as b,dc_corporate_continuity as c,dc_period_reconciliation as period
 
 class Binding(unittest.TestCase):
+    def test_actual_frontend_merges_continuity_status_and_evidence_together(self):
+        import subprocess
+        root=Path(__file__).resolve().parents[1]
+        before={**self.r,'desktop_evidence_request':self.q}
+        after={**period.public_completed_fields({**self.r,**c.update(self.r,self.p)}),
+            'evidence_capture':'captured','evidence_url':'/state-snapshots/'+'a'*64+'.pdf',
+            'evidence_captured_at':self.p['current_license']['captured_at']}
+        script=r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync('web-staging/optimized-workflows.js','utf8');
+const code=source.slice(source.indexOf('    const dcPeriodKeys='),source.indexOf('    async function captureOriginal('));
+const x=JSON.parse(fs.readFileSync(0,'utf8')),ctx={};vm.createContext(ctx);
+vm.runInContext(code+';this.apply=applySavedEvidence;',ctx);
+const clone=x=>JSON.parse(JSON.stringify(x));
+let b=clone(x.before);assert.equal(ctx.apply(b,x.after),true);
+for(const k of ['status','comments','computed_due_date','matched_registry_identifier','matched_registry_name','raw_status_text','renewal_date','renewal_filing_value','evidence_url'])assert.equal(b[k],x.after[k],k);
+const changes=[['ein','111111111'],['run_id','b'.repeat(32)],['prior_identifier','99999'],['prior_name','OTHER'],['prior_status','Current'],['prior_expiration','2000-01-01'],['identifier','99999'],['name','OTHER'],['expiration','2000-01-01'],['raw_status','Closed'],['status','Delinquent'],['issue_date','bad'],['corporate_record',''],['source_url','https://other.example'],['captured_at',0]];
+for(const [k,v] of changes){let a=clone(x.after);a.dc_source_reconciliation[k]=v;b=clone(x.before);assert.equal(ctx.apply(b,a),false,k);assert.deepEqual(b,x.before,k);}
+for(const [k,v] of [['evidence_capture','failed'],['matched_registry_identifier','99999'],['status','Delinquent'],['confirmation_required',true],['renewal_filing_value','2000-01-01']]){let a=clone(x.after);a[k]=v;b=clone(x.before);assert.equal(ctx.apply(b,a),false,k);assert.deepEqual(b,x.before,k);}
+// Legacy evidence-only responses still attach without changing a status.
+b={state:'DC',status:'Current',desktop_evidence_request:{}};assert.equal(ctx.apply(b,{evidence_url:x.after.evidence_url,status:'Delinquent'}),true);assert.equal(b.status,'Current');
+(async()=>{
+for(const lost of [false,true]){
+ const listeners=new Set();let polls=0,archives=0;
+ const window={addEventListener:(k,f)=>listeners.add(f),removeEventListener:(k,f)=>listeners.delete(f),postMessage(m){queueMicrotask(()=>{for(const f of [...listeners])f({source:window,origin:'https://staging.compliance-express.com',data:{...m,direction:'response',result:{ok:true}}});});}};
+ const context={window,location:{origin:'https://staging.compliance-express.com'},crypto:require('crypto').webcrypto,AbortSignal,performance,Date,setTimeout,clearTimeout,
+ fetch:async(url,options)=>{const d=JSON.parse(options.body);if(url.endsWith('/api/source-evidence')){archives++;if(lost)throw new TypeError('modeled lost acknowledgement');return {ok:true,json:async()=>clone(x.after)};}
+ if(d.action==='start')return {ok:true,json:async()=>({token:'same-workflow'})};
+ if(d.action==='poll'){polls++;return {ok:true,json:async()=>({results:[polls===1?clone(x.before):{...clone(x.before),...clone(x.after)}],finished:1})};}
+ return {ok:true,json:async()=>({ok:true})};}};
+ vm.createContext(context);vm.runInContext(source,context);
+ const [result]=await window.CCOptimized.run({apiBase:'https://fixture.invalid',name:'Management Sciences for Health',ein:x.before.ein,states:['DC'],credentials:{}});
+ for(const k of ['status','matched_registry_identifier','matched_registry_name','raw_status_text','renewal_filing_value','evidence_url'])assert.equal(result[k],x.after[k],k+':'+lost);
+ assert.equal(archives,1);
+}
+console.log('20 continuity rejection cases, legacy control, full transport normal/lost acknowledgment passed');
+})().catch(e=>{console.error(e);process.exitCode=1});
+'''
+        result=subprocess.run(['node','-e',script],cwd=root,input=json.dumps(dict(before=before,after=after)),text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_dc_archive_and_status_change_are_atomic(self):
         import base64,io,tempfile
         from PIL import Image,ImageDraw

@@ -29261,6 +29261,11 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
 
+    if (state == "PA" and status == "Exempt" and getattr(result, "success", False)
+            and re.fullmatch(r"Expiration Date:\s*Excluded", raw.strip(), re.I)):
+        return ('Pennsylvania\'s matched EIN row explicitly lists "Excluded" in the expiration field. '
+                'CharityClarity maps that exclusion to Exempt; it is not treated as a missing or overdue expiration date.')
+
     if (state == "PA" and status == "Unable to Confirm"
             and getattr(result, "reason_code", "") == "PA_NAME_BUDGET_EXHAUSTED"):
         return ("Pennsylvania returned some search results, but CharityClarity reached its name-search time limit "

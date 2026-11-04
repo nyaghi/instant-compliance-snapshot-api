@@ -80,11 +80,39 @@
       return ['state','ein','organization_name','matched_registry_identifier','matched_registry_name','raw_status_text','execution_version']
         .every(key=>!Object.hasOwn(after,key)||after[key]===before[key]);
     }
+    function sameDcContinuity(before,after) {
+      const d=before.desktop_evidence_request,p=after.dc_source_reconciliation,c=d?.corporate_continuity_candidate;
+      if(before.state!=='DC'||d?.corporate_continuity_schema!==1||d.boss_reconcile_schema||d.review_candidate
+          ||before.confirmation_required||before.identity_review||after.confirmation_required||after.identity_review
+          ||after.evidence_capture!=='captured'||after.success!==true||p?.schema!==1||p.kind!=='corporate_continuity'
+          ||!c||!['Delinquent','Closed / Withdrawn / Canceled'].includes(before.status)
+          ||!['Current','Upcoming Filing'].includes(after.status)||typeof after.comments!=='string'||!after.comments)return false;
+      const digits=value=>String(value||'').replace(/\D/g,'');
+      if(p.ein!==digits(before.ein)||p.ein!==d.ein||p.run_id!==d.run_id
+          ||p.prior_identifier!==before.matched_registry_identifier||p.prior_identifier!==d.identifier
+          ||p.prior_name!==before.matched_registry_name||p.prior_name!==d.name||p.prior_status!==before.status
+          ||p.prior_expiration!==d.expiration||p.identifier!==c.identifier||p.identifier!==after.matched_registry_identifier
+          ||p.name!==c.name||p.name!==after.matched_registry_name||p.expiration!==c.expiration
+          ||p.expiration!==after.computed_due_date||p.raw_status!=='Active'||p.raw_status!==c.raw_status
+          ||p.raw_status!==after.raw_status_text||p.status!==after.status||p.issue_date!==after.renewal_date
+          ||!/^\d{4}-\d\d-\d\d$/.test(p.issue_date)||!/^\d{4}-\d\d-\d\d$/.test(p.expiration)
+          ||p.issue_date>p.expiration||p.expiration<=d.expiration||!/^[A-Z]\d{6,16}$/.test(p.corporate_record)
+          ||p.source_url!==after.source_url||p.captured_at!==after.evidence_captured_at
+          ||!Number.isFinite(p.captured_at)||p.captured_at<d.issued_at||p.captured_at>d.expires_at
+          ||!['https://boss.dc.gov/licensing/license-details','https://boss.dc.gov/homepage/license-details'].includes(p.source_url)
+          ||after.renewal_date_type!=='current_issue_date'||after.renewal_date_source_label!=='Issue Date'
+          ||after.renewal_filing_value!==p.issue_date||after.renewal_filing_type!=='current_issue_date'
+          ||after.renewal_filing_label!=='Current registration issued'||after.renewal_filing_source_url!==p.source_url
+          ||typeof after.renewal_date_note!=='string'||!after.renewal_date_note||after.renewal_filing_note!==after.renewal_date_note)return false;
+      return ['state','ein','organization_name','execution_version'].every(k=>!Object.hasOwn(after,k)||after[k]===before[k]);
+    }
     function applySavedEvidence(result,saved) {
-      const reconciled=sameDcPeriod(result,saved);
-      if(Object.hasOwn(result.desktop_evidence_request||{},'boss_reconcile_schema')&&!reconciled)return false;
+      const continuity=sameDcContinuity(result,saved),reconciled=sameDcPeriod(result,saved)||continuity;
+      if((Object.hasOwn(result.desktop_evidence_request||{},'boss_reconcile_schema')
+          ||Object.hasOwn(result.desktop_evidence_request||{},'corporate_continuity_schema'))&&!reconciled)return false;
       for(const key of ['evidence_url','evidence_capture','evidence_captured_at','evidence_metrics','desktop_evidence_timing',
-        'search_history_url','search_history_capture','identity_review','review_evidence_context',...(reconciled?dcPeriodKeys:[])])
+        'search_history_url','search_history_capture','identity_review','review_evidence_context',...(reconciled?dcPeriodKeys:[]),
+        ...(continuity?['matched_registry_identifier','matched_registry_name','raw_status_text']:[])])
         if(Object.hasOwn(saved,key))result[key]=saved[key];
       return true;
     }
@@ -156,8 +184,9 @@
           const fields = ['state','ein','organization_name','status','success',
             'matched_registry_identifier','matched_registry_name','raw_status_text',
             'confirmation_required','execution_version'];
-          const reconciled=sameDcPeriod(result,saved);
-          if (!fields.every(k => saved[k] === result[k] || reconciled && k==='status')) continue;
+          const continuity=sameDcContinuity(result,saved),reconciled=sameDcPeriod(result,saved)||continuity;
+          if (!fields.every(k => saved[k] === result[k] || reconciled && k==='status'
+              || continuity && ['matched_registry_identifier','matched_registry_name','raw_status_text'].includes(k))) continue;
           if (saved.confirmation_required && !sameReviewCandidates(result,saved)) continue;
           if (saved.evidence_capture !== 'captured' ||
               !/^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(saved.evidence_url || '') ||

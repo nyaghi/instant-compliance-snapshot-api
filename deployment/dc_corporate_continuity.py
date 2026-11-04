@@ -86,6 +86,10 @@ def update(result,payload):
         'renewal_date_source_url':current['url'],'renewal_date_note':'Current license issue date from BOSS.',
         'comments':f"DC BOSS lists {target['name']} ({target['identifier']}) as Active, expiring {expiry.isoformat()}. Both this license and prior license {request['identifier']} identify corporate record {corporate}. The current license supersedes the expired license despite the changed office address.",
         'dc_source_reconciliation':{'schema':1,'kind':'corporate_continuity','corporate_record':corporate,
-            'prior_identifier':request['identifier'],'identifier':target['identifier'],'expiration':target['expiration']}}
+            'ein':request['ein'],'run_id':request['run_id'],'prior_identifier':request['identifier'],
+            'prior_name':request['name'],'prior_status':result['status'],'prior_expiration':request['expiration'],
+            'identifier':target['identifier'],'name':target['name'],'expiration':target['expiration'],
+            'raw_status':fields['License Status'],'status':status,'issue_date':issue.isoformat(),
+            'source_url':current['url'],'captured_at':current['captured_at']}}
     out.update(master.renewal_filing_metadata(SimpleNamespace(**{**result,**out}),out,status))
     return out

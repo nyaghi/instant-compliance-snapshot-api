@@ -16,7 +16,7 @@ async function checkActualPresentation(result){
   const context=vm.createContext({input:copy(result),window:{},Date,Blob,internalUnlocked:true,
    latestResults:[],generateReportButton:{classList},reportMessage:{},resultTimestamp:{},
    resultRows:{set innerHTML(v){rows.length=0;},appendChild(row){rows.push(row);}},
-   resultPanel:{classList},downloadExcelButton:{classList},downloadLeadLogButton:{classList},fullPictureCta:{classList},
+   resultPanel:{classList},downloadPackageButton:{classList},downloadExcelButton:{classList},downloadLeadLogButton:{classList},fullPictureCta:{classList},
    document:{createElement:()=>({innerHTML:'',lastElementChild:{},click(){}})},
    URL:{createObjectURL(value){blob=value;return 'blob:local-fixture';},revokeObjectURL(){}},
    escapeHtml:value=>String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;'),
