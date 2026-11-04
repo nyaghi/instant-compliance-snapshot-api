@@ -55,6 +55,9 @@ def request_matches_period(result,request):
     return True
 
 def period_allowed(fields,request):
+    if (not enabled(request) and request.get('expiration') == ''
+        and str(request.get('raw_status','')).casefold() in {'cancelled','canceled','closed','withdrawn','revoked'}):
+        return fields.get('Expiration Date') == 'N/A' and fields.get('License Status') == request['raw_status']
     try:
         expiry=datetime.strptime(fields['Expiration Date'],'%m/%d/%Y').date()
         if not enabled(request):return expiry.isoformat()==request['expiration']
@@ -69,6 +72,9 @@ def period_allowed(fields,request):
 
 def completed_update(result,payload):
     request=payload['request']
+    if request.get('corporate_continuity_schema')==1:
+        from deployment.dc_corporate_continuity import update
+        return update(result,payload)
     if not enabled(request):return {}
     from deployment.dc_boss_evidence import describe,fields
     if describe(result)!=request:raise ValueError('DC period request changed')
@@ -114,4 +120,7 @@ def completed_update(result,payload):
 
 def public_completed_fields(result):
     proof=result.get('dc_source_reconciliation')
-    return {key:result[key]for key in PUBLIC_KEYS if key in result}if isinstance(proof,dict)and proof.get('schema')==1 else {}
+    keys=PUBLIC_KEYS
+    if isinstance(proof,dict) and proof.get('kind')=='corporate_continuity':
+        keys=(*keys,'matched_registry_identifier','matched_registry_name','raw_status_text')
+    return {key:result[key]for key in keys if key in result}if isinstance(proof,dict)and proof.get('schema')==1 else {}

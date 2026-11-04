@@ -56,13 +56,14 @@ def expected_record(record):
  if not re.fullmatch(r'\d{5,16}',number) or not name or len(name)>300 or not status or len(status)>100:return trace_return('deployment/dc_native_capture.py:expected_record:53:103:return',(None))
  if 'charitable' not in str(workflow_call('deployment/dc_native_capture.py:expected_record:54:28:get',record.get,locals(), 'license_category','')).lower():return trace_return('deployment/dc_native_capture.py:expected_record:54:71:return',(None))
  try:
-  day=date.fromisoformat(expiry)
+  day=date.fromisoformat(expiry) if expiry else None
+  if day is None and status.casefold() not in {"cancelled","canceled","closed","withdrawn","revoked"}:return None
   u=urlsplit(workflow_call('deployment/dc_native_capture.py:expected_record:57:13:get',record.get,locals(), 'url',''));pairs=parse_qsl(u.query,keep_blank_values=True)
   if (u.scheme!='https' or u.hostname!='maps2.dcgis.dc.gov' or u.port not in (None,443)
       or u.username or u.password or u.fragment or u.path!='/dcgis/rest/services/FEEDS/DCRA/FeatureServer/0/query'
       or pairs!=[('where',"CUSTOMERNUMBER='"+number+"'"),('outFields','*'),('returnGeometry','false'),('f','pjson')]):return trace_return('deployment/dc_native_capture.py:expected_record:60:118:return',(None))
  except (ValueError,TypeError):return trace_return('deployment/dc_native_capture.py:expected_record:61:31:return',(None))
- return trace_return('deployment/dc_native_capture.py:expected_record:62:1:return',({'identifier':number,'name':name,'raw_status':status,'expiration':day.isoformat()}))
+ return trace_return('deployment/dc_native_capture.py:expected_record:62:1:return',({'identifier':number,'name':name,'raw_status':status,'expiration':day.isoformat() if day else ''}))
 
 def bound_values(url,values,expected):
  if not valid_viewer(url) or not isinstance(values,dict) or not expected:return trace_return('deployment/dc_native_capture.py:bound_values:65:73:return',(None))

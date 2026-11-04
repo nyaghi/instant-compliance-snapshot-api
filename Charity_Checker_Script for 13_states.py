@@ -1839,6 +1839,13 @@ def search_pa(page, org: Organization, wait_for_ein=None) -> StateResult:
             result.success = True
             return result
 
+        if re.fullmatch(r"excluded", (expiration_raw or "").strip(), re.I):
+            result.raw_status_text = "Expiration Date: " + expiration_raw.strip()
+            result.status = "Exempt"
+            result.source_note = "Pennsylvania's matched EIN row explicitly lists Excluded in its expiration field."
+            result.success = True
+            return result
+
         if re.search(r"\bexempt\b", row_text or "", re.I):
             result.raw_status_text = "Exempt"
             result.status = "Exempt"

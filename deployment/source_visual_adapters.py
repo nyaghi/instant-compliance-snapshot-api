@@ -632,10 +632,10 @@ def capture_selected_sc_source(master,result,run,deadline):
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=result['source_url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:334:120:return',None)
     fact['phase']='visual_selected_name_search';begin=time.perf_counter()
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:336:4:select_option',page.locator('#MainContent_dd_CharitySearchOperator').select_option,locals(), 'Contains',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:336:4:select_option',page.locator('#MainContent_dd_CharitySearchOperator').select_option,locals(), 'BeginsWith',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:337:4:fill',page.locator('#MainContent_txt_CharitySearchName').fill,locals(), result['matched_registry_name'],timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:338:4:click',page.locator('#MainContent_butt_Search').click,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    fact['visual_name_queries']=1;fact['visual_query_name']=result['matched_registry_name'];fact['visual_query_mode']='Contains'
+    fact['visual_name_queries']=1;fact['visual_query_name']=result['matched_registry_name'];fact['visual_query_mode']='BeginsWith'
     # A credential can have multiple name rows (actual P2775 has both the
     # current and "The" alias). Match the already selected name as well as ID.
     link=page.locator('a[href="javascript:CharityInfo('+identifier[1:]+')"]').filter(has_text=re.compile(r'^\s*'+re.escape(result['matched_registry_name'])+r'\s*$',re.I))

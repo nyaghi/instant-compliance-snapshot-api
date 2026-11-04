@@ -371,7 +371,45 @@ def wa_name_fallback_result_link(page, org: Organization):
     safe_wait_for_network_idle(page, timeout=8000)
     time.sleep(1)
     found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=18, require_search_response=True)
-    return None if found == "NO_VALUE" else found
+    if found == "NO_VALUE":
+        return found
+    # The completed public response supplies FEINs before any detail click.
+    # A related-name result cannot replace the requested EIN. A partial page
+    # or missing FEIN remains incomplete, never a no-registration finding.
+    decision = wa_name_response_identity(wa_search_tracker_state(page), org.ein)
+    if decision == "NO_VALUE":
+        return decision
+    if not isinstance(decision, dict):
+        return None
+    name = normalize_spaces(decision['EntityName'])
+    links = page.get_by_role('link', name=name, exact=True)
+    return links if links.count() == 1 and links.is_visible() else None
+
+
+def wa_name_response_identity(tracker, ein):
+    if (not tracker.get('completed') or tracker.get('pending') or tracker.get('failed')
+            or not 200 <= int(tracker.get('lastStatus') or 0) < 300):
+        return None
+    try:
+        rows = json.loads(tracker.get('lastText') or '')
+        requested = re.sub(r'\D', '', str(ein))
+        if len(requested) != 9 or not isinstance(rows, list):
+            return None
+        if not rows:
+            return 'NO_VALUE'
+        if len(rows) > 100 or any(not isinstance(row, dict) for row in rows):
+            return None
+        for row in rows:
+            total = int((row.get('Criteria') or {}).get('TotalRowCount', -1))
+            pages = int(row.get('TotalPageCount', -1))
+            if total not in (0, len(rows)) or pages not in (0, 1):
+                return None
+            if not row.get('EntityName') or not re.fullmatch(r'\d{2}-?\d{7}', str(row.get('FEINNumber') or '')):
+                return None
+        matching = [row for row in rows if re.sub(r'\D', '', row['FEINNumber']) == requested]
+        return matching[0] if len(matching) == 1 else ('NO_VALUE' if not matching else None)
+    except (ValueError, TypeError):
+        return None
 
 
 def scroll_to_results(page) -> None:
@@ -686,10 +724,10 @@ def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_
                 found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22, require_search_response=True)
             if found == "NO_VALUE":
                 found = wa_name_fallback_result_link(page, org)
-                if not found:
+                if found == "NO_VALUE":
                     result.status = STATUS_NOT_REGISTERED
-                    result.raw_status_text = "No Value Found."
-                    result.source_note = "Washington FEIN search completed and returned zero result rows; bounded name fallback also found no safe result row."
+                    result.raw_status_text = "No matching FEIN in completed searches."
+                    result.source_note = "Washington's completed FEIN search returned no rows; its complete name fallback returned no record with the requested FEIN. Related records with different FEINs were excluded."
                     result.success = True
                     return result
                 result.source_note = (

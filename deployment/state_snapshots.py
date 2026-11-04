@@ -124,6 +124,9 @@ def validate_asset(asset, *, ein, state, run_id):
     if any(not isinstance(v,str) or len(v)>20000 for v in meta.values()):raise ValueError('Invalid archive metadata')
     meta.update(state=state,ein=digits(ein),run_id=run_id,kind=kind,source_url=url,
                 captured_at=stamp,source_sha256=hashlib.sha256(raw).hexdigest())
+    if 'or_export_evidence' in asset:
+        from deployment.or_export_evidence import validate
+        meta['or_export_evidence']=validate(asset['or_export_evidence'],meta)
     return meta,raw
 
 def asset_for(raw, *, kind, state, ein, run_id, source_url, **meta):
@@ -784,6 +787,10 @@ class CaptureRun:
                 asset=workflow_call('deployment/state_snapshots.py:finish:519:22:asset_for',asset_for,locals(), raw,kind=kind,state=self.state,ein=self.ein,run_id=self.run_id,source_url=url,
                     organization_name=self.name,identifier='@completed-search' if negative else identifier,
                     record_name=name,public_text=public_text[:20000],capture_note='Saved during this lookup; no new registry search occurs when this PDF is opened. '+source_note)
+                if self.state=='OR' and not negative:
+                    from deployment.or_export_evidence import extract
+                    supporting=extract(self.ein,name,public_text,url)
+                    if supporting:asset['or_export_evidence']=supporting
                 asset['captured_at']=stamp;assets.append(asset);break
         if assets:data['_worker_source_archives']=assets
         data['evidence_capture_ms']=round(self.capture_ms,2)
@@ -1254,7 +1261,8 @@ def downloaded_record(master,result):
 def render_pdf(meta,raw):
     """Wrap original source pixels only; never redraw or brand the state page.
 
-    Provenance stays in the archive metadata, separate from the source visual.
+    Original pixels remain unchanged. Oregon may append a separately labeled
+    official download extract; it is never presented as a portal screenshot.
     Original state PDF page bytes are returned without a cover or overlays.
     """
     if meta['kind']=='source_pdf':return raw
@@ -1273,6 +1281,9 @@ def render_pdf(meta,raw):
         scale=min(612/width,14400/height);w,h=width*scale,height*scale
         c.setPageSize((w,h));c.drawImage(ImageReader(io.BytesIO(raw_page)),0,0,width=w,height=h);c.showPage()
     c.save()
+    if meta.get('or_export_evidence'):
+        from deployment.or_export_evidence import append
+        return append(out.getvalue(),meta['or_export_evidence'])
     return out.getvalue()
 
 

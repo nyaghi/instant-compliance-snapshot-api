@@ -25,6 +25,9 @@ def retained_request(run,result):
  elif str(result.get('matched_registry_identifier'))!=expected['identifier'] or norm(result.get('matched_registry_name'))!=norm(expected['name']):return None
  from deployment.dc_period_reconciliation import request_fields
  extra=request_fields(run,result,review)
+ continuity=getattr(run,'dc_corporate_continuity_candidate',None)
+ if continuity and not review and not extra:
+  extra={'corporate_continuity_schema':1,'corporate_continuity_candidate':continuity}
  remaining=min(300.,DEADLINE.get()-time.monotonic()-1)
  if remaining<5:return None
  return dict(deadline_schema=1,state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'),**({'review_candidate':True} if review else {}),**extra)
@@ -42,8 +45,14 @@ def describe(result):
  if not request_matches_period(result,d):return None
  if any(type(d.get(k)) not in (int,float) or not math.isfinite(d[k]) for k in ('issued_at','expires_at')):return None
  if not 0<d['expires_at']-d['issued_at']<=(300.1 if d.get('deadline_schema')==1 else 60.1) or not -5<=time.time()-d['issued_at']<600:return None
- try:datetime.strptime(d['expiration'],'%Y-%m-%d')
+ try:
+  if d.get('expiration') != '' or str(d.get('raw_status','')).casefold() not in {'cancelled','canceled','closed','withdrawn','revoked'}:
+   datetime.strptime(d['expiration'],'%Y-%m-%d')
  except (KeyError,ValueError,TypeError):return None
+ if 'corporate_continuity_schema' in d:
+  from deployment.dc_corporate_continuity import request_for_candidate
+  try:request_for_candidate(d)
+  except (ValueError,TypeError,KeyError):return None
  return dict(d)
 def fields(url,text,d):
  if url not in DETAILS or not isinstance(text,str) or not 1<=len(text)<=20000:return None
@@ -54,7 +63,8 @@ def fields(url,text,d):
  positions=[lines.index(v) for v in LABELS]
  if positions!=sorted(positions):return None
  f={label:' '.join(lines[positions[i]+1:positions[i+1] if i+1<len(positions) else len(lines)]) for i,label in enumerate(LABELS)}
- if any(not v or v=='N/A' for k,v in f.items() if k not in {'Trade Name','Premise Address'}):return None
+ undated=d.get('expiration')=='' and str(d.get('raw_status','')).casefold() in {'cancelled','canceled','closed','withdrawn','revoked'}
+ if any(not v or v=='N/A' for k,v in f.items() if k not in ({'Trade Name','Premise Address','Expiration Date'} if undated else {'Trade Name','Premise Address'})):return None
  from deployment.dc_period_reconciliation import name_matches,period_allowed
  if f['License Number']!=d['identifier'] or not name_matches(f['Licensee'],d['name'],d) or f['License Activity'].lower() not in {'charitable solicitation','charitable exempt'} or f['License Status']!=d['raw_status']:return None
  try:
@@ -63,6 +73,9 @@ def fields(url,text,d):
  except ValueError:return None
  return f
 def validate_completion(result,payload):
+ if result.get('_worker_desktop_evidence',{}).get('corporate_continuity_schema')==1:
+  from deployment.dc_corporate_continuity import asset
+  return asset(result,payload)
  d=describe(result)
  if not d or not isinstance(payload,dict) or payload.get('request')!=d:raise ValueError('DC source binding changed')
  stamp=payload.get('captured_at');text=payload.get('public_text');url=payload.get('url')

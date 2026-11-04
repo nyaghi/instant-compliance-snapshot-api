@@ -6952,7 +6952,15 @@ def il_ga_connector_advance(record):
         return {"phase": "search", **record["pending"]}
     except (ValueError, TimeoutError) as exc:
         log_event(f"{record['state']} connector evidence incomplete for {format_ein(org.ein)}: {type(exc).__name__}: {str(exc)[:160]}")
-        return {"phase": "complete", "result": il_ga_connector_failure(record)}
+        failure = il_ga_connector_failure(record)
+        if record['state'] == 'IL':
+            safe_reasons = {'Selected detail name changed from the search result',
+                'Incomplete search pagination', 'Invalid or duplicated charity search identity',
+                'Unexpected Illinois detail link', 'Missing selected detail evidence'}
+            failure['lab_diagnostic'] = {'phase':'IL_PUBLIC_EVIDENCE_VALIDATION',
+                'exception_type':type(exc).__name__,
+                'reason':str(exc) if str(exc) in safe_reasons else 'Source record validation did not complete'}
+        return {"phase": "complete", "result": failure}
     if record["purpose"] == "identity":
         return {"phase": "complete", "result": {"state": record["state"], "source": record["state"], "identity": result}}
     return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], time.perf_counter())}
@@ -7815,11 +7823,29 @@ def nc_apostrophe_comparison_names(names, entered_name, ein):
     return list(dict.fromkeys(alternatives))
 
 
+def tn_reviewed_compound_names(value, name, ein):
+    """Split only an acronym plus an independently reviewed complete expansion.
+
+    Used for TN retrieval and its existing final identity/address checks.
+    Neither a shared word nor an invented acronym expansion is sufficient.
+    """
+    found = re.fullmatch(r"([A-Z0-9]{2,10})\s*\(([^()]+)\)", str(value).strip())
+    if not found:
+        return []
+    short, full = found.groups()
+    exact = {normalized_match_name(value) for value in [name, *known_names_for_ein(ein)]}
+    if all(normalized_match_name(part) in exact for part in (short, full)):
+        return [short, full]
+    return []
+
+
 def final_four_search_candidate_scores(name, ein, state, row):
     """Shortlist source identities without changing master acceptance rules."""
     names = [row["name"], *row.get("aliases", [])]
     if state == "NC" and trial_identity():
         names += nc_apostrophe_comparison_names(names, name, ein)
+    if state == "TN" and trial_identity():
+        names += [part for value in list(names) for part in tn_reviewed_compound_names(value, name, ein)]
     candidates = [score_candidate(name, ein, {"name": n, "ein": row.get("ein", "")}) for n in names if n]
     if state == "NV" and candidates and all(c["decision"] == "rejected" for c in candidates):
         # ORION can join a legal name and another name with punctuation. Test
@@ -8134,7 +8160,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             if state == "NV" and row["entity_type"] in {
                     "Domestic Corporation (78)", "Domestic Limited Liability Company (86)",
                     "Foreign Corporation (80)", "Foreign Limited-Liability Company",
-                    "NT7 Business License Sole Proprietor"}:
+                    "NT7 Business License Sole Proprietor",
+                    "NT7 Business License General Partnership", "Domestic Close Corporation (78A)"}:
                 # These explicitly labeled business categories are outside the
                 # approved nonprofit-corporation/charity-registration scope.
                 # A same-name business must not make a separate, confirmed
@@ -9026,7 +9053,7 @@ def nc_specific_name_recovery(record, payload, now):
     if (record.get("state") != "NC" or record.get("mode") != "standard"
             or record.get("recovery_protocol") != "nc-fresh-search-v1"
             or record.get("nc_search_recovery")
-            or payload.get("reason") != "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH"
+            or payload.get("reason") not in {"NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH", "NY_CONNECTOR_REGISTRY_NC_CARD_CHANGED"}
             or record.get("nc_specific_name_recovery") or not pending
             or payload.get("query_id") != pending.get("query_id")
             or pending["query"].get("state") != "NC"
@@ -9384,7 +9411,7 @@ def final_four_connector_request(payload, origin):
             # Failed collectors close their owned connection. The existing NC
             # recovery protocol must admit the replacement before its query.
             response["recovery"] = {"action": "fresh_browser", "attempt": 1,
-                                    "reason": "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH"}
+                                    "reason": record["nc_specific_name_recovery"]["reason"]}
         try:
             response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"]-time.time())),
                             lookup_remaining_ms=max(0, int((record["expires"]-time.time())*1000)))
@@ -9488,9 +9515,10 @@ def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
         if any(word.casefold() in {"on", "of", "in", "to", "at", "by", "for", "the", "and"}
                for word in words):
             spans = list(re.finditer(r"[A-Za-z0-9]+", target))
-            if (len(spans) >= 2 and all(len(match.group()) >= 5 for match in spans[:2])
+            meaningful = [match for match in spans if match.group().casefold() in distinctive_core_words(target)]
+            if (len(meaningful) >= 2
                     and not licensed_compound_retrieval_names(target)):
-                prefix = target[:spans[1].end()]
+                prefix = target[:meaningful[1].end()]
                 precise_prefixes[target] = prefix
                 planned.append(prefix)
                 del all_words_probes[target]
@@ -9841,6 +9869,21 @@ def tn_browser_generated_queries(required, generated):
                    if short_reviewed or len(distinctive_match_tokens(name)) >= 2), key=len)
 
 
+def focused_generated_name_queries(required, generated):
+    """Keep literal identities and useful phrases; omit broad generated fragments.
+
+    This retrieval filter is used only by CT, IL and NJ. It does not affect
+    identity acceptance or turn an incomplete response into a negative.
+    A one-word brand remains eligible when it is the complete core of an
+    entered/reviewed identity, including punctuated and suffixed forms.
+    """
+    literal = {normalized_match_name(name) for name in required}
+    cores = [set(distinctive_core_words(name)) for name in required]
+    return [name for name in generated if normalized_match_name(name) in literal
+            or len(set(distinctive_core_words(name))) >= 2
+            or (set(distinctive_core_words(name)) and set(distinctive_core_words(name)) in cores)]
+
+
 def il_browser_name_queries(required, generated):
     """Retain reviewed names; avoid redundant generated contains searches.
 
@@ -9851,6 +9894,7 @@ def il_browser_name_queries(required, generated):
     must pass the existing EIN checks. Failed/truncated broad queries never
     become negative evidence. Punctuation is not normalized for coverage.
     """
+    generated = focused_generated_name_queries(required, generated)
     planned = required + generated
     return required + [name for name in generated if not any(
         other.casefold() != name.casefold() and other.casefold() in name.casefold()
@@ -9930,6 +9974,8 @@ def licensed_charity_identity(org, row, state, deadline):
     names = [row["name"], *row.get("aliases", [])]
     if state == "NC" and trial_identity():
         names += nc_apostrophe_comparison_names(names, org.organization_name, org.ein)
+    if state == "TN" and trial_identity():
+        names += [part for value in list(names) for part in tn_reviewed_compound_names(value, org.organization_name, org.ein)]
     # DC relocates the definite article to a terminal parenthesis. Keep its
     # source label intact and retain all ordinary EIN/address safeguards.
     if state == "DC":
@@ -17076,6 +17122,8 @@ def search_ct_direct(org):
     # alternate identities. This is retrieval priority, not relaxed matching.
     primary_forms = literal_name_retrieval_forms(original_name)[:1]
     variants = list(dict.fromkeys([*primary_forms, *variants]))
+    if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
+        variants = focused_generated_name_queries([original_name, *known_names_for_ein(org.ein)], variants)
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -18661,7 +18709,16 @@ def search_nd_completed(page, org):
     queries = nd_search_queries(org)
     scope_candidates, review_truncated = {}, False
     try:
-        page.goto(base + "/search/charitable", wait_until="domcontentloaded", timeout=12000)
+        # One recovery navigation, sharing the original 35-second budget.
+        # A failed navigation never supplies a no-registration conclusion.
+        for navigation_attempt in range(2):
+            try:
+                page.goto(base + "/search/charitable", wait_until="domcontentloaded",
+                          timeout=min(12000, max(1, int((deadline-time.perf_counter())*1000))))
+                break
+            except Exception:
+                if navigation_attempt or deadline-time.perf_counter() < 10:
+                    raise
         search_input = page.locator('input[placeholder*="Search by name"], input[aria-label*="Search by name"], input[type="text"]').first
         search_input.wait_for(state="visible", timeout=8000)
         if search_input:
@@ -25787,6 +25844,7 @@ def nj_name_fallback_queries(org):
         ).split("|")}
         queries = [name for name in queries if normalized_match_name(name) in reviewed
                    or (normalized_match_name(name) not in geography and distinctive_match_tokens(name))]
+        queries = focused_generated_name_queries([org.organization_name, *known_names_for_ein(org.ein)], queries)
         return sorted(queries,key=lambda name:(normalized_match_name(name) not in reviewed,
                                              len(distinctive_match_tokens(name)) < 2))
     return queries
@@ -26071,6 +26129,11 @@ def search_nj_public_details(org):
                 return None
             exemption = nj_exact_ein_exempt_row(data, ein)
             if exemption is not None:
+                if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
+                    # The unnumbered exemption has no detail URL. Let the
+                    # existing exact-EIN browser path capture its verified
+                    # original grid before returning the same Exempt status.
+                    return None
                 body = f"Charity Name: {exemption[0]}\nStatus Exempt Federal EIN {ein}\n"
                 result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, base + path)
                 result.matched_registry_identifier = ein
@@ -26702,12 +26765,14 @@ def pa_completed_name_rows(org, rows, url):
         if observed and observed != canonical_ein_digits(org.ein): continue
         name = str(row.get("EntityName") or "").strip()
         score = target_name_score(name, targets)
-        if not name or (score < 450 and not compatible_ein_alias_for_name(org.organization_name, name)): continue
+        identity = score_candidate(org.organization_name, org.ein, {"name": name, "ein": observed})
+        if not name or identity["decision"] != "accepted": continue
         if not row.get("PersonId"): continue
         expiry = parse_due_date(str(row.get("ExpDate") or "").split("T")[0])
         raw = str(row.get("StatusName") or "").strip()
-        status = licensed_charity_status(raw, expiry)
-        blank = not raw and not expiry and not row.get("CertificateNumber")
+        excluded = raw.casefold() == "excluded" or str(row.get("ExpDate") or "").strip().casefold() == "excluded"
+        status = "Exempt" if excluded else licensed_charity_status(raw, expiry)
+        blank = not excluded and not raw and not expiry and not row.get("CertificateNumber")
         if blank: status = "Delinquent"
         elif status == "Unable to Confirm" and expiry: status = status_from_calendar_date(expiry)
         candidates.append((score, expiry or date.min, name, row, status, blank))
