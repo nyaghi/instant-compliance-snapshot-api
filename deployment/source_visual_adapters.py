@@ -2585,6 +2585,9 @@ def mi_selected_grid_values(page,result):
     # Compare real calendar dates, retaining the exact file/name/single-row guards.
     from datetime import datetime
     displayed=clean(cells.nth(2).inner_text(timeout=400))
+    if displayed.endswith(' Registration Pending'):
+        if not str(result.get('raw_status_text','')).startswith('Status: Registration Pending | '):return None
+        displayed=displayed[:-len(' Registration Pending')]
     if not re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}',displayed):return None
     try:
         if datetime.strptime(displayed,'%m/%d/%Y').date()!=datetime.strptime(raw[1],'%m/%d/%Y').date():return None

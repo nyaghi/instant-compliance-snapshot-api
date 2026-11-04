@@ -25635,8 +25635,7 @@ def nj_search_body(page, query, identity_org=None):
                             page._cc_nj_query_diagnostic["scroll_attempts"] = (
                                 page._cc_nj_query_diagnostic.get("scroll_attempts", 0) + 1)
                             grid.evaluate("""el => {
-                                const rows = el.querySelectorAll('[role="row"]');
-                                rows[rows.length-1]?.scrollIntoView({block:'end',behavior:'instant'});
+                                el.scrollIntoView({block:'end',behavior:'instant'});
                                 el.scrollTop = el.scrollHeight;
                                 if(el.scrollHeight <= el.clientHeight + 1)
                                     el.dispatchEvent(new Event('scroll', {bubbles:true}));
