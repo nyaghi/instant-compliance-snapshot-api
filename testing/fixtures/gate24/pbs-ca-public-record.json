@@ -1,0 +1,41 @@
+[
+  {
+    "entity": {
+      "id": "5905917",
+      "objectId": "entity",
+      "version": 3,
+      "entityType": "Business",
+      "entityName": "PUBLIC BROADCASTING SERVICE",
+      "entityStatus": "Withdrawn",
+      "legalName": "PUBLIC BROADCASTING SERVICE",
+      "outOfState": "No",
+      "entityId": "5905917",
+      "sosId": "3459820",
+      "officialAddress": {
+        "line1": "2100 CRYSTAL DRIVE",
+        "city": "ARLINGTON",
+        "state": "VA",
+        "zipCode": "22202",
+        "county": "ARLINGTON"
+      },
+      "converted": true
+    },
+    "registrations": [
+      {
+        "id": "1452545",
+        "objectId": "registrations",
+        "version": 1,
+        "entityRelated": {
+          "id": "5905917",
+          "name": "PUBLIC BROADCASTING SERVICE  - 5905917"
+        },
+        "registrationType": "Charitable Organization",
+        "registrationStatus": "Not Registered",
+        "complianceStatus": [],
+        "is990Required": "Yes",
+        "termBond": "Continuous",
+        "solicitations": []
+      }
+    ]
+  }
+]

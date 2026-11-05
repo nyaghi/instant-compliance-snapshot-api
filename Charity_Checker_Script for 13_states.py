@@ -782,6 +782,7 @@ def ca_evoke_entity_matches(entity: dict, org: Organization, allow_name_match: b
 
 
 def ca_evoke_status_from_record(entity: dict, registrations: list[dict]) -> tuple[str, str, str, date | None]:
+    from deployment.ca_nonregistration import explicit_absence
     entity_status = str(entity.get("entityStatus") or "")
     relevant_registrations = [
         reg for reg in registrations or []
@@ -811,6 +812,10 @@ def ca_evoke_status_from_record(entity: dict, registrations: list[dict]) -> tupl
         status = "Suspended"
     elif re.search(r"\b(revoked)\b", combined, re.I):
         status = "Revoked"
+    elif explicit_absence(entity, registrations):
+        # A corporate Withdrawn/Listed label is not a charity credential.
+        # Require explicit absence across the completed registration set.
+        status = "Not Registered"
     elif (re.fullmatch(r"exempt|registration\s+not\s+required", entity_status.strip(), re.I)
           and re.fullmatch(r"(?:not\s+registered\s+)?merged\s+out", registration_status.strip(), re.I)):
         # A retired credential is not the standing of the currently exempt
@@ -824,7 +829,8 @@ def ca_evoke_status_from_record(entity: dict, registrations: list[dict]) -> tupl
         status = ca_status_from_expiration_date(expiration_date)
     elif re.search(r"\b(delinquent|expired|past\s+due|non.?compliant)\b", combined, re.I):
         status = STATUS_DELINQUENT
-    elif re.search(r"\bregistered\b", combined, re.I):
+    elif (re.search(r"\bregistered\b", combined, re.I)
+          and not re.search(r"\bnot\s+registered\b", registration_status, re.I)):
         status = STATUS_CURRENT
     else:
         status = STATUS_UNKNOWN

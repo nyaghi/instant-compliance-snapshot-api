@@ -179,6 +179,8 @@ def archive(asset, *, ein, state, run_id, store=None):
 
 def completed_negative_result(result):
     """Illinois absence has an explicitly qualified public label."""
+    from deployment.ca_nonregistration import selected_result
+    if selected_result(result):return False
     return (isinstance(result,dict) and result.get('success') is True
             and (result.get('status')=='Not Registered'
                  or result.get('state')=='IL' and result.get('status')=='Not Registered / Non-Compliant'))

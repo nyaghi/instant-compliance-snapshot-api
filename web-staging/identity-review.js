@@ -2,10 +2,20 @@
 (() => {
   'use strict';
   const unresolvedStatuses = new Set(['Needs Review', 'Unable to Confirm', 'Unable to Verify', 'Site Not Reachable', 'No Confirmed Match', 'Unknown']);
+  function selectedCANonregistration(result) {
+    const raw = result.raw_status_text || '';
+    return result.state === 'CA' && result.success === true && result.status === 'Not Registered'
+      && !!result.matched_registry_name && /^\d+$/.test(result.matched_registry_identifier || '')
+      && !result.computed_due_date
+      && /(?:^|\|)\s*Registration Type:\s*Charitable Organization\s*(?:\||$)/i.test(raw)
+      && /(?:^|\|)\s*Registration Status:\s*Not Registered\s*(?:\||$)/i.test(raw)
+      && !/\b(?:suspended|revoked|enforcement|cease\s+and\s+desist)\b/i.test(raw);
+  }
   function boundedSourceFailure(result) {
     return result.status === 'Site Not Reachable' && !result.identity_review?.candidates?.length
       && (result.state === 'OR' && ['OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'].includes(result.reason_code)
-        || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH');
+        || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH'
+        || result.state === 'ND' && result.reason_code === 'RUNNER_TIMEOUT');
   }
   function add(parent, tag, value, classes = '') {
     const el = document.createElement(tag); el.textContent = value; el.className = classes; parent.appendChild(el); return el;
@@ -21,7 +31,7 @@
       log.href = '/evidence-preview.html?document=' + encodeURIComponent(result.search_history_url); log.target = '_blank'; log.rel = 'noopener noreferrer';
     }
     // A completed absence is documented by actual queries, not an empty image.
-    const negative = result.success === true && (result.status === 'Not Registered'
+    const negative = !selectedCANonregistration(result) && result.success === true && (result.status === 'Not Registered'
       || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant');
     const allRejected = result.identity_review?.candidates?.length
       && result.identity_review.candidates.every(candidate => candidate.decision === 'reject');

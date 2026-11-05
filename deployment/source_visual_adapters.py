@@ -364,6 +364,8 @@ def remember_ca_selected(run,result):
  from deployment.ca_review_evidence import remember as remember_ca_review
  remember_ca_review(run,result)
  remember_ca_exempt_entity(run,result)
+ from deployment.ca_nonregistration import remember_detail as remember_ca_nonregistration
+ remember_ca_nonregistration(run,result)
  """Retain only the already selected registration's original public detail ID."""
  if run is None or run.state!='CA' or not getattr(result,'success',False):return
  number=str(getattr(result,'matched_registry_identifier','') or '')
@@ -540,12 +542,20 @@ def retry_selected_blank_initialization(master,page,fact,url,stop):
 def capture_selected_ca_source(master,result,run,deadline):
  """Photograph the selected actual registration, never the entity Listed label."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:224:5:get',result.get,locals(), 'state')!='CA' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:224:54:get',result.get,locals(), 'ein','')))!=run.ein
-     or workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:225:8:get',result.get,locals(), 'success') is not True or workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:225:45:get',result.get,locals(), 'status') in {'Not Registered','Unable to Confirm','Site Not Reachable'}
+     or workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:225:8:get',result.get,locals(), 'success') is not True or workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:225:45:get',result.get,locals(), 'status') in {'Unable to Confirm','Site Not Reachable'}
      or not workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:226:12:get',result.get,locals(), 'matched_registry_name') or getattr(run,'selected_visual_attempted',False)):return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:226:99:return',None)
  identifier=str(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:227:16:get',result.get,locals(), 'matched_registry_identifier') or '')
  hint=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:228:6:get',getattr(run,'source_detail_hints',{}).get,locals(), identifier)
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if not hint or not re.fullmatch(r'(?:CT)?\d+',identifier) or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:230:67:get',hint.get,locals(), 'name'))!=norm(result['matched_registry_name']):return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:230:124:return',None)
+ proof=hint.get('ca_explicit_nonregistration')
+ if result.get('status')=='Not Registered' and not proof:return
+ if proof:
+  if (result.get('status')!='Not Registered' or proof.get('entity_id')!=identifier
+      or proof.get('name')!=result['matched_registry_name']
+      or hint.get('url')!='https://ca-rcf.evokeplatform.com/app/publicPortal/registrationDetails/'+str(proof.get('detail_id'))):return
+ from deployment.ca_nonregistration import bound_core as ca_nonregistration_core
+ source_core=lambda text:ca_nonregistration_core(text,proof) if proof else ca_registration_core(text)
  if hint.get('exempt_entity_ein') or hint.get('exempt_entity_review') is True:
   return capture_ca_exempt_entity(master,result,run,deadline,hint)
  try:
@@ -602,9 +612,9 @@ def capture_selected_ca_source(master,result,run,deadline):
     fact['waiting_for_label']=''
     fact['selected_fields_ready_ms']=round((time.perf_counter()-begin)*1000,2)
     text=workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:271:9:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    core=ca_registration_core(text)
+    core=source_core(text)
     # Validate source labels and selected values, not merely a sidebar/list hit.
-    if (not core or not re.search(r'Registration Number\s+'+re.escape(identifier)+r'(?!\d)',core)
+    if (not core or not proof and not re.search(r'Registration Number\s+'+re.escape(identifier)+r'(?!\d)',core)
         or norm(result['matched_registry_name']) not in norm(text)
         or not re.search(r'Registration Type\s+Charitable Organization',text)
         or not re.search(r'Registration Status\s+\S+',text)
@@ -628,7 +638,7 @@ def capture_selected_ca_source(master,result,run,deadline):
     from PIL import Image
     with Image.open(io.BytesIO(raw)) as im:
      if im.width*im.height>20000000:fact['outcome']='source_size_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:297:75:return',None)
-    if page.url!=hint['url'] or ca_registration_core(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:298:53:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-1)*1000))))!=core:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:298:144:return',None)
+    if page.url!=hint['url'] or source_core(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:298:53:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-1)*1000))))!=core:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:298:144:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:299:78:return',None)
     before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:300:30:document',run.document,locals(), hint['url'],raw,'image',core[:20000],note='Original selected registration panel and state header. Optional lower filing grids are outside this captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
@@ -1916,6 +1926,8 @@ def ca_empty_response_bound(response,criterion):
 
 def capture_negative_ca_source(master,result,run,deadline):
  """One original CA global-search view, with a separately recorded EIN term."""
+ from deployment.ca_nonregistration import selected_result
+ if selected_result(result):return
  if (run is None or run.state!='CA' or workflow_call('deployment/source_visual_adapters.py:capture_negative_ca_source:1419:39:get',result.get,locals(), 'state')!='CA'
      or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_negative_ca_source:1420:28:get',result.get,locals(), 'ein','')))!=run.ein
      or workflow_call('deployment/source_visual_adapters.py:capture_negative_ca_source:1421:8:get',result.get,locals(), 'status')!='Not Registered' or workflow_call('deployment/source_visual_adapters.py:capture_negative_ca_source:1421:50:get',result.get,locals(), 'success') is not True

@@ -52,7 +52,9 @@ const CCDCSource=(()=>{
   if(allowedDetail.includes(url))return {next:'metadata'};
   const one=(selector,test)=>{const matches=Array.from(document.querySelectorAll(selector)).filter(e=>visible(e)&&test(e));return matches.length===1?matches[0]:null;};
   const reconcile=d.boss_reconcile_schema===1;
-  const searchType=reconcile?'License Number':'Business Name',query=reconcile?d.identifier:d.name,comparison=reconcile?'Exact Match':'Contains';
+  // Retrieval of an already selected license does not authorize changing its
+  // status, period, name or activity. Those bindings below remain unchanged.
+  const searchType='License Number',query=d.identifier,comparison='Exact Match';
   if(phase==='type'){
    const select=document.getElementById('entityApplicantType');
    if(!visible(select))return {waiting:true};
@@ -87,24 +89,41 @@ const CCDCSource=(()=>{
    if(Array.from(document.querySelectorAll('[role="progressbar"]')).some(visible))return {waiting:true};
    if(!Array.from(document.querySelectorAll('.mat-column-licenseNumber')).some(visible))return {waiting:true};
    const clean=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-   const rows=Array.from(document.querySelectorAll('table[aria-label="grid-table"] tr')).filter(visible);
+   const rows=Array.from(document.querySelectorAll('table[aria-label="grid-table"] tr')).filter(r=>visible(r)&&r.querySelector('td.mat-column-licenseNumber'));
+   // Angular can paint the column header before the bound result rows. A
+   // header alone is not a completed zero-result response. Keep the same cap.
+   if(!rows.length)return {waiting:true,selection:{rows:0,identifier_matches:0,matching_rows:0}};
    const canonical=value=>{value=String(value||'').trim();const leading=/^THE\s+/i.test(value),trailing=/\(\s*THE\s*\)\s*\.?$/i.test(value);if(leading&&trailing)return clean(value);return clean(leading?value.replace(/^THE\s+/i,''):trailing?value.replace(/,?\s*\(\s*THE\s*\)\s*\.?$/i,''):value);};
-   const matches=rows.filter(r=>r.querySelector('.mat-column-licenseNumber')?.innerText.trim()===d.identifier&&(clean(r.querySelector('.mat-column-licenseeName')?.innerText)===clean(d.name)||reconcile&&canonical(r.querySelector('.mat-column-licenseeName')?.innerText)===canonical(d.name))&&['Charitable Solicitation','Charitable Exempt'].includes(r.querySelector('.mat-column-licenseActivity')?.innerText.trim())&&(!reconcile||r.querySelector('.mat-column-licenseActivity')?.innerText.trim().toLowerCase()===d.expected_activity));
-   if(matches.length!==1)return {error:'selected_license_not_unique_or_absent'};
+   const activity=r=>{
+    const cell=r.querySelector('.mat-column-licenseActivity'),text=cell?.innerText.trim()||'';
+    if(['Charitable Solicitation','Charitable Exempt'].includes(text))return text;
+    // BOSS appends an accessible "+N more activities" control to its primary
+    // activity. Read the actual label; the opened detail must still match it.
+    const labels=cell?.querySelectorAll('span')||[],extra=cell?.querySelectorAll('a[aria-label]')||[];
+    if(labels.length!==1||extra.length!==1)return '';
+    const label=labels[0].innerText.trim(),count=extra[0].innerText.trim();
+    if(!['Charitable Solicitation','Charitable Exempt'].includes(label)||!/^\+[1-9]\d*$/.test(count)
+       ||extra[0].getAttribute('aria-label')!==count+' more activities'
+       ||text.replace(/\s+/g,'')!==(label+count).replace(/\s+/g,''))return '';
+    return label;
+   };
+   const matches=rows.filter(r=>r.querySelector('.mat-column-licenseNumber')?.innerText.trim()===d.identifier&&(clean(r.querySelector('.mat-column-licenseeName')?.innerText)===clean(d.name)||reconcile&&canonical(r.querySelector('.mat-column-licenseeName')?.innerText)===canonical(d.name))&&['Charitable Solicitation','Charitable Exempt'].includes(activity(r))&&(!reconcile||activity(r).toLowerCase()===d.expected_activity));
+   const selection={rows:rows.length,identifier_matches:rows.filter(r=>r.querySelector('.mat-column-licenseNumber')?.innerText.trim()===d.identifier).length,matching_rows:matches.length};
+   if(matches.length!==1)return {error:'selected_license_not_unique_or_absent',selection};
    const link=matches[0].querySelector('.mat-column-licenseeName a');if(!visible(link))return {error:'selected_license_link_unavailable'};
-   link.click();return {next:'metadata'};
+   link.click();return {next:'metadata',selection};
   }
   return {error:'unknown_source_phase'};
  }
  async function capture(d,sender,signal){
-  const start=Date.now(),steps=[];let end=Math.min(start+30000,d.expires_at*1000),owned=null,tab=null,attached=false,closed=false,rail=null;
+  const start=Date.now(),steps=[];let end=Math.min(start+30000,d.expires_at*1000),owned=null,tab=null,attached=false,closed=false,rail=null,selection=null;
   let onCancel;
   const cancelled=new Promise((_,reject)=>{onCancel=()=>reject(Error('source_cancelled'));signal?.addEventListener('abort',onCancel,{once:true});});
   // Attach a handler before any source operation so an early cancellation is contained.
   cancelled.catch(()=>{});
   const check=()=>{if(signal?.aborted)throw Error('source_cancelled');};
   function limited(p,label,late,reserve=null){const at=Date.now();let timer;return Promise.race([cancelled,Promise.resolve(p).then(v=>{if(closed||signal?.aborted){late?.(v);throw Error('closed');}return v;}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout:'+label)),Math.max(1,Math.min(reserve===null?(label==='create'?Math.max(1,end-Date.now()-3000):3000):Math.max(1,end-Date.now()-reserve),end-Date.now())));})]).finally(()=>{clearTimeout(timer);steps.push({phase:label,seconds:(Date.now()-at)/1000});});}
-  function captureTiming(finished){const seconds=(finished-start)/1000,queue_seconds=steps.find(s=>s.phase==='queue')?.seconds||0;return {seconds,queue_seconds,active_seconds:seconds-queue_seconds,steps};}
+  function captureTiming(finished){const seconds=(finished-start)/1000,queue_seconds=steps.find(s=>s.phase==='queue')?.seconds||0;return {seconds,queue_seconds,active_seconds:seconds-queue_seconds,steps,...(selection?{selection}: {})};}
   const command=(method,params={},reserve=null,label=method)=>{check();return limited(chrome.debugger.sendCommand({tabId:tab.id},method,params),label,null,reserve);};
   // Keep one pending source command; reserve five seconds for image completion.
   // Final binding gets only the same remaining active deadline, never a new clock.
@@ -126,6 +145,7 @@ const CCDCSource=(()=>{
    while(Date.now()<end-3000){
     let observed;
     try{observed=await observe(phase);}catch(e){if(!/context.*destroyed|Cannot find.*context/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,100));continue;}
+    if(observed?.selection)selection=observed.selection;
     if(observed?.error)throw Error(observed.error);
     if(phase==='metadata'&&observed?.ready==='complete'&&fields(observed.url,observed.text,d)){meta=observed;break;}
     if(observed?.next){steps.push({phase:'source:'+phase,elapsed_seconds:(Date.now()-start)/1000});phase=observed.next;}

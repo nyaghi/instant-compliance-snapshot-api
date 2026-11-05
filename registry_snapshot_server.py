@@ -2026,6 +2026,17 @@ def ascii_dash_search_name(value: str) -> str:
     return re.sub(r"[\u2010-\u2015\u2212]", "-", value)
 
 
+def plain_registry_query(value: str) -> str:
+    """Keep every name token while avoiding HTML delimiters in public forms.
+
+    Original/reviewed identities remain untouched. Some registries interpret
+    angle-delimited source annotations as markup or reject the whole request.
+    """
+    if '<' not in value and '>' not in value:
+        return value
+    return re.sub(r"\s+", " ", re.sub(r"[<>]", " ", value)).strip()
+
+
 def normalize_reviewed_names(value) -> list[str]:
     if not isinstance(value, list) or len(value) > IDENTITY_MAX_NAMES:
         raise ValueError(f"Provide at most {IDENTITY_MAX_NAMES} alternate names.")
@@ -2554,6 +2565,15 @@ def search_ca_master(page, org):
     # The public entity directory can retain shells that have no registration.
     entity = getattr(result, "_cc_selected_entity", None)
     registrations = getattr(result, "_cc_registration_records", None)
+    from deployment.ca_nonregistration import explicit_absence
+    if (result.success is True and result.status.casefold() == checker.STATUS_NOT_REGISTERED.casefold()
+            and isinstance(entity, dict)
+            and len(canonical_ein_digits(org.ein)) == 9
+            and canonical_ein_digits(str(entity.get("fein") or "")) == canonical_ein_digits(org.ein)
+            and explicit_absence(entity, registrations)):
+        # This is a selected exact-EIN record, not an empty EIN search that
+        # needs name fallback. Retain its original detail and avoid new queries.
+        return result
     if (trial_identity() and result.success is True and result.status == checker.STATUS_UNKNOWN
             and isinstance(entity, dict) and entity.get("entityStatus") == "Listed"
             and canonical_ein_digits(str(entity.get("fein") or "")) == canonical_ein_digits(org.ein)
@@ -2606,6 +2626,7 @@ def search_ca_master(page, org):
         result.matched_registry_name = chosen["name"]; result.matched_registry_identifier = chosen["identifier"]
         result.raw_status_text = chosen["raw_status"]
         result._cc_registration_records = registrations_by_id[chosen["identifier"]]
+        result._cc_selected_entity = name_sources[chosen["identifier"]]["entity"]
         result.source_note = "California's completed empty EIN search was followed by a legal-name search. Identity was corroborated by the source EIN or retained same-EIN organization street and ZIP; status comes from that selected record."
     except Exception as exc:
         result.status = "Unable to Confirm" if isinstance(exc, ValueError) else checker.STATUS_UNKNOWN
@@ -6491,6 +6512,7 @@ def build_search_queries(
     queries: list[str] = []
 
     def add(value: str, reason: str = "") -> None:
+        value = plain_registry_query(value or "")
         cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
         # A generated legal-form fragment is not an independent search name.
         # Preserve explicitly entered/reviewed legal-form names and their variants.
@@ -16498,6 +16520,9 @@ def md_registry_match_from_entries(result, body: str, org) -> None:
 
 
 def normalize_registry_match_fields(result, org) -> None:
+    from deployment.ca_nonregistration import preserves_selected_record as preserves_ca_nonregistration
+    if preserves_ca_nonregistration(result):
+        return
     from deployment.ma_withheld_evidence import preserves_identity as preserves_ma_notice
     if preserves_ma_notice(result):
         return  # A source publication restriction does not erase its bound identity.
@@ -17084,6 +17109,7 @@ def literal_registry_name_queries(original_name, ein, *, remove_periods=False):
     """Retrieval spellings only; never new identity aliases or acceptance rules."""
     values=[]
     for value in [original_name, *known_names_for_ein(ein)]:
+        value = plain_registry_query(value)
         literal=re.sub(r"\s+", " ", ascii_dash_search_name(canonical_name_punctuation(value))).strip()
         if literal and literal.casefold() not in {v.casefold() for v in values}:
             values.append(literal)
@@ -17113,11 +17139,12 @@ def reviewed_queries_first(original_name: str, ein: str, generated: list[str], *
     Keep the former fallback allowance after the approved identities. Matching,
     EIN confirmation and address checks are deliberately independent of order.
     """
+    generated = list(dict.fromkeys(plain_registry_query(value) for value in generated))
     if not known_names_for_ein(ein):
         return generated[:limit] if limit is not None else generated
     queries, seen, identity_seen = [], set(), set()
     for value in [original_name, *known_names_for_ein(ein)]:
-        value = canonical_name_punctuation(value)
+        value = plain_registry_query(canonical_name_punctuation(value))
         value = transform(value) if transform else value
         key = reviewed_retrieval_key(value)
         if key and key not in identity_seen:
@@ -23568,7 +23595,7 @@ def wi_direct_search_names(org) -> list[str]:
                         "institute", "international", "national", "organization", "university"}):
                 direct.append(value)
                 break
-    return direct
+    return list(dict.fromkeys(plain_registry_query(value) for value in direct))
 
 
 def wi_confirm_clean_no_results_page(org, max_seconds: float = 14.0, progress: dict | None = None):
@@ -28942,6 +28969,9 @@ def ca_explicit_primary_registry_status(result) -> str:
 
 
 def true_status_from_body(result, body: str) -> str:
+    from deployment.ca_nonregistration import preserves_selected_record as preserves_ca_nonregistration
+    if preserves_ca_nonregistration(result):
+        return "Not Registered"
     if result.state in {"AL", "NC", "NV", "TN"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
         return public_status(result)
     if result.state in {"DC", "RI", "IL", "GA"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
@@ -29551,6 +29581,11 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if status == "Not Registered":
         if getattr(result, "success", True) is False or re.search(r"ambiguous|human verification|captcha|search incomplete", raw, re.I):
             return "CharityClarity returned Not Registered, but the search evidence is incomplete or ambiguous. Non-registration could not be confirmed from this check; the result needs verification."
+        from deployment.ca_nonregistration import preserves_selected_record as preserves_ca_nonregistration
+        if preserves_ca_nonregistration(result):
+            return ('California explicitly lists this selected charitable-organization record as Not Registered, '
+                    'without a registration number or filing dates. Corporate entity standing is retained as context; '
+                    'it does not override the charity-registration status.')
         if state == "NM" and re.search(r"detail shell|did not expose a charity name|no .*charity registration name", combined, re.I):
             return "The state search returned a page for the EIN, but it did not identify a charitable registration for this organization. CharityClarity classifies the result as Not Registered because no qualifying charity record was confirmed."
         if re.search(r"first rejected|rejected .*candidate|none safely matched|no safely matching|no safe confirmed|no safe matching", combined, re.I):
@@ -37753,6 +37788,10 @@ def identity_review_wi_status(row):
 
 
 def identity_review_state_status(state, row):
+    if state == "CA":
+        from deployment.ca_nonregistration import review_status
+        if review_status(row):
+            return "Not Registered"
     if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY"}:
         status = row.get("interpreted_status")
         return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
