@@ -1,0 +1,9 @@
+.checks-completed{max-width:80rem;margin:1rem auto 0;padding:0 1rem;display:flex;align-items:center;justify-content:flex-end;gap:.8rem;color:#0b2a5b}
+.checks-completed[hidden]{display:none}.check-digits{display:flex;gap:3px;perspective:500px}
+.check-digit{position:relative;display:inline-flex;align-items:center;justify-content:center;width:30px;height:42px;border-radius:5px;background:linear-gradient(#303132 49%,#191a1b 50%);color:#fff;font:600 30px/1 system-ui,sans-serif;font-variant-numeric:tabular-nums;box-shadow:0 2px 3px #0003}
+.check-digit:after{content:"";position:absolute;top:50%;left:0;right:0;height:1px;background:#0009;box-shadow:0 1px #ffffff15}
+.check-count-label{font:500 12px/1.4 system-ui,sans-serif;max-width:125px}.check-flip{animation:check-flip .45s ease-out}
+@keyframes check-flip{0%{transform:rotateX(-80deg);filter:brightness(.6)}100%{transform:rotateX(0);filter:brightness(1)}}
+@media(prefers-reduced-motion:reduce){.check-flip{animation:none}}
+@media(max-width:480px){.checks-completed{justify-content:center;margin-top:.75rem}.check-digit{width:25px;height:36px;font-size:26px}}
+@media print{.checks-completed{display:none}}

@@ -2607,6 +2607,14 @@ def search_ca_master(page, org):
         name_sources = {}
         for entity, outcome in plausible:
             registrations = checker.ca_evoke_registrations_for_entity(str(entity.get("id") or ""))
+            # A completed empty charity-registration list is not a failed
+            # detail. This directory shell contributes no credential, even
+            # when its missing FEIN prevents confirming its corporate identity.
+            # All plausible entities still must be evaluated before a negative.
+            if (registrations == [] and isinstance(registrations, list)
+                    and entity.get("entityStatus") == "Listed"
+                    and entity.get("entityType") == "Business"):
+                continue
             standing, raw, identifier, expiry = checker.ca_evoke_status_from_record(entity, registrations)
             if not identifier or standing in {checker.STATUS_UNKNOWN, "Unknown", "Unable to Confirm"}:
                 raise ValueError("California name-fallback registration details are incomplete")
@@ -2615,6 +2623,12 @@ def search_ca_master(page, org):
             rows.append(dict(name=checker.ca_evoke_display_name(entity), identifier=str(identifier),
                 ein=canonical_ein_digits(str(entity.get("fein") or "")), raw_status=raw, status=standing,
                 expiration=expiry, url=result.source_url, location="", _identity_outcome=outcome))
+        if not rows:
+            result.source_note = ("California's EIN and legal-name searches completed. The returned Listed business "
+                                  "entries have completed empty charity-registration lists. A business-directory "
+                                  "entry is not a charity registration; CharityClarity reports Not Registered.")
+            result.raw_status_text = "Completed EIN/name searches; no qualifying charity registration"
+            return result
         if any(row["_identity_outcome"] == "possible" for row in rows):
             result._cc_ca_name_sources = name_sources
             result._cc_identity_review = dict(records=rows, search_complete=False)
@@ -2632,7 +2646,11 @@ def search_ca_master(page, org):
         result.status = "Unable to Confirm" if isinstance(exc, ValueError) else checker.STATUS_UNKNOWN
         result.success = False
         result.source_note = "California name fallback remained incomplete or identity-conflicting; no registration conclusion was inferred."
-        result.error = "CA name fallback: " + str(exc)[:180]
+        # A completed but uninterpretable source response is not an outage.
+        result.error = "" if isinstance(exc, ValueError) else "CA name fallback: " + str(exc)[:180]
+        if isinstance(exc, ValueError):
+            result.status_reason = "CA_NAME_DETAIL_INCOMPLETE"
+            result.raw_status_text = "California returned a record that could not be conclusively interpreted or bound to this organization."
     return result
 
 
@@ -6599,9 +6617,11 @@ def il_charity_detail_text(body, expected_identifier=""):
             raise ValueError(f"Illinois detail is missing or duplicates {label}")
         return values[0]
     identifier = field("CO Number:")
-    ein = canonical_ein_digits(field("FEIN:"))
+    fein_text = field("FEIN:", optional=True)
+    ein = canonical_ein_digits(fein_text)
     raw = field("Status:")
-    if not lines or not re.fullmatch(r"\d{8}", identifier) or len(ein) != 9:
+    if (not lines or not re.fullmatch(r"\d{8}", identifier)
+            or (any(line.startswith("FEIN:") for line in lines) and len(ein) != 9)):
         raise ValueError("Illinois charity identity is incomplete")
     if expected_identifier and identifier != expected_identifier:
         raise ValueError("Illinois detail does not match the selected CO number")
@@ -6782,7 +6802,7 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     failed_ga_prefixes = set()
     for query in queries:
         # Exact EIN is decisive for IL. Name fallbacks never admit a different EIN.
-        if state == "IL" and records:
+        if state == "IL" and any(r.get("ein") == canonical_ein_digits(org.ein) for r in records):
             break
         planned_name = query.get("orgName", "")
         if state == "GA" and planned_name.casefold() in covered_ga_names:
@@ -6841,9 +6861,11 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                 # Illinois can retain a former legal name in that detail while
                 # showing a newer name in its grid. The detail EIN is decisive;
                 # a different EIN is excluded even when the grid name matches.
-                if parsed["ein"] != canonical_ein_digits(org.ein):
+                if parsed["ein"] and parsed["ein"] != canonical_ein_digits(org.ein):
                     seen.add(identity)
                     continue
+                if not parsed["ein"] and normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
+                    raise ValueError("Illinois detail without FEIN changed its selected name")
                 if normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
                     parsed["search_name"] = row["name"]
             elif normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
@@ -6878,8 +6900,9 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         else:
             selected = getattr(result, "_cc_license_record", {})
             if selected:
-                result.source_note = (f"Illinois lists {selected['name']} (CO {selected['identifier']}) as {selected['raw_status']}. "
-                                      f"The detail EIN {format_ein(selected['ein'])} matches the requested organization. ")
+                result.source_note = f"Illinois lists {selected['name']} (CO {selected['identifier']}) as {selected['raw_status']}. "
+                result.source_note += (f"The detail EIN {format_ein(selected['ein'])} matches the requested organization. " if selected['ein'] else
+                                      "The detail omits FEIN; its full name, street, state and ZIP were corroborated against an EIN-linked organization address. ")
                 if selected.get("search_name"):
                     result.source_note += (f"The search list displays {selected['search_name']}; the detail uses a different name "
                                            "for the same CO number and confirmed EIN. ")
@@ -10019,6 +10042,39 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
         return {}
 
 
+def il_missing_fein_identity(org, row, deadline):
+    """Illinois-only exact full name and EIN-bound office; never invent a FEIN."""
+    unavailable = {"decision": "unavailable", "basis": "Illinois omits FEIN. Confirm the identity; complete EIN-linked street/state/ZIP proof was unavailable."}
+    targets = {normalized_match_name(n) for n in [org.organization_name, *known_names_for_ein(org.ein)]}
+    if normalized_match_name(row.get("name", "")) not in targets:
+        return unavailable
+    def street_key(value):
+        # Equivalent floor abbreviations, while retaining the floor number.
+        return re.sub(r"\b(\d+(?:ST|ND|RD|TH)?)\s+(?:F|FLOOR|FL)\b", r"\1 FL", registry_street_key(value))
+    street, region, postal = street_key(row.get("street")), str(row.get("region") or "").upper(), str(row.get("postal_code") or "")[:5]
+    if not re.match(r"^\d+\s", street) or not re.fullmatch(r"[A-Z]{2}", region) or not re.fullmatch(r"\d{5}", postal):
+        return unavailable
+    ein = canonical_ein_digits(org.ein)
+    with IDENTITY_CACHE_LOCK:
+        sources = [data for (source_ein, _, _), (expires, data) in IDENTITY_SOURCE_CACHE.items()
+                   if source_ein == ein and expires > time.time()]
+    profile = (PUBLIC_PROFILE_CACHE.get(ein, {}).get("organization") or {})
+    if canonical_ein_digits(str(profile.get("ein", ""))) == ein:
+        sources.append({"source": "IRS organization metadata", "address": dict(profile, address_role="organization")})
+    addresses = discovered_organization_addresses(ein, sources)
+    if not addresses and time.monotonic() < deadline:
+        try:
+            addresses = discovered_organization_addresses(ein, [identity_source_result("IRS", ein, min(deadline, time.monotonic()+6))])
+        except Exception:
+            pass
+    for address in addresses:
+        if (street_key(address.get("street")) == street and str(address.get("state", "")).upper() == region
+                and str(address.get("postal_code", ""))[:5] == postal):
+            return {"decision": "corroborated", "cross_state_records": [address],
+                    "basis": "The complete source name and street/state/ZIP agree with an organization office retrieved by the requested EIN. Illinois does not display FEIN."}
+    return unavailable
+
+
 def licensed_charity_identity(org, row, state, deadline):
     """Shared master name/EIN and cross-state office checks; never address-only."""
     names = [row["name"], *row.get("aliases", [])]
@@ -10047,6 +10103,18 @@ def licensed_charity_identity(org, row, state, deadline):
         row["match"] = {"decision": "accepted", "score": 100, "reason": "USER_CONFIRMED_IDENTITY"}
         row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
         return "accepted"
+    if state == "IL" and not row.get("ein"):
+        # An absent field is not a conflicting EIN, but a short name alone is
+        # insufficient. Keep a plausible source record for confirmation when
+        # exact legal-name and EIN-linked office proof are unavailable.
+        if decision["decision"] == "rejected":
+            return "rejected"
+        proof = il_missing_fein_identity(org, row, deadline)
+        row["address_evidence"] = proof
+        row["match"] = {"decision": "accepted" if proof["decision"] == "corroborated" else "possible",
+                        "score": 95 if proof["decision"] == "corroborated" else 55,
+                        "reason": "IL_FULL_NAME_OFFICE_CONFIRMED" if proof["decision"] == "corroborated" else "IL_MISSING_FEIN_REVIEW"}
+        return row["match"]["decision"]
     if (state == "NV" and not row.get("ein")
             and nv_entity_type_in(row.get("entity_type"))
             and len(distinctive_match_tokens(org.organization_name)) >= 2
@@ -21243,6 +21311,21 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
         return result
     if result.ma_filing_evidence.get("contrary_status"):
         registry_status = result.ma_filing_evidence["registry_status"]
+        if (registry_status.strip().casefold() == "deactivated"
+                and getattr(result, "success", False) is True
+                and getattr(result, "matched_registry_name", "")
+                and re.fullmatch(r"\d{6}", str(result.ma_filing_evidence.get("ago_account", "")))
+                and result.matched_registry_identifier == result.ma_filing_evidence["ago_account"]):
+            result.status = "Closed / Withdrawn / Canceled"
+            result.status_reason = "MA_EXPLICIT_DEACTIVATED"
+            result.raw_status_text = "Charity Status: Deactivated"
+            result.computed_due_date = ""
+            result.fiscal_year_end = ""
+            result.next_required_period = ""
+            result.source_note = ("Massachusetts explicitly lists the matched charity registration as Deactivated. "
+                                  "CharityClarity classifies that registration as Closed / Withdrawn / Canceled. "
+                                  "This does not establish that the organization itself dissolved, or why the registration was deactivated.")
+            return result
         result.status = "Needs Review"
         result.status_reason = "MA_EXPLICIT_STATUS_REQUIRES_REVIEW"
         result.raw_status_text = f"Charity Status: {registry_status}"
@@ -34628,10 +34711,10 @@ def search_wv_precise(page, org, *, public_lookup=None):
                     break
 
                 body = registry_page_body(page)
-            query_targets = list(dict.fromkeys([
-                *safe_targets,
-                *organization_match_target_variants(query_name, org.ein),
-            ]))
+            # Retrieval fragments are not new identities. Keep only the entered
+            # name and verified aliases, including the explicit spelling/DBA
+            # proofs established above, when admitting a selected record.
+            query_targets = list(dict.fromkeys([*safe_targets, *([legal_query] if legal_query else [])]))
             if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
                 finish_wv(_cc_history, body, [], WV_SEARCH_URL if public_lookup is not None else page.url)
                 completed_queries.append(query_name)

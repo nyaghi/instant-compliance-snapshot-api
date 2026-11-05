@@ -1,5 +1,5 @@
 {
-  "build": "combined-source-evidence-1",
+  "build": "gate25-repair-1",
   "version": "0.6.135",
-  "scope": "Staging: bound NV detail uses its existing completion allowance from entry; optional NM filing is fetched only after original detail capture, within six seconds and the existing state deadline. Permissions, matching, queue and window placement unchanged."
+  "scope": "IL complete missing-FEIN panels; DC exact source-linked corporate identity. Other installed collectors preserved."
 }

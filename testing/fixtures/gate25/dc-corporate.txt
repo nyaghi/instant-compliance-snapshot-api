@@ -1,0 +1,543 @@
+Entity Information
+Search
+Entity Search
+Entity Information
+Back
+
+Record Name
+
+SUNDANCE INSTITUTE
+
+Entity Type
+
+Foreign Nonprofit Corporation
+
+Election Type
+
+N/A
+
+Initial File No.
+
+N0000001384
+
+Entity Status
+
+Active - In Good Standing
+
+Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Mailing Address
+
+PO Box 684429, Park City, UT, 84068, USA
+
+Entity Email
+
+institute@sundance.org
+
+File Date
+
+09/13/2011
+
+Purpose
+
+Nonprofit Arts Organization
+
+Jurisdiction of Formation
+
+Date of Organization
+
+10/26/1979
+
+Commencement Date
+
+09/13/2011
+
+Country
+
+United States
+
+State
+
+Utah
+
+Jurisdiction Business Unique Identifier
+
+N/A
+
+Biennial Report Information
+
+Report Status
+
+Filed
+
+Next Report Due by
+
+04/01/2028
+
+Registered Agent Information
+
+Agent Name
+
+C T CORPORATION SYSTEM
+
+Agent Type
+
+Entity
+
+Status
+
+Active
+
+Effective Date of the Resignation
+
+N/A
+
+Agent Email
+
+CLS-CTWashingtonDCFulfillment@wolterskluwer.com
+
+Agent Phone
+
+N/A
+
+Street Address
+
+1015 15TH STREET NW, Suite 1000, Washington, DC, 20005, USA
+
+Commercial RA?
+
+Yes
+
+Beneficial Owner Information (32)
+
+Name
+
+Ebs Burnough
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+William Plapinger
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Jeanne Donovan Fisher
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Robert Redford
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Sean Bailey
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Gigi Pritzker
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Pat Mitchell
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Jason Blum
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Geoffrey K. Sands
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Kimberle Crenshaw
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Philipp Engelhorn
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Caterina Fake
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Bob Frankenberg
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Donna Gruneich
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Cindy Harrell Horn
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Amanda Kelso
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Charles D. King
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Ann Lewnes
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Wonya Lucas
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Alejandro Ramirez Magaña
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Amy Redford
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Nadine Schiff-Rosen
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Patrick Gaspard
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Shripriya Mahesh
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Barry Tyerman
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Lulu Wang
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Nina Fialkow
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Peter Nicks
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Tessa Thompson
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Trista Schroeder
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Benjamine Stilp
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Name
+
+Kimberly Steward
+
+Type
+
+Individual
+
+Entity/Street Address
+
+1500 Kearns Blvd, Suite B110, Park City, UT, 84060, USA
+
+Trade Name Information
+No Records Found.
+License Information
+License Number
+
+License Type
+
+License Period
+
+License Status
+
+400222000224	Charitable Solicitation	02/13/2026 - 02/28/2028	Active
+Filing History
+Report History
+feedback
+This entity's filing history is shown below. For filings done prior to 12/2025, documents will only available for filings submitted online. Filings submitted in-person or by mail will prior to 12/2025 will show 'No documents found.'
+Note: Older entities may have additional filings not listed here. Contact Corporations Division at dlcp.corp@dc.gov for questions about filing history or documents on record.
+Filing Number
+
+Filing Date
+
+Effective Date
+
+Filing Type
+	Actions
+N0000001384-01	06/10/2026	06/10/2026	Biennial Report (2026)
+
+000007913081	02/12/2024	02/12/2024	Biennial Report (2024)
+
+000007321037	03/31/2022	03/31/2022	Biennial Report (2022)
+
+000006554459	03/19/2020	03/19/2020	Biennial Report (2020)
+
+000005956163	04/03/2018	04/03/2018	Biennial Report (2018)
+
+N0000001384-4167643	07/25/2017	07/25/2017	Biennial Report (2012)
+
+000005388486	03/25/2016	03/25/2016	Biennial Report (2016)
+
+000004964430	05/23/2014	05/23/2014	Biennial Report (2014)
+
+N0000001384	09/13/2011	09/13/2011	Initial
+Items per page:
+25
+1 – 9 of 9

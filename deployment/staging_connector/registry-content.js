@@ -136,7 +136,9 @@
     if(buttons.length!==1)throw new Error('REGISTRY_RESULTS_INCOMPLETE');
     const readDetail=()=>{const d=document.querySelector('#KendoWindowLevel1');return visible(d)
       &&[...d.querySelectorAll('h4')].some(el=>text(el)==='CO Number: '+query.identifier)
-      &&/FEIN:\s*\d/.test(d.innerText)&&/Status:\s*\S/.test(d.innerText)&&d.innerText;};
+      &&document.readyState==='complete'&&d.querySelector('#DetailsTabStrip')
+      &&![...d.querySelectorAll('[aria-busy="true"],.k-loading-mask,.k-loading-image')].some(visible)
+      &&/Registration Date:/.test(d.innerText)&&/Status:\s*\S/.test(d.innerText)&&d.innerText;};
     try {
       const body=await wfcAwait("content:ilOpenSelectedDetail:141:17",()=>(wait(readDetail,25000,{action:()=>buttons[0].click(),trace})));
       return {query,complete:true,body};
@@ -397,7 +399,11 @@
     // with its blank type; do not invent a CSR or reject the other explicit
     // CSR rows. Placeholder rows still lack the required filing identity.
     if (title === 'Filing History Details' && values.some(cells => !cells[0] || !cells[2]
-        || !cells[3] && (headers.indexOf('Source')<0 || !cells[headers.indexOf('Source')] || !/^\d+$/.test(cells[headers.indexOf('No. of Pages')]))))
+        || !cells[3] && (!/^\d+$/.test(cells[headers.indexOf('No. of Pages')])
+          || (headers.indexOf('Source')>=0 ? !cells[headers.indexOf('Source')]
+            : headers.length!==5 || !/^\d{2}\/\d{2}\/\d{4}$/.test(cells[0])
+              || !/^\d{2}\/\d{2}\/\d{4}$/.test(cells[1])
+              || !/^[A-Za-z0-9-]+$/.test(cells[2]) || !/^[1-9]\d*$/.test(cells[4])))))
       throw new Error('REGISTRY_NV_FILINGS_INCOMPLETE');
     if (!rows.length) {
       if (!grid.querySelector('.k-grid-norecords') || grid.getAttribute('aria-rowcount') !== '1' || table.querySelector('kendo-datapager'))
@@ -425,7 +431,7 @@
       throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
     return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
   }
-  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200, pendingGraceMs=0}={}) {
+  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200, pendingGraceMs=0, validateSearch=null}={}) {
     let loadingSeen = false, lastParseError = '', retryTimer;
     const responseEnd = Math.min(deadline, Date.now()+35000+pendingGraceMs);
     const loading = () => [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
@@ -440,6 +446,7 @@
       }, Math.min(3000, Math.max(1, deadline-Date.now())));
     };
     const ready = () => {
+      validateSearch?.();
       loadingSeen ||= loading();
       if (loading() || requireLoading && !loadingSeen) return false;
       try {
@@ -449,6 +456,7 @@
       } catch (error) { lastParseError = error.message; return false; } // Partial renders are not completed responses.
     };
     const relevant = mutations => {
+      validateSearch?.();
       loadingSeen ||= loading() || mutations.some(m => [...m.addedNodes].some(n => n.nodeType === 1
         && (n.matches?.('.circle-loader, .app-loader-pane') || n.querySelector?.('.circle-loader'))));
       return mutations.some(m => {
@@ -609,7 +617,13 @@
       const search=await wfcAwait("content:nvSearch:587:19",()=>(bindSearch()));
       nvTrace('search-submitted',{name:query.name,search_mode:searchMode});
       return nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {
-      requireLoading:true, pendingGraceMs:25000, retryNotStarted:()=>{
+      requireLoading:true, pendingGraceMs:25000, validateSearch:()=>{
+        if(field('entityName')?.value!==query.name)return;
+        const rejected=[...document.querySelectorAll('div,span,p')].some(el=>
+          !el.childElementCount && visible(el)
+          && text(el)==='This field contains unsupported special characters. Please remove them and try again.');
+        if(rejected)throw new Error('REGISTRY_NV_SEARCH_CHARACTERS_REJECTED');
+      }, retryNotStarted:()=>{
         // Re-read the current visible controls. A changed query must not be
         // submitted or allowed to inherit the original query's evidence.
         if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return;
@@ -1353,7 +1367,8 @@
         // NC retains an EX/SL number on some explicitly In-Process cards.
         // Their absent expiration is not an incomplete ordinary license.
         const numberedPending=fields['CSL Type']==='In-Process'&&fields.Status==='In-Process'&&/^(SL|EX)\d+$/.test(fields.License||'');
-        if(!numberless&&!numberedPending&&fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
+        const undatedActive=fields['CSL Type']==='Charitable Organization'&&fields.Status==='Current Active'&&/^SL\d+$/.test(fields.License||'')&&!fields['Extension End Date'];
+        if(!numberless&&!numberedPending&&!undatedActive&&fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
         fields['Expiration Date']='';
       }
       fields.profile_url=new URL(links[0].getAttribute('href'),location.origin).href;
@@ -1400,17 +1415,21 @@
   }
   function ncProfile(query) {
     if(location.href!==query.url||!/^\/online_services\/search\/charities_profile\/\d+$/.test(location.pathname))throw new Error('REGISTRY_NC_PROFILE_CHANGED');
-    const main=document.querySelector('main'),fields=ncLabeled(main,['Name','Status','Registration #','Expiration Date','Last Application Date','Extension End Date']);
+    const main=document.querySelector('main'),fields=ncLabeled(main,['Name','Status','Registration #','Expiration Date','Last Application Date','Extension End Date','CSL Exemption Type']);
     const application=/^NCAPP-\d+$/.test(query.identifier||'')&&
       query.url===location.origin+'/online_services/search/charities_profile/'+query.identifier.slice(6);
     if(application) {
-      if(!['In-Process','Withdrawn'].includes(fields.Status)||fields['Registration #']||fields['Expiration Date']||fields['Extension End Date'])
+      const expired=fields.Status==='Expired License'&&/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(fields['Expiration Date']||'');
+      if(fields['Registration #']||(!expired&&(!['In-Process','Withdrawn'].includes(fields.Status)||fields['Expiration Date']||fields['Extension End Date'])))
         throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
       fields['Registration #']='';
     }
     if(!fields.Name||!fields.Status||fields['Registration #']!==(application?'':query.identifier)||!Object.hasOwn(fields,'Last Application Date'))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
     if(!Object.hasOwn(fields,'Expiration Date')) {
-      if(!application&&!/^EX\d+$/.test(query.identifier))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
+      const undatedActive=/^SL\d+$/.test(query.identifier)&&fields.Status==='Current Active'&&!fields['Extension End Date'];
+      const undatedExempt=/^SL\d+$/.test(query.identifier)&&fields.Status==='CSL Exempt'
+        &&text(main.querySelector('h1'))==='CSL Exempt Organization'&&!!fields['CSL Exemption Type'];
+      if(!application&&!undatedActive&&!undatedExempt&&!/^EX\d+$/.test(query.identifier))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
       fields['Expiration Date']='';
     }
     const addresses=[...main.querySelectorAll('.para-small > .boldSpan')].filter(el=>text(el)==='Address');
@@ -1427,6 +1446,9 @@
       [fields.Street,fields.City,fields.State,fields.Zip]=spans;
     }
     fields.profile_url=location.href;
+    // This visible label gates the missing-date exception locally. Keep the
+    // established signed detail schema; the original profile retains the label.
+    delete fields['CSL Exemption Type'];
     const links=[...main.querySelectorAll('a[href]')].filter(a=>a.getAttribute('href')===location.pathname.replace('charities_profile','charities_filings'));
     return {ok:true,evidence:{query,complete:true,fields},filings_url:links.length===1?new URL(links[0].getAttribute('href'),location.origin).href:null};
   }
@@ -1651,7 +1673,8 @@
     const total=empty?0:Number(count[3]);
     const start=empty?0:Number(count[1]),end=empty?0:Number(count[2]);
     if((empty&&rows.length)||(count&&(start<1||end<start||end-start+1!==rows.length||end>total))
-        ||total>500||new Set(rows.map(r=>r.identifier)).size!==rows.length)
+        ||total>500||rows.some((row,i)=>rows.slice(0,i).some(prior=>prior.identifier===row.identifier
+          &&(prior.name!==row.name||prior.raw_status!==row.raw_status))))
       throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
     return {rows,total,start,end};
   }
@@ -1661,6 +1684,10 @@
   }
   async function msCollectPages(query,first,deadline,identifiers) {
     if(first.start!==0&&first.start!==1)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+    // Identical same-page repeats require the same current-response proof
+    // already required for cross-page repeats; retain raw rows/count/order.
+    if(!identifiers && new Set(first.rows.map(row=>row.identifier)).size!==first.rows.length)
+      throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
     const rows=[...first.rows],pages=new Map(first.rows.map(row=>[row.identifier,1]));
     let current=first,page=1;
     while(current.end<first.total) {
@@ -2149,7 +2176,7 @@
             || JSON.stringify(tnFields(proof.selected))!==proof.fields)return null;
         continue;
       }
-      if(IL && label==='Annual Report Due Date' && found.length===0) {
+      if(IL && ['Annual Report Due Date','FEIN'].includes(label) && found.length===0) {
         // The source can explicitly finish without this optional date label.
         if(document.readyState!=='complete' || !dialog.querySelector('#DetailsTabStrip')
             || [...dialog.querySelectorAll('[aria-busy="true"],.k-loading-mask,.k-loading-image')].some(visible))return null;

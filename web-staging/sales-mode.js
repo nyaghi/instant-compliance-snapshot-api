@@ -67,7 +67,7 @@
     const selectedStates=stateInputs.filter(el=>el.checked).map(el=>el.value);
     if(!selectedStates.length){$('ccSalesError').textContent='Select at least one state.';return;}
     if(!internalUnlocked || !isComplianceExpressEmail($('email').value) || !$('adminPasscode').value.trim()) {$('ccSalesError').textContent='Unlock staging to run a sales check.';return;}
-    busy=true;const id=++runId,start=performance.now(),deadline=start+RUN_LIMIT_MS;let completed=0,closed=false,cutoff=false;const results=[],settled=new Set(),controller=new AbortController();
+    busy=true;const id=++runId,completedCheckId=crypto.randomUUID(),start=performance.now(),deadline=start+RUN_LIMIT_MS;let completed=0,closed=false,cutoff=false;const results=[],settled=new Set(),controller=new AbortController();
     for(const el of [$('ccSalesRun'),$('ccSalesMode'),$('ccStandardMode'),$('ccSalesName'),$('ccSalesEin'),$('ccSalesConsent'),$('ccSalesStates')]) el.disabled=true;
     $('ccSalesOrganization').textContent=org;$('ccSalesResults').hidden=false;$('ccSalesRows').replaceChildren();
     const cells=new Map();
@@ -118,6 +118,8 @@
       closed=true;clearTimeout(deadlineTimer);clearInterval(timer);busy=false;progress();
       for(const el of [$('ccSalesRun'),$('ccSalesMode'),$('ccStandardMode'),$('ccSalesName'),$('ccSalesEin'),$('ccSalesConsent'),$('ccSalesStates')]) el.disabled=false;
       results.sort((a,b)=>NAMES[a.state].localeCompare(NAMES[b.state],'en'));
+      if(results.length===selectedStates.length)window.CCCompletedChecks?.completed({id:completedCheckId,ein,states:selectedStates,apiBase:API_BASE,
+        credentials:{email:$('email').value.trim(),admin_passcode:$('adminPasscode').value.trim()}});
       window.dispatchEvent(new CustomEvent('cc-sales-complete',{detail:{run_id:id,organization:org,ein,seconds:(performance.now()-start)/1000,results,version:VERSION,time_limit_reached:cutoff}}));
     }
   });

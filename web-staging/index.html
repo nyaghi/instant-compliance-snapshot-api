@@ -106,6 +106,10 @@
       </div>
 
     </header>
+    <aside id="checksCompleted" class="checks-completed" hidden aria-label="CharityClarity usage">
+      <div class="check-digits" role="img" aria-label=""></div>
+      <span class="check-count-label">Organization checks completed</span>
+    </aside>
 
 
 
@@ -740,6 +744,7 @@
       adminPasscode.value = gatePasscode;
 
       internalUnlocked = true;
+      void window.CCCompletedChecks?.load({apiBase:API_BASE,credentials:{email:email.value.trim(),admin_passcode:adminPasscode.value.trim(),device_id:getDeviceId()}});
 
       stagingGate.classList.add("hidden");
 
@@ -1735,6 +1740,7 @@
       submitButton.textContent = `Checking ${total} public ${total === 1 ? "registry" : "registries"}...`;
 
       startElapsedTimer();
+      const completedCheckId = crypto.randomUUID();
 
 
 
@@ -1744,6 +1750,8 @@
         stopElapsedTimer();
 
         renderResults(results);
+        if(results.length===states.length)window.CCCompletedChecks?.completed({id:completedCheckId,ein:einValue,states,
+          apiBase:API_BASE,credentials:{email:emailValue,admin_passcode:adminPasscode.value.trim(),device_id:getDeviceId()}});
 
       } catch (error) {
         stopElapsedTimer();
@@ -1760,6 +1768,8 @@
 
   </script>
 
+  <link rel="stylesheet" href="/checks-completed.css?v=20261105.1">
+  <script src="/checks-completed.js?v=20261105.1"></script>
   <script src="/optimized-workflows.js?v=2026.09.29.1"></script>
   <script src="/sales-mode.js?v=2026.09.29.1-aurora"></script>
 </body>

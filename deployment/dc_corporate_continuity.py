@@ -25,6 +25,9 @@ def candidate(selected, rows):
     return expected_record(current[0]) if len(current)==1 else None
 
 def request_for_candidate(request):
+    if request.get('corporate_continuity_schema') == 2:
+        from deployment.dc_linked_identity import request_for_candidate as linked_request
+        return linked_request(request)
     value=request.get('corporate_continuity_candidate')
     if (request.get('corporate_continuity_schema') != 1 or type(request.get('corporate_continuity_schema')) is not int
         or not isinstance(value,dict) or set(value)!={'identifier','name','raw_status','expiration'}

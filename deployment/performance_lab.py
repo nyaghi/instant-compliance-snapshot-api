@@ -608,6 +608,9 @@ def build_handler(master, key, capacity=None, durable=None):
                 if self.path == '/api/source-evidence' and durable is not None:
                     from deployment.desktop_source_evidence import handle_completion
                     return handle_completion(master,self,durable)
+                if self.path == '/api/checks-completed' and durable is not None:
+                    from deployment.checks_completed import handle as handle_checks_completed
+                    return handle_checks_completed(master,self,durable)
                 if self.path == '/api/workflow' and durable is not None:
                     from deployment.staging_workflows import handle
                     return handle(master, self, trial_queue=durable)
@@ -701,6 +704,11 @@ def main():
         limits.update(ME=1, AR=1, FL=3, IRS=4, NY=2)
         durable.initialize(master.APP_VERSION, limits,
                            workflow_limit=int(os.environ.get('CE_LAB_WORKFLOW_LIMIT', '15')))
+        from deployment.checks_completed import initialize as initialize_checks_completed
+        try:
+            initialize_checks_completed(durable.pool)
+        except Exception:
+            print('Usage ledger initialization unavailable; registry service remains enabled.', flush=True)
         if os.environ.get('CE_LAB_QUEUE_WORKER') == '1':
             from deployment.queue_worker import Supervisor
             supervisor = Supervisor(durable, master.APP_VERSION, int(os.environ.get('CE_LAB_WORKER_SLOTS', '8')))

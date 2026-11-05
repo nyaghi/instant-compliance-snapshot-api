@@ -90,6 +90,9 @@ def capture_dc(master,org,result,rows,deadline):
             run.dc_boss_selected_activity=targets[0].get("license_category","")
             from deployment.dc_corporate_continuity import candidate
             run.dc_corporate_continuity_candidate=candidate(targets[0],rows)
+            if not run.dc_corporate_continuity_candidate:
+                from deployment.dc_linked_identity import candidate as linked_candidate
+                run.dc_corporate_link_candidate=linked_candidate(master,org,targets[0],rows)
             return
     start=time.perf_counter();browser=context=None;held=False;receipt=None
     fact={'adapter':'DC-native-original','outcome':'not_started','total_ms':0,'capture_ms':0,'records_requested':len(targets),'records_captured':0}

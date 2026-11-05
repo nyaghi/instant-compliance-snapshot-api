@@ -1044,17 +1044,18 @@ def il_selected_detail_snapshot(query,evidence,url,text,expected_ein=None):
         fields={}
         for label in ['CO Number:','FEIN:','Status:','Registration Date:','Annual Report Due Date:']:
             values=[line for line in lines if line.startswith(label)]
-            if len(values)>1 or (label!='Annual Report Due Date:' and len(values)!=1):return None
+            if len(values)>1 or (label not in {'Annual Report Due Date:','FEIN:'} and len(values)!=1):return None
             if values:
                 if shown.count(values[0])!=1:return None
                 fields[label]=values[0][len(label):].strip()
-        fein=digits(fields['FEIN:'])
+        fein=digits(fields.get('FEIN:',''))
+        if [v for v in shown if v.startswith('FEIN:')] != [v for v in lines if v.startswith('FEIN:')]:return None
         # Illinois omits a leading zero for some EINs. Accept that source form
         # only when it equals the already validated nine-digit requested EIN.
         expected=digits(expected_ein) if expected_ein is not None else None
         if len(fein)==8 and expected is not None:fein='0'+fein
-        if (fields['CO Number:']!=identifier or len(fein)!=9
-                or (expected is not None and (len(expected)!=9 or fein!=expected))
+        if (fields['CO Number:']!=identifier or ('FEIN:' in fields and len(fein)!=9)
+                or (expected is not None and (len(expected)!=9 or fein and fein!=expected))
                 or not fields['Status:'] or shown.count(lines[0])!=1):return None
         return identifier,lines[0]
     except (AttributeError,TypeError,ValueError,KeyError):return None

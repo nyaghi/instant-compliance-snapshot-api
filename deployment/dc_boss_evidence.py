@@ -28,6 +28,9 @@ def retained_request(run,result):
  continuity=getattr(run,'dc_corporate_continuity_candidate',None)
  if continuity and not review and not extra:
   extra={'corporate_continuity_schema':1,'corporate_continuity_candidate':continuity}
+ linked=getattr(run,'dc_corporate_link_candidate',None)
+ if linked and not review and not extra:
+  extra={'corporate_continuity_schema':2,'corporate_continuity_candidate':linked['candidate'],'corporate_link_proof':linked['proof']}
  remaining=min(300.,DEADLINE.get()-time.monotonic()-1)
  if remaining<5:return None
  return dict(deadline_schema=1,state='DC',operation='detail',ein=run.ein,run_id=run.run_id,issued_at=time.time(),expires_at=time.time()+remaining,url=SEARCH,name=expected['name'],identifier=expected['identifier'],raw_status=expected['raw_status'],expiration=expected['expiration'],result_raw_status=result.get('raw_status_text'),**({'review_candidate':True} if review else {}),**extra)
@@ -73,6 +76,9 @@ def fields(url,text,d):
  except ValueError:return None
  return f
 def validate_completion(result,payload):
+ if result.get('_worker_desktop_evidence',{}).get('corporate_continuity_schema')==2:
+  from deployment.dc_linked_identity import asset
+  return asset(result,payload)
  if result.get('_worker_desktop_evidence',{}).get('corporate_continuity_schema')==1:
   from deployment.dc_corporate_continuity import asset
   return asset(result,payload)

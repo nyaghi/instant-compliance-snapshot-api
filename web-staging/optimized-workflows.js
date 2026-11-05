@@ -82,7 +82,8 @@
     }
     function sameDcContinuity(before,after) {
       const d=before.desktop_evidence_request,p=after.dc_source_reconciliation,c=d?.corporate_continuity_candidate;
-      if(before.state!=='DC'||d?.corporate_continuity_schema!==1||d.boss_reconcile_schema||d.review_candidate
+      if(d?.corporate_continuity_schema===2&&p?.identity_method!=='linked_corporate_profile')return false;
+      if(before.state!=='DC'||![1,2].includes(d?.corporate_continuity_schema)||d.boss_reconcile_schema||d.review_candidate
           ||before.confirmation_required||before.identity_review||after.confirmation_required||after.identity_review
           ||after.evidence_capture!=='captured'||after.success!==true||p?.schema!==1||p.kind!=='corporate_continuity'
           ||!c||!['Delinquent','Closed / Withdrawn / Canceled'].includes(before.status)

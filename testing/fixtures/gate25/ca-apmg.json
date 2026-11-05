@@ -1,0 +1,32 @@
+[
+  {
+    "entity": {
+      "id": "6558251",
+      "objectId": "entity",
+      "version": 2,
+      "entityType": "Business",
+      "entityName": "AMERICAN PUBLIC MEDIA GROUP",
+      "entityStatus": "Listed",
+      "legalName": "AMERICAN PUBLIC MEDIA GROUP",
+      "outOfState": "No",
+      "entityId": "6558251",
+      "sosId": "4080246",
+      "officialAddress": {
+        "line1": "480 CEDAR STREET",
+        "city": "SAINT PAUL",
+        "state": "MN",
+        "zipCode": "55101",
+        "county": "RAMSEY"
+      },
+      "mailingAddress": {
+        "line1": "480 CEDAR STREET",
+        "city": "SAINT PAUL",
+        "state": "MN",
+        "zipCode": "55101",
+        "county": "RAMSEY"
+      },
+      "converted": true
+    },
+    "registrations": []
+  }
+]

@@ -72,6 +72,9 @@ def period_allowed(fields,request):
 
 def completed_update(result,payload):
     request=payload['request']
+    if request.get('corporate_continuity_schema')==2:
+        from deployment.dc_linked_identity import update
+        return update(result,payload)
     if request.get('corporate_continuity_schema')==1:
         from deployment.dc_corporate_continuity import update
         return update(result,payload)
