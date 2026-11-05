@@ -106,6 +106,43 @@ class GroupIdentity(unittest.TestCase):
         self.assertIn(related['source_note'],out['source_note'])
         self.assertFalse(out.get('_worker_identity_review'));self.assertFalse(out['success'])
 
+    def test_two_completed_negatives_retain_both_query_histories_without_false_review(self):
+        from deployment.search_history import SourceQueryReceipt
+        def negative(ein):
+            run=s.CaptureRun(self.name,ein,'WA')
+            SourceQueryReceipt(run,{'state':'WA','operation':'search','ein':ein,
+                'url':'https://ccfs-api.prod.sos.wa.gov/api/CFTPublicSearch/GetCFPublicSearchList',
+                'source_kind':'state_portal','filter_label':'FEIN'}).complete(0,rows=[])
+            return run.finish({**self.base('WA'),'ein':ein})
+        base=negative(self.ein);related=negative('987654321')
+        out=g.completed_group_negative(base,related,self.proof())
+        self.assertEqual(out['status'],'Not Registered');self.assertTrue(out['success'])
+        self.assertEqual([x['query']['ein'] for x in out['_worker_search_history']['completed']],[self.ein,'987654321'])
+        self.assertEqual(len(base['_worker_search_history']['completed']),1)
+        with tempfile.TemporaryDirectory() as folder:
+            store=s.SQLiteStore(Path(folder)/'negative-group.sqlite')
+            public=s.persist_worker_result(None,out,{'state':'WA','payload':{'ein':self.ein}},store=store)
+            self.assertTrue(public.get('search_history_url'))
+        def lookup(name,ein,state):
+            SourceQueryReceipt(s.CURRENT.get(),{'state':state,'operation':'search','ein':ein,
+                'url':'https://ccfs-api.prod.sos.wa.gov/api/CFTPublicSearch/GetCFPublicSearchList',
+                'source_kind':'state_portal','filter_label':'FEIN'}).complete(0,rows=[])
+            return {**self.base(state),'ein':ein}
+        with patch.object(g,'find_relationship',return_value=self.proof()):
+            recovered=g.recover(m,base,lookup)
+        self.assertEqual(recovered['reason_code'],'GROUP_AND_MEMBER_COMPLETED_NO_MATCH')
+        self.assertEqual(len(recovered['_worker_search_history']['completed']),2)
+        for changes in [{'success':False},{'status':'Unable to Confirm'},{'status':'Current'},
+                        {'ein':'111111111'},{'state':'CA'},{'_worker_search_history':{}},
+                        {'matched_registry_identifier':'1234'}, {'error':'source incomplete'},
+                        {'_worker_identity_review':{'records':[{}]}}]:
+            with self.subTest(changes=changes):
+                self.assertIsNone(g.completed_group_negative(base,{**related,**changes},self.proof()))
+        broken=copy.deepcopy(related);broken['_worker_search_history']['search_failed_receipts']=[{}]
+        self.assertIsNone(g.completed_group_negative(base,broken,self.proof()))
+        broken=copy.deepcopy(related);broken['_worker_search_history']['completed'][0]['query']['ein']='111111111'
+        self.assertIsNone(g.completed_group_negative(base,broken,self.proof()))
+
     def test_signed_accept_reject_undo_keep_originals_and_state_status(self):
         base=self.base();proof=self.proof();url='https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/54321'
         text=self.name+' EIN 987654321 Exempt 54321';raw=fixture_image(text)

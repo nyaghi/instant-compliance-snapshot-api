@@ -168,6 +168,48 @@ def convert(master, base, related, proof):
     return data
 
 
+def completed_group_negative(base, related, proof):
+    """A completed related no-match is not a transport or identity failure."""
+    from deployment.search_history import manifest
+    for row, ein in [(base, proof['requested_ein']), (related, proof['registry_ein'])]:
+        if (not isinstance(row, dict) or row.get('state') != base['state']
+                or re.sub(r'\D', '', str(row.get('ein', ''))) != ein
+                or row.get('status') != 'Not Registered' or row.get('success') is not True
+                or row.get('error') or row.get('matched_registry_identifier')
+                or row.get('identity_review') or row.get('_worker_identity_review')):
+            return None
+        history = row.get('_worker_search_history') or {}
+        if (history.get('state') != base['state'] or history.get('ein') != ein
+                or not history.get('completed') or history.get('search_failed_receipts')
+                or not isinstance(history.get('issued'), (int, float))):
+            return None
+        try:
+            manifest(history, row, {}, time.time())
+        except (ValueError, KeyError, TypeError):
+            return None
+    data = copy.deepcopy(base)
+    history = data['_worker_search_history']
+    related_history = related['_worker_search_history']
+    history['completed'].extend(copy.deepcopy(related_history['completed']))
+    history['issued'] = min(history['issued'], related_history['issued'])
+    # These are sequential capture runs, each with its own one-based order.
+    # Preserve all original receipts while assigning the joined report order.
+    history['completed'].sort(key=lambda item: item['search_receipt'].get('issued_at', item['search_receipt']['completed_at']))
+    history['history_order'] = 'issued-sequence-v1'
+    for sequence, item in enumerate(history['completed'], 1):
+        item['search_receipt']['source_order'] = sequence
+    try:
+        manifest(history, data, {}, time.time())
+    except (ValueError, KeyError, TypeError):
+        return None
+    note = (f"The requested EIN {proof['requested_ein']} and documented group-return EIN "
+            f"{proof['registry_ein']} both completed the state's search without a qualifying registration. "
+            "The search history retains both identities and the actual queries; no group registration was assumed.")
+    data.update(group_identity=proof, reason_code='GROUP_AND_MEMBER_COMPLETED_NO_MATCH',
+                source_note=note, comments=note)
+    return data
+
+
 def recover(master, base, lookup):
     """One bounded fallback after completed no-match/CA identity conflict only."""
     from deployment.state_snapshots import DEADLINE, CaptureRun
@@ -220,7 +262,7 @@ def recover(master, base, lookup):
                     related.pop('_worker_identity_review', None)
         finally:
             DEADLINE.reset(token)
-        data = convert(master, base, related, proof)
+        data = completed_group_negative(base, related, proof) or convert(master, base, related, proof)
         if data:
             data['lookup_seconds'] = round(float(base.get('lookup_seconds') or 0) + time.monotonic() - started, 2)
             return data
