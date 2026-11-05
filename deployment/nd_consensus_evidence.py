@@ -32,7 +32,13 @@ def capture(page,records,result,lookup_deadline):
         const found=rows.filter(r=>[...r.cells].some(c=>norm(c.innerText)===record.id));
         if(found.length!==1)return null;
         const cells=[...found[0].cells].map(c=>norm(c.innerText));
-        if(!cells.some(c=>c===norm(record.name))||!cells.some(c=>c===norm(record.status)))return null;
+        // The publisher places name, entity type and a caret in one cell.
+        // Match the complete name label, never the combined cell or a prefix.
+        const nameCell=found[0].cells[0];
+        const names=[norm(nameCell.innerText),...[...nameCell.querySelectorAll('span.cell')]
+          .filter(visible).map(e=>norm(e.innerText))];
+        if(!names.some(c=>c.toLowerCase()===norm(record.name).toLowerCase())
+          ||!cells.some(c=>c===norm(record.status)))return null;
         actual.push({id:record.id,name:record.name,status:record.status});
       }
       return actual;

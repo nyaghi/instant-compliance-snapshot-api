@@ -17990,12 +17990,17 @@ def search_fl_with_transport(page, org, transport):
             "association", "society", "center", "centre", "institute",
             "organization",
         }
-        meaningful = [word for word in norm.split() if word not in generic]
+        # Apostrophe splitting can create an orphan possessive ("s hospital").
+        # It supplies no identity signal. Literal/reviewed names are prepended
+        # separately and do not pass through this generated-variant filter.
+        possessive_suffix = bool(re.search(r"['\u2019]s\b", original_name, re.I))
+        meaningful = [word for word in norm.split() if word not in generic
+                      and not (possessive_suffix and word == "s")]
         if not meaningful:
             return False
         original_meaningful = [
             word for word in normalized_match_name(original_name).split()
-            if word not in generic
+            if word not in generic and not (possessive_suffix and word == "s")
         ]
         if len(meaningful) == 1 and len(original_meaningful) > 1:
             return False

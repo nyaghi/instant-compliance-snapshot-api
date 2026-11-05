@@ -15,6 +15,33 @@ FIXTURES = Path(__file__).parent/'fixtures/gates22-23/rework'
 
 
 class ObservedPages(unittest.TestCase):
+    def test_nd_observed_multilabel_name_cells_capture_complete_consensus(self):
+        import ast,inspect
+        from types import SimpleNamespace
+        from deployment import nd_consensus_evidence as nd
+        from testing.test_gates22_23_capture_budget import CaptureBinding
+        observed=json.loads((FIXTURES/'nd-observed-grid.json').read_text(encoding='utf-8'))
+        self.markup='<html><body><table>'+''.join(r['html'] for r in observed['rows'])+'</table></body></html>'
+        self.page.goto(nd.URL)
+        records=[{'RECORD_NUM':'0004013715','TITLE':['FRED HUTCHINSON CANCER RESEARCH CENTER'],'STATUS':'Inactive - Voluntary'},
+                 {'RECORD_NUM':'0004014119','TITLE':['Fred Hutchinson Cancer Center'],'STATUS':'Inactive - Involuntary'}]
+        selected=[{'id':r['RECORD_NUM'],'name':r['TITLE'][0],'status':r['STATUS']} for r in records]
+        guard=next(ast.literal_eval(n.value) for n in ast.walk(ast.parse(inspect.getsource(nd.capture)))
+                   if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='check' for t in n.targets))
+        self.assertEqual(self.page.evaluate(guard,selected),selected)
+        for key,value in [('id','0004012584'),('name','Fred Hutchinson Cancer'),('status','Active')]:
+            altered=copy.deepcopy(selected);altered[1][key]=value
+            self.assertIsNone(self.page.evaluate(guard,altered))
+        result=SimpleNamespace(status_reason='ND_MATCHING_RECORDS_INACTIVE',matched_registry_name=records[0]['TITLE'][0],
+            matched_registry_identifier=', '.join(r['RECORD_NUM'] for r in records),
+            raw_status_text='; '.join(r['RECORD_NUM']+': '+r['STATUS'] for r in records))
+        run=ss.CaptureRun('Fred Hutchinson Cancer Center','911935159','ND')
+        token=ss.CURRENT.set(run);self.addCleanup(ss.CURRENT.reset,token)
+        nd.capture(self.page,records,result,time.perf_counter()+20)
+        self.assertEqual(run.visual_adapter_facts[-1]['outcome'],'captured',run.visual_adapter_facts)
+        row={'state':'ND','ein':run.ein,'organization_name':run.name,'status':'Closed / Withdrawn / Canceled','success':True,**vars(result)}
+        CaptureBinding.persist(self,run,row)
+
     @classmethod
     def setUpClass(cls):
         cls.playwright = m.checker.sync_playwright().start()

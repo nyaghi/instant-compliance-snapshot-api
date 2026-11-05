@@ -1,0 +1,21 @@
+{
+  "rows": [
+    {
+      "html": "<tr><th class=\"div-table-head \"><div class=\"flex-row\"><span class=\"header-label\">Form Info</span></div></th><th class=\"div-table-head \"><div class=\"flex-row\"><span class=\"header-label\">SOS Control ID#</span></div></th><th class=\"div-table-head \"><div class=\"flex-row\"><span class=\"header-label\">Status</span></div></th><th class=\"div-table-head \"><div class=\"flex-row\"><span class=\"header-label\">Filing Date</span></div></th></tr>",
+      "text": "Form Info\n\t\nSOS Control ID#\n\t\nStatus\n\t\nFiling Date"
+    },
+    {
+      "html": "<tr class=\"div-table-row  \"><td class=\"div-table-cell  interactive\"><div role=\"button\" tabindex=\"0\" class=\"interactive-cell-button\"><span class=\"cell\">Fred Hutchinson Cancer Center</span><span class=\"cell\">Nonprofit Corporation</span><span class=\"icon icon-caret-right\"></span></div></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">0004014119</span></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">Inactive - Involuntary</span></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">07/27/2010</span></td></tr>",
+      "text": "Fred Hutchinson Cancer Center\nNonprofit Corporation\n\t0004014119\tInactive - Involuntary\t07/27/2010"
+    },
+    {
+      "html": "<tr class=\"div-table-row  \"><td class=\"div-table-cell  interactive\"><div role=\"button\" tabindex=\"0\" class=\"interactive-cell-button\"><span class=\"cell\">FRED HUTCHINSON CANCER RESEARCH CENTER</span><span class=\"cell\">Nonprofit Corporation</span><span class=\"icon icon-caret-right\"></span></div></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">0004013715</span></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">Inactive - Voluntary</span></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">07/24/2008</span></td></tr>",
+      "text": "FRED HUTCHINSON CANCER RESEARCH CENTER\nNonprofit Corporation\n\t0004013715\tInactive - Voluntary\t07/24/2008"
+    },
+    {
+      "html": "<tr class=\"div-table-row  \"><td class=\"div-table-cell  interactive\"><div role=\"button\" tabindex=\"0\" class=\"interactive-cell-button\"><span class=\"cell\">FRED HUTCHINSON CANCER RESEARCH CENTER FOUNDATION</span><span class=\"cell\">Nonprofit Corporation</span><span class=\"icon icon-caret-right\"></span></div></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">0004012584</span></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">Inactive - Involuntary</span></td><td class=\"div-table-cell  interactive\"><span class=\"cell \">05/07/2002</span></td></tr>",
+      "text": "FRED HUTCHINSON CANCER RESEARCH CENTER FOUNDATION\nNonprofit Corporation\n\t0004012584\tInactive - Involuntary\t05/07/2002"
+    }
+  ],
+  "url": "https://firststop.sos.nd.gov/search/charitable"
+}

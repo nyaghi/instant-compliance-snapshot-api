@@ -265,7 +265,7 @@ def remember_ca_exempt_entity(run,result):
  entity=getattr(result,'_cc_selected_entity',None)
  records=getattr(result,'_cc_registration_records',None)
  retired=(isinstance(records,list) and bool(records)
-          and re.search(r'(?:^|\|)\s*Registration Status:\s*Merged Out\s*(?:\||$)',str(getattr(result,'raw_status_text','')),re.I))
+          and re.search(r'(?:^|\|)\s*Registration Status:\s*(?:Not Registered\s+)?Merged Out\s*(?:\||$)',str(getattr(result,'raw_status_text','')),re.I))
  if not isinstance(entity,dict) or not (records==[] or retired):return
  identifier=str(getattr(result,'matched_registry_identifier','') or '')
  name=str(getattr(result,'matched_registry_name','') or '')

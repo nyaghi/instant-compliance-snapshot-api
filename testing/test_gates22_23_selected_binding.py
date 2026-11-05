@@ -65,7 +65,7 @@ class SelectedBinding(unittest.TestCase):
     def test_ca_current_exemption_selects_entity_original_not_retired_registration(self):
         org=m.checker.Organization('Example Research Institute','123456789')
         entity={'id':'5481653','entityStatus':'Exempt','entityName':org.organization_name,'fein':org.ein}
-        retired={'id':'8901234','registrationType':'Charitable Organization','registrationStatus':'Merged Out',
+        retired={'id':'8901234','registrationType':'Charitable Organization','registrationStatus':'Not Registered Merged Out',
                  'registrationNumber':'CT12345','currentExpirationDate':'2000-12-31',
                  'entityRelated':{'id':entity['id'],'name':org.organization_name+' - '+entity['id']}}
         with patch.object(m.checker,'ca_evoke_entity_search_by_ein',return_value=[entity]), \
