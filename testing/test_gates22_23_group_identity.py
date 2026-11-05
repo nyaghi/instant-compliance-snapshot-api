@@ -93,6 +93,18 @@ class GroupIdentity(unittest.TestCase):
             out=g.recover(m,self.base(),lambda *a:(_ for _ in ()).throw(TimeoutError()))
         self.assertEqual(out['status'],'Unable to Confirm');self.assertFalse(out['success'])
         self.assertEqual(out['reason_code'],'GROUP_RECORD_LOOKUP_INCOMPLETE')
+        self.assertEqual(out['group_lookup_diagnostics']['error_type'],'TimeoutError')
+        self.assertEqual(out['source_note'],out['comments'])
+        self.assertNotIn('Confirm whether this record applies',out['comments'])
+
+    def test_incomplete_related_result_retains_reason_without_claiming_a_candidate(self):
+        related={**self.base('WA'),'ein':'987654321','status':'Unable to Confirm','success':False,
+                 'status_reason':'WA_DETAIL_EIN_UNCONFIRMED','source_note':'The source detail did not expose its EIN.'}
+        with patch.object(g,'find_relationship',return_value=self.proof()):
+            out=g.recover(m,self.base('WA'),lambda *a:related)
+        self.assertEqual(out['group_lookup_diagnostics']['status_reason'],'WA_DETAIL_EIN_UNCONFIRMED')
+        self.assertIn(related['source_note'],out['source_note'])
+        self.assertFalse(out.get('_worker_identity_review'));self.assertFalse(out['success'])
 
     def test_signed_accept_reject_undo_keep_originals_and_state_status(self):
         base=self.base();proof=self.proof();url='https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/54321'

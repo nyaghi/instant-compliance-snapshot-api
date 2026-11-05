@@ -179,6 +179,26 @@ def recover(master, base, lookup):
         return base
     started = time.monotonic()
     proof = None
+    related = None
+
+    def incomplete(error_type=''):
+        # Retain why the related lookup failed instead of presenting the
+        # member's earlier empty-search explanation as the current outcome.
+        observed = related if isinstance(related, dict) else {}
+        diagnostic = {key: observed.get(key, '') for key in
+                      ('status', 'status_reason', 'reason_code', 'evidence_capture')}
+        if error_type:
+            diagnostic['error_type'] = error_type
+        reason = str(observed.get('source_note') or observed.get('comments') or '').strip()
+        note = (f"Entered EIN {proof['requested_ein']}; registry group-return EIN {proof['registry_ein']}. "
+                "The documented group relationship does not establish this state's registration coverage. "
+                "The related state record could not be confirmed in this lookup.")
+        if reason:
+            note += ' Related lookup: ' + reason[:1200]
+        return {**base, 'status': 'Unable to Confirm', 'success': False, 'group_identity': proof,
+                'reason_code': 'GROUP_RECORD_LOOKUP_INCOMPLETE', 'status_reason': 'GROUP_RECORD_LOOKUP_INCOMPLETE',
+                'comments': note, 'source_note': note, 'group_lookup_diagnostics': diagnostic,
+                'lookup_seconds': round(float(base.get('lookup_seconds') or 0) + time.monotonic() - started, 2)}
     try:
         proof = find_relationship(master, base['organization_name'], master.canonical_ein_digits(base['ein']),
                                   min(DEADLINE.get() - 4, started + 4))
@@ -206,12 +226,8 @@ def recover(master, base, lookup):
             return data
         # The relationship is known but the related source was unavailable.
         # Do not leave a definitive no-registration claim behind.
-        return {**base, 'status': 'Unable to Confirm', 'success': False, 'group_identity': proof,
-                'reason_code': 'GROUP_RECORD_LOOKUP_INCOMPLETE',
-                'comments': explanation(proof) + ' The related state record could not be confirmed in this lookup.'}
-    except Exception:
+        return incomplete()
+    except Exception as exc:
         if proof:
-            return {**base, 'status': 'Unable to Confirm', 'success': False, 'group_identity': proof,
-                    'reason_code': 'GROUP_RECORD_LOOKUP_INCOMPLETE',
-                    'comments': explanation(proof) + ' The related state record could not be confirmed in this lookup.'}
+            return incomplete(type(exc).__name__)
         return base

@@ -16498,6 +16498,9 @@ def md_registry_match_from_entries(result, body: str, org) -> None:
 
 
 def normalize_registry_match_fields(result, org) -> None:
+    from deployment.ma_withheld_evidence import preserves_identity as preserves_ma_notice
+    if preserves_ma_notice(result):
+        return  # A source publication restriction does not erase its bound identity.
     ct_bound = getattr(result, "_cc_ct_source_identity", None)
     if (result.state == "CT" and getattr(result, "success", False) is True
             and isinstance(ct_bound, tuple) and len(ct_bound) == 4
@@ -18566,6 +18569,7 @@ def search_mn(page, org):
         name_fallback_started = time.perf_counter()
         result.queries_attempted = []
         name_plan_complete = True
+        name_plan_failure = ''
         for index, variant in enumerate(build_search_queries(
             org.organization_name,
             org.ein,
@@ -18578,12 +18582,14 @@ def search_mn(page, org):
         )[:MN_NAME_FALLBACK_MAX_VARIANTS]):
             if index > 0 and (time.perf_counter() - name_fallback_started) >= MN_NAME_FALLBACK_MAX_SECONDS:
                 name_plan_complete = False
+                name_plan_failure = "Minnesota's name search reached its existing time allowance before completing every planned query."
                 break
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             checker.safe_wait_for_network_idle(page, timeout=5000)
             org_box = checker.find_visible_input(page, ["#txtOrg", 'input[name="txtOrg"]'])
             if not org_box:
                 name_plan_complete = False
+                name_plan_failure = "Minnesota's organization-name search form was unavailable."
                 break
             org_box.fill("")
             org_box.fill(variant)
@@ -18596,6 +18602,9 @@ def search_mn(page, org):
             text = readable_page_text(page)
             result.queries_attempted.append(variant)
             if no_registry_results_seen(text):
+                continue
+            from deployment.mn_empty_response import complete as mn_completed_empty_response
+            if mn_completed_empty_response(page, variant):
                 continue
             try:
                 row_candidates = page.evaluate(
@@ -18612,6 +18621,7 @@ def search_mn(page, org):
                 return mn_unconfirmed_alias_result(result, "Minnesota's organization-name response could not be read; absence has not been established.")
             if not row_candidates:
                 name_plan_complete = False
+                name_plan_failure = "Minnesota returned a page whose result rows or completed empty response could not be verified."
                 continue
             best_index = None
             best_score = -10000
@@ -18735,7 +18745,7 @@ def search_mn(page, org):
             return result
         if result.success and public_status(result) == "Not Registered":
             if not name_plan_complete:
-                return mn_unconfirmed_alias_result(result, "Minnesota's name search did not complete within its existing allowance; the empty EIN search alone does not establish absence.")
+                return mn_unconfirmed_alias_result(result, name_plan_failure + " The empty EIN search alone does not establish absence.")
             result.raw_status_text = "No qualifying Minnesota EIN or organization-name registration found"
             result.source_note = "Minnesota EIN-first searches and the completed bounded name searches found no qualifying registration or confirmed exact alternate-name listing."
         return result
@@ -20560,7 +20570,8 @@ def search_ma_master(page, org, completed):
                 try:
                     from deployment.state_snapshots import CURRENT
                     from deployment.ma_withheld_evidence import capture
-                    capture(page, CURRENT.get(), candidate, query)
+                    if capture(page, CURRENT.get(), candidate, query):
+                        result._ma_withheld_identity = (query, candidate['value'], candidate['label'], result.source_url)
                 except Exception:
                     pass
                 return result, body
@@ -27840,6 +27851,15 @@ def ny_search_row_could_match_without_valid_ein(name, ein, row):
             or name_decision in {"accepted", "possible"})
 
 
+def ny_name_search_term(name):
+    """Canonicalize a catalogued trailing article for retrieval only."""
+    name = canonical_name_punctuation(name).replace("'", "").strip()
+    article = re.fullmatch(r'(.+?)\s+\((the|an|a)\)', name, re.I)
+    if article:
+        name = article[2] + ' ' + article[1]
+    return re.sub(r'\s+', ' ', name).strip()
+
+
 def search_ny_direct(org, browser_page=None, registry_search_provider=None, registry_detail_provider=None):
     """Read the official site's completed JSON responses, never its loading table."""
     from deployment.search_observation import observed_http_call as _history_http_call
@@ -27906,10 +27926,11 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
         # NY's public form rejects apostrophes with HTTP 400. Submit the same
         # bounded name variants without that punctuation; keep the original
         # organization identity for every candidate and detail comparison.
-        names = dict.fromkeys(canonical_name_punctuation(name).replace("'", "")
-                              for name in build_search_queries(
-                                  org.organization_name, requested_ein, max_queries=4))
-        queries.extend({"orgName": name} for name in names if name.strip())
+        names = {}
+        for name in build_search_queries(org.organization_name, requested_ein, max_queries=4):
+            term = ny_name_search_term(name)
+            names.setdefault(term.casefold(), term)
+        queries.extend({"orgName": name} for name in names.values() if name.strip())
         if not queries:
             raise ValueError("Organization identity was not provided")
         with curl_requests.Session(impersonate="chrome136") as session:

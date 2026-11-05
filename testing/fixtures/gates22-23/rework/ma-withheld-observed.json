@@ -1,0 +1,35 @@
+{
+  "body": "Skip to Main Content\n\nHome\n\nMassachusetts Office of the\nAttorney General\n\nPublic Charities Filing Search\nTo search for a public charity, use one of the search options below. The search will only return those charitable organizations that are registered with the Massachusetts Office of the Attorney General.\n Please note that this is the new web address for Massachusetts Public Charities Filing Search. Please replace any bookmarks from the previous site with this new page.\nSearch Charity by AGO Number or Employer Identification Number or Charity Name\nAGO Number\nEmployer Identification Number\nCharity Name Contains\n\nSearch\nClear\nSelect a Charity\n-- Select --\nTHE JOHNS HOPKINS HOSPITAL\nGet Filings\nThis Charity is not available for public.\n\nThe Annual Filing Document Search website is intended as an informational tool only and is being made available as a public service. Please note that the AGO maintains fifteen (15) years of annual filing records, and that recently filed reports may not yet be available in the database. If a report does not appear in the database, it does not necessarily mean the public charity is delinquent or has failed to file the report. Questions regarding the availability of a report or the status of a public charity should be directed to the AGO’s Non-Profit Organizations/Public Charities Division by phone (617) 963-2101 or email at charities@mass.gov.\n\nFor information on registration and filing requirements, please return to the Non-Profit Organizations/Public Charities Division Main Page. Note that certain charities may be exempt from filing requirements under M.G.L. c. 12, §§ 8E and 8F, M.G.L. c. 68, §§ 19 and 20, and 940 CMR 2.00.\n\nFor information regarding the eligibility of any public charity to receive tax-deductible charitable contributions, please visit the Internal Revenue Service Tax Exempt Organization Search page at https://apps.irs.gov/app/eos/.\n\n© 2026 Commonwealth of Massachusetts.\n\nMass.gov® is a registered service mark of the Commonwealth of Massachusetts.\n\nPublic Charities Filing Search",
+  "inputs": [
+    {
+      "html": "<input c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\" type=\"text\" data-id=\"txt_userInput\" placeholder=\"Enter the 6 digit AG Account Number\" disabled=\"\">",
+      "type": "text",
+      "value": "520591656"
+    }
+  ],
+  "selects": [
+    {
+      "html": "<select data-id=\"rad_SearchBy\" c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\"><option value=\"charityNumber\" c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\">AGO Number</option><option value=\"ein\" c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\">Employer Identification Number</option><option value=\"charityName\" c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\">Charity Name Contains</option></select>",
+      "text": "Employer Identification Number",
+      "value": "ein",
+      "visible": true
+    },
+    {
+      "html": "<select c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\" data-id=\"ddl_CharityLists\" style=\"width: 100%; display: grid;\"><option value=\"0\" c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\">-- Select --</option><option value=\"a094U00001vhxgtQAA\" selected=\"\" c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\">THE JOHNS HOPKINS HOSPITAL</option></select>",
+      "text": "THE JOHNS HOPKINS HOSPITAL",
+      "value": "a094U00001vhxgtQAA",
+      "visible": true
+    },
+    {
+      "html": "<select c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\" data-id=\"ddl_Filter_FormPCFilingYear\" style=\"display: grid;\"></select>",
+      "value": "",
+      "visible": false
+    },
+    {
+      "html": "<select c-aes_live_getallfilings_withattachments_for_npcdpublicusers_v1_aes_live_getallfilings_withattachments_for_npcdpublicusers_v1=\"\" data-id=\"ddl_Filter_FormPCAttachments\" style=\"display: grid;\"></select>",
+      "value": "",
+      "visible": false
+    }
+  ],
+  "url": "https://masscharities.my.site.com/FilingSearch/s/"
+}
