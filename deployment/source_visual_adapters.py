@@ -1292,6 +1292,15 @@ def capture_owned_md_page(run,result,page,context,deadline):
   if (not same_record() or norm(value(general,'Charity Name'))!=norm(result['matched_registry_name'])
       or value(general,'Charity ID')!=identifier or (value(general,'Registration Status') or '').casefold()!=expected['status'].casefold()):fact['outcome']='general_source_fields_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:809:190:return',None)
   fact['approval_date_visible']=bool(value(general,'Latest Approval Date'))
+  # A loaded, bound record may finish within five seconds. Do not repeat
+  # navigation, revive an expired allowance, or extend the task deadline.
+  ready_at=time.monotonic()
+  if 0<stop-ready_at<5:
+   finish_stop=min(ready_at+5,stop+5,deadline-1)
+   if finish_stop>stop:
+    fact['finish_allowance_extra_ms']=round((finish_stop-stop)*1000,2)
+    fact['finish_allowance_after_bound_record']=True
+    stop=finish_stop
   dismiss=detail.get_by_role('button',name='Dismiss alert.',exact=True)
   if workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:812:5:count',dismiss.count,locals())==1 and workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:812:28:is_visible',dismiss.is_visible,locals()):
    # Wait for the source's own alert to finish dismissing. Preserve three
