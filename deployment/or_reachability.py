@@ -45,7 +45,11 @@ def unavailable_result(payload, version, reason, attempts=(), elapsed=0):
 
 
 def check(url=SOURCE, *, deadline=float('inf'), opener=None, clock=None):
-    """GET the actual page headers, never HEAD or an unrelated health endpoint."""
+    """Check source access; a slow detail alone must not suppress normal lookup.
+
+    A transient detail failure uses the existing retries for the official search
+    entrance. Success permits the unchanged collector, not a registration claim.
+    """
     opener = opener or urllib.request.urlopen
     clock = clock or time.monotonic
     parsed = urlsplit(url)
@@ -59,9 +63,11 @@ def check(url=SOURCE, *, deadline=float('inf'), opener=None, clock=None):
         remaining = stop-clock()
         if remaining <= 0:
             break
-        attempt = {'attempt': number}
+        request_url = SOURCE if number > 1 and parsed.path == '/Charities/Charity/details' else url
+        started = clock()
+        attempt = {'attempt': number, 'target': 'search' if request_url == SOURCE else 'detail'}
         try:
-            request = urllib.request.Request(url, headers={'User-Agent': 'ComplianceExpressRegistrySnapshot/1.0'})
+            request = urllib.request.Request(request_url, headers={'User-Agent': 'ComplianceExpressRegistrySnapshot/1.0'})
             with opener(request, timeout=min(allowance, remaining)) as response:
                 if clock() >= stop:
                     attempt['error_type'] = 'LateResponse'
@@ -85,4 +91,6 @@ def check(url=SOURCE, *, deadline=float('inf'), opener=None, clock=None):
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             attempt['error_type'] = type(exc).__name__
             attempts.append(attempt)
+        finally:
+            attempt['elapsed_seconds'] = round(clock()-started, 3)
     return False, 'OR_SOURCE_UNREACHABLE', attempts, clock()-start
