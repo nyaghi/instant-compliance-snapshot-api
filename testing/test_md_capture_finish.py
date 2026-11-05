@@ -35,13 +35,13 @@ class Page:
   self.nav=opts.get('nav',26.54);self.panel_delay=opts.get('panel_delay',2.0)
   self.dismiss_delay=opts.get('dismiss_delay',.5);self.change_alert=opts.get('change_alert',False)
   self.change_shot=opts.get('change_shot',False);self.shot_delay=opts.get('shot_delay',.2)
-  self.foreign_url=opts.get('foreign_url',False);self.verification=opts.get('verification',False)
+  self.foreign_url=opts.get('foreign_url',False);self.verification=opts.get('verification',False);self.http_status=opts.get('http_status',200)
   self.fields={'Charity Name':"Crohn's & Colitis Foundation, Inc.",'Charity ID':'271','Registration Status':'Pending','Latest Approval Date':'11/01/2026'}
   self.fields.update(opts.get('fields',{}))
  def set_extra_http_headers(self,v): pass
  def goto(self,url,referer,wait_until,timeout):
   self.clock.spend(self.nav,timeout);self.url=url+('/foreign' if self.foreign_url else '')
-  return SimpleNamespace(status=200)
+  return SimpleNamespace(status=self.http_status)
  def get_by_role(self,role,name,exact=True):
   return Node(self,{'tabpanel':'panel','button':'alert','heading':'heading'}[role],name)
  def inner_text(self,selector,timeout): return '\n'.join(self.fields.values())+(' Verify you are human' if self.verification else '')
@@ -65,16 +65,19 @@ class MarylandFinishTests(unittest.TestCase):
   return run,p,clock
  def test_observed_slow_bound_record_recovers_without_navigation_retry(self):
   r,p,c=self.run_case();self.assertEqual(len(r.documents),1);self.assertEqual(p.shots,1);self.assertEqual(p.clicks,1)
-  self.assertTrue(r.visual_adapter_facts[0]['finish_allowance_after_bound_record']);self.assertLessEqual(c.now,135);self.assertTrue(p.closed)
+  self.assertTrue(r.visual_adapter_facts[0]['finish_allowance_after_selected_response']);self.assertLessEqual(c.now,135);self.assertTrue(p.closed)
+ def test_live_followup_panel_delay_recovers_after_successful_selected_response(self):
+  r,p,c=self.run_case(nav=26.92,panel_delay=3.0)
+  self.assertEqual(len(r.documents),1);self.assertLess(c.now,135)
  def test_healthy_path_has_no_extra_allowance_or_wait(self):
   r,p,c=self.run_case(nav=.5,panel_delay=.1);self.assertEqual(len(r.documents),1)
   self.assertNotIn('finish_allowance_extra_ms',r.visual_adapter_facts[0]);self.assertLess(c.now,102)
  def test_slow_ready_record_without_alert_can_finish(self):
   r,p,c=self.run_case(alert=False);self.assertEqual(len(r.documents),1);self.assertEqual(p.clicks,0)
- def test_wrong_name_identifier_or_status_never_gets_allowance(self):
+ def test_wrong_name_identifier_or_status_never_gets_captured(self):
   for fields in [{'Charity Name':'Other charity'},{'Charity ID':'999'},{'Registration Status':'Current'}]:
    with self.subTest(fields=fields):
-    r,p,c=self.run_case(fields=fields);self.assertFalse(r.documents);self.assertEqual(p.shots,0);self.assertNotIn('finish_allowance_extra_ms',r.visual_adapter_facts[0])
+    r,p,c=self.run_case(fields=fields);self.assertFalse(r.documents);self.assertEqual(p.shots,0)
  def test_wrong_ein_and_foreign_page_rejected(self):
   r,p,c=self.run_case(foreign_ein=True);self.assertFalse(r.documents);self.assertFalse(r.visual_adapter_facts)
   r,p,c=self.run_case(foreign_url=True);self.assertFalse(r.documents);self.assertNotIn('finish_allowance_extra_ms',r.visual_adapter_facts[0])
@@ -91,17 +94,19 @@ class MarylandFinishTests(unittest.TestCase):
  def test_navigation_timeout_does_not_receive_allowance(self):
   r,p,c=self.run_case(nav=35);self.assertFalse(r.documents);self.assertEqual(p.shots,0)
   self.assertNotIn('finish_allowance_extra_ms',r.visual_adapter_facts[0]);self.assertLess(c.now,130)
+ def test_http_failure_does_not_receive_allowance(self):
+  for status in [403,429,500,503]:
+   r,p,c=self.run_case(http_status=status);self.assertFalse(r.documents);self.assertNotIn('finish_allowance_extra_ms',r.visual_adapter_facts[0])
  def test_alert_and_capture_hangs_remain_bounded(self):
   for opt in [dict(dismiss_delay=20),dict(shot_delay=20)]:
    with self.subTest(opt=opt):
     r,p,c=self.run_case(**opt);self.assertFalse(r.documents);self.assertLess(c.now,135)
  def test_allowance_cannot_be_revived_after_local_expiry(self):
-  # Source API returns late despite its own timeout; no extension may revive it.
-  original=Node.inner_text
-  def late(node,timeout=None):
-   if node.label=='Latest Approval Date':node.p.clock.spend(2)
-   return original(node,timeout)
-  with patch.object(Node,'inner_text',late):r,p,c=self.run_case()
+  # Navigation returns late despite its timeout; no extension may revive it.
+  original=Page.goto
+  def late(page,*a,**kw):
+   response=original(page,*a,**kw);page.clock.spend(4);return response
+  with patch.object(Page,'goto',late):r,p,c=self.run_case()
   self.assertFalse(r.documents);self.assertNotIn('finish_allowance_extra_ms',r.visual_adapter_facts[0]);self.assertEqual(p.shots,0)
 
 if __name__=='__main__':unittest.main()

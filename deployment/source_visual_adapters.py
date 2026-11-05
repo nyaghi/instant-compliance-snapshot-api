@@ -1282,6 +1282,16 @@ def capture_owned_md_page(run,result,page,context,deadline):
   def same_record():
    actual=urlsplit(detail.url)
    return actual.scheme=='https' and actual.hostname=='onestop.md.gov' and actual.path==u.path and not actual.username and not actual.password
+  # A slow successful response from the retained selected URL may finish
+  # rendering and capture within five extra seconds. All visible identity
+  # checks below remain mandatory; never retry navigation or extend the task.
+  ready_at=time.monotonic()
+  if same_record() and 0<stop-ready_at<5:
+   finish_stop=min(stop+5,deadline-1)
+   if finish_stop>stop:
+    fact['finish_allowance_extra_ms']=round((finish_stop-stop)*1000,2)
+    fact['finish_allowance_after_selected_response']=True
+    stop=finish_stop
   begin=time.perf_counter();fact['phase']='general_information'
   general=detail.get_by_role('tabpanel',name='General Information',exact=True);workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:802:79:wait_for',general.wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
   workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:803:2:wait_for',general.locator('.dvce-model-property').filter(has=detail.get_by_role('heading',name='Charity ID',exact=True)).locator('p').filter(has_text=re.compile(r'\d')).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
@@ -1292,15 +1302,6 @@ def capture_owned_md_page(run,result,page,context,deadline):
   if (not same_record() or norm(value(general,'Charity Name'))!=norm(result['matched_registry_name'])
       or value(general,'Charity ID')!=identifier or (value(general,'Registration Status') or '').casefold()!=expected['status'].casefold()):fact['outcome']='general_source_fields_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:809:190:return',None)
   fact['approval_date_visible']=bool(value(general,'Latest Approval Date'))
-  # A loaded, bound record may finish within five seconds. Do not repeat
-  # navigation, revive an expired allowance, or extend the task deadline.
-  ready_at=time.monotonic()
-  if 0<stop-ready_at<5:
-   finish_stop=min(ready_at+5,stop+5,deadline-1)
-   if finish_stop>stop:
-    fact['finish_allowance_extra_ms']=round((finish_stop-stop)*1000,2)
-    fact['finish_allowance_after_bound_record']=True
-    stop=finish_stop
   dismiss=detail.get_by_role('button',name='Dismiss alert.',exact=True)
   if workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:812:5:count',dismiss.count,locals())==1 and workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:812:28:is_visible',dismiss.is_visible,locals()):
    # Wait for the source's own alert to finish dismissing. Preserve three
