@@ -58,6 +58,21 @@ def task_allowance(job):
     return min(allowance, TASK_SECONDS) if job.get('state') == 'OR' else allowance
 
 
+def collector_recovery_allowed(reason, attempts, deadline, *, clock=None):
+    """One normal-collector opportunity for response stalls, within the old cap.
+
+    DNS, connect, TLS, access denial, foreign redirects and elapsed deadlines
+    remain terminal. A bare TimeoutError with missing frames covers the retained
+    response-stage failures; urllib wraps request-setup timeouts in URLError.
+    """
+    clock = clock or time.monotonic
+    return (reason == 'OR_SOURCE_UNREACHABLE' and bool(attempts)
+            and clock()+3 < deadline
+            and all(a.get('error_type') == 'TimeoutError'
+                    and a.get('failure_phase', 'unknown') in {'unknown', 'http_response_headers'}
+                    for a in attempts))
+
+
 def unavailable_result(payload, version, reason, attempts=(), elapsed=0):
     assert reason in REASONS
     if reason == 'OR_SOURCE_TIME_LIMIT':
