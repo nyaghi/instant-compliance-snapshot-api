@@ -1,0 +1,22 @@
+{
+  "ein": "13-3347524",
+  "state": "MA",
+  "status": "Unable to Confirm",
+  "success": true,
+  "comments": "The registration record was found, but no annual filing history or overdue deadline could be confirmed, so CharityClarity reports Unable to Confirm. Massachusetts cautions that missing public reports do not establish that a charity is delinquent or has failed to file. Registry match: NATIONAL BOOK FOUNDATION (ID: 034900).",
+  "source_url": "https://masscharities.my.site.com/FilingSearch/s/",
+  "source_note": "Massachusetts explicitly lists the matched charity registration as Deactivated. CharityClarity classifies that registration as Closed / Withdrawn / Canceled. This does not establish that the organization itself dissolved, or why the registration was deactivated.",
+  "status_reason": "FILING_HISTORY_UNAVAILABLE_NO_CONFIRMED_DEADLINE",
+  "fiscal_year_end": "",
+  "raw_status_text": "Charity Status: Deactivated",
+  "computed_due_date": "",
+  "organization_name": "National Book Foundation Inc.",
+  "ma_filing_evidence": {
+    "ago_account": "034900",
+    "contrary_status": true,
+    "registry_status": "Deactivated"
+  },
+  "next_required_period": "",
+  "matched_registry_name": "NATIONAL BOOK FOUNDATION",
+  "matched_registry_identifier": "034900"
+}

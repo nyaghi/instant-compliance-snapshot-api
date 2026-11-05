@@ -29088,6 +29088,17 @@ def true_status_from_body(result, body: str) -> str:
         return "Delinquent"
     if state == "MA" and getattr(result, "status_reason", "") == "MA_PRIMARY_REGISTRATION_PENDING":
         return "Pending"
+    if state == "MA" and getattr(result, "status_reason", "") == "MA_EXPLICIT_DEACTIVATED":
+        evidence = getattr(result, "ma_filing_evidence", {})
+        if (getattr(result, "success", False) is True
+                and getattr(result, "matched_registry_name", "")
+                and re.fullmatch(r"\d{6}", str(evidence.get("ago_account", "")))
+                and result.matched_registry_identifier == evidence["ago_account"]
+                and evidence.get("contrary_status") is True
+                and str(evidence.get("registry_status", "")).strip().casefold() == "deactivated"
+                and re.fullmatch(r"\s*Charity Status:\s*Deactivated\s*", result.raw_status_text or "", re.I)):
+            # The explicit registration standing does not depend on filing history.
+            return "Closed / Withdrawn / Canceled"
     if state == "VA" and getattr(result, "status_reason", "") == "VA_CONFIRMED_SOLICITATION_RESTRICTION":
         evidence = getattr(result, "va_entity_evidence", {})
         if (evidence.get("registration_count") == 0 and len(evidence.get("ein", "")) == 9
@@ -29596,6 +29607,9 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return ("The matched New York record returned a completed document collection with no annual filings and no recorded exemption. "
                 "CharityClarity therefore infers Delinquent. This is an inferred status, not an explicit state determination; "
                 "a specific overdue deadline was not confirmed, and recent filings may still be awaiting state review.")
+    if (state == "MA" and reason == "MA_EXPLICIT_DEACTIVATED"
+            and status == "Closed / Withdrawn / Canceled"):
+        return note
     if state == "MA" and reason == "MA_EXPLICIT_STATUS_REQUIRES_REVIEW":
         return (f"Massachusetts lists the charity status as {result.ma_filing_evidence['registry_status']}. "
                 "This contradicts inferring delinquency from missing filings, so CharityClarity reports Needs Review. "
