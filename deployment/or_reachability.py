@@ -1,5 +1,6 @@
 """Bound Oregon source access within one isolated task; no cross-run outage cache."""
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -11,6 +12,45 @@ CONNECT_SECONDS = 8.0
 PROBE_SECONDS = CONNECT_SECONDS * 4
 TASK_SECONDS = 75.0
 REASONS = {'OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'}
+
+
+def failure_diagnostic(exc):
+    """Classify retained exception frames; no I/O or exception-message logging.
+
+    A timeout class alone cannot establish which network stage failed. Keep
+    unknown when no standard-library frame establishes a stage. The diagnostic
+    must never change the original bounded recovery result.
+    """
+    try:
+        pending, seen, frames, kinds = [exc], set(), [], []
+        dns_error = False
+        while pending and len(seen) < 8:
+            error = pending.pop()
+            if not isinstance(error, BaseException) or id(error) in seen:
+                continue
+            seen.add(id(error)); kinds.append(type(error).__name__)
+            dns_error = dns_error or isinstance(error, socket.gaierror)
+            tb = error.__traceback__
+            while tb is not None:
+                module = tb.tb_frame.f_globals.get('__name__', '')
+                if module in {'socket', 'ssl', 'http.client', 'urllib.request'}:
+                    frames.append((module, tb.tb_frame.f_code.co_name))
+                tb = tb.tb_next
+            pending.extend([error.__cause__, error.__context__, getattr(error, 'reason', None)])
+        if ('http.client', '_read_status') in frames:
+            phase = 'http_response_headers'
+        elif any(module == 'ssl' and name in {'do_handshake', '_create', 'wrap_socket'} for module, name in frames):
+            phase = 'tls_handshake'
+        elif dns_error:
+            phase = 'dns_resolution'
+        elif ('socket', 'create_connection') in frames:
+            phase = 'tcp_connect'
+        else:
+            phase = 'unknown'
+        return {'failure_phase': phase, 'exception_types': list(dict.fromkeys(kinds))[:8],
+                'network_frames': [module+'.'+name for module, name in frames][-12:]}
+    except Exception:
+        return {'failure_phase': 'unknown'}
 
 
 def task_allowance(job):
@@ -90,6 +130,7 @@ def check(url=SOURCE, *, deadline=float('inf'), opener=None, clock=None):
                 return False, 'OR_SOURCE_ACCESS_REFUSED', attempts, clock()-start
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             attempt['error_type'] = type(exc).__name__
+            attempt.update(failure_diagnostic(exc))
             attempts.append(attempt)
         finally:
             attempt['elapsed_seconds'] = round(clock()-started, 3)
