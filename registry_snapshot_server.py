@@ -34951,6 +34951,7 @@ def wa_apply_detail_master(result, body: str):
     result.verified_registry_ein = ""
     result.identity_anchor = ""
     result.reason_code = ""
+    result.matched_registry_identifier = ""
     if not requested or requested != observed:
         result.status = "Unable to Confirm"
         if len(requested) == 9 and len(observed) == 9:
@@ -34970,6 +34971,9 @@ def wa_apply_detail_master(result, body: str):
     result.verified_registry_ein = observed
     result.identity_anchor = "EIN"
     result.reason_code = "MATCH_EIN_EXACT"
+    registration = wa_detail_field(body.replace("\u00a0", " "), "Registration Number")
+    if re.fullmatch(r"\d{1,20}", registration):
+        result.matched_registry_identifier = registration
     status = wa_detail_field(body, "Status")
     renewal = next((v for label in ("Renewal Date", "Renewal Due Date", "Renewal")
                     if (v := wa_detail_field(body, label))), "")

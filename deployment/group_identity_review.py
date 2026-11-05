@@ -132,6 +132,15 @@ def convert(master, base, related, proof):
         for field in ('completed', 'search_failed_receipts'):
             history.setdefault(field, []).extend(copy.deepcopy(related_history.get(field, [])))
         history['issued'] = min(history['issued'], related_history['issued'])
+        # Member and group capture runs each start request order at one.
+        # Rebase only the joined presentation order; keep query hashes and
+        # original timestamps/IDs intact, including incomplete attempts.
+        receipts = [x['search_receipt'] for x in history.get('completed', [])]
+        receipts += history.get('search_failed_receipts', [])
+        receipts.sort(key=lambda x: x.get('issued_at') or x.get('completed_at') or x.get('reported_at'))
+        history['history_order'] = 'issued-sequence-v1'
+        for sequence, receipt in enumerate(receipts, 1):
+            receipt['source_order'] = sequence
         data['_worker_search_history'] = history
     assets = []
     for asset in related.get('_worker_source_archives', [])[:12]:
