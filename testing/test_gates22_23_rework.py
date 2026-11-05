@@ -118,6 +118,33 @@ class ObservedPages(unittest.TestCase):
             self.assertEqual(len(PdfReader(io.BytesIO(pdf)).pages),1)
             self.assertEqual(meta['record_name'],candidate['label'])
 
+    def test_ma_actual_open_shadow_structure_survives_capture_and_archive(self):
+        self.ma_page()
+        # Preserve the source's open-shadow boundary; the earlier flattened
+        # fixture incorrectly made document.querySelectorAll see its controls.
+        inner=self.markup.split('<body>',1)[1].split('</body>',1)[0]
+        self.markup='<html><body><div id="host"></div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='+json.dumps(inner)+'</script></body></html>'
+        self.page.goto(ma.URL)
+        self.assertEqual(self.page.locator('body').evaluate('(b)=>document.querySelectorAll("select").length'),0)
+        observed=json.loads((FIXTURES/'ma-withheld-observed.json').read_text(encoding='utf-8'))
+        candidate={'value':observed['selects'][1]['value'],'label':observed['selects'][1]['text']}
+        run=ss.CaptureRun('The Johns Hopkins Hospital','520591656','MA')
+        self.assertTrue(ma.capture(self.page,run,candidate,run.ein),run.visual_adapter_facts)
+        self.assertEqual(run.visual_adapter_facts[-1]['guard']['shadow_roots'],1)
+        row={'state':'MA','ein':run.ein,'organization_name':run.name,'status':'Unable to Confirm','success':True,
+             'status_reason':ma.REASON,'matched_registry_name':candidate['label'],'matched_registry_identifier':candidate['value'],'source_url':ma.URL}
+        private=run.finish(row)
+        with tempfile.TemporaryDirectory() as folder:
+            store=ss.SQLiteStore(Path(folder)/'shadow.sqlite')
+            public=ss.persist_worker_result(None,private,{'state':'MA','payload':{'ein':run.ein}},store=store)
+            self.assertTrue(public.get('evidence_url'),public)
+            _,pdf=ss.saved_pdf(public['evidence_url'].split('/')[-1][:-4],store)
+            self.assertEqual(len(PdfReader(io.BytesIO(pdf)).pages),1)
+        for changes in [{'value':'a094U00001vhxguQAA'},{'label':'Another Hospital'}]:
+            self.assertFalse(ma.capture(self.page,run,{**candidate,**changes},run.ein))
+        self.page.get_by_role('combobox').first.select_option('charityNumber')
+        self.assertFalse(ma.capture(self.page,run,candidate,run.ein))
+
     def test_ma_changed_identity_notice_and_status_do_not_preserve_binding(self):
         candidate=self.ma_page();run=ss.CaptureRun('The Johns Hopkins Hospital','520591656','MA')
         self.assertFalse(ma.capture(self.page,run,{**candidate,'value':'a094U00001vhxguQAA'},run.ein))

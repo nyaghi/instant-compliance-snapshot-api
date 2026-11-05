@@ -80,7 +80,8 @@ class CaptureBinding(unittest.TestCase):
         candidate={'value':'a094U00001vhxgtQAA','label':'EXAMPLE HOSPITAL'}
         body='EXAMPLE HOSPITAL '+ma.MESSAGE
         raw=fixture_image(body)
-        page=Mock(url=ma.URL);page.evaluate.return_value=True
+        page=Mock(url=ma.URL)
+        page.evaluate.side_effect=lambda *a:{'bound':True,'source_text':body}
         def photograph(p):run.document(ma.URL,raw,'image',body)
         with patch.object(run,'page',side_effect=photograph):
             self.assertTrue(ma.capture(page,run,candidate,run.ein))
