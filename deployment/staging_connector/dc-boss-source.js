@@ -9,7 +9,8 @@ const CCDCSource=(()=>{
  function reconcileRequest(d){return (!Object.hasOwn(d,'prior_renewal_date_type')||d.prior_renewal_date_type==='current_effective_date')&&d.boss_reconcile_schema===1&&!Object.hasOwn(d,'review_candidate')&&['active','current','issued','approved'].includes(String(d.raw_status||'').toLowerCase())&&['charitable solicitation','charitable exempt'].includes(d.expected_activity)&&/^[a-f0-9]{64}$/.test(d.prior_comments_sha256||'')&&/^\d{4}-\d\d-\d\d$/.test(d.prior_renewal_date||'')&&['Current','Upcoming Filing','Delinquent','Exempt'].includes(d.prior_status);}
  function sameName(a,b,d){return norm(a)===norm(b)||reconcileRequest(d)&&articleKey(a)===articleKey(b);}
 
- function valid(d){return d?.state==='DC'&&d.operation==='detail'&&d.url===SEARCH&&/^\d{9}$/.test(d.ein)&&/^[a-f0-9]{32}$/.test(d.run_id)&&/^\d{5,16}$/.test(d.identifier)&&typeof d.name==='string'&&d.name.length>0&&d.name.length<=300&&typeof d.raw_status==='string'&&d.raw_status.length>0&&d.raw_status.length<=100&&/^\d{4}-\d\d-\d\d$/.test(d.expiration)&&Number.isFinite(d.issued_at)&&Number.isFinite(d.expires_at)&&d.expires_at>d.issued_at&&(!Object.hasOwn(d,'deadline_schema')||d.deadline_schema===1)&&d.expires_at-d.issued_at<=(d.deadline_schema===1?300.1:60.1)&&Date.now()/1000>=d.issued_at-5&&Date.now()/1000<d.expires_at&&(!Object.hasOwn(d,'boss_reconcile_schema')||reconcileRequest(d));}
+ function terminalUndated(d){return d?.expiration===''&&['cancelled','canceled','closed','withdrawn','revoked'].includes(String(d.raw_status||'').toLowerCase());}
+ function valid(d){return d?.state==='DC'&&d.operation==='detail'&&d.url===SEARCH&&/^\d{9}$/.test(d.ein)&&/^[a-f0-9]{32}$/.test(d.run_id)&&/^\d{5,16}$/.test(d.identifier)&&typeof d.name==='string'&&d.name.length>0&&d.name.length<=300&&typeof d.raw_status==='string'&&d.raw_status.length>0&&d.raw_status.length<=100&&(/^\d{4}-\d\d-\d\d$/.test(d.expiration)||terminalUndated(d))&&Number.isFinite(d.issued_at)&&Number.isFinite(d.expires_at)&&d.expires_at>d.issued_at&&(!Object.hasOwn(d,'deadline_schema')||d.deadline_schema===1)&&d.expires_at-d.issued_at<=(d.deadline_schema===1?300.1:60.1)&&Date.now()/1000>=d.issued_at-5&&Date.now()/1000<d.expires_at&&(!Object.hasOwn(d,'boss_reconcile_schema')||reconcileRequest(d));}
  function fields(url,text,d){
   if(!DETAILS.includes(url)||typeof text!=='string'||text.length>20000||/user validation required|recaptcha timeout|verify you are human|access denied/i.test(text))return null;
   if(text.split('License Information').length!==2||text.split('Licensee Information').length!==2)return null;
@@ -17,12 +18,12 @@ const CCDCSource=(()=>{
   if(LABELS.some(k=>lines.filter(v=>v===k).length!==1))return null;
   const pos=LABELS.map(k=>lines.indexOf(k));if(pos.some((v,i)=>i&&v<=pos[i-1]))return null;
   const f=Object.fromEntries(LABELS.map((k,i)=>[k,lines.slice(pos[i]+1,pos[i+1]??lines.length).join(' ')]));
-  if(Object.entries(f).some(([k,v])=>!['Trade Name','Premise Address'].includes(k)&&(!v||v==='N/A')))return null;
+  if(Object.entries(f).some(([k,v])=>!(['Trade Name','Premise Address',...(terminalUndated(d)?['Expiration Date']:[])]).includes(k)&&(!v||v==='N/A')))return null;
   const exp=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(f['Expiration Date']);
-  if(f['License Number']!==d.identifier||!sameName(f.Licensee,d.name,d)||!['charitable solicitation','charitable exempt'].includes(f['License Activity'].toLowerCase())||f['License Status']!==d.raw_status||!exp||!/^\d\d\/\d\d\/\d{4}$/.test(f['Issue Date']))return null;
-  const expiry=`${exp[3]}-${exp[1]}-${exp[2]}`,parts=f['Issue Date'].split('/'),issue=`${parts[2]}-${parts[0]}-${parts[1]}`;
+  if(f['License Number']!==d.identifier||!sameName(f.Licensee,d.name,d)||!['charitable solicitation','charitable exempt'].includes(f['License Activity'].toLowerCase())||f['License Status']!==d.raw_status||(!exp&&!(terminalUndated(d)&&f['Expiration Date']==='N/A'))||!/^\d\d\/\d\d\/\d{4}$/.test(f['Issue Date']))return null;
+  const expiry=exp?`${exp[3]}-${exp[1]}-${exp[2]}`:'',parts=f['Issue Date'].split('/'),issue=`${parts[2]}-${parts[0]}-${parts[1]}`;
   const validDate=value=>{const parsed=new Date(value+'T00:00:00Z');return Number.isFinite(parsed.valueOf())&&parsed.toISOString().slice(0,10)===value;};
-  if(!validDate(expiry)||!validDate(issue))return null;
+  if((expiry&&!validDate(expiry))||!validDate(issue))return null;
   if(reconcileRequest(d)){
    const observedDay=new Date(d.issued_at*1000).toISOString().slice(0,10);
    if(f['License Activity'].toLowerCase()!==d.expected_activity||expiry<d.expiration||issue>expiry||issue>observedDay||(!(d.prior_renewal_date_type==='current_effective_date'&&expiry===d.expiration)&&(issue<d.prior_renewal_date||(expiry>d.expiration&&issue<=d.prior_renewal_date))))return null;
@@ -47,13 +48,34 @@ const CCDCSource=(()=>{
    window.scrollTo({left:0,top:0,behavior:'instant'});
    for(const e of document.querySelectorAll('mat-sidenav-content'))e.scrollTo({left:0,top:0,behavior:'instant'});
   }
-  if(phase==='metadata'||phase==='capture_position')return {url,text,ready:document.readyState,
+  // Inspect real rendered text, including clipping by nested source containers.
+  // No source text, stylesheet, or field is rewritten.
+  const captureFit=()=>{
+   const labels=['Licensee','Trade Name','License Category','License Activity','License Number','Premise Address','License Status','Issue Date','Expiration Date'];
+   const cells=[...document.querySelectorAll('.readonly')].filter(visible);
+   const selected=labels.map(label=>cells.filter(e=>e.children[0]?.textContent.trim()===label));
+   if(selected.some(v=>v.length!==1))return {ok:false,reason:'license_field_layout_unrecognized'};
+   const clipped=[];
+   for(const cell of selected.map(v=>v[0]))for(const child of cell.children){
+    const range=document.createRange();range.selectNodeContents(child);
+    for(const rect of range.getClientRects()){
+     if(!rect.width||!rect.height)continue;
+     let fits=rect.left>=-1&&rect.top>=-1&&rect.right<=innerWidth+1&&rect.bottom<=innerHeight+1;
+     for(let parent=child;parent&&fits;parent=parent.parentElement){
+      const style=getComputedStyle(parent),box=parent.getBoundingClientRect();
+      if(/hidden|clip|auto|scroll/.test(style.overflowX)&& (rect.left<box.left-1||rect.right>box.right+1))fits=false;
+      if(/hidden|clip|auto|scroll/.test(style.overflowY)&& (rect.top<box.top-1||rect.bottom>box.bottom+1))fits=false;
+     }
+     if(!fits){clipped.push(cell.children[0].textContent.trim());break;}
+    }
+   }
+   return {ok:clipped.length===0,clipped:[...new Set(clipped)],fields:labels.length};
+  };
+  if(phase==='metadata'||phase==='capture_position')return {url,text,ready:document.readyState,capture_fit:captureFit(),
    position:{x:scrollX,y:scrollY,width:innerWidth,content:[...document.querySelectorAll('mat-sidenav-content')].map(e=>({x:e.scrollLeft,y:e.scrollTop}))}};
   if(allowedDetail.includes(url))return {next:'metadata'};
   const one=(selector,test)=>{const matches=Array.from(document.querySelectorAll(selector)).filter(e=>visible(e)&&test(e));return matches.length===1?matches[0]:null;};
   const reconcile=d.boss_reconcile_schema===1;
-  // Retrieval of an already selected license does not authorize changing its
-  // status, period, name or activity. Those bindings below remain unchanged.
   const searchType='License Number',query=d.identifier,comparison='Exact Match';
   if(phase==='type'){
    const select=document.getElementById('entityApplicantType');
@@ -115,8 +137,8 @@ const CCDCSource=(()=>{
   }
   return {error:'unknown_source_phase'};
  }
- async function capture(d,sender,signal){
-  const start=Date.now(),steps=[];let end=Math.min(start+30000,d.expires_at*1000),owned=null,tab=null,attached=false,closed=false,rail=null,selection=null;
+ async function captureOne(d,sender,signal,activeBudgetMs=30000,requireCorporate=false){
+  const start=Date.now(),steps=[];let end=Math.min(start+activeBudgetMs,d.expires_at*1000),owned=null,tab=null,attached=false,closed=false,rail=null,selection=null;
   let onCancel;
   const cancelled=new Promise((_,reject)=>{onCancel=()=>reject(Error('source_cancelled'));signal?.addEventListener('abort',onCancel,{once:true});});
   // Attach a handler before any source operation so an early cancellation is contained.
@@ -137,7 +159,7 @@ const CCDCSource=(()=>{
    // work without extending the signed request or taking an extra window.
    try {rail=await CCSourceRail.acquire(sender,'DC',d.deadline_schema===1?d.expires_at*1000-30000:Math.min(start+60000,d.expires_at*1000)-5000,d.run_id,signal);check();}
    finally {steps.push({phase:'queue',seconds:(Date.now()-queued)/1000});}
-   end=Math.min(d.deadline_schema===1?d.expires_at*1000:start+60000,Date.now()+30000,d.expires_at*1000);if(rail)rail.job.activeExpiresAt=end;
+   end=Math.min(d.deadline_schema===1?d.expires_at*1000:start+60000,Date.now()+activeBudgetMs,d.expires_at*1000);if(rail)rail.job.activeExpiresAt=end;
    owned=await limited(CCSourceRail.create(rail,{url:SEARCH,...(rail?.options||{type:'popup',focused:false,width:1280,height:1000})}),'create',w=>chrome.windows.remove(w.id).catch(()=>{}));tab=owned?.tabs?.[0];if(rail)rail.windowId=owned.id;
    if(!Number.isInteger(owned?.id)||!Number.isInteger(tab?.id))throw Error('owned_window_unavailable');
    await limited(chrome.debugger.attach({tabId:tab.id},'1.3'),'attach',()=>chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));attached=true;await command('Page.enable');
@@ -147,27 +169,58 @@ const CCDCSource=(()=>{
     try{observed=await observe(phase);}catch(e){if(!/context.*destroyed|Cannot find.*context/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,100));continue;}
     if(observed?.selection)selection=observed.selection;
     if(observed?.error)throw Error(observed.error);
-    if(phase==='metadata'&&observed?.ready==='complete'&&fields(observed.url,observed.text,d)){meta=observed;break;}
+    if(phase==='metadata'&&observed?.ready==='complete'&&fields(observed.url,observed.text,d)&&(!requireCorporate||corporateRecord(observed.text))){meta=observed;break;}
     if(observed?.next){steps.push({phase:'source:'+phase,elapsed_seconds:(Date.now()-start)/1000});phase=observed.next;}
     await new Promise(r=>setTimeout(r,100));
    }
    if(!meta)throw Error('selected_detail_unavailable');
    const before=fields(meta.url,meta.text,d);
+   // This tab belongs to this capture and is closed in finally. Give the source
+   // a desktop layout and enough viewport height for its internal scroller.
+   await command('Emulation.setDeviceMetricsOverride',{width:1280,height:1600,deviceScaleFactor:1,mobile:false},5000);
    const positioned=await observe('capture_position');
+   if(!positioned?.capture_fit?.ok)throw Error('selected_detail_fields_clipped');
    const atStart=m=>m?.position?.x===0&&m.position.y===0&&Array.isArray(m.position.content)&&m.position.content.every(e=>e.x===0&&e.y===0);
    if(!atStart(positioned)||JSON.stringify(before)!==JSON.stringify(fields(positioned.url,positioned.text,d)))throw Error('selected_detail_position_changed');
    meta=positioned;
    const layout=await command('Page.getLayoutMetrics',{},4000);const rect=layout.cssContentSize||layout.contentSize;
    if(!rect||rect.width<1||rect.height<1||rect.width*rect.height>20000000)throw Error('source_size_rejected');
-   const shot=await command('Page.captureScreenshot',{format:'jpeg',quality:80,captureBeyondViewport:true,fromSurface:true,clip:{x:0,y:0,width:rect.width,height:rect.height,scale:1}},3000);
+   // Capture the complete fitted viewport. CSS-sized clip rectangles are not
+   // screenshot pixel dimensions when the browser's page zoom is not 100%.
+   const shot=await command('Page.captureScreenshot',{format:'jpeg',quality:80,captureBeyondViewport:false,fromSurface:true},3000);
    const after=await observe('metadata',true),afterFields=after&&fields(after.url,after.text,d);
    const finished=Date.now();
    check();
-   if(after?.url!==meta.url||!afterFields||JSON.stringify(before)!==JSON.stringify(afterFields)||!atStart(after)||after.position.width!==meta.position.width||finished>=end)throw Error('selected_detail_changed');
+   if(requireCorporate&&JSON.stringify(corporateRecord(after?.text||''))!==JSON.stringify(corporateRecord(meta.text)))throw Error('corporate_record_changed');
+   if(after?.url!==meta.url||!afterFields||!after.capture_fit?.ok||JSON.stringify(before)!==JSON.stringify(afterFields)||!atStart(after)||after.position.width!==meta.position.width||finished>=end)throw Error('selected_detail_changed');
    return {ok:true,request:d,url:after.url,public_text:after.text,source_fields:afterFields,image:shot.data,captured_at:finished/1000,navigation_started_at:start/1000,timing:captureTiming(finished)};
   }catch(e){return {ok:false,reason:String(e.message||'source_capture_failed').slice(0,150),timing:captureTiming(Date.now())};}
   finally{closed=true;signal?.removeEventListener("abort",onCancel);const cleanup=[];if(attached&&tab)cleanup.push(chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));if(owned)cleanup.push(chrome.windows.remove(owned.id).catch(()=>{}));let timer;await Promise.race([Promise.allSettled(cleanup),new Promise(r=>{timer=setTimeout(r,500);})]);clearTimeout(timer);if(rail)await CCSourceRail.release(rail);}
  }
- return {valid,fields,pageStep,capture};
+ function continuityRequest(d){
+  const c=d.corporate_continuity_candidate;
+  if(d.corporate_continuity_schema!==1||!c||Object.keys(c).sort().join(',')!=='expiration,identifier,name,raw_status'||d.review_candidate||d.boss_reconcile_schema||c.raw_status!=='Active'||norm(c.name)!==norm(d.name)||c.identifier===d.identifier||!/^\d{5,16}$/.test(c.identifier)||!/^\d{4}-\d\d-\d\d$/.test(c.expiration)||c.expiration<=d.expiration)throw Error('invalid_corporate_continuity_request');
+  const {corporate_continuity_schema,corporate_continuity_candidate,...base}=d;return {...base,...c};
+ }
+ function corporateRecord(text){
+  if(text.split('Licensee Information').length!==2||text.split('Registered/Resident Agent Information').length!==2)return null;
+  const part=text.split('Licensee Information')[1].split('Registered/Resident Agent Information')[0];
+  const m=/^\s*Licensee Name\s+(.+?)\s+Record Name\s+([A-Z]\d{6,16})\s+Entity Status\s+(.+?)\s*$/s.exec(part);return m?{name:m[1],identifier:m[2]}:null;
+ }
+ async function capture(d,sender,signal){
+  if(!Object.hasOwn(d,'corporate_continuity_schema'))return captureOne(d,sender,signal);
+  let next;
+  try{next=continuityRequest(d);}catch(e){return {ok:false,reason:e.message};}
+  const prior=await captureOne(d,sender,signal,30000,true);if(!prior.ok)return prior;
+  const used=prior.timing.active_seconds,remaining=Math.floor((30-used)*1000);
+  if(remaining<5000)return {ok:false,reason:'corporate_continuity_deadline',timing:prior.timing};
+  const current=await captureOne(next,sender,signal,remaining,true);
+  const timing={seconds:prior.timing.seconds+(current.timing?.seconds||0),queue_seconds:prior.timing.queue_seconds+(current.timing?.queue_seconds||0),active_seconds:used+(current.timing?.active_seconds||0),steps:[...prior.timing.steps,...(current.timing?.steps||[])]};
+  if(!current.ok)return {...current,timing};
+  const a=corporateRecord(prior.public_text),b=corporateRecord(current.public_text);
+  if(!a||!b||a.identifier!==b.identifier||norm(a.name)!==norm(d.name)||norm(b.name)!==norm(next.name))return {ok:false,reason:'corporate_identity_not_established',timing};
+  return {...current,request:d,prior_license:prior,current_license:current,timing,navigation_started_at:prior.navigation_started_at};
+ }
+ return {valid,fields,pageStep,capture,continuityRequest,corporateRecord};
 })();
 if(typeof module!=='undefined')module.exports=CCDCSource;

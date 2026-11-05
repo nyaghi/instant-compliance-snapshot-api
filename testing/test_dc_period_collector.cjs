@@ -17,7 +17,7 @@ async function transport(input,mode){
    if(mode==='verification')return {result:{value:JSON.stringify({error:'source_verification_required'})}};
    if(step<6)return {result:{value:JSON.stringify({next:['option','fill','submit','licensing','row','metadata'][step++]})}};
    const shown=mode==='changed'&&calls.includes('Page.captureScreenshot')?{...f,'Expiration Date':'10/31/2030'}:f;
-   return {result:{value:JSON.stringify({url,ready:'complete',text:text(shown),position:{x:0,y:0,width:1280,content:[]}})}};
+   return {result:{value:JSON.stringify({url,ready:'complete',text:text(shown),capture_fit:{ok:mode!=='clipped'},position:{x:0,y:0,width:1280,content:[]}})}};
   }
   if(method==='Page.getLayoutMetrics')return {cssContentSize:{width:1280,height:1000}};
   if(method==='Page.captureScreenshot')return {data:'bW9kZWxlZC1waXhlbHM='};
@@ -42,7 +42,7 @@ async function transport(input,mode){
   for(const [key,value]of [['Licensee','Other Foundation'],['License Number','999999'],['License Status','Revoked'],['License Activity','Charitable Exempt'],['Expiration Date','10/31/2025'],['Expiration Date','02/30/2028'],['Issue Date','10/30/2030']]){
    assert.equal(api.fields('https://boss.dc.gov/licensing/license-details',text({...f,[key]:value}),d),null,key);count.field_rejections++;
   }
-  for(const mode of ['good','changed','verification','expired']){
+  for(const mode of ['good','changed','verification','expired','clipped']){
    await transport(item,mode);if(mode==='good')count.transport_recoveries++;else count.transport_rejections++;
    if(mode!=='expired')count.owned_cleanups++;
   }
