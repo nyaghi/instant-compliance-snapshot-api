@@ -1303,12 +1303,16 @@
               }
               note.textContent = message; note.hidden = !message;
             } });
-        } catch {
+        } catch (error) {
           if (signal?.aborted) throw signal.reason;
           const result = fallbackResult(state, einValue, `The ${state} browser check could not be completed. Confirm that staging is unlocked and the connector is enabled, then retry. Registration status remains unconfirmed.`, organizationNameValue);
           result.status = "Unable to Confirm";
           result.success = false;
           result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
+          if (state === 'NY' && error?.ccRegistryHandoffFailed) {
+            result.status_reason = 'NY_RESULT_SUBMISSION_FAILED';
+            result.comments = result.source_note = 'The New York browser search returned, but CharityClarity could not process its result because the server handoff failed. This does not establish a registration status. Retry New York.';
+          }
           return result;
         }
       }

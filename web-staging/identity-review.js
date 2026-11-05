@@ -98,6 +98,11 @@
         if (review.exclusive && candidate.suggested) add(card, 'p', 'Suggested match · confirm before using its status', 'mb-1 text-xs font-semibold text-slate-900');
         add(card, 'p', candidate.name, 'font-semibold');
         add(card, 'p', [candidate.identifier, candidate.location].filter(Boolean).join(' · '), 'mt-1 text-xs');
+        if (candidate.group_identity) {
+          const group = candidate.group_identity;
+          add(card, 'p', `Entered EIN: ${group.requested_ein} · Registry group-return EIN: ${group.registry_ein}`, 'mt-1 text-xs font-semibold');
+          add(card, 'p', `IRS metadata shows group exemption ${group.group_exemption_number}. Confirm whether this state's record applies to the entered organization; a group relationship alone does not establish coverage.`, 'mt-1 text-xs text-slate-600');
+        }
         add(card, 'p', [candidate.raw_status, candidate.expiration ? `Expiration: ${candidate.expiration}` : ''].filter(Boolean).join(' · '), 'mt-1 text-xs text-slate-600');
         if (candidate.decision !== 'reject' && !(result.success === true && (result.status === 'Not Registered'
           || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant'))) renderEvidence(card, candidate);

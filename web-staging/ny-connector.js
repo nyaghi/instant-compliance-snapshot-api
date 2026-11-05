@@ -127,10 +127,22 @@
       try {
       const requestBody = JSON.stringify({ ...credentials, ...fields });
       requestPhase = "send";
-      const response = await fetch(API + "/api/ny-connector", {
+      const endpoint = API + "/api/ny-connector";
+      const requestOptions = {
         method: "POST", headers: { "Content-Type": "application/json" },
         signal: fields.action === "capture_empty" ? AbortSignal.any([...(signal ? [signal] : []),timeout,AbortSignal.timeout(Math.max(1,alEvidenceDeadline-Date.now()))]) : signal && !cleanup ? AbortSignal.any([signal, timeout]) : timeout, body: requestBody
-      });
+      };
+      let response = await fetch(endpoint, requestOptions);
+      // A signed NY advance replays the same saved public evidence; it does
+      // not perform another browser search. Recover one gateway failure using
+      // the exact request and the original timeout/abort signal.
+      if (registryState === "NY" && fields.action === "advance" && !cleanup
+          && [502,503,504,520,522,524].includes(response.status)
+          && !timeout.aborted && !signal?.aborted) {
+        onProgress?.("New York: resubmitting the completed browser result once.",
+          {state:"NY",stage:"master response retry",action:"advance",http_status:response.status});
+        response = await fetch(endpoint, requestOptions);
+      }
       requestStatus = response.status; requestPhase = "decode";
       const payload = await response.json();
       requestPhase = "status";
@@ -139,6 +151,8 @@
       } catch (error) {
         // Record only public control-flow facts. Never export payloads,
         // credentials, signed continuations, or arbitrary exception text.
+        if (registryState === 'NY' && fields.action === 'advance' && requestPhase !== 'serialize')
+          error.ccRegistryHandoffFailed = true;
         if (!cleanup) try {
           const reason = signal?.aborted ? 'CALLER_ABORTED' : timeout.aborted ? 'API_TIMEOUT'
             : requestPhase === 'serialize' ? 'API_SERIALIZATION_FAILED'

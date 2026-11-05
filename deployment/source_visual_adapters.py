@@ -19,6 +19,9 @@ def completed_names_only_result(run,result):
 def capture_result_visuals(master,result,run,deadline):
  """Measure visual-only requests separately; never alter a completed status."""
  if completed_names_only_result(run,result):return None
+ if run is not None and run.state=='RI' and result.get('_worker_identity_review'):
+  capture_ri_review_sources(master,result,run,deadline)
+  return None
  if run is not None and run.state=='CA' and getattr(run,'ca_review_candidates',None):
   from deployment.ca_review_evidence import capture as capture_ca_review
   if capture_ca_review(master,result,run,deadline):return None
@@ -28,6 +31,29 @@ def capture_result_visuals(master,result,run,deadline):
   try:workflow_call('deployment/source_visual_adapters.py:capture_result_visuals:12:6:capture',capture,locals(), master,result,run,deadline)
   except Exception:
    if run is not None:run.errors.append('source_visual_adapter_unavailable')
+
+def capture_ri_review_sources(master,result,run,deadline):
+ """Photograph each exact candidate, sharing the existing RI visual allowance."""
+ review=result.get('_worker_identity_review')
+ rows=review.get('records',[]) if isinstance(review,dict) else []
+ if (not isinstance(rows,list) or not 1<=len(rows)<=10
+     or result.get('state')!='RI' or re.sub(r'\D','',str(result.get('ein','')))!=run.ein):return
+ run.ri_review_capture_stop=min(deadline-1,time.monotonic()+22)
+ seen=set()
+ for row in rows:
+  if not isinstance(row,dict):continue
+  if row.get('status') not in {'Current','Upcoming Filing','Delinquent','Pending','Exempt','Revoked','Suspended','Closed / Withdrawn / Canceled'}:continue
+  identifier=str(row.get('identifier') or '')
+  if identifier in seen or not re.fullmatch(r'CO\.\d+',identifier):continue
+  seen.add(identifier)
+  candidate={**result,'success':True,'status':row.get('status'),
+             'matched_registry_name':row.get('name'), 'matched_registry_identifier':identifier,
+             'source_url':row.get('url'),'raw_status_text':row.get('raw_status','')}
+  if selected_url(run,candidate) is None:continue
+  if time.monotonic()+3>=run.ri_review_capture_stop:break
+  run.selected_visual_attempted=False
+  capture_selected_source(master,candidate,run,run.ri_review_capture_stop)
+ run.selected_visual_attempted=True
 
 def _selected_url(run,result):
  if (not isinstance(result,dict) or result.get('state')!=run.state
@@ -43,7 +69,7 @@ def _selected_url(run,result):
       or u.query or re.sub(r'\D','',identifier)!=run.ein):return None
  elif run.state=='OH':
   params=parse_qsl(u.query,keep_blank_values=True)
-  ordinary=(u.path in {'/Charities/OrganizationDetails','/Charities/FullyExemptOrganization'} and params==[('Id',identifier)])
+  ordinary=(u.path in {'/Charities/OrganizationDetails','/Charities/FullyExemptOrganization','/Charities/ChapterOrganizationDetails'} and params==[('Id',identifier)])
   exempt=(u.path=='/Charities/PartiallyExemptOrganization'
       and params in [[('Id',identifier),('ExemptionStatus','109')],
                      [('Id',identifier),('ExemptionStatus','1716')]])
@@ -123,6 +149,8 @@ def capture_selected_source(master,result,run,deadline):
  # Existing owned browser captures must remain the first choice.
  if any(d[2] in {'image','source_pdf'} and run.ein in re.sub(r'\D','',d[3])
         and re.sub(r'[^a-z0-9]','',result['matched_registry_name'].lower()) in re.sub(r'[^a-z0-9]','',d[3].lower())
+        and (run.state!='RI' or not getattr(run,'ri_review_capture_stop',None)
+             or str(result.get('matched_registry_identifier') or '') in d[3])
         for d in run.documents):return trace_return('deployment/source_visual_adapters.py:capture_selected_source:102:32:return',None)
  started=time.perf_counter();context=browser=None;held=False
  fact={'adapter':run.state+'-selected-detail','outcome':'not_started','playwright_start_ms':0,'browser_acquire_ms':0,'context_start_ms':0,'navigation_ms':0,'binding_ms':0,'capture_ms':0,'browser_close_ms':0,'playwright_close_ms':0,'total_ms':0}
@@ -133,6 +161,7 @@ def capture_selected_source(master,result,run,deadline):
   remaining=deadline-time.monotonic()-1.0
   if remaining<3.0:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:110:54:return',None)
   stop=time.monotonic()+min(22.0 if run.state=='RI' else 30.0 if run.state=='OR' else 8.0,remaining)
+  if run.state=='RI':stop=min(stop,getattr(run,'ri_review_capture_stop',stop))
   held=workflow_call('deployment/source_visual_adapters.py:capture_selected_source:112:7:acquire',master.BROWSER_LOOKUP_SEMAPHORE.acquire,locals(), blocking=False)
   if not held:fact['outcome']='browser_capacity_unavailable';return trace_return('deployment/source_visual_adapters.py:capture_selected_source:113:61:return',None)
   runtime_started=time.perf_counter();runtime_close_started=None
@@ -234,7 +263,10 @@ def capture_selected_source(master,result,run,deadline):
 def remember_ca_exempt_entity(run,result):
  if run is None or run.state!='CA' or not getattr(result,'success',False) or getattr(result,'status','')!='Exempt':return
  entity=getattr(result,'_cc_selected_entity',None)
- if not isinstance(entity,dict) or getattr(result,'_cc_registration_records',None)!=[]:return
+ records=getattr(result,'_cc_registration_records',None)
+ retired=(isinstance(records,list) and bool(records)
+          and re.search(r'(?:^|\|)\s*Registration Status:\s*Merged Out\s*(?:\||$)',str(getattr(result,'raw_status_text','')),re.I))
+ if not isinstance(entity,dict) or not (records==[] or retired):return
  identifier=str(getattr(result,'matched_registry_identifier','') or '')
  name=str(getattr(result,'matched_registry_name','') or '')
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
@@ -242,7 +274,9 @@ def remember_ca_exempt_entity(run,result):
      or entity.get('entityStatus')!='Exempt' or re.sub(r'\D','',str(entity.get('fein') or ''))!=run.ein
      or not name or norm(entity.get('entityName') or entity.get('legalName') or entity.get('name'))!=norm(name)):return
  run.remember_detail(identifier,name,'https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/'+identifier)
- if identifier in run.source_detail_hints:run.source_detail_hints[identifier]['exempt_entity_ein']=run.ein
+ if identifier in run.source_detail_hints:
+  run.source_detail_hints[identifier]['exempt_entity_ein']=run.ein
+  run.source_detail_hints[identifier]['retired_registration_present']=bool(retired)
 
 def ca_exempt_entity_core(text,name,ein):
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
@@ -312,7 +346,8 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
     before=len(run.documents)
     note=('Original state entity candidate: explicit Exempt standing and organization name. Source EIN is blank; identity confirmation is required.'
-          if not expected_ein else 'Original state entity page: explicit Exempt standing, organization name and EIN. No registration record exists in the completed lookup.')
+          if not expected_ein else ('Original state entity page: explicit Exempt standing, organization name and EIN. A historical Merged Out registration is retained in the search result; the current exemption is on this entity page.'
+          if hint.get('retired_registration_present') else 'Original state entity page: explicit Exempt standing, organization name and EIN. No registration record exists in the completed lookup.'))
     run.document(url,raw,'image',core,note=note)
     fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
@@ -774,9 +809,15 @@ def capture_selected_wa_source(master,result,run,deadline):
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
 
 def remember_va_selected(run,result):
- """Keep only the already fetched exact-EIN selected Charity registration ID."""
+ """Keep an already accepted registration bound to its original source entity."""
  if run is None or run.state!='VA' or not getattr(result,'success',False):return
  proof=getattr(result,'va_entity_evidence',None);identifier=str(getattr(result,'matched_registry_identifier','') or '');name=str(getattr(result,'matched_registry_name','') or '')
+ if not isinstance(proof,dict):
+  candidate=getattr(result,'_cc_va_selected_registration',None)
+  if (isinstance(candidate,dict) and candidate.get('identity_basis')=='accepted_name'
+      and candidate.get('requested_ein')==run.ein and candidate.get('source_ein') in {'',run.ein}
+      and re.sub(r'\D','',str(getattr(result,'ein','')))==run.ein):
+   proof={**candidate,'ein':run.ein}
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if (not isinstance(proof,dict) or proof.get('ein')!=run.ein or proof.get('id')!=identifier
      or norm(proof.get('name'))!=norm(name) or not re.fullmatch(r'\d+',identifier)

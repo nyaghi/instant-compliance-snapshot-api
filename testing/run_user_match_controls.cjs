@@ -12,6 +12,13 @@ function setup(result,decide=async()=>{},retry=async()=>{}){
 }
 const candidate={id:'verified-candidate',name:'<script>unsafe</script>',identifier:'REG123',location:'Boston, MA',source_url:'https://registry.example/123',raw_status:'Exempt'};
 const result={state:'GA',status:'Needs Review',identity_review:{candidates:[candidate]}};
+test('group identity card displays both EINs and scope limitation as text',()=>{
+ const group={requested_ein:'123456789',registry_ein:'987654321',group_exemption_number:'1234'};
+ const els=setup({...result,identity_review:{candidates:[{...candidate,group_identity:group}]}});
+ assert.ok(els.some(e=>(e.textContent||'').includes('Entered EIN: 123456789 · Registry group-return EIN: 987654321')));
+ assert.ok(els.some(e=>(e.textContent||'').includes('does not establish coverage')));
+ assert.ok(els.some(e=>e.textContent==='Accept match'));assert.ok(!els.some(e=>e.innerHTML));
+});
 test('comments expose evidence and explicit identity actions without HTML injection',()=>{
  const els=setup(result);assert.ok(els.some(e=>e.textContent===candidate.name));assert.ok(els.some(e=>e.textContent==='Accept match'));
  assert.ok(els.some(e=>e.textContent==='Reject match'));assert.ok(!els.some(e=>e.innerHTML));

@@ -1,0 +1,37 @@
+{
+  "source_url":"https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=24361b2c-0d84-4797-8115-0abf32f42e3b",
+  "observed_at":"2026-11-04",
+  "scope":"Visible official detail and all seven filing rows; collected read-only, not a candidate live run.",
+  "requested_name":"Solomon R. Guggenheim Foundation",
+  "requested_ein":"135562233",
+  "aliases":["SOLOMON R. GUGGENHEIM COLLECTION","THE SOLOMON R. GUGGENHEIM FOUNDATION","Guggenheim Museum","Peggy Guggenheim","SOLOMON R. GUGGENHEIM FOUNDATION","GUGGENHEIM, SOLOMON R. FOUNDATION","PEGGY GUGGENHEIM COLLECTION"],
+  "fields":{
+    "Entity Name":"Solomon R. Guggenheim Foundation Guggenheim Museum, Peggy Guggenheim Collection",
+    "NV Business ID":"NV20191041588",
+    "Entity Number":"E0019272019-7",
+    "Entity Status":"Expired",
+    "Entity Type":"-",
+    "FEIN":"-",
+    "Solicits Charitable Contribution?":"Yes",
+    "IRS Registered Name":"Solomon R. Guggenheim Foundation",
+    "Campaign Name":"-",
+    "Formation Date in Nevada":"01/10/2019",
+    "Annual Renewal Due Date/Expiration Date":"01/31/2026"
+  },
+  "history":{
+    "identifier":"NV20191041588",
+    "name":"Solomon R. Guggenheim Foundation Guggenheim Museum, Peggy Guggenheim Collection",
+    "complete":true,
+    "total":7,
+    "headers":["Filed Date","Effective Date","Filing Number","Filing Type","No. of Pages"],
+    "rows":[
+      ["01/09/2025","01/09/2025","20254589199","Charitable Solicitation Registration Statement","4"],
+      ["07/29/2024","07/29/2024","20244219877","Charitable Solicitation Registration Statement","4"],
+      ["07/29/2024","07/29/2024","20244219862","Charitable Solicitation Registration Statement","2"],
+      ["01/11/2023","01/11/2023","20232929740","Charitable Solicitation Registration Statement","4"],
+      ["01/11/2022","01/11/2022","20222049964","Charitable Solicitation Registration Statement","4"],
+      ["02/22/2021","02/22/2021","20211280760","Charitable Solicitation Registration Statement","4"],
+      ["01/10/2019","01/10/2019","20190014520-94","Charitable Solicitation Registration Statement","3"]
+    ]
+  }
+}

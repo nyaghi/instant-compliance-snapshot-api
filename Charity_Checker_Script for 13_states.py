@@ -811,6 +811,11 @@ def ca_evoke_status_from_record(entity: dict, registrations: list[dict]) -> tupl
         status = "Suspended"
     elif re.search(r"\b(revoked)\b", combined, re.I):
         status = "Revoked"
+    elif (re.fullmatch(r"exempt|registration\s+not\s+required", entity_status.strip(), re.I)
+          and re.fullmatch(r"merged\s+out", registration_status.strip(), re.I)):
+        # A retired credential is not the standing of the currently exempt
+        # entity. Explicit enforcement/revocation above still takes priority.
+        status = "Exempt"
     elif re.search(r"\b(withdrawn|terminated|dissolved|merged\s+out|closed)\b", combined, re.I):
         status = "Closed / Withdrawn / Canceled"
     elif re.search(r"\b(exempt|registration\s+not\s+required)\b", combined, re.I):
@@ -837,6 +842,12 @@ def ca_evoke_status_from_record(entity: dict, registrations: list[dict]) -> tupl
         ]
         if part
     )
+    if (status == "Exempt" and entity_status == "Exempt"
+            and re.fullmatch(r"merged\s+out", registration_status.strip(), re.I)
+            and re.fullmatch(r"\d+", str(entity.get("id") or ""))):
+        # The entity supplies the controlling exemption. Keep the retired
+        # registration in raw history, but bind current evidence to the entity.
+        return status, raw_status, str(entity["id"]), None
     return status, raw_status, str(reg.get("registrationNumber") or entity.get("registrations") or entity.get("id") or ""), expiration_date
 
 

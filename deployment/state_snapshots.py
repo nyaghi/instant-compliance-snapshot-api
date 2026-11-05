@@ -724,7 +724,9 @@ class CaptureRun:
             ordered=sorted((d for d in self.documents if d[2] in {'image','image_pages','source_pdf'}),key=lambda d:({'image':3,'image_pages':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
             if self.state=='MA' and not negative:
                 from deployment.ma_view_more_evidence import select
-                ordered=select(self,ordered,row)
+                from deployment.ma_withheld_evidence import bound as ma_withheld_bound
+                ordered=([d for d in ordered if ma_withheld_bound(self,row,d)]
+                    if row.get('status_reason')=='MA_RECORD_NOT_PUBLIC' else select(self,ordered,row))
             if self.state=='OH' and not negative:
                 from deployment.oh_detail_evidence import select as select_oh_detail
                 ordered=select_oh_detail(self,ordered,row)
@@ -749,6 +751,9 @@ class CaptureRun:
                         and getattr(self,'sc_selected_image_bindings',{}).get(hashlib.sha256(raw).hexdigest())==(name,identifier))
                 if self.state=='ME' and not negative and me_detail_name_bound(name,text,identifier):matched=True
                 if identifier:matched=matched and bool(re.search(r'(?<![\w])'+re.escape(identifier)+r'(?![\w])',text+' '+url,re.I))
+                if self.state=='MA' and row.get('status_reason')=='MA_RECORD_NOT_PUBLIC':
+                    from deployment.ma_withheld_evidence import bound as ma_withheld_bound
+                    matched=ma_withheld_bound(self,row,(url,raw,kind,public_text,stamp,source_note))
                 if self.state=='PA' and not negative:
                     from deployment.pa_selected_evidence import image_bound
                     if image_bound(self,row,url,raw,kind):matched=True
@@ -762,6 +767,9 @@ class CaptureRun:
                 if self.state=='ND' and review_rows:
                     matched=(kind=='image' and url=='https://firststop.sos.nd.gov/search/charitable'
                         and getattr(self,'nd_review_image_bindings',{}).get(hashlib.sha256(raw).hexdigest())==(name,identifier))
+                if self.state=='ND' and not negative and row.get('status_reason')=='ND_MATCHING_RECORDS_INACTIVE':
+                    from deployment.nd_consensus_evidence import image_bound as nd_consensus_image_bound
+                    matched=nd_consensus_image_bound(self,row,url,raw,kind)
                 if self.state=='AK' and not negative:
                     cycle_image=getattr(self,'ak_selected_cycle_images',{}).get(hashlib.sha256(raw).hexdigest())
                     if cycle_image:

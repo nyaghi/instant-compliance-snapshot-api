@@ -8,7 +8,8 @@ def bound(doc,row,ein):
     u=urlsplit(url);q=parse_qs(u.query)
     identifier=str(row.get('matched_registry_identifier') or row.get('identifier') or '')
     if (u.scheme!='https' or u.hostname!='charitableregistration.ohioago.gov'
-        or u.path not in {'/Charities/OrganizationDetails','/Charities/PartiallyExemptOrganization'}
+        or u.path not in {'/Charities/OrganizationDetails','/Charities/PartiallyExemptOrganization',
+                         '/Charities/FullyExemptOrganization','/Charities/ChapterOrganizationDetails'}
         or not identifier or q.get('Id')!=[identifier]):return False
     identity=re.search(r'Employer Identification Number\s*\(EIN\)\s*:?\s*(\d{2}-?\d{7})\b',text,re.I)
     if not identity or re.sub(r'\D','',identity[1])!=ein:return False
