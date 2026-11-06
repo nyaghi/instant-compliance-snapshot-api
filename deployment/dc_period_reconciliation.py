@@ -56,7 +56,7 @@ def request_matches_period(result,request):
 
 def period_allowed(fields,request):
     if (not enabled(request) and request.get('expiration') == ''
-        and str(request.get('raw_status','')).casefold() in {'cancelled','canceled','closed','withdrawn','revoked'}):
+        and str(request.get('raw_status','')).casefold() in {'cancelled','canceled','closed','withdrawn','revoked','expired'}):
         return fields.get('Expiration Date') == 'N/A' and fields.get('License Status') == request['raw_status']
     try:
         expiry=datetime.strptime(fields['Expiration Date'],'%m/%d/%Y').date()

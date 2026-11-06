@@ -35121,7 +35121,8 @@ def wa_apply_detail_master(result, body: str):
         raw.append(f"Renewal Date: {renewal}")
     if optional:
         raw.append(f"Optional Charity: {optional}")
-    terminal = module.terminal_closed_status_text(body) if hasattr(module, "terminal_closed_status_text") else ""
+    # Associated fundraiser names and history do not establish this charity's standing.
+    terminal = module.terminal_closed_status_text(status) if hasattr(module, "terminal_closed_status_text") else ""
     if terminal:
         result.status = module.STATUS_CLOSED
         raw.insert(0, f"Registry Status: {terminal}")

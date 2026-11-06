@@ -6,7 +6,7 @@ function nvHandoffDiagnostic(job,message) {
   if(!P.TRIAL_ORIGIN || job?.registryState!=='NV' || typeof message.ok!=='boolean' || message.progress)return wfReturn(job,"worker.js:nvHandoffDiagnostic:6:103:return",(message));
   const operation=job.command?.query?.operation;
   return wfReturn(job,"worker.js:nvHandoffDiagnostic:8:2:return",({...message,nv_readiness:{...message.nv_readiness,handoff:{
-    build:'evidence-policy-placement-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
+    build:'focused-status-evidence-1',extension_id:chrome.runtime.id,worker_tag:nvHandoffWorkerTag,
     active:isActive(job),pending:!!job.pending,search_complete:job.finalFourSearchComplete===true,
     pending_matches_reply:job.pending===message.id,
     command_matches_reply:job.command?.id===message.id,
@@ -246,7 +246,7 @@ function allowedSender(sender) {
 function post(job, message) {
   message=nvHandoffDiagnostic(job,message);
   if(P.TRIAL_ORIGIN)message={...message,workflow_observation:wfExport(job)};
-  if(P.TRIAL_ORIGIN && ["GA","MS","NC","TN","AL","IL","NM"].includes(job.registryState)
+  if(P.TRIAL_ORIGIN && ["GA","MS","NC","TN","AL","IL","NM","NY"].includes(job.registryState)
       && (message.action==="closed" || (typeof message.ok==="boolean" && !message.progress)))
     message={...message,trial_diagnostics:[...(job.trialDiagnostics||[])]};
   if(P.TRIAL_ORIGIN && job.registryState==='IL' && typeof message.ok==='boolean' && !message.progress)
@@ -565,6 +565,14 @@ async function performSearch(job, query, id) {
         collectNyDiagnostics(job,response);
         job.verificationRetryUsed ||= response?.verificationRetryUsed === true;
         await wfAwait(job,"worker.js:performSearch:527:8:await",()=>(saveRuntime()));
+        // A previously successful NY form can return HTTP400 on a later
+        // name query. Retry that same query once in a fresh owned document;
+        // keep the shared deadline and verification/timeout retry budgets.
+        if (P.TRIAL_ORIGIN && response?.reason === 'NY_CONNECTOR_SEARCH_HTTP_ERROR'
+            && !Object.hasOwn(query,'orgID') && job.nyLastSearchQuery
+            && response.ny_diagnostics?.some(d=>d.stage==='search'&&d.event==='response'&&d.http_status===400)
+            && job.timeoutRetries < 1 && job.activeExpiresAt-Date.now()>15000)
+          throw new Error('NY_CONNECTOR_SEARCH_HTTP_RECOVERY');
         if (["NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT", "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT"].includes(response?.reason)) throw new Error(response.reason);
         if (response?.reason === "NY_CONNECTOR_RATE_LIMITED") throw new Error(response.reason);
         if (!response?.ok || !P.sameQuery(response.evidence?.query, query)) response = { ok: false, reason: response?.reason || "NY_CONNECTOR_INCOMPLETE" };
@@ -653,7 +661,7 @@ async function performSearch(job, query, id) {
           await wfAwait(job,"worker.js:performSearch:613:10:await",()=>(waitForRegistryDocument(job, path, previous.documentId)));
           continue;
         }
-        if (["NY_CONNECTOR_TAB_READY_TIMEOUT", "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT"].includes(error.message) && job.timeoutRetries < 1) {
+        if (["NY_CONNECTOR_TAB_READY_TIMEOUT", "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_HTTP_RECOVERY"].includes(error.message) && job.timeoutRetries < 1) {
           job.timeoutRetries++;
           job.retryNotBefore = Date.now() + 1000;
           post(job, { id, progress: true, retrying: true });
@@ -727,7 +735,20 @@ async function performSearch(job, query, id) {
       && P.sameQuery(preparedNc.query,query) && !job.closed && isActive(job)
       && job.pending===id && job.command?.id===id && Date.now()<job.activeExpiresAt;
     // A failed profile capture is not retried against the later filings page.
-    const snapshot=useNc?preparedNc.snapshot:await wfAwait(job,"worker.js:performSearch:674:45:await",()=>(captureStateSnapshot(job,query,id,job.registryState==='AL'&&alCompletedSource&&Number.isInteger(response.evidence.total)&&response.evidence.total>0&&Array.isArray(response.evidence.rows)&&response.evidence.rows.length===response.evidence.total?{kind:'al-completed-record',command_id:id,query}:preparedNvMetadata)));
+    const snapshotContext={tab:job.tab,generation:job.generation};
+    let snapshot=useNc?preparedNc.snapshot:await wfAwait(job,"worker.js:performSearch:674:45:await",()=>(captureStateSnapshot(job,query,id,job.registryState==='AL'&&alCompletedSource&&Number.isInteger(response.evidence.total)&&response.evidence.total>0&&Array.isArray(response.evidence.rows)&&response.evidence.rows.length===response.evidence.total?{kind:'al-completed-record',command_id:id,query}:preparedNvMetadata)));
+    // One retry of the same original NY detail; its existing 12-second aggregate
+    // capture allowance and every original binding/deadline check still apply.
+    if(!snapshot&&P.TRIAL_ORIGIN&&job.registryState==='NY'&&Object.hasOwn(query,'orgID')
+        &&!job.closed&&isActive(job)&&job.pending===id&&job.command?.id===id
+        &&P.sameQuery(job.command.query,query)&&owned.has(job.tab)
+        &&job.tab===snapshotContext.tab&&job.generation===snapshotContext.generation
+        &&!job.snapshotCleanupBusy&&!job.snapshotViewportBusy
+        &&Number.isFinite(job.nySnapshotSpentMs)&&job.nySnapshotSpentMs<11000
+        &&job.activeExpiresAt-Date.now()>4000) {
+      diagnostic('ny-detail-capture-retry',job,'same selected page; existing aggregate allowance');
+      snapshot=await captureStateSnapshot(job,query,id);
+    }
     if(snapshot){
       response.state_snapshot=snapshot;
       // Save the original detail first. An optional filing cannot consume its

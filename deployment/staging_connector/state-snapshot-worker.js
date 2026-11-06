@@ -19,9 +19,9 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
   const observed={phase:'entry',captures:job.snapshotCaptures||0};
 
   const trace=()=>{
-    if(job.registryState==='NV'&&typeof diagnostic==='function')diagnostic('source-snapshot-phase',job,JSON.stringify({operation:query.operation||(['GA','IL'].includes(job.registryState)&&Object.hasOwn(query,'identifier')?'detail':'search'),...observed}));
-    if(['NC','GA','IL','AL','TN','NM','MS'].includes(job.registryState)&&typeof diagnostic==='function')try {
-      diagnostic('source-snapshot-phase',job,JSON.stringify({operation:query.operation||(['GA','IL'].includes(job.registryState)&&Object.hasOwn(query,'identifier')?'detail':'search'),...observed}));
+    if(job.registryState==='NV'&&typeof diagnostic==='function')diagnostic('source-snapshot-phase',job,JSON.stringify({operation:query.operation||((['GA','IL'].includes(job.registryState)&&Object.hasOwn(query,'identifier')||job.registryState==='NY'&&Object.hasOwn(query,'orgID'))?'detail':'search'),...observed}));
+    if(['NC','GA','IL','AL','TN','NM','MS','NY'].includes(job.registryState)&&typeof diagnostic==='function')try {
+      diagnostic('source-snapshot-phase',job,JSON.stringify({operation:query.operation||((['GA','IL'].includes(job.registryState)&&Object.hasOwn(query,'identifier')||job.registryState==='NY'&&Object.hasOwn(query,'orgID'))?'detail':'search'),...observed}));
     } catch { /* Observation cannot invalidate an original screenshot. */ }
   };
 
@@ -507,6 +507,9 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
       const alRequiredGrid=state==='AL'&&query.operation==='search'&&meta.source_grid_clipped===false
         &&prepared?.kind==='al-completed-record'&&prepared.command_id===commandId&&P.sameQuery(prepared.query,query);
       let gaFullViewport=false;
+      const gaBinding=gaRequiredDetail?meta.source_binding:null,gaDocument=gaRequiredDetail?meta.document_id:null;
+      if(gaRequiredDetail&&(!meta.source_ga_primary_ready||!gaBinding||!gaDocument
+        ||!Number.isInteger(meta.source_ga_primary_bottom)||!Number.isInteger(meta.source_viewport_width)))return null;
       if(gaRequiredDetail||nmRequiredDetail||alRequiredGrid||msRequiredDetail||nyRequiredDetail||ncSelectedDetail) {
         const originalText=meta.public_text,content=layout.cssContentSize,view=layout.cssLayoutViewport;
         // Use the existing complete NY schema binding across responsive cards
@@ -518,7 +521,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
         // Preserve the full source viewport width, including its scrollbar gutter.
         // Layout clientWidth excludes that gutter; reusing it shrinks the page.
         if((nmRequiredDetail||alRequiredGrid||nyRequiredDetail||ncSelectedDetail)&&(!Number.isInteger(meta.source_viewport_width)||meta.source_viewport_width<view.clientWidth||meta.source_viewport_width>2400))return null;
-        const width=(nyRequiredDetail||ncSelectedDetail)?meta.source_viewport_width:Math.ceil(Math.max(content.width,nmRequiredDetail?1000:0,(nmRequiredDetail||alRequiredGrid||nyRequiredDetail)?meta.source_viewport_width:view.clientWidth)),height=nmRequiredDetail?meta.source_record_bottom:Math.ceil(Math.max(content.height+32,view.clientHeight));
+        const width=gaRequiredDetail?Math.max(1024,meta.source_viewport_width):(nyRequiredDetail||ncSelectedDetail)?meta.source_viewport_width:Math.ceil(Math.max(content.width,nmRequiredDetail?1000:0,(nmRequiredDetail||alRequiredGrid||nyRequiredDetail)?meta.source_viewport_width:view.clientWidth)),height=gaRequiredDetail?meta.source_ga_primary_bottom:nmRequiredDetail?meta.source_record_bottom:Math.ceil(Math.max(content.height+32,view.clientHeight));
         if(width<320||width>2400||height<200||height>((nmRequiredDetail||alRequiredGrid)?16000:nyRequiredDetail?20000000/width:3000)||width*height>20000000)return null;
         desktopViewport=true;job.snapshotViewportBusy=true;
         observed.phase=state+'-full-viewport';
@@ -540,6 +543,8 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
           const fresh=await sampled(state+'-full-metadata',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}));
           layout=await sampled(state+'-full-layout',()=>chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics'));
           const c=layout.cssContentSize,v=layout.cssLayoutViewport;
+          if(gaRequiredDetail&&(!fresh?.source_ga_primary_ready||fresh.source_binding!==gaBinding
+            ||fresh.document_id!==gaDocument||fresh.source_ga_primary_bottom>height))return null;
           if(ncSelectedDetail&&(fresh?.source_detail!==true||fresh.source_binding!==ncBinding||fresh.document_id!==ncDocument))return null;
           const textSame=fresh?.public_text===originalText||(nyRequiredDetail&&nyLayoutText!==null
             &&typeof fresh?.public_text==='string'&&fresh.public_text.trim()&&fresh.public_text.length<=20000
@@ -564,7 +569,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
           } catch { /* Passive diagnostics cannot alter capture decisions. */ }
           if(fresh?.url!==tab.url||!textSame||(nyRequiredDetail&&fresh.document_id!==meta.document_id)||!c||!v||v.pageX||v.pageY)return null;
           const shape=JSON.stringify([c.width,c.height,v.clientWidth,v.clientHeight]);
-          stable=(nyRequiredDetail?fresh.source_page_fits===true:c.width<=v.clientWidth&&(nmRequiredDetail?fresh.source_page_fits===true&&fresh.source_record_bottom===height:c.height<=v.clientHeight))&&shape===previous?stable+1:0;previous=shape;
+          stable=(gaRequiredDetail?fresh.source_ga_primary_fits===true:nyRequiredDetail?fresh.source_page_fits===true:c.width<=v.clientWidth&&(nmRequiredDetail?fresh.source_page_fits===true&&fresh.source_record_bottom===height:c.height<=v.clientHeight))&&shape===previous?stable+1:0;previous=shape;
           if(msRequiredDetail&&stable>=1&&!cancelled&&alive()
               &&Date.now()<started+captureBudgetMs&&started+captureBudgetMs-Date.now()<4000) {
             const extended=Math.min(16000-(observed.prior_capture_ms||0),job.activeExpiresAt-started-1000);
@@ -586,7 +591,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
 
       if(cancelled || !alive() || !size || size.width<=0 || size.height<=0
 
-          || (nmRequiredDetail?layout.cssLayoutViewport.clientWidth*layout.cssLayoutViewport.clientHeight:size.width*size.height)>20000000)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:313:45:return",(null));
+          || (nmRequiredDetail||gaRequiredDetail?layout.cssLayoutViewport.clientWidth*layout.cssLayoutViewport.clientHeight:size.width*size.height)>20000000)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:313:45:return",(null));
 
       const tnModal=state==='TN'&&query.operation==='detail'&&Array.isArray(meta.capture_views)
 
@@ -621,11 +626,23 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
       let completedViews=0;
 
       const captureViews=modal?[...meta.capture_views]:[null];
+      // Reuse the just-established three-sample NV geometry
+      // only when the entire selected record already fits in one unchanged view.
+      const nvReadySingleView=boundNvDetail&&meta.source_fields_visible===true
+        &&captureViews.length===1&&captureViews[0]==='nv-0'
+        &&Array.isArray(meta.source_view_shape)&&meta.source_view_shape.length>=8
+        &&(meta.source_view_shape.length-4)%4===0&&meta.source_view_shape.every(Number.isFinite)
+        &&meta.source_view_shape[2]===viewport.clientWidth
+        &&meta.source_view_shape[3]===viewport.clientHeight;
+      if(nvReadySingleView) {
+        observed.phase='NV-single-view-geometry-reused';trace();
+      }
+
       for(const view of captureViews) {
 
         if(cancelled||!alive())return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:349:31:return",(null));
 
-        if(view) {
+        if(view&&!nvReadySingleView) {
 
           restoreModal=true;
 
@@ -674,7 +691,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
 
           {format:'jpeg',quality:75,captureBeyondViewport:!modal&&!gaFullViewport,fromSurface:true,
 
-            clip:(modal||(nmRequiredDetail||nyRequiredDetail||ncSelectedDetail)&&gaFullViewport)?{x:viewport.pageX||0,y:viewport.pageY||0,width:viewport.clientWidth,height:viewport.clientHeight,scale:1}:
+            clip:(modal||(gaRequiredDetail||nmRequiredDetail||nyRequiredDetail||ncSelectedDetail)&&gaFullViewport)?{x:viewport.pageX||0,y:viewport.pageY||0,width:viewport.clientWidth,height:viewport.clientHeight,scale:1}:
 
               {x:0,y:0,width:size.width,height:size.height,scale:1}}))));
 
@@ -730,12 +747,21 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
 
       if(!afterMeta)afterMeta=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:432:30:await",()=>(sampled('post-metadata',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}))));
 
+      // Reused geometry must still describe the same complete visible record
+      // after the original pixels were captured. A changed view is not published.
+      if(nvReadySingleView&&(afterMeta?.source_fields_visible!==true
+          ||JSON.stringify(afterMeta.source_view_shape)!==JSON.stringify(meta.source_view_shape)
+          ||JSON.stringify(afterMeta.capture_views)!==JSON.stringify(meta.capture_views)))return null;
+
       if(ncSelectedDetail&&(afterMeta?.source_detail!==true||afterMeta.source_binding!==ncBinding
           ||afterMeta.document_id!==ncDocument||afterMeta.source_page_fits!==true))return null;
       if(nyRequiredDetail&&afterMeta?.document_id!==meta.document_id)return null;
       if(ilDetail&&(!Array.isArray(afterMeta?.capture_views)||afterMeta.capture_views.some(view=>!captureViews.includes(view))))return null;
       if((nmRequiredDetail||nyRequiredDetail)&&gaFullViewport&&afterMeta?.source_page_fits!==true)return null;
       if(nmRequiredDetail&&afterMeta?.source_record_bottom!==meta.source_record_bottom)return null;
+      if(gaRequiredDetail&&(!afterMeta?.source_ga_primary_ready||!afterMeta.source_ga_primary_fits
+        ||afterMeta.source_binding!==gaBinding||afterMeta.document_id!==gaDocument
+        ||afterMeta.source_ga_primary_bottom!==meta.source_ga_primary_bottom))return null;
       if(msRequiredDetail&&(afterMeta?.source_ms_detail_ready!==true||afterMeta?.source_ms_summary_visible!==true))return null;
       if(state==='NV'&&typeof diagnostic==='function')diagnostic('source-snapshot-phase',job,JSON.stringify({operation:query.operation,phase:'postvalidation-check',alive:alive(),url_same:after.url===tab.url,document_same:afterMeta?.document_id===meta.document_id,body_same:afterMeta?.public_text===meta.public_text,binding_present:boundNvDetail,binding_same:afterMeta?.source_binding===meta.source_binding}));
 
@@ -924,7 +950,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
 
     if(typeof diagnostic==='function')diagnostic('source-snapshot',job,JSON.stringify({
 
-      operation:query.operation||(['GA','IL'].includes(job.registryState)&&Object.hasOwn(query,'identifier')?'detail':'search'),capture_ms:Math.max(0,Date.now()-started),
+      operation:query.operation||((['GA','IL'].includes(job.registryState)&&Object.hasOwn(query,'identifier')||job.registryState==='NY'&&Object.hasOwn(query,'orgID'))?'detail':'search'),capture_ms:Math.max(0,Date.now()-started),
 
       saved:!!captured,pages:captured?(captured.images?.length||1):0}));
 

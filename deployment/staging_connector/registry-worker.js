@@ -1353,7 +1353,7 @@ async function registryNorthCarolinaQuery(job,query) {
       for(const row of result.evidence.rows||[]) {
         const application=!row.License
           && (row.Status==='In-Process'&&['In-Process','Charitable Organization'].includes(row['CSL Type'])
-            ||row.Status==='Withdrawn'&&row['CSL Type']==='In-Process')
+            ||['Withdrawn','Expired License'].includes(row.Status)&&row['CSL Type']==='In-Process')
           && /^https:\/\/www\.sosnc\.gov\/online_services\/search\/charities_profile\/\d+$/.test(row.profile_url||'');
         const identifier=application?'NCAPP-'+row.profile_url.split('/').pop():row.License;
         if(identifier)job.ncProfiles[identifier]=row.profile_url;

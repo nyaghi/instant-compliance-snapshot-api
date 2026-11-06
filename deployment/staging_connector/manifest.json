@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity — Gate 25 Repair",
+  "name": "CharityClarity — Focused GA WA DC Repair",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
-  "description": "Staging: complete Illinois detail evidence and source-linked DC corporate identity.",
+  "description": "Staging: focused Georgia, Washington and District of Columbia repair.",
   "permissions": [
     "storage",
     "browsingData",

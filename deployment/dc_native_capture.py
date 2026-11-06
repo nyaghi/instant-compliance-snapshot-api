@@ -57,7 +57,7 @@ def expected_record(record):
  if 'charitable' not in str(workflow_call('deployment/dc_native_capture.py:expected_record:54:28:get',record.get,locals(), 'license_category','')).lower():return trace_return('deployment/dc_native_capture.py:expected_record:54:71:return',(None))
  try:
   day=date.fromisoformat(expiry) if expiry else None
-  if day is None and status.casefold() not in {"cancelled","canceled","closed","withdrawn","revoked"}:return None
+  if day is None and status.casefold() not in {"cancelled","canceled","closed","withdrawn","revoked","expired"}:return None
   u=urlsplit(workflow_call('deployment/dc_native_capture.py:expected_record:57:13:get',record.get,locals(), 'url',''));pairs=parse_qsl(u.query,keep_blank_values=True)
   if (u.scheme!='https' or u.hostname!='maps2.dcgis.dc.gov' or u.port not in (None,443)
       or u.username or u.password or u.fragment or u.path!='/dcgis/rest/services/FEEDS/DCRA/FeatureServer/0/query'

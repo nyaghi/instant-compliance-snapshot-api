@@ -49,7 +49,7 @@ def describe(result):
  if any(type(d.get(k)) not in (int,float) or not math.isfinite(d[k]) for k in ('issued_at','expires_at')):return None
  if not 0<d['expires_at']-d['issued_at']<=(300.1 if d.get('deadline_schema')==1 else 60.1) or not -5<=time.time()-d['issued_at']<600:return None
  try:
-  if d.get('expiration') != '' or str(d.get('raw_status','')).casefold() not in {'cancelled','canceled','closed','withdrawn','revoked'}:
+  if d.get('expiration') != '' or str(d.get('raw_status','')).casefold() not in {'cancelled','canceled','closed','withdrawn','revoked','expired'}:
    datetime.strptime(d['expiration'],'%Y-%m-%d')
  except (KeyError,ValueError,TypeError):return None
  if 'corporate_continuity_schema' in d:
@@ -66,7 +66,7 @@ def fields(url,text,d):
  positions=[lines.index(v) for v in LABELS]
  if positions!=sorted(positions):return None
  f={label:' '.join(lines[positions[i]+1:positions[i+1] if i+1<len(positions) else len(lines)]) for i,label in enumerate(LABELS)}
- undated=d.get('expiration')=='' and str(d.get('raw_status','')).casefold() in {'cancelled','canceled','closed','withdrawn','revoked'}
+ undated=d.get('expiration')=='' and str(d.get('raw_status','')).casefold() in {'cancelled','canceled','closed','withdrawn','revoked','expired'}
  if any(not v or v=='N/A' for k,v in f.items() if k not in ({'Trade Name','Premise Address','Expiration Date'} if undated else {'Trade Name','Premise Address'})):return None
  from deployment.dc_period_reconciliation import name_matches,period_allowed
  if f['License Number']!=d['identifier'] or not name_matches(f['Licensee'],d['name'],d) or f['License Activity'].lower() not in {'charitable solicitation','charitable exempt'} or f['License Status']!=d['raw_status']:return None

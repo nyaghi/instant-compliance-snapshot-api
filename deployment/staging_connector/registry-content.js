@@ -2541,10 +2541,35 @@
       return {document_id:documentId,source_viewport_width:innerWidth,source_detail:false};
     }
   }
+  function snapshotGaPrimary(query) {
+    if(!GA||query?.state!=='GA'||!Object.hasOwn(query,'identifier'))return null;
+    const reject={source_ga_primary_ready:false};
+    if(location.pathname!=='/verification/Details.aspx'||scrollX!==0||scrollY!==0)return reject;
+    const boundary=document.querySelector('#more_details');
+    if(!boundary)return reject;
+    const spans=[...document.querySelectorAll('span[id]')].filter(el=>
+      /^_ctl\d+__ctl\d+_(full_name|license_no|profession|license_type|status|issue_date|expiry|last_ren)$/.test(el.id)
+      &&!!(el.compareDocumentPosition(boundary)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const fields={},elements=[];
+    for(const el of spans){const key=el.id.match(/_(full_name|license_no|profession|license_type|status|issue_date|expiry|last_ren)$/)[1];
+      if(Object.hasOwn(fields,key))return reject;fields[key]=text(el);elements.push(el);}
+    if(!fields.full_name||fields.profession!=='Charities'||!fields.license_type||!fields.status
+      ||(query.identifier?fields.license_no!==query.identifier:!query.record_name||fields.full_name!==query.record_name)
+      ||query.record_name&&fields.full_name!==query.record_name)return reject;
+    const bottom=Math.ceil(boundary.getBoundingClientRect().top);
+    if(!Number.isInteger(bottom)||bottom<200||bottom>3000)return reject;
+    let fits=bottom<=innerHeight;
+    for(const el of elements){if(!text(el))continue;const r=el.getBoundingClientRect(),style=getComputedStyle(el);
+      if(r.height<=0||r.width<=0||r.top<0||r.bottom>bottom||style.visibility==='hidden'||style.display==='none')return reject;
+      const range=document.createRange();range.selectNodeContents(el);const t=range.getBoundingClientRect();
+      if(t.left<0||t.right>innerWidth||t.bottom>innerHeight)fits=false;}
+    return {source_ga_primary_ready:true,source_ga_primary_fits:fits,source_ga_primary_bottom:bottom,
+      source_binding:JSON.stringify(fields),document_id:documentId,source_viewport_width:innerWidth};
+  }
   function snapshotMetadata(query) {
     const dialog=snapshotDialog(query);
     const capture_views=dialog?snapshotSummaryPlan(dialog):null;
-    return {...(snapshotNcDetail(query)||{}),...(NM&&query?.state==='NM'&&query.operation==='detail'?{source_viewport_width:innerWidth}:{}),...(snapshotMsDetail(query)||{}),...(snapshotNmPageFit(query)||{}),...(snapshotAlGridLayout(query)||{}),url:location.href,public_text:((IL||TN)&&dialog?dialog.innerText:document.body?.innerText||'').slice(0,20000),
+    return {...(snapshotGaPrimary(query)||{}),...(snapshotNcDetail(query)||{}),...(NM&&query?.state==='NM'&&query.operation==='detail'?{source_viewport_width:innerWidth}:{}),...(snapshotMsDetail(query)||{}),...(snapshotNmPageFit(query)||{}),...(snapshotAlGridLayout(query)||{}),url:location.href,public_text:((IL||TN)&&dialog?dialog.innerText:document.body?.innerText||'').slice(0,20000),
       ...(dialog?{source_summary_ready:!!snapshotSummaryFields(dialog)}:{}),
       ...(IL&&dialog?{source_heading_texts:[...dialog.querySelectorAll('h4')].slice(0,40).map(el=>text(el).slice(0,500))}:{}),
       ...(NV?{document_id:documentId,...(query?.operation==='detail'?{source_binding:snapshotNvBinding(query)}:{})}:{}),
