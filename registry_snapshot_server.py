@@ -6789,6 +6789,8 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     if purpose != "identity":
         names = il_browser_name_queries(required, generated) if state == "IL" else required + generated
         if state == "GA":
+            from deployment.gate28_repairs import ga_article_queries
+            names = ga_article_queries(sys.modules[__name__], required, generated)
             # GA distinguishes punctuation in literal prefix retrieval.
             # Keep a leading-article spelling for punctuated initial names.
             for name in list(required):
@@ -8433,9 +8435,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     and other.get("match", {}).get("decision") == "accepted"
                     and other.get("address_evidence", {}).get("decision") not in {"conflict", "different_ein"}
                     for other in records))
-            if historical_empty:
+            from deployment.gate28_repairs import nv_historical_expired_empty
+            expired_empty = nv_historical_expired_empty(sys.modules[__name__], record, records, identity)
+            if historical_empty or expired_empty:
                 result.rejected_candidates = list(getattr(result, "rejected_candidates", [])) + [{
-                    **candidate, "reason": "Older terminated record has a complete empty filing history; a later charitable registration is independently confirmed."}]
+                    **candidate, "reason": "Historical terminal record has a complete empty filing history; a later charitable registration is independently confirmed."}]
             elif identity == "possible" and record["match"].get("reason") != "ALIAS_IDENTITY_UNCONFIRMED":
                 result.rejected_candidates = list(getattr(result, "rejected_candidates", [])) + [{
                     **candidate, "reason": "Partial name was not corroborated; a separate full record was confirmed."}]
@@ -10703,8 +10707,10 @@ def ri_charity_detail(raw, deadline, headers):
                 for item in content.get("data", []):
                     label, value = item.get("label"), item.get("value")
                     if not label or not isinstance(value, list): continue
-                    if label in values: raise ValueError("Rhode Island repeats a selected detail field")
-                    values[label] = [str(v).strip() for v in value if v is not None and str(v).strip()]
+                    normalized = [re.sub(r"\s+", " ", str(v)).strip() for v in value if v is not None and str(v).strip()]
+                    if label in values and values[label] != normalized:
+                        raise ValueError("Rhode Island repeats conflicting selected detail values")
+                    values[label] = normalized
     credential = values.get("Credential", [])
     if "Charitable Organization" not in credential or not credential or not re.fullmatch(r"CO\.\d+", credential[0]):
         raise ValueError("Rhode Island selected record is not a charitable organization credential")
@@ -14852,7 +14858,18 @@ def search_bundled_extension_state(page, org, state: str):
             registry_ein = checker.extract_labeled_value_from_text(body_text, ["Federal EIN", "EIN"])
             registry_digits = re.sub(r"\D", "", registry_ein or "")
             requested_digits = re.sub(r"\D", "", org.ein or "")
-            return bool(registry_digits and requested_digits and registry_digits != requested_digits)
+            return bool(len(registry_digits) == len(requested_digits) == 9 and registry_digits != requested_digits)
+
+        def or_invalid_ein_result(result, registry_name):
+            body = registry_page_body(page)
+            value = checker.extract_labeled_value_from_text(body, ["Federal EIN", "EIN"])
+            digits = re.sub(r"\D", "", value or "")
+            if not digits or len(digits) == 9:
+                return None
+            from deployment.gate28_repairs import or_malformed_review
+            retained = or_malformed_review(sys.modules[__name__], org, result, registry_name, body, page.url)
+            return retained if retained is not None else licensed_charity_failure(
+                org, "OR", page.url, ValueError("Oregon's malformed source EIN could not be bound to a complete reviewable identity"))
 
         def annotate_or_empty_reports(result):
             # Preserve the existing live-reader classification, but explain its
@@ -14975,6 +14992,9 @@ def search_bundled_extension_state(page, org, state: str):
                 return result
             if not result_is_retryable_name_miss(result):
                 registry_name = or_registry_name_from_detail() or best_or_registry_name_from_page() or variant
+                malformed = or_invalid_ein_result(result, registry_name)
+                if malformed is not None:
+                    return malformed
                 if or_detail_ein_mismatches(registry_name):
                     best_result = checker.StateResult(
                         org.organization_name,
@@ -15015,6 +15035,9 @@ def search_bundled_extension_state(page, org, state: str):
                     return result
                 if not result.matched_registry_name:
                     result.matched_registry_name = or_registry_name_from_detail() or best_candidate_name
+                malformed = or_invalid_ein_result(result, result.matched_registry_name or best_candidate_name)
+                if malformed is not None:
+                    return malformed
                 if or_detail_ein_mismatches(result.matched_registry_name or best_candidate_name):
                     best_result = checker.StateResult(
                         org.organization_name,
@@ -34090,8 +34113,10 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     planned = reviewed_queries_first(name, ein, generated, limit=6, transform=ascii_dash_search_name)
     # These are retrieval probes only; search_ms_fast still checks full row and
     # detail identity against original_organization_name and reviewed names.
-    return [query for query in dict.fromkeys([*priority, *planned])
-            if not ms_discard_generic_probe(name, query, ein)]
+    queries = [query for query in dict.fromkeys([*priority, *planned])
+               if not ms_discard_generic_probe(name, query, ein)]
+    from deployment.gate28_repairs import ms_dash_space_queries
+    return ms_dash_space_queries(name, queries, [name, *known_names_for_ein(ein)])
 
 
 def case_boundary_name_variant(name: str) -> str:
@@ -37833,7 +37858,7 @@ def attach_identity_review(data, context):
             clean['group_identity'] = row['group_identity']
             clean['interpreted_status'] = row.get('status','Unable to Confirm')
         clean["suggested"] = row.get("suggested") is True
-        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY"}:
+        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY", "OR"}:
             # Keep the master interpretation of complete state evidence in the
             # signed snapshot. Identity acceptance cannot substitute a generic
             # Active label for a filing-history or charity-scope decision.
@@ -37890,7 +37915,7 @@ def identity_review_state_status(state, row):
         from deployment.ca_nonregistration import review_status
         if review_status(row):
             return "Not Registered"
-    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY"}:
+    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY", "OR"}:
         status = row.get("interpreted_status")
         return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
             "Pending", "Suspended", "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",

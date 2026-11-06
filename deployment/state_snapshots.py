@@ -556,15 +556,19 @@ def oh_selected_grid_bound(run,raw,url,row):
 
 
 def me_detail_name_bound(name,text,identifier):
- """Maine moves its indexed trailing ', THE' to the original detail heading."""
+ """Bind an indexed legal name to the selected heading or official alias row."""
  def canonical(value):
   value=re.sub(r',\s*THE\s*$','',str(value),flags=re.I)
   value=re.sub(r'^THE\s+','',value.strip(),flags=re.I)
   return re.sub(r'[^a-z0-9]','',value.lower())
  headings=re.findall(r'CHARITABLE SOLICITATIONS\s+(.*?)\s+CHARITABLE ORGANIZATION\s+License Number:',text,re.S|re.I)
- return bool(re.fullmatch(r'CO\d+',str(identifier),re.I) and len(headings)==1
-             and canonical(name) and canonical(headings[0])==canonical(name)
-             and re.search(r'License\s+Number:\s*'+re.escape(identifier)+r'(?!\w)',text,re.I))
+ credentials=re.findall(r'License\s+Number:\s*(CO\d+)\b',text,re.I)
+ if (not re.fullmatch(r'CO\d+',str(identifier),re.I) or len(headings)!=1
+     or len(credentials)!=1 or credentials[0].casefold()!=str(identifier).casefold() or not canonical(name)):
+  return False
+ if canonical(headings[0])==canonical(name):return True
+ sections=re.findall(r'Alias, DBA or Trade Name(?:\([^\n]*\))?[^\n]*\n\s*Name\s*\n(.*?)(?=\n(?:Purpose|License/Disciplinary Action|GENERAL INFORMATION|Filing)(?:\(|\s|$))',text,re.S|re.I)
+ return len(sections)==1 and any(canonical(line)==canonical(name) for line in sections[0].splitlines() if line.strip())
 
 
 class CaptureRun:

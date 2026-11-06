@@ -76,7 +76,8 @@ def preserves_review_match(result):
     state=getattr(result,'state','')
     reason=getattr(result,'reason_code','')
     if not ((state in STATES and reason=='SHORT_ALIAS_IDENTITY_REVIEW')
-            or (state=='WV' and reason=='WV_SHORT_NAME_IDENTITY_UNCONFIRMED')):return False
+            or (state=='WV' and reason=='WV_SHORT_NAME_IDENTITY_UNCONFIRMED')
+            or (state=='OR' and reason=='OR_MALFORMED_EIN_IDENTITY_REVIEW')):return False
     rows=(getattr(result,'_cc_identity_review',None) or {}).get('records',[])
     return (len(rows)==1 and rows[0].get('status') in FINAL
         and rows[0].get('name')==getattr(result,'matched_registry_name','')
