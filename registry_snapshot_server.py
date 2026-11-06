@@ -34116,7 +34116,7 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     queries = [query for query in dict.fromkeys([*priority, *planned])
                if not ms_discard_generic_probe(name, query, ein)]
     from deployment.gate28_repairs import ms_dash_space_queries
-    return ms_dash_space_queries(name, queries, [name, *known_names_for_ein(ein)])
+    return ms_dash_space_queries(name, queries, [name, *known_names_for_ein(ein), *priority])
 
 
 def case_boundary_name_variant(name: str) -> str:
