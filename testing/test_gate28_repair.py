@@ -128,7 +128,7 @@ class Gate28(unittest.TestCase):
   for changed,url in [(body.replace('73943866','123456789'),self.or_result().source_url),(body.replace('73943866','273943866'),self.or_result().source_url),(body,'https://example.com/Charities/Charity/details?charityID=48191'),(body.replace('Registration:','#Other:'),self.or_result().source_url)]:
    with patch.object(m,'known_names_for_ein',return_value=[]):self.assertIsNone(g.or_malformed_review(m,org,self.or_result(),'Center for Biological Diversity, Inc.',changed,url))
  def test_or_full_lookup_stops_at_malformed_record_without_extra_search(self):
-  body=(F/'OR-original-detail.txt').read_text(encoding='utf-8');org=self.org();page=SimpleNamespace(url=self.or_result().source_url)
+  body=(F/'OR-original-detail.txt').read_text(encoding='utf-8');org=self.org();page=SimpleNamespace(url='https://justice.oregon.gov/charities')
   module=SimpleNamespace(Organization=m.checker.Organization)
   with patch.object(m,'state_extension_module',return_value=module),patch.object(m,'search_or_completed',return_value=self.or_result()) as search,patch.object(m,'copy_external_result',side_effect=lambda org,st,r:r),patch.object(m,'registry_page_body',return_value=body),patch.object(m,'known_names_for_ein',return_value=[]):
    r=m.search_bundled_extension_state(page,org,'OR')

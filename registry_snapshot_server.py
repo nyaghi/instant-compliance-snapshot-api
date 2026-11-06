@@ -14867,7 +14867,9 @@ def search_bundled_extension_state(page, org, state: str):
             if not digits or len(digits) == 9:
                 return None
             from deployment.gate28_repairs import or_malformed_review
-            retained = or_malformed_review(sys.modules[__name__], org, result, registry_name, body, page.url)
+            # Oregon loads the clicked detail inside the search document;
+            # the collector retained the actual clicked detail href separately.
+            retained = or_malformed_review(sys.modules[__name__], org, result, registry_name, body, result.source_url)
             return retained if retained is not None else licensed_charity_failure(
                 org, "OR", page.url, ValueError("Oregon's malformed source EIN could not be bound to a complete reviewable identity"))
 
