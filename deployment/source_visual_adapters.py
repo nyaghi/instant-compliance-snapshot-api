@@ -1360,13 +1360,14 @@ def capture_owned_md_page(run,result,page,context,deadline):
   if detail is not None:
    try:workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:857:7:close',detail.close,locals())
    except Exception:fact['owned_page_close_error']=True
+  fact['total_ms']=round((time.perf_counter()-start)*1000,2)
+  # Recovery has its own timing fact; do not count it twice in source metrics.
   # Recover only access failures, never a rejected identity/status or blocked view.
   if (not run.documents and 'recovery_stop' in locals() and
       ((fact.get('outcome')=='detail_navigation_rejected' and (fact.get('detail_http_status') or 0)>=500)
        or (fact.get('phase')=='navigation' and fact.get('error_type')=='TimeoutError'))):
    from deployment.md_listing_evidence import capture as capture_md_listing
    capture_md_listing(run,result,hint,context,recovery_stop)
-  fact['total_ms']=round((time.perf_counter()-start)*1000,2)
 
 def capture_owned_md_empty(run,result,context,deadline):
  """Original zero-entry EIN filter, using only the existing owned context."""

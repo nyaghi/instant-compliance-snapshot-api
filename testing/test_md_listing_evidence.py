@@ -58,6 +58,11 @@ class ListingEvidence(unittest.TestCase):
 
 class RecoveryAdmission(unittest.TestCase):
  run_case=md_controls.MarylandFinishTests.run_case
+ def test_recovery_time_is_not_double_counted_as_primary_capture(self):
+  def recover(*args):md_controls.m.time.now+=2
+  with patch.object(m,'capture',side_effect=recover):r,p,c=self.run_case(nav=40)
+  self.assertEqual(r.visual_adapter_facts[0]['total_ms'],29000)
+  self.assertEqual(c.now,131)
  def test_only_access_failures_enter_listing_fallback(self):
   for opts,eligible in [({'nav':40},True),({'http_status':504,'nav':1},True),({'http_status':403,'nav':1},False),({'fields':{'Charity ID':'999'}},False),({'change_shot':True},False),({'nav':1,'panel_delay':.1},False)]:
    with self.subTest(opts=opts),patch.object(m,'capture') as capture:
