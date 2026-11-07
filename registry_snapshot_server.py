@@ -6693,7 +6693,7 @@ def ga_charity_detail_html(body, expected_identifier, expected_name=""):
         if len(values) > 1 or required and (len(values) != 1 or not values[0] and not allow_blank):
             raise ValueError(f"Georgia primary license is missing or duplicates {suffix}")
         return values[0] if values else ""
-    identifier = field("license_no", True, allow_blank=not expected_identifier)
+    identifier = field("license_no", bool(expected_identifier), allow_blank=not expected_identifier)
     name, profession, kind, raw = (field(key, True) for key in ("full_name", "profession", "license_type", "status"))
     if identifier != expected_identifier or not re.fullmatch(r"(?:CH\d+|EXEMPT)?", identifier):
         raise ValueError("Georgia detail does not match the selected charity license")
@@ -6701,6 +6701,13 @@ def ga_charity_detail_html(body, expected_identifier, expected_name=""):
         raise ValueError("Georgia record is not a qualifying charity registration")
     if not identifier and (not expected_name or normalized_match_name(name) != normalized_match_name(expected_name)):
         raise ValueError("Georgia unnumbered detail does not match its bound name")
+    if not identifier and kind == "Charity" and raw.casefold() == "expired":
+        # Historical rows can omit the license number entirely. This is
+        # descriptive evidence only; it can never establish identity/status.
+        return {"name": name, "identifier": "", "raw_status": raw,
+                "license_category": kind, "historical_unnumbered": True}
+    if not identifier:
+        field("license_no", True, allow_blank=True)
     if (not identifier or kind == "agency1prof0licType52004") and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
         raise ValueError("Georgia legacy record is not an explicit charity exemption")
     if identifier == "EXEMPT" and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
@@ -6837,6 +6844,7 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         queries += [{"state": state, "orgName": name} for name in names]
     records, seen, completed = [], set(), []
     covered_ga_names = set()
+    historical_ga_names = set()
     failed_ga_prefixes = set()
     for query in queries:
         # Exact EIN is decisive for IL. Name fallbacks never admit a different EIN.
@@ -6894,6 +6902,10 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
             detail = evidence(detail_query)["body"]
             parsed = (il_charity_detail_text(detail, row["identifier"]) if state == "IL" else
                       ga_charity_detail_html(detail, row["identifier"], row["name"]))
+            if state == "GA" and parsed.get("historical_unnumbered"):
+                historical_ga_names.add(normalized_match_name(parsed["name"]))
+                seen.add(identity)
+                continue
             if state == "IL":
                 # The selected CO number was checked by the detail parser.
                 # Illinois can retain a former legal name in that detail while
@@ -6929,6 +6941,13 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     if purpose == "identity":
         return identity_rows_names("IL", records, canonical_ein_digits(org.ein), IL_GA_SOURCES[state])
     result = licensed_charity_result(org, state, records, deadline, IL_GA_SOURCES[state])
+    if state == "GA" and historical_ga_names:
+        selected = getattr(result, "_cc_license_record", {})
+        if (not re.fullmatch(r"CH\d+", selected.get("identifier", ""))
+                or selected.get("status") not in {"Current", "Upcoming Filing", "Exempt"}
+                or historical_ga_names != {normalized_match_name(selected.get("name", ""))}):
+            raise ValueError("Georgia unnumbered historical charity could not be reconciled")
+        result.source_note += " Georgia also shows an expired, unnumbered entry under the same name. The reported status comes from the verified numbered license."
     if state == "IL":
         # User-approved IL-only interpretation, 2026-09-25. The combined label
         # deliberately does not choose between never registered and noncompliant.
@@ -38150,6 +38169,7 @@ def attach_identity_review(data, context):
     if not (APP_VERSION.endswith("-staging") or trial_identity()) or len(NY_CONNECTOR_SIGNING_KEY) < 32:
         return
     rows = []
+    review_source_refs = []
     from deployment.group_identity_review import allowed as group_review_allowed
     from deployment.wa_conflict_review import allowed as wa_conflict_allowed
     for row in context["records"]:
@@ -38166,6 +38186,8 @@ def attach_identity_review(data, context):
         from deployment.state_snapshots import REFERENCES, matching_reference
         snapshot_ref = matching_reference({**clean, 'state': data['state'], 'ein': data['ein']}, REFERENCES.get())
         if snapshot_ref:
+            if snapshot_ref.get('provisional'):
+                review_source_refs.append(snapshot_ref)
             clean['evidence_url'] = snapshot_ref['url']
         if data['state']=='WA' and wa_conflict_allowed(row,data['organization_name'],data['ein']):
             clean['wa_ein_conflict']=row['wa_ein_conflict']
@@ -38189,6 +38211,11 @@ def attach_identity_review(data, context):
         rows.append(clean)
     if not any(row["reviewable"] for row in rows) or len(rows) > 100:
         return
+    if review_source_refs:
+        from deployment.state_snapshots import retain_references
+        unavailable = retain_references(review_source_refs)
+        for row in rows:
+            if row.get("evidence_url") in unavailable: row.pop("evidence_url", None)
     if data["state"] == "GA":
         # A Georgia review must expose every record that can determine its
         # result. Do not retain an unreviewable automatic match behind the cards.

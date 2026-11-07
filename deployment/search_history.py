@@ -185,6 +185,7 @@ def attach(record,result,store=None,now=None):
     if store is None:return data
     try:
         snapshot=ss.matching_reference(result,record.get('source_snapshots',[]))
+        if snapshot and ss.retain_references([snapshot],store):snapshot=None
         doc=manifest(record,result,snapshot or {},time.time() if now is None else now)
         raw=json.dumps(doc,ensure_ascii=False,separators=(',',':')).encode('utf-8')
         if len(raw)>150000 and drop_returned_details(doc):

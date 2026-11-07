@@ -154,14 +154,39 @@ class SQLiteStore:
         with self.lock,closing(sqlite3.connect(self.path)) as c,c:c.execute('UPDATE snapshots SET pdf=? WHERE id=? AND pdf IS NULL',(pdf,ident))
 
 class PostgresStore:
-    def __init__(self,pool):self.pool=pool
-    def save(self,meta,raw):
+    def __init__(self,pool,*,provisional_enabled=False):
+        self.pool=pool
+        self.provisional_enabled=provisional_enabled
+
+    def save(self,meta,raw,*,provisional=False):
         from psycopg.types.json import Jsonb
         ident=secrets.token_hex(32)
         with self.pool.connection(timeout=.25) as c:
             c.execute("SET LOCAL statement_timeout = '500ms'")
-            c.execute('INSERT INTO cc_state_snapshots(id,metadata,source) VALUES(%s,%s,%s)',(ident,Jsonb(meta),raw))
+            if provisional:
+                c.execute("WITH saved AS (INSERT INTO cc_state_snapshots(id,metadata,source) "
+                          "VALUES(%s,%s,%s) RETURNING id) INSERT INTO cc_state_snapshot_scratch "
+                          "SELECT id,CURRENT_TIMESTAMP+interval '1 day' FROM saved",(ident,Jsonb(meta),raw))
+            else:
+                c.execute('INSERT INTO cc_state_snapshots(id,metadata,source) VALUES(%s,%s,%s)',(ident,Jsonb(meta),raw))
         return ident
+
+    def protect(self,ids):
+        with self.pool.connection(timeout=.25) as c:
+            c.execute("SET LOCAL statement_timeout = '500ms'")
+            c.execute("DELETE FROM cc_state_snapshot_scratch WHERE id=ANY(%s)",(ids,))
+            # Separate READ COMMITTED statement: if the reaper won the lock,
+            # this must see its committed deletion before a link can go out.
+            rows=c.execute("SELECT id FROM cc_state_snapshots WHERE id=ANY(%s)",(ids,)).fetchall()
+            return {r['id'] for r in rows}
+
+    def prune_provisional(self):
+        with self.pool.connection(timeout=.25) as c:
+            c.execute("SET LOCAL statement_timeout = '1s'")
+            return c.execute("WITH batch AS (SELECT id FROM cc_state_snapshot_scratch "
+                             "WHERE discard_after <= CURRENT_TIMESTAMP ORDER BY discard_after,id "
+                             "LIMIT 128 FOR UPDATE SKIP LOCKED) "
+                             "DELETE FROM cc_state_snapshots s USING batch WHERE s.id=batch.id").rowcount
     def load(self,ident):
         if not re.fullmatch(r'[a-f0-9]{64}',ident):return None
         with self.pool.connection() as c:r=c.execute('SELECT metadata,source,pdf FROM cc_state_snapshots WHERE id=%s',(ident,)).fetchone()
@@ -171,11 +196,34 @@ class PostgresStore:
 
 def snapshot_link(ident):return '/state-snapshots/'+ident+'.pdf'
 
-def archive(asset, *, ein, state, run_id, store=None):
+def retain_references(refs,store=None):
+    """Promote connector scratch files before they can be shared."""
+    pending={}
+    for ref in refs:
+        if not ref.get('provisional'):continue
+        match=re.fullmatch(r'/state-snapshots/([a-f0-9]{64})\.pdf',ref['url'])
+        if match:pending.setdefault(match[1],[]).append(ref)
+    if not pending:return set()
+    store=store or STORE
+    retained=set()
+    if store is not None and hasattr(store,'protect'):
+        try:retained=store.protect(list(pending))
+        except Exception:pass
+    unavailable=set()
+    for ident,group in pending.items():
+        for ref in group:
+            if ident in retained:ref.pop('provisional',None)
+            else:unavailable.add(ref['url'])
+    return unavailable
+
+def archive(asset, *, ein, state, run_id, store=None, provisional=False):
     store=store or STORE
     if store is None:raise RuntimeError('Persistent source archive is not configured')
     meta,raw=validate_asset(asset,ein=ein,state=state,run_id=run_id)
-    return trace_return('deployment/state_snapshots.py:archive:162:4:return',({'url':snapshot_link(store.save(meta,raw)),'identifier':meta['identifier'],
+    provisional=provisional and getattr(store,'provisional_enabled',False) is True
+    ident=store.save(meta,raw,provisional=True) if provisional else store.save(meta,raw)
+    return trace_return('deployment/state_snapshots.py:archive:162:4:return',({'url':snapshot_link(ident),'identifier':meta['identifier'],
+            **({'provisional':True} if provisional else {}),
             'record_name':meta['record_name'],'source_sha256':meta['source_sha256'],
             'source_url':meta['source_url'],'captured_at':meta['captured_at'],
             'kind':meta['kind'],'run_id':run_id,'ein':meta['ein'],'state':state}))
@@ -258,15 +306,25 @@ def matching_reference(result, refs):
 
 def attach_links(result, refs):
     data=dict(result);ref=workflow_call('deployment/state_snapshots.py:attach_links:228:26:matching_reference',matching_reference,locals(), data,refs)
-    if ref:data.update(evidence_url=ref['url'],evidence_captured_at=ref['captured_at'])
-    else:data['evidence_url']=''
     review=workflow_call('deployment/state_snapshots.py:attach_links:231:11:get',data.get,locals(), 'identity_review')
+    selected=[ref] if ref else []
     if review:
         # The signed record is populated in the master before this public view.
         data['identity_review']={**review,'candidates':[dict(c) for c in workflow_call('deployment/state_snapshots.py:attach_links:234:73:get',review.get,locals(), 'candidates',[])]}
         for row in data['identity_review']['candidates']:
             candidate=workflow_call('deployment/state_snapshots.py:attach_links:236:22:matching_reference',matching_reference,locals(), {**row,'ein':data['ein'],'state':data['state']},refs)
-            if candidate:row['evidence_url']=candidate['url']
+            if candidate:
+                row['evidence_url']=candidate['url']
+                selected.append(candidate)
+    unavailable=retain_references(selected)
+    if ref and ref['url'] not in unavailable:
+        data.update(evidence_url=ref['url'],evidence_captured_at=ref['captured_at'])
+    else:
+        ref=None
+        data['evidence_url']=''
+    if review:
+        for row in data['identity_review']['candidates']:
+            if row.get('evidence_url') in unavailable:row.pop('evidence_url',None)
     data['evidence_capture']='saved' if ref else ('candidate_only' if review and any(workflow_call('deployment/state_snapshots.py:attach_links:238:85:get',r.get,locals(), 'evidence_url') for r in data['identity_review']['candidates']) else 'unavailable')
     return trace_return('deployment/state_snapshots.py:attach_links:239:4:return',(data))
 
@@ -1192,11 +1250,11 @@ def _connector_archive(record,payload,query,evidence):
             if record['state']=='NM' and query.get('operation')=='detail':
                 from deployment.nm_registration_document import append_to_asset
                 asset=append_to_asset(asset,incoming.get('registration_document'),record,query,evidence)
-            ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id)
+            ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id,provisional=True)
             # The complete metadata stays in persistent storage. Continuations
             # carry short references, never images or repeated source URLs.
             record.setdefault('source_snapshots',[]).append({
-                **{k:ref[k] for k in ('url','identifier','record_name','captured_at','ein','state')},
+                **{k:ref[k] for k in ('url','identifier','record_name','captured_at','ein','state','provisional') if k in ref},
                 'operation':'detail' if ga_detail or il_detail or (record['state']=='NY' and query.get('orgID')) else query.get('operation','')})
         refs=record.get('source_snapshots',[])
         if record['state']=='TN':refs=sorted(refs,key=lambda r:r.get('operation')=='detail')

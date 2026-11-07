@@ -413,6 +413,7 @@
                   <div id="progressBar" class="h-full w-0 rounded-full bg-[#C62828] transition-all duration-500"></div>
 
                 </div>
+                <button type="button" id="stopRun" hidden class="mt-3 rounded-lg border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-800">Stop run</button>
 
               </div>
 
@@ -582,6 +583,14 @@
     const errorBox = document.getElementById("errorBox");
 
     const progressBox = document.getElementById("progressBox");
+    const stopRun = document.getElementById("stopRun");
+    let runController = null;
+    stopRun.addEventListener("click", () => {
+      if (!runController || runController.signal.aborted) return;
+      stopRun.disabled = true;
+      stopRun.textContent = "Stopping…";
+      runController.abort();
+    });
 
     const progressLabel = document.getElementById("progressLabel");
 
@@ -1277,7 +1286,7 @@
               note.textContent = message; note.hidden = !message;
             } });
         } catch (error) {
-          if (signal?.aborted) throw signal.reason;
+          if (signal?.aborted) throw error?.stopCleanupFailed ? error : signal.reason;
           const result = fallbackResult(state, einValue, `The ${state} browser check could not be completed. Confirm that staging is unlocked and the connector is enabled, then retry. Registration status remains unconfirmed.`, organizationNameValue);
           result.status = "Unable to Confirm";
           result.success = false;
@@ -1452,13 +1461,13 @@
 
 
 
-    async function runStateChecks(states, einValue, emailValue, organizationNameValue) {
+    async function runStateChecks(states, einValue, emailValue, organizationNameValue, signal) {
       if (window.CCOptimized && internalUnlocked) {
         let completed=0;
         return window.CCOptimized.run({apiBase:API_BASE,name:organizationNameValue,ein:einValue,
-          states,aliases:runAlternateNames,mode:'standard',
+          states,aliases:runAlternateNames,mode:'standard',signal,userStop:!!signal,
           credentials:{email:emailValue,admin_passcode:adminPasscode.value.trim(),device_id:getDeviceId()},
-          externalLookup:state=>requestSingleState(API_BASE,einValue,emailValue,state,organizationNameValue,false,runAlternateNames),
+          externalLookup:(state,names,signal)=>requestSingleState(API_BASE,einValue,emailValue,state,organizationNameValue,false,names,{signal}),
           onResult:()=>{completed++;progressCount.textContent=`${completed} of ${states.length}`;
             progressBar.style.width=`${Math.max(12,Math.round(completed/states.length*100))}%`;}});
       }
@@ -1693,6 +1702,7 @@
       const total = states.length;
 
       progressBox.classList.remove("hidden");
+      document.getElementById("progressLabel").textContent = "Checking public registry…";
 
       progressCount.textContent = `0 of ${total}`;
 
@@ -1706,12 +1716,16 @@
 
       startElapsedTimer();
       const completedCheckId = crypto.randomUUID();
+      runController = window.CCOptimized && internalUnlocked ? new AbortController() : null;
+      stopRun.hidden = !runController;
+      stopRun.disabled = false;
+      stopRun.textContent = "Stop run";
 
 
 
       try {
         trackFunnelEvent("free_search_form_submitted", { state: states[0] || "" });
-        const results = await runStateChecks(states, einValue, emailValue, organizationNameValue);
+        const results = await runStateChecks(states, einValue, emailValue, organizationNameValue, runController?.signal);
         stopElapsedTimer();
 
         renderResults(results);
@@ -1720,10 +1734,20 @@
 
       } catch (error) {
         stopElapsedTimer();
+        if (runController?.signal.aborted) {
+          if (error.partialResults?.length) renderResults(error.partialResults);
+          const completed = error.partialResults?.length || 0;
+          document.getElementById("progressLabel").textContent = error.runStopped
+            ? `Stopped after ${completed} of ${total} states.` : "Stop requested. Cleanup could not be confirmed.";
+          const elapsed = document.getElementById("resultElapsed");
+          if (elapsed && completed) elapsed.textContent = `Stopped after ${completed} of ${total} states`;
+          return;
+        }
         showError(error.message || "The snapshot could not be completed.");
         trackFunnelEvent("search_error", { state: states[0] || "", error_category: "client_or_api_error" });
       } finally {
-
+        runController = null;
+        stopRun.hidden = true;
         submitButton.disabled = false;
         window.CCIdentity.setBusy(false);
         submitButton.textContent = internalUnlocked ? "Run CharityClarity Aurora" : (STAGING_ACCESS_REQUIRED ? "Unlock staging to continue" : "Run CharityClarity Aurora");

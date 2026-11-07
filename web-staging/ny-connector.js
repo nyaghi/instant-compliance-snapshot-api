@@ -278,10 +278,12 @@
       if (state.phase !== "complete" || !state.result || state.result.state !== registryState) throw new Error(`${label} did not return a complete result.`);
       return state.result;
     } finally {
-      if (connected) await bridge("finish", null, lookupId);
+      const cleanupReceipt = connected ? await bridge("finish", null, lookupId) : null;
       if (checkToken) api({ action: "cancel", check_token: checkToken }, true).catch(() => {});
       onProgress?.("");
       activeLookups--; if (refreshButton) refreshButton.disabled = !!refreshing || activeLookups > 0;
+      if (connected && signal?.aborted && cleanupReceipt?.cleanup_complete !== true)
+        throw Object.assign(new Error("Browser cleanup was not confirmed."), {stopCleanupFailed:true});
     }
   }
   window.CCNYConnector = Object.freeze({ setup, lookup, refresh });

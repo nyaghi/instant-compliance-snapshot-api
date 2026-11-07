@@ -151,8 +151,8 @@ def bind_il_replies(text):
       '          lookupId = crypto.randomUUID().replaceAll("-", "");\n'
       "          if (['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(registryState)) (ilReplyOwners.set(lookupId,connection.il_transport.extension_id), ilReplyIntents.set(lookupId,registryState));",
       1),
-     ('      if (connected) await bridge("finish", null, lookupId);',
-      '      if (connected) await bridge("finish", null, lookupId);\n      ilReplyOwners.delete(lookupId); ilReplyIntents.delete(lookupId);',
+     ('      const cleanupReceipt = connected ? await bridge("finish", null, lookupId) : null;',
+      '      const cleanupReceipt = connected ? await bridge("finish", null, lookupId) : null;\n      ilReplyOwners.delete(lookupId); ilReplyIntents.delete(lookupId);',
       1)]
     for before, after, count in replacements:
         if text.count(before) != count:
@@ -456,7 +456,8 @@ def lab_asset(path):
 def build_handler(master, key, capacity=None, durable=None):
     if durable is not None:
         from deployment import state_snapshots
-        state_snapshots.STORE = state_snapshots.PostgresStore(durable.pool)
+        state_snapshots.STORE = state_snapshots.PostgresStore(
+            durable.pool,provisional_enabled=os.environ.get('CE_PERMANENT_STAGING')=='1')
     lock = threading.Lock()
     telemetry = {'started_epoch': time.time(), 'active_requests': 0, 'peak_requests': 0, 'completed_requests': 0}
 
@@ -726,8 +727,22 @@ def main():
             if supervisor: supervisor.stop()
             threading.Thread(target=server.shutdown, daemon=True).start()
         for sig in (signal.SIGINT, signal.SIGTERM): signal.signal(sig, stop)
+        stop_cleanup = threading.Event()
+        cleanup_thread = None
+        if os.environ.get('CE_PERMANENT_STAGING') == '1' and supervisor is None:
+            from deployment import state_snapshots
+            def clean_unused_captures():
+                while not stop_cleanup.wait(60):
+                    try:
+                        state_snapshots.STORE.prune_provisional()
+                    except Exception as exc:
+                        print(f'Snapshot cleanup deferred: {type(exc).__name__}',flush=True)
+            cleanup_thread=threading.Thread(target=clean_unused_captures,daemon=True,name='lab-snapshot-cleanup')
+            cleanup_thread.start()
         try: server.serve_forever()
         finally:
+            stop_cleanup.set()
+            if cleanup_thread:cleanup_thread.join(2)
             if supervisor:
                 supervisor.stop()
                 supervisor_thread.join(25)

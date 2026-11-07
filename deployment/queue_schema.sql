@@ -6,6 +6,13 @@ CREATE TABLE IF NOT EXISTS cc_state_snapshots (
  metadata jsonb NOT NULL, source bytea NOT NULL CHECK (octet_length(source) BETWEEN 1 AND 3000000),
  pdf bytea
 );
+-- Only newly created connector scratch captures enter the expiry ledger.
+CREATE TABLE IF NOT EXISTS cc_state_snapshot_scratch (
+ id text PRIMARY KEY REFERENCES cc_state_snapshots(id) ON DELETE CASCADE,
+ discard_after timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cc_state_snapshot_scratch_expiry
+ ON cc_state_snapshot_scratch(discard_after,id);
 CREATE TABLE IF NOT EXISTS cc_lab_settings (
  id integer PRIMARY KEY CHECK (id = 1),
  workflow_limit integer NOT NULL CHECK (workflow_limit BETWEEN 1 AND 20),

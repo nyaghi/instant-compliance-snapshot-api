@@ -144,3 +144,43 @@ test('canceled workflow cannot return browser reservations as new capacity',asyn
  await new Promise(setImmediate);ctrl.abort();complete({state:'GA',status:'Current'});deliver();await pending;
  assert.equal(releases.length,0);
 });
+
+test('Stop keeps prior results and waits for worker and owned browser cleanup',async()=>{
+ const ctrl=new AbortController(),calls=[],seen=[];let polls=0,browserClosed=false;
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);calls.push(p.action);
+  if(p.action==='start')return response({token:'signed',progressive_external_release:true});
+  if(p.action==='cancel'){assert.equal(p.token,'signed');return response({ok:true});}
+  if(++polls===1)return response({finished:null,results:[{state:'CO',status:'Current'}]});
+  return response({finished:1,results:[{state:'GA',status:'Unable to Confirm'}]});
+ });
+ const run=cc.run({...base,states:['CO','GA'],signal:ctrl.signal,userStop:true,
+  onResult:r=>{seen.push(r.state);ctrl.abort();},
+  externalLookup:(state,names,signal)=>new Promise((resolve,reject)=>{
+   assert.equal(signal,ctrl.signal);
+   signal.addEventListener('abort',()=>setImmediate(()=>{browserClosed=true;reject(signal.reason);}),{once:true});
+  })});
+ await assert.rejects(run,e=>e.runStopped===true&&e.partialResults.length===1&&e.partialResults[0].state==='CO');
+ assert(browserClosed);assert.deepEqual(seen,['CO']);assert.deepEqual(calls,['start','poll','cancel','poll']);
+});
+
+test('Stop during a lost admission response uses one request identity and then cancels',async()=>{
+ const ctrl=new AbortController(),starts=[],calls=[];
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);calls.push(p.action);
+  if(p.action==='start'){starts.push(p.request_id);if(starts.length===1){ctrl.abort();throw ctrl.signal.reason;}
+   return response({token:'signed'});}
+  if(p.action==='cancel'){assert.equal(p.token,'signed');return response({ok:true});}
+  return response({finished:1,results:[]});
+ });
+ await assert.rejects(cc.run({...base,states:['CO'],signal:ctrl.signal,userStop:true}),e=>e.runStopped===true);
+ assert.deepEqual(calls,['start','start','cancel','poll']);assert.equal(starts[0],starts[1]);
+});
+
+test('Connector-only Stop does not claim success without browser cleanup',async()=>{
+ const ctrl=new AbortController();
+ const cc=setup(async()=>{assert.fail('Connector-only run must not submit a server workflow');});
+ const run=cc.run({...base,states:['GA'],signal:ctrl.signal,userStop:true,
+  externalLookup:()=>new Promise((resolve,reject)=>ctrl.signal.addEventListener('abort',
+   ()=>reject(Object.assign(Error('unconfirmed'),{stopCleanupFailed:true})),{once:true}))});
+ ctrl.abort();
+ await assert.rejects(run,e=>e.runStopped===false&&e.partialResults.length===0);
+});

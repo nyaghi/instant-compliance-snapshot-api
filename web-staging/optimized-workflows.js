@@ -12,6 +12,8 @@
     const settledExternal=new Set();
     let progressiveRelease=false, releasedCount=0;
     const requestId=crypto.randomUUID();
+    const userStop=options.userStop===true;
+    let submission=null;
     const missing=state=>({state,ein,organization_name:name,status:'Unable to Confirm',success:false,
       comments:'The state check did not provide a complete response. Registration status remains unconfirmed.'});
     const record=result=>{
@@ -203,7 +205,20 @@
         }
       } catch { /* Preserve the original result when persistence is unavailable. */ }
     }
-    const cancel=()=>{if(token) void call('cancel',{},true).catch(()=>{});};
+    const cancel=()=>{if(token && !userStop) void call('cancel',{},true).catch(()=>{});};
+    async function confirmStop() {
+      if (!token && submission) token=(await call('start',submission,true)).token;
+      if (token) {
+        await call('cancel',{},true);
+        const deadline=Date.now()+15000;
+        while (true) {
+          const progress=await call('poll',{},true);
+          if (Number.isFinite(progress.finished)) break;
+          if (Date.now()>=deadline) throw new Error('The server has not confirmed the stop.');
+          await new Promise(resolve=>setTimeout(resolve,500));
+        }
+      }
+    }
     signal?.throwIfAborted();signal?.addEventListener('abort',cancel,{once:true});
     let connector=Promise.resolve(),connectorStarted=false;
     const startConnector=(names,confirmed=true)=>{
@@ -211,19 +226,24 @@
       connectorStarted=true;
       connector=Promise.all(external.map(async state=>{
         try{
-          let result=await externalLookup(state,names);
+          let result=await externalLookup(state,names,signal);
           if(!confirmed&&/^Not Registered/.test(result.status||''))result={...missing(state),
             status_reason:'SALES_IDENTITY_INCOMPLETE',
             comments:'The Sales name-evidence step was incomplete. A negative name-only search cannot confirm non-registration. Run Standard for a full check.'};
           record(result);
-        }catch{if(!signal?.aborted)record(missing(state));}
+        }catch(error){
+          if(error?.stopCleanupFailed) stopCleanupFailed=true;
+          if(!signal?.aborted)record(missing(state));
+        }
         finally{settledExternal.add(state);}
       })).then(()=>{externalDone=true;});
     };
+    let stopCleanupFailed=false;
     if(!needsIdentity)startConnector(aliases);
     try {
       if(states.length>external.length||needsIdentity) {
         const payload={organization_name:name,ein,alternate_names:aliases,states,mode,consent:true,request_id:requestId};
+        submission=payload;
         let accepted;
         try{accepted=await call('start',payload);}catch(error){
           if(error.code==='PERFORMANCE_LAB_EXPIRED')throw error;
@@ -257,12 +277,28 @@
         }
       }
       await connector;
+      if(userStop)signal?.throwIfAborted();
       for(const state of states)if(!results.has(state))record(missing(state));
       await Promise.all(evidenceTasks);
       await reconcileSavedEvidence();
+      if(userStop)signal?.throwIfAborted();
       return states.map(state=>results.get(state));
     } catch(error) {
+      if(userStop && signal?.aborted) {
+        const stopped=new Error('Run stopped.');
+        stopped.partialResults=states.filter(state=>results.has(state)).map(state=>results.get(state));
+        try {
+          try { await confirmStop(); } finally { await connector; }
+          if(stopCleanupFailed)throw new Error('Browser cleanup was not confirmed.');
+          stopped.runStopped=true;
+        } catch {
+          stopped.message='Stop requested. Cleanup could not be confirmed.';
+          stopped.runStopped=false;
+        }
+        throw stopped;
+      }
       cancel();
+      if(userStop && token) await call('cancel',{},true).catch(()=>{});
       if(signal?.aborted)throw error;
       if(error.code==='PERFORMANCE_LAB_EXPIRED')throw error;
       await connector;

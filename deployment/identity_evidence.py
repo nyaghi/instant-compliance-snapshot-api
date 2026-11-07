@@ -35,6 +35,7 @@ def retain(record,result,store):
         for ref in record.get('source_snapshots',[])[:24]:
             _source(ref,doc['state'],doc['ein'],doc['run_id'],store)
             refs.append(copy.deepcopy(ref))
+        if ss.retain_references(refs,store):raise ValueError('Could not retain decision evidence')
         payload={'schema':SCHEMA,'history':doc,'sources':refs}
         raw=json.dumps(payload,ensure_ascii=False,separators=(',',':')).encode()
         if len(raw)>200000:raise ValueError('Review evidence exceeds bound')
