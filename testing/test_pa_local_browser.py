@@ -10,7 +10,8 @@ class LocalBrowser(unittest.TestCase):
   fields=dict(EntityName=cells[0],RegNum=cells[3],Expdt=cells[4],FederalID=cells[5])
   grid='<table><tr id="SearchResults">'+''.join('<td>'+v+'</td>' for v in cells)+'<td><i ng-click="search.redirectEntityDetails(row)" onclick="window.open(\''+pa.DETAIL+'\')">View</i></td></tr></table>'
   detail='<div id="panelEntityInfo">'+''.join('<label>'+k+'<input name="'+k+'" value="'+v+'" disabled></label>' for k,v in fields.items())+'</div>'
-  html='<script>document.write(location.hash.includes("charitiesEntityDetails")?'+json.dumps(detail)+':'+json.dumps(grid)+');</script>'
+  detail+='<div class="cg-busy" style="position:fixed;inset:0;background:white">Loading</div><script>setTimeout(()=>document.querySelector(".cg-busy").style.display="none",600)</script>'
+  html='<script>document.write(location.hash.includes("charitiesEntityDetails")?'+json.dumps(detail).replace('</script>','<\\/script>')+':'+json.dumps(grid)+');</script>'
   with sync_playwright() as p:
    browser=p.chromium.launch(headless=True)
    context=browser.new_context();context.route('**/*',lambda route:route.fulfill(status=200,body=html,content_type='text/html'))
@@ -22,5 +23,7 @@ class LocalBrowser(unittest.TestCase):
    finally:pa.CURRENT.reset(token);pa.DEADLINE.reset(deadline);browser.close()
    self.assertEqual(len(run.documents),1,run.visual_adapter_facts)
    self.assertEqual(len(json.loads(run.documents[0][1])),2)
+   self.assertGreaterEqual(run.visual_adapter_facts[0]['total_ms'],600)
+   self.assertLess(run.visual_adapter_facts[0]['total_ms'],8000)
 
 if __name__=='__main__':unittest.main()

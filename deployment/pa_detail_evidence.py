@@ -10,6 +10,7 @@ SEARCH='https://www.charities.pa.gov/#/page/searchCharities'
 DETAIL='https://www.charities.pa.gov/#/page/charitiesEntityDetails'
 PROBE="""()=>Object.fromEntries([...document.querySelectorAll('#panelEntityInfo input')]
  .filter(el=>el.getClientRects().length).map(el=>[el.name,el.value]))"""
+SETTLED="""()=>![...document.querySelectorAll('.cg-busy')].some(el=>el.getClientRects().length && getComputedStyle(el).visibility!=='hidden' && getComputedStyle(el).display!=='none')"""
 
 
 def bound(fields, row):
@@ -44,16 +45,18 @@ def capture(page, org, result):
         if len(hits)!=1:return
         chosen=hits[0];cells=chosen['cells']
         if not cells[3] or not cells[4]:return
+        page.wait_for_function(SETTLED,timeout=timeout())
         grid=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(timeout(),2000))
         with page.expect_popup(timeout=timeout()) as opened:
             page.locator('tr#SearchResults').nth(chosen['index']).locator('i[ng-click="search.redirectEntityDetails(row)"]').click(timeout=timeout())
         popup=opened.value
         popup.wait_for_url(DETAIL,timeout=timeout())
         popup.wait_for_function("() => !!document.querySelector('#panelEntityInfo input[name=FederalID]')?.value",timeout=timeout())
+        popup.wait_for_function(SETTLED,timeout=timeout())
         fields=popup.evaluate(PROBE)
         if not bound(fields,cells):return
         raw=popup.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(timeout(),3000))
-        if popup.url!=DETAIL or popup.evaluate(PROBE)!=fields or time.monotonic()>=stop:return
+        if popup.url!=DETAIL or not popup.evaluate(SETTLED) or popup.evaluate(PROBE)!=fields or time.monotonic()>=stop:return
         packed=json.dumps([base64.b64encode(v).decode('ascii') for v in (grid,raw)]).encode()
         if len(packed)>MAX_BYTES:return
         # Metadata describes the actual disabled input values visible in pixels.

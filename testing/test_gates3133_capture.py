@@ -63,7 +63,7 @@ class OriginalEvidence(unittest.TestCase):
     page.locator.return_value.evaluate_all.side_effect=lambda expression, arg=None:[dict(index=0,cells=cells)]
     popup=MagicMock(url=pa.DETAIL);page.expect_popup.return_value.__enter__.return_value.value=popup
     page.screenshot.return_value=b'original-grid';popup.screenshot.return_value=b'original-detail'
-    popup.evaluate.side_effect=[fields,dict(fields,RegNum='999999') if changed else fields]
+    popup.evaluate.side_effect=[fields,True,dict(fields,RegNum='999999') if changed else fields]
     token=pa.CURRENT.set(run);deadline=pa.DEADLINE.set(time.monotonic()+30)
     try:pa.capture(page,NS(ein=run.ein),NS(state='PA',success=True,status='Current',matched_registry_name=cells[0],matched_registry_identifier=cells[3]))
     finally:pa.CURRENT.reset(token);pa.DEADLINE.reset(deadline)
