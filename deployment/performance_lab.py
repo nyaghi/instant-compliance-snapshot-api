@@ -729,16 +729,18 @@ def main():
         for sig in (signal.SIGINT, signal.SIGTERM): signal.signal(sig, stop)
         stop_cleanup = threading.Event()
         cleanup_thread = None
-        if os.environ.get('CE_PERMANENT_STAGING') == '1' and supervisor is None:
+        if os.environ.get('CE_PERMANENT_STAGING') == '1' and os.environ.get('CE_LAB_ROLE') == 'api':
             from deployment import state_snapshots
             def clean_unused_captures():
                 while not stop_cleanup.wait(60):
                     try:
-                        state_snapshots.STORE.prune_provisional()
+                        removed=state_snapshots.STORE.prune_provisional()
+                        if removed:print(f'Expired temporary snapshots removed: {removed}',flush=True)
                     except Exception as exc:
                         print(f'Snapshot cleanup deferred: {type(exc).__name__}',flush=True)
             cleanup_thread=threading.Thread(target=clean_unused_captures,daemon=True,name='lab-snapshot-cleanup')
             cleanup_thread.start()
+            print('Temporary snapshot cleanup enabled on staging API.',flush=True)
         try: server.serve_forever()
         finally:
             stop_cleanup.set()
