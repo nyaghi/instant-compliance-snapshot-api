@@ -7117,7 +7117,10 @@ def al_charity_search_evidence(payload):
                 raise ValueError("Alabama result identity is missing or duplicated across pages")
             seen.add(tuple(cells))
             continue
-        unnumbered = not identifier and fields["Registration Type"] == "Private Foundation"
+        pending_application = (fields["Registration Type"] == "Charitable Organization"
+            and fields["Status"] == "Pending" and not fields["Issued Date"]
+            and not fields["Expiration Date"])
+        unnumbered = not identifier and (fields["Registration Type"] == "Private Foundation" or pending_application)
         # A public unnumbered foundation is real source evidence, but it is
         # not an issued license. Use an internal row key only for deduplication;
         # the master must withhold classification if its name could match.
