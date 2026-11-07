@@ -688,6 +688,45 @@ async function registryReadinessMessage(job, message, deadline) {
     return value;
   } finally {clearTimeout(timer);}
 }
+function registryNmHttpFailureProof(frame, page) {
+  if (frame?.url !== 'chrome-error://chromewebdata/' || page?.url !== frame.url) return false;
+  try {
+    const url=new URL(frame.unreachableUrl);
+    return url.origin==='https://secure.nmdoj.gov' && /^\/CharitySearch\//i.test(url.pathname)
+      && /\bHTTP ERROR 5\d{2}\b/.test(page.text||'');
+  } catch {return false;}
+}
+async function registryNmHttpFailure(job, deadline) {
+  // Read only an explicit browser-generated server error, never infer an outage
+  // from an absent receiver, slow form, challenge, or a different tab's error.
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NM' || job.closed || deadline-Date.now()<500) return false;
+  const tabId=job.tab,generation=job.generation,pending=job.pending;
+  const alive=()=>!job.closed && job.tab===tabId && job.generation===generation && job.pending===pending && Date.now()<deadline;
+  let timer,attached=false,cancelled=false;
+  const inspect=async()=>{
+    try {
+      const tab=await chrome.tabs.get(tabId);
+      if (!alive() || tab.status!=='complete' || new URL(tab.url).origin!==registryOrigin('NM')) return false;
+      if (job.nmErrorDocumentChecked===tab.url) return false;
+      await chrome.debugger.attach({tabId},'1.3');attached=true;
+      if(cancelled||!alive())return false;
+      const {frameTree}=await chrome.debugger.sendCommand({tabId},'Page.getFrameTree');
+      if(cancelled||!alive()||frameTree?.frame?.url!=='chrome-error://chromewebdata/')return false;
+      job.nmErrorDocumentChecked=tab.url;
+      const value=await chrome.debugger.sendCommand({tabId},'Runtime.evaluate',{
+        expression:'JSON.stringify({url:document.URL,text:document.body?.innerText||""})',returnByValue:true});
+      if(cancelled||!alive())return false;
+      const page=JSON.parse(value?.result?.value||'null');
+      const final=await chrome.debugger.sendCommand({tabId},'Page.getFrameTree');
+      return !cancelled&&alive()&&final?.frameTree?.frame?.loaderId===frameTree.frame.loaderId
+        && registryNmHttpFailureProof(frameTree.frame,page)&&registryNmHttpFailureProof(final.frameTree.frame,page);
+    } catch {return false;}
+    finally {if(attached)try{await chrome.debugger.detach({tabId});}catch{}}
+  };
+  try {return await Promise.race([inspect(),new Promise(resolve=>{
+    timer=setTimeout(()=>{cancelled=true;resolve(false);},Math.min(2500,Math.max(1,deadline-Date.now())));
+  })]);}finally{clearTimeout(timer);}
+}
 async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null, nvRouteOnly = false) {
   if (nvRouteOnly && (job.registryState!=='NV' || oldDocument!==null
       || path!==new URL(registryStart('NV')).pathname)) throw registrySequenceError(job,null,'readiness-route-contract');
@@ -795,6 +834,8 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
     } catch(error) {
       if(error?.message==='NY_CONNECTOR_READINESS_DEADLINE') throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : 'NY_CONNECTOR_TAB_READY_TIMEOUT');
       if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED','NY_CONNECTOR_NC_RATE_LIMITED'].includes(error?.message))throw error;
+      if(job.registryState==='NM' && await registryNmHttpFailure(job,deadline))
+        throw new Error('NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR');
       // The public challenge can precede content-script readiness. Its visible
       // tab title is sufficient to describe a pending verification, not a result.
       if (job.registryState==='NC') try {

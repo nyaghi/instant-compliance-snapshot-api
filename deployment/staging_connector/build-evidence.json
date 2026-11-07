@@ -1,5 +1,5 @@
 {
-  "build": "gates31-33-focused-repair",
+  "build": "nm-http-outage-repair",
   "version": "0.6.135",
-  "scope": "NY legacy search-row transport; AL excluded-category history; TN complete summary capture; NV mark-only source history. All other installed files preserved."
+  "scope": "New Mexico explicit Chrome HTTP5xx failure detection only; all other connector behavior preserved."
 }

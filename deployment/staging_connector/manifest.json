@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity — Gates 31–33 Repair",
+  "name": "CharityClarity — New Mexico Availability",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
-  "description": "Staging: focused status, identity and original evidence repairs for Gates 31–33.",
+  "description": "Staging: explicit New Mexico HTTP outage reporting; prior evidence and identity repairs preserved.",
   "permissions": [
     "storage",
     "browsingData",

@@ -9118,7 +9118,15 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "The browser connector could not preserve this registry's search sequence." if reason == "NY_CONNECTOR_INVALID_SEQUENCE" else
            "The trial browser connector is unavailable or needs an update." if reason in {"NY_CONNECTOR_UNAVAILABLE", "NY_CONNECTOR_UPDATE_REQUIRED"} else
            "The registry search or selected record did not return complete, confirmed information.")
-    result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
+    nm_http_error = state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
+    if nm_http_error:
+        result.status = 'Site Not Reachable'
+        result.success = False
+        result.source_note = ("New Mexico's registry returned an HTTP server error on its official lookup page. "
+                              "CharityClarity stopped this lookup and reports Site Not Reachable. "
+                              "No registration status was established; retry when the registry is available.")
+    else:
+        result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
     candidates = (al_completed_candidates_for_review(record) if state == "AL"
                   else nc_completed_candidates_for_review(record))
     if candidates:
