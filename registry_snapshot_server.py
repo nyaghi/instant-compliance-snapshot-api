@@ -29650,6 +29650,10 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if result.state == "WA" and getattr(result, "reason_code", "") == "WA_CORROBORATED_EIN_CONFLICT_REVIEW":
+        difference = re.match(r"Washington EIN conflict: entered \d{9}; registry \d{9}\.", result.raw_status_text or "")
+        if difference:
+            return difference.group(0) + " " + result.source_note
     if result.state == "OH" and getattr(result, "status_reason", "") == "OH_PARENT_FILES_FOR_CHAPTER":
         return result.source_note
     if result.state in {"AL", "NC", "NV", "TN"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":

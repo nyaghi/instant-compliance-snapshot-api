@@ -1,0 +1,8 @@
+{
+  "state": "WA",
+  "reason_code": "WA_CORROBORATED_EIN_CONFLICT_REVIEW",
+  "raw_status_text": "Washington EIN conflict: entered 872410117; registry 872610117. Status: Active | Renewal Date: 11/30/2026",
+  "source_note": "The exact legal name and organization office corroborate a possible record, but the EIN differs. Review the original and accept or reject this identity. CharityClarity has not assumed the difference is a typo or changed either EIN.",
+  "status": "Unable to Confirm",
+  "ein": "87-2410117"
+}
