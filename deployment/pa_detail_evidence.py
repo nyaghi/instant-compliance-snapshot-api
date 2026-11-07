@@ -34,7 +34,8 @@ def capture(page, org, result):
         if remaining<=0:raise TimeoutError('PA detail allowance exhausted')
         return max(1,int(remaining*1000))
     try:
-        rows=page.locator('tr#SearchResults').evaluate_all("nodes=>nodes.map((el,index)=>({index,cells:[...el.querySelectorAll('td')].map(x=>x.innerText.trim())}))",timeout=timeout())
+        timeout()
+        rows=page.locator('tr#SearchResults').evaluate_all("nodes=>nodes.map((el,index)=>({index,cells:[...el.querySelectorAll('td')].map(x=>x.innerText.trim())}))")
         identifier=str(getattr(result,'matched_registry_identifier','') or '')
         name=getattr(result,'matched_registry_name','')
         hits=[r for r in rows if len(r['cells'])>=12 and (

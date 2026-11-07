@@ -56,7 +56,11 @@ class OriginalEvidence(unittest.TestCase):
     fields=dict(EntityName=cells[0],RegNum=cells[3],Expdt=cells[4],FederalID=cells[5])
     run=NS(state='PA',ein='262122566',visual_adapter_facts=[],documents=[])
     run.document=lambda *args,**kw:run.documents.append(args)
-    page=MagicMock(url=pa.SEARCH);page.locator.return_value.evaluate_all.return_value=[dict(index=0,cells=cells)]
+    page=MagicMock(url=pa.SEARCH)
+    from unittest.mock import create_autospec
+    from playwright.sync_api import Locator
+    page.locator.return_value.evaluate_all=create_autospec(Locator,instance=True).evaluate_all
+    page.locator.return_value.evaluate_all.side_effect=lambda expression, arg=None:[dict(index=0,cells=cells)]
     popup=MagicMock(url=pa.DETAIL);page.expect_popup.return_value.__enter__.return_value.value=popup
     page.screenshot.return_value=b'original-grid';popup.screenshot.return_value=b'original-detail'
     popup.evaluate.side_effect=[fields,dict(fields,RegNum='999999') if changed else fields]
