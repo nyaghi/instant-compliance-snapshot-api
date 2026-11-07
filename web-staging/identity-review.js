@@ -15,7 +15,7 @@
     return result.status === 'Site Not Reachable' && !result.identity_review?.candidates?.length
       && (result.state === 'OR' && ['OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'].includes(result.reason_code)
         || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH'
-        || result.state === 'ND' && result.reason_code === 'RUNNER_TIMEOUT');
+        || ['ND','CO'].includes(result.state) && result.reason_code === 'RUNNER_TIMEOUT');
   }
   function add(parent, tag, value, classes = '') {
     const el = document.createElement(tag); el.textContent = value; el.className = classes; parent.appendChild(el); return el;

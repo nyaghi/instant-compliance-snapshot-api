@@ -5,11 +5,10 @@ const data=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/dc-retained-
 const old=cp.execFileSync('git',['show','fcb271897cd7826db2a642397dbcfebe2a03e277:'+file],{cwd:root,encoding:'utf8'});
 let harness=fs.readFileSync(path.join(__dirname,'test_dc_period_frontend.cjs'),'utf8').split('(async()=>{')[0];
 harness=harness.replace("'2026-10-30Current registration issued'","result.renewal_filing_value+result.renewal_filing_label")
- .replace("exported[7],'2026-10-30'","exported[7],result.renewal_filing_value")
- .replace("exported[11],'Current registration issued'","exported[11],result.renewal_filing_label")
- .replace('exported[13],result.source_url',"exported[13].replace(/&amp;/g,'&'),result.renewal_filing_source_url");
+ .replace("exported[5],'2026-10-30'","exported[5],result.renewal_filing_value")
+ .replace("sources[6],'Current registration issued'","sources[6],result.renewal_filing_label");
 function load(source){const module={exports:{}};const wrapped={...fs,readFileSync(p,...rest){return String(p).endsWith('optimized-workflows.js')?source:fs.readFileSync(p,...rest);}};
- vm.runInNewContext(harness+'\nmodule.exports={run,checkActualPresentation};',{module,require:n=>n==='fs'?wrapped:require(n),__dirname,console,Blob,DOMException,AbortSignal,performance,queueMicrotask,setTimeout,clearTimeout});return module.exports;}
+ vm.runInNewContext(harness+'\nmodule.exports={run,checkActualPresentation};',{module,require:n=>n==='fs'?wrapped:require(n),__dirname,console,Blob,URL,TextEncoder,Buffer,DOMException,AbortSignal,performance,queueMicrotask,setTimeout,clearTimeout});return module.exports;}
 const baseline=load(old),candidate=load(fs.readFileSync(path.join(root,file),'utf8')),copy=x=>JSON.parse(JSON.stringify(x));
 (async()=>{
  assert.equal((await baseline.run(data,'normal')).result.evidence_url,'','actual first candidate failure reproduced');

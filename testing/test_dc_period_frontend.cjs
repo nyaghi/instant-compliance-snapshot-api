@@ -13,21 +13,31 @@ async function checkActualPresentation(result){
   assert.ok(render.startsWith('    function renderResults('));assert.ok(excel.startsWith('    function downloadExcel('));
   const rows=[];let blob;
   const classList={toggle(){},remove(){}};
-  const context=vm.createContext({input:copy(result),window:{},Date,Blob,internalUnlocked:true,
+  class DownloadURL extends URL {static createObjectURL(value){blob=value;return 'blob:local-fixture';}static revokeObjectURL(){}}
+  const context=vm.createContext({input:copy(result),window:{},Date,Blob,TextEncoder,setTimeout:()=>{},location:{origin:'https://fixture.invalid'},internalUnlocked:true,
    latestResults:[],generateReportButton:{classList},reportMessage:{},resultTimestamp:{},
    resultRows:{set innerHTML(v){rows.length=0;},appendChild(row){rows.push(row);}},
    resultPanel:{classList},downloadPackageButton:{classList},downloadExcelButton:{classList},downloadLeadLogButton:{classList},fullPictureCta:{classList},
    document:{createElement:()=>({innerHTML:'',lastElementChild:{},click(){}})},
-   URL:{createObjectURL(value){blob=value;return 'blob:local-fixture';},revokeObjectURL(){}},
+   URL:DownloadURL,
    escapeHtml:value=>String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;'),
    formatEin:value=>value,statusClass:()=>'',boldStatuses:value=>value,commentsWithRegistryFooter:value=>value.comments});
+  vm.runInContext(fs.readFileSync(path.join(root,'web-staging/excel-export.js'),'utf8'),context);
   vm.runInContext(render+'\n'+excel+'\nrenderResults([input],true);downloadExcel();',context);
   const cells=Array.from(rows[0].innerHTML.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g),m=>m[1].replace(/<[^>]*>/g,''));
   assert.equal(cells[4],result.registration_date+(result.registration_date_source_label||''),file);
   assert.equal(cells[5],'2026-10-30Current registration issued',file);
-  const exported=Array.from((await blob.text()).matchAll(/<td>([\s\S]*?)<\/td>/g),m=>m[1]);
-  assert.equal(exported[7],'2026-10-30',file);assert.equal(exported[11],'Current registration issued',file);
-  assert.equal(exported[12],result.renewal_date_note,file);assert.equal(exported[13],result.source_url,file);checked++;
+  const data=Buffer.from(await blob.arrayBuffer()),parts={};let offset=0;
+  while(data.readUInt32LE(offset)===0x04034b50){
+   const method=data.readUInt16LE(offset+8),size=data.readUInt32LE(offset+18),names=data.readUInt16LE(offset+26),extra=data.readUInt16LE(offset+28);
+   assert.equal(method,0,'Product export uses stored ZIP entries');
+   const start=offset+30+names+extra;parts[data.subarray(offset+30,offset+30+names).toString()]=data.subarray(start,start+size).toString();offset=start+size;
+  }
+  const decode=s=>s.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,'&');
+  const row=name=>Array.from(parts[name].match(/<row r="2"[^>]*>([\s\S]*?)<\/row>/)[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g),m=>decode(m[1]));
+  const exported=row('xl/worksheets/sheet1.xml'),sources=row('xl/worksheets/sheet2.xml');
+  assert.equal(exported[5],'2026-10-30',file);assert.equal(sources[6],'Current registration issued',file);
+  assert.equal(sources[7],result.renewal_filing_note||result.renewal_date_note,file);assert.equal(sources[3],result.source_url,file);checked++;
  }
  return checked;
 }

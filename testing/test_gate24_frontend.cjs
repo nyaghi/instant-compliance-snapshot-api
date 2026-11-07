@@ -10,6 +10,15 @@ test('ND source timeout is not presented as an identity-review problem',()=>{
   assert.equal(window.CCIdentityReview.statusLabel({...result,identity_review:{candidates:[{}]}}),'Confirm match');
   assert.equal(window.CCIdentityReview.statusLabel({...result,status:'Unable to Confirm'}),'Review required');
 });
+
+test('CO bounded timeout keeps its explicit source failure label and identity guards',()=>{
+  const window={};vm.runInNewContext(fs.readFileSync(__dirname+'/../web-staging/identity-review.js','utf8'),{window});
+  const result={state:'CO',status:'Site Not Reachable',success:false,reason_code:'RUNNER_TIMEOUT'};
+  assert.equal(window.CCIdentityReview.statusLabel(result),'Site Not Reachable');
+  assert.equal(window.CCIdentityReview.statusLabel({...result,identity_review:{candidates:[{}]}}),'Confirm match');
+  assert.equal(window.CCIdentityReview.statusLabel({...result,status:'Unable to Confirm'}),'Review required');
+  assert.equal(window.CCIdentityReview.statusLabel({...result,state:'NJ'}),'Review required');
+});
 test('selected explicit CA nonregistration retains its original source link',()=>{
   const out=render(record);assert.ok(out.some(e=>e.tag==='a'&&e.textContent==='View State Snapshot (PDF)'));
   assert.ok(!out.some(e=>/unavailable/.test(e.textContent||'')));

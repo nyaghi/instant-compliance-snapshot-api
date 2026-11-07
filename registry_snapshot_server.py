@@ -15179,7 +15179,7 @@ def search_co_with_name_fallback(page, org):
     # Healthy full plans in the 30-case audit finished within 30 seconds.
     # Share twice that observed maximum rather than restarting long waits for
     # each alias. Existing query order and matching rules remain unchanged.
-    token=STOP.set(min(time.monotonic()+60,DEADLINE.get()-5)) if trial_identity() else None
+    token=STOP.set(min(STOP.get(),time.monotonic()+60,DEADLINE.get()-5))
     try:
         return search_co_with_name_fallback_core(page,org)
     finally:
@@ -36639,7 +36639,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 except Exception:pass
             elif state == "CO":
                 result = search_co_with_name_fallback(page, org)
-                body = registry_page_body(page)
+                body = registry_page_body(page) if result.success else ""
                 if not (getattr(result, "matched_registry_name", "") or "").strip():
                     co_name = checker.extract_labeled_value_from_text(body, ["Name"])
                     if co_name and useful_registry_name(co_name):
@@ -37013,9 +37013,9 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             if page and state == "CO":
                 result._cc_registration_date_evidence = co_registration_renewal_evidence(page, result, body, lookup_started)
             if page:
-                if not body:
+                if not body and not (state == "CO" and not result.success):
                     body = registry_page_body(page)
-                if CAPTURE_EVIDENCE_SCREENSHOTS:
+                if CAPTURE_EVIDENCE_SCREENSHOTS and not (state == "CO" and not result.success):
                     checker.save_artifacts(
                         page,
                         ARTIFACTS_DIR,
@@ -37606,6 +37606,13 @@ def run_me_lookup_with_lane(organization_name: str, ein: str, progress: dict) ->
 
 
 def _run_single_state_lookup_reliably_source(organization_name: str, ein: str, state: str) -> dict:
+    if (state or '').upper() == 'CO':
+        from deployment.co_budget import run
+        return run(_run_single_state_lookup_reliably_core,organization_name,ein,state)
+    return _run_single_state_lookup_reliably_core(organization_name,ein,state)
+
+
+def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, state: str) -> dict:
     state = (state or "").upper()
     attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
     if state in {"CT", "FL"}:
@@ -37625,6 +37632,9 @@ def _run_single_state_lookup_reliably_source(organization_name: str, ein: str, s
     me_progress = {"deadline": time.perf_counter() + 265, "completed": set()} if state == "ME" else None
     wi_progress = {"attempted": [], "completed": set()} if state == "WI" else None
     for attempt in range(1, attempts + 1):
+        if state == 'CO' and result is not None:
+            from deployment.co_budget import STOP
+            if time.monotonic()+1 >= STOP.get():break
         if state == 'WI' and result is not None and time.perf_counter() >= wi_progress.get('deadline', float('inf')):
             break
         if state == 'FL' and result is not None and time.monotonic()+1 >= fl_shared_lookup_deadline(organization_name, ein):
