@@ -8414,7 +8414,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         # their broader retrieval must not become a new early-exit shortcut.
         if state == "NC" and nc_retrieval_coverage:
             primary_positive = False
-        if records and (index >= len(required) - 1 or (primary_positive and not unreviewed_scope)):
+        if (records and (index >= len(required) - 1 or (primary_positive and not unreviewed_scope))
+                and (state != "TN" or any(row.get("status") in {"Current", "Upcoming Filing", "Exempt"} for row in records))):
+            # This is only an early-positive exit. With no positive TN record,
+            # defer identity work to final selection after the same full plan.
+            # Signed continuation replays must not repeat futile source lookups.
             selected, review = select_licensed_charity(org, records, state, deadline)
             if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:
                 if index >= len(required) - 1 or licensed_primary_positive_complete(
@@ -10442,6 +10446,16 @@ def select_licensed_charity(org, rows, state, deadline):
             return None, f"{state} returned a similar name, {possible[0]['name']}, but the complete name and available identity evidence do not confirm this organization."
         return None, ""
     from deployment.gates2930_repairs import tn_primary_over_alias
+    if (state == 'TN' and len(accepted) == 1 and possible and not conflicts
+            and normalized_match_name(accepted[0]['name']) == normalized_match_name(org.organization_name)
+            and all(r.get('match',{}).get('reason') == 'ALIAS_IDENTITY_UNCONFIRMED'
+                and not set(normalized_match_name(r['name']).split()) & set(normalized_match_name(org.organization_name).split())
+                for r in possible)):
+        primary = accepted[0]
+        if '_tn_full_primary_office' not in primary:
+            primary['_tn_full_primary_office'] = licensed_charity_street_evidence(org,primary,min(deadline,time.monotonic()+6))
+        if primary['_tn_full_primary_office'].get('decision') == 'corroborated':
+            primary['address_evidence'] = primary['_tn_full_primary_office']
     tn_verified_primary = state == 'TN' and tn_primary_over_alias(
         org,accepted,possible,conflicts,normalized_match_name,registry_street_key,canonical_ein_digits)
     if state in {"AL", "NC", "NV", "TN"} and not tn_verified_primary and any(r.get("match", {}).get("reason") == "ALIAS_IDENTITY_UNCONFIRMED" for r in possible):

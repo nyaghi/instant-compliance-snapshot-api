@@ -384,7 +384,9 @@ def wa_name_fallback_result_link(page, org: Organization):
     if decision.get('_cc_ein_conflict') is True:
         page._cc_wa_name_conflict=decision
     name = normalize_spaces(decision['EntityName'])
-    links = page.get_by_role('link', name=name, exact=True)
+    # The official result uses an Angular anchor without href, so it has no
+    # Playwright link role. Bind only its exact text inside the result table.
+    links = page.locator('#tblCFSearch tbody a').filter(has_text=re.compile(r'^\s*' + re.escape(name) + r'\s*$'))
     return links if links.count() == 1 and links.is_visible() else None
 
 

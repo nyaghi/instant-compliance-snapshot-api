@@ -1,0 +1,29 @@
+<table class="table table-striped" id="tblCFSearch">
+                                    <thead>
+                                        <tr>
+                                            <td class="bg-primary" ng-click="search(page,null,'OrganizationName')"><strong>Organization Name</strong><!-- ngIf: cftSearchcriteria.SortType == 'ASC'&&cftSearchcriteria.SortBy == 'OrganizationName' --><!-- ngIf: cftSearchcriteria.SortType == 'DESC'&&cftSearchcriteria.SortBy == 'OrganizationName' --></td>
+                                            <td class="bg-primary" ng-click="search(page,null,'CityName')"><strong>City Name</strong><!-- ngIf: cftSearchcriteria.SortType == 'ASC'&&cftSearchcriteria.SortBy == 'CityName' --><!-- ngIf: cftSearchcriteria.SortType == 'DESC'&&cftSearchcriteria.SortBy == 'CityName' --></td>
+                                            <!--<td class="bg-primary" ng-click="search(page,null,'OrganizationName')"><strong>State Name</strong></td>
+                                            <td class="bg-primary" ng-click="search(page,null,'OrganizationName')"><strong>County Name</strong></td>-->
+                                            <td class="bg-primary" ng-click="search(page,null,'PercentToProgramServices')"><strong>Percent to Program Services (Ranges of 10%)</strong><!-- ngIf: cftSearchcriteria.SortType == 'ASC'&&cftSearchcriteria.SortBy == 'PercentToProgramServices' --><!-- ngIf: cftSearchcriteria.SortType == 'DESC'&&cftSearchcriteria.SortBy == 'PercentToProgramServices' --></td>
+                                            <td class="bg-primary" ng-click="search(page,null,'Status')"><strong>Status</strong><!-- ngIf: cftSearchcriteria.SortType == 'ASC'&&cftSearchcriteria.SortBy == 'Status' --><!-- ngIf: cftSearchcriteria.SortType == 'DESC'&&cftSearchcriteria.SortBy == 'Status' --></td>
+                                        </tr>
+                                    </thead>
+                                    <tbody data-ng-show="cftSearchcriteria.CFSearchList.length&gt;0" class="" style="">
+                                        <!-- ngRepeat: cf in cftSearchcriteria.CFSearchList --><tr data-ng-repeat="cf in cftSearchcriteria.CFSearchList" class="ng-scope" style="">
+                                            <td><a class="btn-link ng-binding text-uppercase" ng-click="showBusineInfo(cf.CFTId,cf.BusinessType)" data-ng-bind="cf.EntityName + ((cf.AKANames != null &amp;&amp; cf.AKANames != '')?'('+cf.AKANames+')':'')">HUMAN APPEAL INC.</a></td>
+                                            <td class="text-uppercase ng-binding" data-ng-bind="cf.EntityMailingAddress.City">MISSION VIEJO</td>
+                                            <!--<td data-ng-bind="cf.EntityMailingAddress.State"></td>
+                                            <td data-ng-bind="cf.EntityMailingAddress.CountyName"></td>-->
+                                            <td data-ng-bind="cf.PercentToProgramServices" class="ng-binding">54</td>
+                                            <td data-ng-bind="cf.Status" class="ng-binding">Active</td>
+
+                                            <!--***** Added re: CCFS TFS ticket# 3034 - KK, 9/10/2019-->
+                                            <!--<td data-ng-bind="cf.TaxExStatus"></td>-->
+
+                                        </tr><!-- end ngRepeat: cf in cftSearchcriteria.CFSearchList -->
+                                    </tbody>
+                                    <tbody data-ng-hide="cftSearchcriteria.CFSearchList.length&gt;0" class="ng-hide" style="">
+                                        <tr><td colspan="3" ng-bind="messages.BusinessSearch.emptyRecordsMsg" class="ng-binding">No Value Found.</td></tr>
+                                    </tbody>
+                                </table>
