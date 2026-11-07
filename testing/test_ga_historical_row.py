@@ -1,5 +1,4 @@
 """Reproduce the archived Georgia grid with bounded primary-detail fixtures."""
-import re
 import unittest
 from unittest.mock import patch
 from testing.run_il_ga_guardrails import cc, ga_html, search_row
@@ -24,8 +23,6 @@ class HistoricalRowTests(unittest.TestCase):
             details.append(identifier)
             body=ga_html(full_name=selected['name'] if identifier else legacy_name,license_no=identifier,
                          status='Active' if identifier else legacy_status,expiry='12/31/2099' if identifier else '')
-            if not identifier:
-                body=re.sub(r'<span id="_ctl34__ctl1_license_no"></span>','',body)
             return cc.il_ga_clean_evidence(dict(query=query,complete=True,body=body),query)
         with patch.object(cc,'licensed_charity_names',return_value=([NAME],[])), \
              patch.object(cc,'public_profile_for_ein',return_value={}), \

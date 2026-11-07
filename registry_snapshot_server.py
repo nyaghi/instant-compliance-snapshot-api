@@ -6693,7 +6693,7 @@ def ga_charity_detail_html(body, expected_identifier, expected_name=""):
         if len(values) > 1 or required and (len(values) != 1 or not values[0] and not allow_blank):
             raise ValueError(f"Georgia primary license is missing or duplicates {suffix}")
         return values[0] if values else ""
-    identifier = field("license_no", bool(expected_identifier), allow_blank=not expected_identifier)
+    identifier = field("license_no", True, allow_blank=not expected_identifier)
     name, profession, kind, raw = (field(key, True) for key in ("full_name", "profession", "license_type", "status"))
     if identifier != expected_identifier or not re.fullmatch(r"(?:CH\d+|EXEMPT)?", identifier):
         raise ValueError("Georgia detail does not match the selected charity license")
@@ -6702,12 +6702,10 @@ def ga_charity_detail_html(body, expected_identifier, expected_name=""):
     if not identifier and (not expected_name or normalized_match_name(name) != normalized_match_name(expected_name)):
         raise ValueError("Georgia unnumbered detail does not match its bound name")
     if not identifier and kind == "Charity" and raw.casefold() == "expired":
-        # Historical rows can omit the license number entirely. This is
+        # Georgia can explicitly show Expired with a blank license number. This is
         # descriptive evidence only; it can never establish identity/status.
         return {"name": name, "identifier": "", "raw_status": raw,
                 "license_category": kind, "historical_unnumbered": True}
-    if not identifier:
-        field("license_no", True, allow_blank=True)
     if (not identifier or kind == "agency1prof0licType52004") and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
         raise ValueError("Georgia legacy record is not an explicit charity exemption")
     if identifier == "EXEMPT" and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
