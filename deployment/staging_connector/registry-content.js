@@ -1090,6 +1090,10 @@
     const addresses=[...dialog.querySelectorAll('.col-md-6 > h4')].map(text).filter(s=>suffix.test(s));
     if(addresses.length>1)throw new Error('REGISTRY_TN_ADDRESS_AMBIGUOUS');
     fields.Address=addresses[0]||'';
+    const purposes=[...dialog.querySelectorAll('h4')].filter(el=>text(el)==='Purpose');
+    if(purposes.length>1)throw new Error('REGISTRY_TN_PURPOSE_AMBIGUOUS');
+    const purpose=purposes[0]?.nextElementSibling;
+    if(purpose?.tagName==='P' && visible(purpose))fields.Purpose=text(purpose).slice(0,6000);
     return fields;
   }
   function tnFinancials(dialog) {

@@ -1,0 +1,63 @@
+{
+  "entities": [
+    {
+      "id": "5301538",
+      "objectId": "entity",
+      "version": 3,
+      "entityType": "Business",
+      "entityName": "LUTHERAN WORLD RELIEF INC.",
+      "entityStatus": "Listed",
+      "fein": "13-2574963",
+      "legalName": "LUTHERAN WORLD RELIEF INC.",
+      "outOfState": "Yes",
+      "entityId": "5301538",
+      "sosId": "1932697",
+      "registrations": "078450,",
+      "homeJurisdiction": "NY",
+      "officialAddress": {
+        "line1": "700 LIGHT STREET",
+        "city": "BALTIMORE",
+        "state": "MD",
+        "zipCode": "21230"
+      },
+      "mailingAddress": {
+        "line1": "700 LIGHT STREET",
+        "city": "BALTIMORE",
+        "state": "MD",
+        "zipCode": "21230",
+        "county": "BALTIMORE CITY"
+      },
+      "email": "registrations@mpmay.com",
+      "phoneNumber": "800 597 5972",
+      "converted": true
+    }
+  ],
+  "registrations": {
+    "5301538": [
+      {
+        "id": "1026699",
+        "objectId": "registrations",
+        "version": 12,
+        "entityRelated": {
+          "id": "5301538",
+          "name": "LUTHERAN WORLD RELIEF INC.  - 5301538"
+        },
+        "email": "registrations@mpmay.com",
+        "registrationType": "Charitable Organization",
+        "registrationNumber": "078450",
+        "registrationStatus": "Registered",
+        "initialRegistrationDate": "2006-09-30",
+        "reportingStatus": "Current",
+        "complianceStatus": [],
+        "currentIssuanceDate": "2026-09-01",
+        "currentRegistrationYear": 2025,
+        "renewalEvaluationDate": "2027-09-30",
+        "currentExpirationDate": "2025-09-30",
+        "is990Required": "Yes",
+        "fiscalYearDate": "2024-09-30",
+        "termBond": "Continuous",
+        "solicitations": []
+      }
+    ]
+  }
+}

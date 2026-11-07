@@ -380,6 +380,9 @@ def remember_ca_selected(run,result):
      or norm(related.get('name'))!=norm(name+' - '+entity_id)
      or str(record.get('registrationType') or '')!='Charitable Organization'):return
  run.remember_detail(number,name,'https://ca-rcf.evokeplatform.com/app/publicPortal/registrationDetails/'+identifier)
+ from deployment.ca_accepted_renewal import preserves
+ if preserves(result):
+  run.source_detail_hints[number]['accepted_renewal']=result._cc_ca_accepted_renewal
 
 def ca_registration_core(text):
  """Original selected fields; later optional grid paint is outside this block."""
@@ -641,6 +644,9 @@ def capture_selected_ca_source(master,result,run,deadline):
     if page.url!=hint['url'] or source_core(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:298:53:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-1)*1000))))!=core:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:298:144:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_ca_source:299:78:return',None)
     before=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:300:30:document',run.document,locals(), hint['url'],raw,'image',core[:20000],note='Original selected registration panel and state header. Optional lower filing grids are outside this captured view.');fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
+    if hint.get('accepted_renewal'):
+     from deployment.ca_accepted_renewal import capture_renewal
+     capture_renewal(page,run,hint['accepted_renewal'],stop,fact)
    finally:
     finish_readiness()
     if context is not None:context._captured=True;workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:302:50:close',context.close,locals())
@@ -676,6 +682,9 @@ def capture_selected_sc_source(master,result,run,deadline):
     response=workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:332:13:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=result['source_url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:334:120:return',None)
+    from deployment.gates2930_repairs import sc_finish_deadline
+    previous_stop=stop;stop=sc_finish_deadline(stop,deadline,time.monotonic())
+    fact['finish_allowance_ms']=round(max(0,stop-previous_stop)*1000)
     fact['phase']='visual_selected_name_search';begin=time.perf_counter()
     workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:336:4:select_option',page.locator('#MainContent_dd_CharitySearchOperator').select_option,locals(), 'BeginsWith',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:337:4:fill',page.locator('#MainContent_txt_CharitySearchName').fill,locals(), result['matched_registry_name'],timeout=max(1,int((stop-time.monotonic()-1)*1000)))

@@ -212,6 +212,10 @@ def matching_reference(result, refs):
                      and digits(r['identifier'])==ein
                      and (not name or key(workflow_call('deployment/state_snapshots.py:matching_reference:189:42:get',r.get,locals(), 'record_name'))==key(name))),None)))
     if state=='IL' and ident:
+        proof=result.get('il_source_identity')
+        if (isinstance(proof,dict) and proof.get('state')=='IL' and proof.get('ein')==ein
+                and proof.get('identifier')==ident and proof.get('name')):
+            name=proof['name']
         # A results list cannot substantiate the selected record's dates.
         candidates=[r for r in candidates if workflow_call('deployment/state_snapshots.py:matching_reference:192:45:get',r.get,locals(), 'operation')=='detail']
     if state=='TN':

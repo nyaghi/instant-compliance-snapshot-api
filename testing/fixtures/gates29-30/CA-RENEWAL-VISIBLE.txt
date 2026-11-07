@@ -1,0 +1,714 @@
+people_alt
+Registry Search Tool
+Verification
+File a Complaint
+Renewal - Form RRF-1
+
+Accepted
+
+•
+
+Registrant: LUTHERAN WORLD RELIEF INC.
+
+Request Summary
+Contact Details
+Workload Details
+ENTITY & REGISTRATION DETAILS
+Related Registration
+
+078450
+
+Related Entity
+
+LUTHERAN WORLD RELIEF INC. - 5301538
+
+Registration Status
+
+Registered
+
+Related Entity Status
+
+Listed
+
+Reporting Status
+
+Current
+
+Compliance Status(es)
+
+
+
+REQUEST DETAILS
+Request Type
+
+Renewal
+
+Registration Year
+
+2025
+
+Rejection Reason
+
+
+
+Registration Type
+
+Charitable Organization
+
+Channel
+
+Online
+
+Converted
+
+Received Date
+
+09/01/2026
+
+Resubmission Date
+
+
+
+Due Date
+
+01/31/2027
+
+Date Assets Received
+
+
+
+FEE DETAILS
+Fee Balance
+
+0
+
+Unpaid Fees
+This amount excludes fees that are set to Hide on Portal
+
+0
+
+Form
+
+Documents
+
+Correspondence
+
+Intro
+
+  ANNUAL REGISTRATION RENEWAL FEE REPORT
+TO ATTORNEY GENERAL OF CALIFORNIA (RRF-1, Rev. 01/2024)
+
+ Sections 12586 and 12587, California Government Code
+11 Cal. Code Regs. sections 301-306, 309, 311, and 312
+
+Failure to submit this report annually no later than four months and fifteen days after the end of the
+ organization's accounting period may result in the loss of tax exemption and the assessment of a
+ minimum tax of $800, plus interest, and/or fines or filing penalties. Revenue & Taxation Code section
+ 23703; Government Code section 12586.1. IRS extensions will be honored.
+
+Review RRF-1: Privacy Notice
+
+
+
+Demographic Info
+Name of Organization
+
+LUTHERAN WORLD RELIEF INC.
+
+List all DBAs and names the organization uses or has used
+
+
+
+Address
+
+700 LIGHT STREET
+
+Request Address Line 2
+
+
+
+City or Town
+
+BALTIMORE
+
+State
+
+MD
+
+ZIP Code
+
+21230
+
+Telephone Number
+
+800 597 5972
+
+E-mail Address *
+
+registrations@mpmay.com
+
+State Charity Registration Number
+
+078450
+
+SOS Entity Number
+
+1932697
+
+FTB Entity ID
+
+
+
+Federal Employer Identification Number (FEIN)
+
+13-2574963
+
+Part A - Activities
+
+ANNUAL REGISTRATION RENEWALFEE SCHEDULE (11 Cal. Code Regs. sections301-307, 311, and 312)
+
+       	Total Revenue	Fee	Total Revenue	Fee	Total Revenue	Fee
+ 	Less than $50,000	$25  	Between $250,001 and $1 million	$100  	Between $20,000,001 and $100 million 	$800
+ 	Between $50,000 and $100,000	$50  	Between $1,000,001 and $5 million 	$200  	Between $100,000,001 and $500 million 	$1,000
+ 	Between $100,001 and $250,000	$75  	Between $5,000,001 and $20 million	$400  	Greater than $500 million	$1,200
+
+For your most recent full accounting period:
+
+Full Accounting Period Beginning *
+
+10/01/2024
+
+Full Accounting Period Ending *
+
+09/30/2025
+
+Total Revenue $
+
+71718541
+
+Noncash Contributions $
+
+16880163
+
+Total Assets $
+
+157305358
+
+Program Expenses $
+
+38588265
+
+Total Expenses $
+
+49735714
+
+990 Type previously selected:
+
+990
+
+A copy of IRS Form 990, 990-PF, 990-EZ, or 1120 as filed with IRS, together with all attachments and schedules, must be filed with the Attorney General's Registry of Charitable Trusts, together with Form RRF-1. Schedule B is not required.
+
+IRS 990 Document(s)
+Document ID	Document Name	Description	Document Upload	Visibility Type
+
+
+DOC0031159
+
+
+
+Lutheran World Relief IRS 990
+
+
+
+2025
+
+
+
+View Document
+
+
+
+Public
+
+Extensions of time for filing Form RRF-1 will be allowed if an organization has received an extension from the Internal Revenue Service for filing the IRS Form 990, 990-PF, 990- EZ, or 1120. An organization shall file both forms (RRF-1 and IRS Form 990, 990-PF, 990-EZ, or 1120) with the Registry of Charitable Trusts at the same time, together with (1) the applicable renewal fee; and (2) a copy of all requests to IRS for an extension and, where approval of the extension is not automatic, a copy of each approved extension request.
+
+Approved IRS Extension Request
+Document ID	Document Name	Description	Document Upload	Visibility Type
+
+
+DOC0031160
+
+
+
+Lutheran World Relief IRS 8868
+
+
+
+2025 Extension
+
+
+
+View Document
+
+
+
+Public
+
+Part B - Statements
+
+PART B - STATEMENTS REGARDING ORGANIZATION DURING THE PERIOD OF THIS REPORT
+
+Note: All questions must be answered. If you answer "yes" to any of the questions below, you must attach a separate page providing an explanation and details for each "yes" response. Please review RRF-1 instructions for information required.
+
+1. During this reporting period, were there any contracts, loans, leases or other financial transactions between the organization and any officer, director or trustee thereof, either directly or with an entity in which any such officer, director or trustee had any financial interest? *
+
+No
+
+2. During this reporting period, was there any theft, embezzlement, diversion or misuse of the organization's charitable property or funds? *
+
+No
+
+3. During this reporting period, were any organization funds used to pay any penalty, fine or judgment? *
+
+No
+
+4. During this reporting period, were the services of a commercial fundraiser, fundraising counsel for charitable purposes, or commercial coventurer used? *
+
+No
+
+5. During this reporting period, did the organization receive any governmental funding? *
+
+Yes
+
+List the name of each funding source, the name of the agency, mailing address, contact person, and telephone number. This info must be made available for public viewing.
+•
+
+USAID/Prime
+
+-
+
+Peru
+
+Transforming
+
+VRAEM
+
+C0AG:
+
+1300
+
+Pennsylvania
+
+Avenue
+
+NW
+
+(Ronald
+
+Reagan
+
+Building);
+
+Washington,
+
+DC
+
+20004
+
+•
+
+USAID
+
+-
+
+BHA
+
+-
+
+Building
+
+Disaster
+
+Resilient
+
+Communities
+
+in
+
+Nepal
+
+(UTTHANSHIL)
+-
+
+720BHA24GR000:
+
+1300
+
+Pennsylvania
+
+Avenue
+
+NW
+
+(Ronald
+
+Reagan
+
+Building);
+
+Washington,
+
+DC
+
+20004
+
+•
+
+USAID
+
+-
+
+BHA
+
+-
+
+ESPOIR:
+
+Sowing
+
+resilience
+
+in
+
+the
+
+Centre
+-
+Nord
+
+and
+
+East
+
+regions
+
+of
+
+Burkina
+
+Faso:
+
+1300
+
+Pennsylvania
+
+Avenue
+
+NW
+
+(Ronald
+
+Reagan
+
+Building);
+
+Washington,
+
+DC
+
+20004
+
+•
+
+US
+
+DOS
+
+Sub
+
+through
+
+Tandem
+
+Global
+
+Empower
+
+Innovation
+
+Challenge
+
+•
+
+USDA/Prime
+
+-
+
+Sesame:
+
+1400
+
+Independence
+
+Avenue
+
+SW;
+
+Washington,
+
+DC
+
+20250
+
+•
+
+USDA/Prime
+-
+
+TRACE
+
+Food
+
+for
+
+Progress:
+
+1400
+
+Independence
+
+Avenue
+
+SW;
+
+Washington,
+
+DC
+
+20250
+
+•
+
+USDA
+
+/FAS
+
+-
+
+Food
+
+for
+
+Progress
+
+-
+
+Nepal:
+
+1400
+
+Independence
+
+Avenue
+
+SW;
+
+Washington,
+
+DC
+
+20250
+
+•
+
+USDA
+
+/FAS
+
+-
+
+Food
+
+for
+
+Progress
+
+-
+
+Togo:
+
+1400
+
+Independence
+
+Avenue
+
+SW;
+
+Washington,
+
+DC
+
+20250
+
+•
+
+USDA
+
+/FAS
+
+-
+
+Food
+
+for
+
+Progress
+
+-
+
+Tanzania:
+
+1400
+
+Independence
+
+Avenue
+
+SW;
+
+Washington,
+
+DC
+
+20250
+
+•
+
+USDA
+
+/FAS
+
+-
+
+Food
+
+for
+
+Progress
+
+-
+
+Nepal:
+
+1400
+
+Independence
+
+Avenue
+
+SW;
+
+Washington,
+
+DC
+
+20250
+
+•
+
+USDA
+
+/FAS
+
+-
+
+Food
+
+for
+
+Progress
+
+-
+
+Vietnam:
+
+1400
+
+Independence
+
+Avenue
+
+SW;
+
+Washington,
+
+DC
+
+20250
+
+•
+
+USDA
+
+MOCCA
+
+sub
+
+thru
+
+TechnoServe
+
+(TNS):
+
+1400
+
+Independence
+
+Avenue
+
+SW;
+
+Washington,
+
+DC
+
+20250
+
+6. During this reporting period, did the organization hold a raffle for charitable purposes? *
+
+No
+
+7. Does the organization conduct a vehicle donation program? *
+
+No
+
+8. Did the organization conduct an independent audit and prepare audited financial statements in accordance with generally accepted accounting principles for this reporting period? *
+
+Yes
+
+If you received over $2 million in total revenue, as reported on IRS Form 990, 990-PF or 990-EZ, audited financial statements using generally accepted accounting principles are required.
+Document ID	Document Name	Description	Document Upload	Visibility Type
+
+
+DOC0031177
+
+
+
+Lutheran World Relief Audit
+
+
+
+FYE 2025 Audit
+
+
+
+View Document
+
+
+
+Public
+
+9. At the end of this reporting period, did the organization hold restricted net assets, while reporting negative unrestricted net assets? *
+
+No

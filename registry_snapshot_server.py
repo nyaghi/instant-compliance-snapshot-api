@@ -2153,6 +2153,17 @@ def ny_pack_offices(ein, source_results, *, key, version, now):
     return body+'.'+signature
 
 def ny_retained_alias_address_review(org, result, detail):
+    if getattr(result,'_ny_possible_identity',False) and result.success:
+        standing = public_status(result)
+        result._cc_identity_review = {'records':[{
+            'name':str(detail['orgName']), 'ein':str(detail.get('ein') or ''),
+            'identifier':str(detail['orgID']), 'url':result.source_url,
+            'raw_status':result.raw_status_text, 'status':standing,
+            '_identity_outcome':'possible'}], 'search_complete':False}
+        result.status='Needs Review';result.success=False
+        result.source_note = ('New York returned a plausible related name without confirming the entered legal identity. '
+            'Review the original and accept or reject this specific record. Its displayed filing status is conditional on that identity decision. ' + result.source_note)
+        return result
     requested = canonical_ein_digits(org.ein)
     source_ein = canonical_ein_digits(str(detail.get('ein') or ''))
     name = str(detail.get('orgName') or '')
@@ -2565,6 +2576,8 @@ def search_ca_master(page, org):
     # The public entity directory can retain shells that have no registration.
     entity = getattr(result, "_cc_selected_entity", None)
     registrations = getattr(result, "_cc_registration_records", None)
+    from deployment.ca_accepted_renewal import reconcile
+    reconcile(sys.modules[__name__],org,result,entity,registrations)
     from deployment.ca_nonregistration import explicit_absence
     if (result.success is True and result.status.casefold() == checker.STATUS_NOT_REGISTERED.casefold()
             and isinstance(entity, dict)
@@ -3870,7 +3883,7 @@ def irs_latest_period(ein: str, deadline: float) -> dict:
     return {}
 
 
-def irs_period_for_label(ein: str, label: int, deadline: float, *, scanned_deadline: float | None = None) -> dict:
+def irs_period_for_label(ein: str, label: int, deadline: float, *, scanned_deadline: float | None = None, ky_cover_scan: bool = False) -> dict:
     """A same-year IRS return resolves the period, never proves another state received it."""
     ein = canonical_ein_digits(ein); key = (ein, label)
     with TAX_PERIOD_EVIDENCE_LOCK:
@@ -3912,7 +3925,7 @@ def irs_period_for_label(ein: str, label: int, deadline: float, *, scanned_deadl
             alternate_step = "Hawaii organization page"
             source = identity_fetch(url, deadline, headers={"Accept": "text/html"}).decode("utf-8", "replace")
             alternate_step = "Hawaii Form 990 attachment"
-            evidence = hi_attachment_period(source, ein, label, deadline,
+            evidence = hi_attachment_period(source, ein, label, deadline, ky_cover_scan=ky_cover_scan,
                 **({"scanned_deadline": scanned_deadline} if scanned_deadline is not None else {}))
             if evidence:
                 evidence["period_basis"] = "Same-EIN, same-tax-year Form 990 publicly filed in Hawaii"
@@ -4028,7 +4041,7 @@ def irs_scanned_period_fields(picture, rows, ocr, ein, label, url, deadline):
     return {}
 
 
-def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float, *, require_complete: bool = False, legacy_heights: dict | None = None, first_page_deadline: float | None = None) -> dict:
+def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float, *, require_complete: bool = False, legacy_heights: dict | None = None, first_page_deadline: float | None = None, ky_cover_scan: bool = False) -> dict:
     """Read bounded header crops; OCR never treats empty boxes as calendar proof."""
     global IRS_HEADER_OCR, IRS_HEADER_TITLE_OCR
     acquired = False
@@ -4052,7 +4065,7 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
             IRS_HEADER_TITLE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_type="max", det_limit_side_len=1600)
         ordered = sorted(images, key=lambda entry: entry[0])
         for page_index, full_picture in ordered:
-            deadline = first_stop if page_index == 0 else original_deadline
+            deadline = first_stop if page_index == 0 or ky_cover_scan else original_deadline
             original_height = (legacy_heights or {}).get(page_index)
             picture = (full_picture if original_height is None else
                        full_picture.crop((0,0,full_picture.width,original_height)))
@@ -4069,6 +4082,18 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
                     text = " ".join(r[1] for r in ([*(title_rows or []), *(full_title_rows or [])]
                         if full_picture is not picture else full_title_rows or []) if float(r[2]) >= .95)
                     title_ok = bool(re.search(r"8879-TE\b", text) or (re.search(r"990(?:-EZ|-PF)?\b", text) and "returnoforganization" in re.sub(r"\s", "", text.lower())))
+                # A clipped low-confidence title can trigger one full-header
+                # read for KY. Acceptance still requires high-confidence title,
+                # exact EIN/year and independently proved fiscal fields.
+                if (not title_ok and ky_cover_scan and time.monotonic() < deadline
+                        and any(float(r[2]) >= .90 and 'returnoforganization' in re.sub(r'\s', '', r[1].lower()) for r in title_rows or [])):
+                    complete_rows, _ = IRS_HEADER_OCR(full_picture, use_cls=False)
+                    complete_text = ' '.join(r[1] for r in complete_rows or [] if float(r[2]) >= .95)
+                    title_ok = bool(re.search(r'\b990\b', complete_text) and 'returnoforganization' in re.sub(r'\s', '', complete_text.lower()))
+                    if title_ok and time.monotonic() < deadline:
+                        from deployment.ky_scanned_calendar import calendar_period
+                        evidence = calendar_period(sys.modules[__name__], full_picture, complete_rows or [], ein, label, url)
+                        if evidence: return dict(evidence, pdf_page=page_index+1)
                 if not title_ok: continue
                 if time.monotonic() >= deadline: return incomplete("OCR header extraction deadline reached")
                 raw_rows, _ = IRS_HEADER_OCR(picture, use_cls=False)
@@ -4090,6 +4115,9 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
                         if time.monotonic() >= deadline: return incomplete("OCR field extraction deadline reached")
                         raw_rows, _ = IRS_HEADER_OCR(full_picture, use_cls=False)
                     evidence = irs_scanned_period_fields(field_picture, raw_rows or [], IRS_HEADER_OCR, ein, label, url, deadline)
+                    if not evidence and ky_cover_scan and time.monotonic() < deadline:
+                        from deployment.ky_scanned_calendar import calendar_period
+                        evidence = calendar_period(sys.modules[__name__], field_picture, raw_rows or [], ein, label, url)
                     if evidence: return dict(evidence, pdf_page=page_index+1)
             finally:
                 if picture is not full_picture: picture.close()
@@ -4102,7 +4130,7 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
     return incomplete("The same-EIN filing fiscal period was not readable")
 
 
-def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None, *, require_complete: bool = False, scanned_deadline: float | None = None) -> dict:
+def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None, *, require_complete: bool = False, scanned_deadline: float | None = None, ky_cover_scan: bool = False) -> dict:
     """Read only the return/8879 header; support separately positioned PDF text."""
     def incomplete(reason):
         if require_complete: raise FilingPeriodReadIncomplete(reason)
@@ -4161,7 +4189,7 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
                 if time.monotonic() >= deadline: return incomplete("PDF image extraction deadline reached")
                 page = document[page_index]
                 try:
-                    extended_first_header = require_complete and page_index == 0
+                    extended_first_header = require_complete and (page_index == 0 or ky_cover_scan)
                     if extended_first_header:
                         # Preserve PDFium's exact original18-percent raster height,
                         # including its independent pixel rounding for each crop.
@@ -4185,12 +4213,12 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
                   and time.monotonic() < deadline and isinstance(scanned_deadline, (int, float))
                   and deadline < scanned_deadline <= deadline + 14.0 else None)
     evidence = irs_scanned_header_period(scanned_images, ein, label, url, deadline, require_complete=require_complete,
-        legacy_heights=legacy_heights, **({"first_page_deadline": first_stop} if first_stop is not None else {}))
+        legacy_heights=legacy_heights, ky_cover_scan=ky_cover_scan, **({"first_page_deadline": first_stop} if first_stop is not None else {}))
     if first_stop is not None:
         if time.monotonic() >= first_stop: return incomplete("Scanned first-header completion allowance reached")
         if evidence:
             evidence = dict(evidence, scanned_completion_reserve={"maximum_extra_seconds": 14.0,
-                "original_deadline_exceeded": time.monotonic() >= deadline, "page": 1})
+                "original_deadline_exceeded": time.monotonic() >= deadline, "page": evidence.get("pdf_page", 1)})
     return evidence
 
 
@@ -4257,7 +4285,7 @@ def hi_group_return_period(body: bytes, ein: str, label: int, url: str, deadline
     return period
 
 
-def hi_attachment_period(source: str, ein: str, label: int, deadline: float, *, scanned_deadline: float | None = None) -> dict:
+def hi_attachment_period(source: str, ein: str, label: int, deadline: float, *, scanned_deadline: float | None = None, ky_cover_scan: bool = False) -> dict:
     digits = canonical_ein_digits(ein)
     pattern = r'<a\b[^>]*\brel="(/charity/attachments/irs/' + digits + '/' + str(label) + r'/[^"<>]+\.pdf)"[^>]*>([^<]+)'
     links = [(path, title) for path, title in re.findall(pattern, source, re.I) if re.search(r"IRSForm|990|Annual Financial", title, re.I)]
@@ -4272,7 +4300,7 @@ def hi_attachment_period(source: str, ein: str, label: int, deadline: float, *, 
                 cached = HI_DOCUMENT_PERIOD_CACHE.get(key)
             if cached and cached[0] > time.time(): return dict(cached[1])
             try:
-                evidence = form990_pdf_period(body, ein, label, url, deadline, require_complete=True,
+                evidence = form990_pdf_period(body, ein, label, url, deadline, require_complete=True, ky_cover_scan=ky_cover_scan,
                     **({"scanned_deadline": scanned_deadline} if scanned_deadline is not None else {}))
             except FilingPeriodReadIncomplete as exc:
                 if str(exc) != "The same-EIN filing header was not found":
@@ -6633,10 +6661,9 @@ def il_charity_detail_text(body, expected_identifier=""):
     initial = registration_source_date(initial_text)
     if initial_text and initial is None:
         raise ValueError("Illinois registration date could not be parsed")
-    # User-confirmed IL policy (2026-09-26): a loaded, identified Good Standing
-    # record without its annual-report deadline is incomplete and delinquent.
-    # Transport/identity failures never reach this classification.
-    status = (status_from_calendar_date(due) if due else "Delinquent") if raw.casefold() == "good standing" else licensed_charity_status(raw, due)
+    # Loaded, identified Good Standing is retained when the source has no due date.
+    # Malformed dates and incomplete transport/identity still fail above.
+    status = (status_from_calendar_date(due) if due else "Current") if raw.casefold() == "good standing" else licensed_charity_status(raw, due)
     return {"name": lines[0], "identifier": identifier, "ein": ein, "raw_status": raw,
             "status": status, "expiration": due, "initial": initial,
             "date_type": "annual_report_due_date", "initial_label": "Registration Date", "aliases": []}
@@ -6911,7 +6938,7 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                 if selected["expiration"]:
                     result.source_note += f"The state's annual-report due date is {selected['expiration'].isoformat()}. "
                 elif selected["raw_status"].casefold() == "good standing":
-                    result.source_note += "The selected record loaded, but no annual-report due date is displayed. CharityClarity treats this incomplete filing information as Delinquent under its Illinois review policy. This is CharityClarity's interpretation, rather than a delinquency label displayed by the state. "
+                    result.source_note += "The verified record displays Good Standing without an annual-report due date. CharityClarity retains Current; a next filing deadline is not available from this record. "
                 result.source_note += f"CharityClarity reports {result.status}."
     elif state == "GA":
         selected = getattr(result, "_cc_license_record", {})
@@ -7566,7 +7593,9 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
             date_note = (f"Tennessee displays no expiration date. Its complete financial history ends with fiscal period {latest_period.isoformat()}; "
                          "that historical period is retained as context, not treated as a license expiration. "
                          "The reported status follows the state's displayed Active standing.")
+    purpose = str(fields.get('Purpose') or '')[:6000]
     return dict(name=name, identifier=expected_identifier, ein="", aliases=list(dict.fromkeys(aliases)),
+                purpose=purpose,
                 raw_status=raw, status=status, expiration=expiration, date_evidence_note=date_note,
                 initial=initial, initial_label="Registration Date", renewal=None,
                 latest_filed_period=latest_period, latest_filed_period_label="Fiscal Year End",
@@ -7944,6 +7973,10 @@ def final_four_search_candidate_scores(name, ein, state, row):
         # A bounded detail inspection only. The source domicile name must
         # subsequently agree exactly; a prefix never establishes identity.
         candidates.append({"score": 55, "decision": "possible", "reason": "REVIEW_NV_POSSIBLE_DOMICILE"})
+    if state == "TN" and not row.get("ein") and candidates and all(c['decision']=='rejected' for c in candidates):
+        from deployment.gates2930_repairs import tn_historical_prefix
+        if tn_historical_prefix([name, *known_names_for_ein(ein)], row['name']):
+            candidates.append({'score':55,'decision':'possible','reason':'REVIEW_TN_HISTORICAL_NAME'})
     if (state == "AL" and not row.get("ein") and candidates
             and all(c["decision"] == "rejected" for c in candidates)
             and foundation_suffix_review_candidate(name,row["name"])):
@@ -9515,6 +9548,7 @@ def registry_json_request(url, deadline, *, payload=None, form=False, headers=No
     # a third increasingly long read must not restart another waiting cycle.
     timeouts = (15.0, 20.0) if url == DC_LICENSE_API else (15.0, 15.0)
     for attempt, request_timeout in enumerate(timeouts):
+        attempt_started=time.monotonic() if url==DC_LICENSE_API else None
         try:
             result = json.loads(identity_fetch(url, deadline, headers=request_headers, data=data,
                                               request_timeout=request_timeout, max_bytes=6_000_000))
@@ -9523,6 +9557,9 @@ def registry_json_request(url, deadline, *, payload=None, form=False, headers=No
             return result
         except (urllib.error.URLError, TimeoutError) as exc:
             if url == DC_LICENSE_API:
+                from deployment.dc_transport_diagnostics import failure
+                fact=failure(exc,time.monotonic()-attempt_started,deadline-time.monotonic(),attempt+1)
+                log_event('DC_TRANSPORT_FAILURE '+json.dumps(fact,separators=(',',':')))
                 log_event(f"DC public data attempt {attempt + 1}/{len(timeouts)} failed: {type(exc).__name__}; read limit {request_timeout:g}s; remaining {max(0, deadline - time.monotonic()):.1f}s")
             if (attempt == len(timeouts) - 1 or deadline - time.monotonic() < (10 if url == DC_LICENSE_API else 3)
                     or isinstance(exc, urllib.error.HTTPError) and exc.code not in {408, 429, 500, 502, 503, 504}):
@@ -9942,8 +9979,10 @@ def tn_browser_generated_queries(required, generated):
     fallbacks of short legal names are preserved; identity/status are unchanged.
     """
     short_reviewed = any(len(distinctive_match_tokens(name)) < 2 for name in required)
-    return sorted((name for name in generated
-                   if short_reviewed or len(distinctive_match_tokens(name)) >= 2), key=len)
+    from deployment.gates2930_repairs import tn_possessive_plan
+    bounded = sorted((name for name in generated
+                      if short_reviewed or len(distinctive_match_tokens(name)) >= 2), key=len)
+    return tn_possessive_plan(required, bounded)
 
 
 def focused_generated_name_queries(required, generated):
@@ -10107,6 +10146,21 @@ def licensed_charity_identity(org, row, state, deadline):
         row["match"] = {"decision": "accepted", "score": 100, "reason": "USER_CONFIRMED_IDENTITY"}
         row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
         return "accepted"
+    if state == 'TN' and decision['decision']=='rejected' and not row.get('ein'):
+        from deployment.gates2930_repairs import tn_historical_prefix
+        if tn_historical_prefix([org.organization_name,*known_names_for_ein(org.ein)],row['name']):
+            target = normalized_match_name(org.organization_name)
+            purpose = normalized_match_name(row.get('purpose',''))
+            explicit_name = bool(target and (' '+target+' ') in (' '+purpose+' '))
+            proof = (licensed_charity_foreign_ein(org,row,deadline,exact_name=True)
+                     or (licensed_charity_street_evidence(org,row,deadline) if explicit_name else {}))
+            row['address_evidence'] = proof or {'decision':'unavailable','basis':
+                'The historical name is plausible, but its relationship to the entered legal entity is not independently established. Confirm or reject this identity.'}
+            outcome = ('rejected' if proof.get('decision')=='different_ein' else
+                       'accepted' if explicit_name and proof.get('decision')=='corroborated' else 'possible')
+            row['match'] = {'decision':outcome,'score':95 if outcome=='accepted' else 55 if outcome=='possible' else 0,
+                            'reason':'TN_HISTORICAL_FULL_OFFICE_CONFIRMED' if outcome=='accepted' else 'REVIEW_TN_HISTORICAL_NAME'}
+            return outcome
     if state == "IL" and not row.get("ein"):
         # An absent field is not a conflicting EIN, but a short name alone is
         # insufficient. Keep a plausible source record for confirmation when
@@ -10385,7 +10439,10 @@ def select_licensed_charity(org, rows, state, deadline):
                               "CharityClarity will apply the state status rules to any accepted record; the name alone does not establish identity.")
             return None, f"{state} returned a similar name, {possible[0]['name']}, but the complete name and available identity evidence do not confirm this organization."
         return None, ""
-    if state in {"AL", "NC", "NV", "TN"} and any(r.get("match", {}).get("reason") == "ALIAS_IDENTITY_UNCONFIRMED" for r in possible):
+    from deployment.gates2930_repairs import tn_primary_over_alias
+    tn_verified_primary = state == 'TN' and tn_primary_over_alias(
+        org,accepted,possible,conflicts,normalized_match_name,registry_street_key,canonical_ein_digits)
+    if state in {"AL", "NC", "NV", "TN"} and not tn_verified_primary and any(r.get("match", {}).get("reason") == "ALIAS_IDENTITY_UNCONFIRMED" for r in possible):
         return None, f"{state} returned an alternate-name record that could not be tied to the requested organization's EIN and full office address. Review the identity before using its status; a matching city alone does not establish that it is the same organization."
     from deployment.nc_pending_precedence import confirmed_pending
     explicit_nc_pending = ([r for r in accepted if confirmed_pending(r)]
@@ -14235,8 +14292,8 @@ def copy_external_result(org, state: str, external_result):
     # Preserve the master-created Oklahoma suffix review through the external
     # result adapter; otherwise its signed candidate and original PDF disappear.
     review = getattr(external_result, "_cc_identity_review", None)
-    if (state_upper == "OK"
-            and getattr(external_result, "reason_code", "") == "OK_FOUNDATION_SUFFIX_IDENTITY_REVIEW"
+    if ((state_upper == "OK" and getattr(external_result, "reason_code", "") == "OK_FOUNDATION_SUFFIX_IDENTITY_REVIEW"
+             or state_upper == 'WA' and getattr(external_result,'reason_code','')=='WA_CORROBORATED_EIN_CONFLICT_REVIEW')
             and getattr(external_result, "status", "") == "Needs Review"
             and isinstance(review, dict) and review.get("records")):
         result._cc_identity_review = review
@@ -15130,6 +15187,9 @@ def co_status_from_registry_evidence(result, org, body: str = "") -> str:
         getattr(result, "matched_registry_name", "") or ""
     ).strip() and result_registry_name_is_safe(result, getattr(org, "organization_name", "") or "", getattr(org, "ein", "") or ""):
         text = co_registry_evidence_text(result, body)
+        from deployment.gates2930_repairs import co_expired_restriction
+        if co_expired_restriction(text):
+            return "Delinquent"
         if re.search(r"\b(withdrawn?|cancel(?:ed|led)?|closed|terminated|dissolved)\b", text, re.I):
             return "Closed / Withdrawn / Canceled"
         if re.search(r"\b(may\s+not\s+solicit|not\s+authorized|suspend(?:ed)?|revok(?:ed)?|cease\s+and\s+desist)\b", text, re.I):
@@ -15217,7 +15277,10 @@ def co_api_fallback_result(org):
     ))
     raw_status = str(row.get("currentstatus") or "").strip()
     expiration = parse_due_date(str(row.get("expirationdate") or "").split("T", 1)[0])
-    if re.search(r"\b(suspend|revok|notice\s*\d*|may\s+not|not\s+authorized)\b", raw_status, re.I):
+    from deployment.gates2930_repairs import co_expired_restriction
+    if co_expired_restriction(raw_status):
+        status = "Delinquent"
+    elif re.search(r"\b(suspend|revok|notice\s*\d*|may\s+not|not\s+authorized)\b", raw_status, re.I):
         status = "Suspended"
     elif re.search(r"\b(withdraw|cancel|closed)\b", raw_status, re.I):
         status = "Closed / Withdrawn / Canceled"
@@ -15696,7 +15759,9 @@ def search_mi_name_fallback(page, org):
                         clicked_name_score = 450 + checker_score[0]
                 except Exception:
                     pass
-            if clicked_name_score >= 0:
+            from deployment.mi_alias_identity import materially_different,detail_identity,retain_candidate
+            distinct_legal_alias=materially_different(sys.modules[__name__],org.organization_name,clicked_name)
+            if clicked_name_score >= 0 and not distinct_legal_alias:
                 selected_row_text = link.locator("xpath=ancestor::tr[1]").inner_text(timeout=mi_action_timeout(active_page, 2000))
                 # Read status only from the confirmed candidate's row. Michigan
                 # also mentions Pending in page-wide instructions and other rows.
@@ -15736,7 +15801,14 @@ def search_mi_name_fallback(page, org):
             detail_text = re.sub(r"\s+", " ", module.body_text(detail_frame, timeout=mi_action_timeout(active_page, 3500))).strip()
             site_name = module.extract_legal_name(detail_frame) or clicked_name or org.organization_name
             ein_digits = re.sub(r"\D", "", org.ein or "")
-            ein_confirmed = bool(ein_digits and ein_digits in re.sub(r"\D", "", detail_text))
+            alias_identity,alias_values = ('accepted',{})
+            if distinct_legal_alias:
+                alias_identity,alias_values = detail_identity(sys.modules[__name__],org,detail_frame,site_name)
+            if alias_identity == 'rejected':
+                result.source_attempts.append('Excluded selected Michigan legal record: its labeled EIN differs from the entered EIN.')
+                continue
+            ein_confirmed = (alias_identity == 'accepted' if distinct_legal_alias else
+                             bool(ein_digits and ein_digits in re.sub(r"\D", "", detail_text)))
             if not ein_confirmed and not mi_name_fallback_candidate_is_safe(site_name, org.organization_name, org.ein, safe_targets):
                 continue
             if not ein_confirmed and clicked_name_score < 0 and target_name_score(site_name, safe_targets) < 0:
@@ -15754,7 +15826,11 @@ def search_mi_name_fallback(page, org):
             result.source_note = "MI tried EIN search first, then used the public organization-name search when the EIN field returned no exact result."
             result.matched_registry_name = clean_registry_name(site_name)
             result.reason_code = "MATCH_NAME_EXACT" if registry_exact_active_tiebreak(site_name, safe_targets, "Active") else "MATCH_NAME_SAFE"
+            if alias_values:
+                result.matched_registry_identifier=alias_values['identifier']
             result.success = True
+            if distinct_legal_alias and not ein_confirmed:
+                return retain_candidate(sys.modules[__name__],result,alias_values,detail_frame,active_page,deadline)
             return result
         except Exception as exc:
             result.error = f"MI name fallback error: {exc}"
@@ -16968,8 +17044,9 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     result = checker.StateResult(org.organization_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
     result._cc_registration_date_detail = detail_text
     result.matched_registry_name = row_name
-    credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", combined)
-    result.matched_registry_identifier = credential or (credential_match.group(0) if credential_match else "")
+    credential_ids = set(re.findall(r"\bCHR\.\d{7}(?:-EXEMPT)?(?![\w.-])", combined, re.I))
+    valid_credential = credential.upper() if re.fullmatch(r"CHR\.\d{7}(?:-EXEMPT)?", credential, re.I) else ""
+    result.matched_registry_identifier = valid_credential or (next(iter(credential_ids)).upper() if len(credential_ids) == 1 else "")
     exp_date = first_date_near_label(" ".join([row_text, detail_text]), ["Expiration Date", "Expiration", "Expires", "Expire Date"])
     terminal_status_text = " ".join([status_text, status_reason, credential_description])
     if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description]), re.I):
@@ -17048,8 +17125,9 @@ def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str],
     combined = " ".join([row_text, credential, credential_description, status_text, status_reason])
     result = checker.StateResult(org.organization_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
     result.matched_registry_name = row_name
-    credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", combined)
-    result.matched_registry_identifier = credential or (credential_match.group(0) if credential_match else "")
+    credential_ids = set(re.findall(r"\bCHR\.\d{7}(?:-EXEMPT)?(?![\w.-])", combined, re.I))
+    valid_credential = credential.upper() if re.fullmatch(r"CHR\.\d{7}(?:-EXEMPT)?", credential, re.I) else ""
+    result.matched_registry_identifier = valid_credential or (next(iter(credential_ids)).upper() if len(credential_ids) == 1 else "")
     terminal_status_text = " ".join([status_text, status_reason, credential_description])
     if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description]), re.I):
         result.status = "Exempt"
@@ -17593,8 +17671,9 @@ def search_ct(page, org):
                 status_text = re.sub(r"\s+", " ", status_after_expiration.group(1)).strip()
             combined_detail = " ".join([detail_segment, row_text, credential, credential_description, registration_type, status_text, status_reason])
             result.matched_registry_name = matched_name
-            credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", " ".join([credential, row_text, detail_segment]))
-            result.matched_registry_identifier = credential_match.group(0) if credential_match else (checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else "")
+            credential_ids = set(re.findall(r"\bCHR\.\d{7}(?:-EXEMPT)?(?![\w.-])", " ".join([credential, row_text, detail_segment]), re.I))
+            valid_credential = credential.upper() if re.fullmatch(r"CHR\.\d{7}(?:-EXEMPT)?", credential, re.I) else ""
+            result.matched_registry_identifier = valid_credential or (next(iter(credential_ids)).upper() if len(credential_ids) == 1 else "")
             terminal_status_text = " ".join([status_text, status_reason, credential_description, registration_type])
             if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description, registration_type, row_text]), re.I):
                 result.status = "Exempt"
@@ -23703,6 +23782,8 @@ def wi_direct_search_names(org) -> list[str]:
                         "institute", "international", "national", "organization", "university"}):
                 direct.append(value)
                 break
+    from deployment.gates2930_repairs import wi_literal_core_plan
+    direct = wi_literal_core_plan(original, [original, *known_names_for_ein(org.ein)], direct)
     return list(dict.fromkeys(plain_registry_query(value) for value in direct))
 
 
@@ -24969,6 +25050,10 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             body = result.raw_status_text
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
+    from deployment.gates2930_repairs import il_source_identity
+    il_bound = il_source_identity(result, getattr(result, '_cc_license_record', {}), canonical_ein_digits)
+    if il_bound:
+        data['il_source_identity'] = il_bound
     if organization_name:
         data["organization_name"] = organization_name
         result.organization_name = organization_name
@@ -28077,6 +28162,8 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
             session.headers.update({"Accept": "application/json", "Origin": "https://charities-search.ag.ny.gov"})
             selected = None
             selected_detail = None
+            plausible_rows = {}
+            selected_for_review = False
             for query in queries:
                 rows = request_data(session, "RegistrySearch", query, list)
                 candidates = {}
@@ -28108,11 +28195,12 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                         candidates[str(row["orgID"])] = (score["score"], row)
                     elif score["decision"] == "possible":
                         possible = True
+                        plausible_rows[str(row['orgID'])] = row
                 if unrelated_malformed_eins:
                     result.source_attempts.append(
                         f"NY RegistrySearch: excluded {unrelated_malformed_eins} unrelated row(s) with unrecognized EINs")
-                if possible and not candidates:
-                    raise ValueError("New York search returned ambiguous organization identities")
+                # Complete the existing bounded searches before considering a
+                # plausible row; a later exact EIN/name match has priority.
                 if candidates:
                     same_ein = [row for _, row in candidates.values()
                                 if requested_ein and canonical_ein_digits(row.get("ein", "")) == requested_ein]
@@ -28131,6 +28219,11 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                         raise ValueError("New York search returned ambiguous organization identities")
                     selected = strongest[0]
                     break
+            if selected is None and plausible_rows:
+                if len(plausible_rows) != 1:
+                    raise ValueError('New York returned multiple unresolved candidate identities')
+                selected = next(iter(plausible_rows.values()))
+                selected_for_review = True
             if selected is None:
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No qualifying registration record found"
@@ -28146,8 +28239,12 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                                        {"name": detail.get("orgName"), "ein": detail_ein})
             selected_ein = re.sub(r"\D", "", str(selected.get("ein") or ""))
             if (str(detail.get("orgID")) != str(selected["orgID"]) or not detail.get("orgName")
-                    or identity["decision"] != "accepted"
+                    or (identity['decision'] != 'accepted' and not (selected_for_review and identity['decision']=='possible'
+                        and complete_name_identity_key(detail.get('orgName','')) == complete_name_identity_key(selected['orgName'])))
                     or (selected_ein and selected_ein != "000000000" and detail_ein != selected_ein)):
+                raise ValueError("New York detail identity did not confirm the selected organization")
+            result._ny_possible_identity = selected_for_review and identity['decision'] != 'accepted'
+            if detail_ein and requested_ein and detail_ein != requested_ein:
                 raise ValueError("New York detail identity did not confirm the selected organization")
             result._ny_confirmed_detail = {"org_id": str(detail["orgID"]), "ein": detail_ein, "name": detail["orgName"]}
             result.matched_registry_name = detail["orgName"]
@@ -29077,6 +29174,9 @@ def ca_explicit_primary_registry_status(result) -> str:
 
 
 def true_status_from_body(result, body: str) -> str:
+    from deployment.ca_accepted_renewal import preserves
+    if preserves(result):
+        return result.status
     from deployment.ca_nonregistration import preserves_selected_record as preserves_ca_nonregistration
     if preserves_ca_nonregistration(result):
         return "Not Registered"
@@ -29798,6 +29898,9 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         due = parsed_result_date(raw)
         label = "expiration date (including any automatic extension shown)"
     if state == "CA":
+        from deployment.ca_accepted_renewal import preserves
+        if preserves(result):
+            return result.source_note
         due = comment_labeled_date(raw, r"Current Expiration Date") or due
         label = "current expiration date"
     elif state == "VA":
@@ -30248,7 +30351,7 @@ def ky_filed_period_evidence(org, label):
             if bounded > original_stop:
                 scan_stop = bounded
     return irs_period_for_label(org.ein, label, original_stop,
-        **({"scanned_deadline": scan_stop} if scan_stop is not None else {}))
+        **({"scanned_deadline": scan_stop, "ky_cover_scan": True} if scan_stop is not None else {}))
 
 
 def search_ky_strict_snapshot(org):
@@ -34695,6 +34798,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
         best_score = -10000
         best_rank = (-1, -10000, -1)
         best_kind = "weak"
+        selected_detail_text = None
         searched_queries: list[str] = []
         progress = getattr(org, "_cc_wv_progress", {})
         completed_queries = progress.setdefault("completed", [])
@@ -34778,6 +34882,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 saw_result_rows = True
                 progress["saw_result_rows"] = True
             readable_record_rows = 0
+            safe_rows = []
             for record in snapshot:
                 action_timeout(1000)
                 row = record["target"] if public_lookup is not None else rows.nth(record["index"])
@@ -34796,6 +34901,8 @@ def search_wv_precise(page, org, *, public_lookup=None):
                     continue
                 score = target_name_score(registry_name, query_targets)
                 safe_candidate = score >= 450 and (safe_identity(registry_name, safe_targets) or exact_legal_side(registry_name))
+                if safe_candidate:
+                    safe_rows.append((row,registry_id,registry_name,status_text,query_targets))
                 article_candidate = wv_unreviewed_indefinite_article_conflict(
                     org.organization_name, registry_name, org.ein)
                 # Status only breaks a tie after safety and name strength.
@@ -34809,6 +34916,13 @@ def search_wv_precise(page, org, *, public_lookup=None):
             if not readable_record_rows:
                 raise TimeoutError("West Virginia returned neither readable results nor its completed no-record message")
             if best is not None and (best_score >= 450 or best_kind == "article"):
+                from deployment.wv_legal_identity import choose
+                bound = choose(sys.modules[__name__],org,best,safe_rows,public_lookup,deadline)
+                if bound:
+                    best,selected_detail_text,result.identity_evidence=bound
+                    best_kind='safe';best_score=max(best_score,450)
+                    result.identity_anchor='MATCH_WV_DETAIL_LEGAL_DBA'
+                    result.reason_code='MATCH_WV_DETAIL_LEGAL_DBA'
                 # Keep this query eligible for recovery until the selected
                 # record opens. A found row is not a completed detail read.
                 break
@@ -34851,7 +34965,9 @@ def search_wv_precise(page, org, *, public_lookup=None):
             return result
 
         row, registry_id, registry_name, row_status, selected_targets = best
-        if public_lookup is not None:
+        if selected_detail_text is not None:
+            detail_text = selected_detail_text
+        elif public_lookup is not None:
             detail_text = public_lookup.detail(row, registry_id)
         else:
             link = row.locator("a").first
@@ -35117,6 +35233,10 @@ def wa_apply_detail_master(result, body: str):
     result.reason_code = ""
     result.matched_registry_identifier = ""
     if not requested or requested != observed:
+        if requested and observed and getattr(result,'_wa_name_conflict',None):
+            from deployment.wa_conflict_review import build
+            reviewed=build(sys.modules[__name__],result,body)
+            if reviewed is not None:return reviewed
         result.status = "Unable to Confirm"
         if len(requested) == 9 and len(observed) == 9:
             result.reason_code = "WA_SOURCE_EIN_CONFLICT"
@@ -37840,12 +37960,14 @@ def attach_identity_review(data, context):
         return
     rows = []
     from deployment.group_identity_review import allowed as group_review_allowed
+    from deployment.wa_conflict_review import allowed as wa_conflict_allowed
     for row in context["records"]:
         outcome = row.get("_identity_outcome")
         if outcome not in {"accepted", "possible", "conflict"}:
             continue
         if row.get("ein") and canonical_ein_digits(row["ein"]) != canonical_ein_digits(data["ein"]):
             if not ((data['state']=='NJ' and nj_conflict_review_allowed(row,data['organization_name'],data['ein']))
+                    or (data['state']=='WA' and wa_conflict_allowed(row,data['organization_name'],data['ein']))
                     or group_review_allowed(sys.modules[__name__],row,data['organization_name'],data['ein'])):
                 continue
         clean = {key: row.get(key, "") for key in
@@ -37854,13 +37976,16 @@ def attach_identity_review(data, context):
         snapshot_ref = matching_reference({**clean, 'state': data['state'], 'ein': data['ein']}, REFERENCES.get())
         if snapshot_ref:
             clean['evidence_url'] = snapshot_ref['url']
+        if data['state']=='WA' and wa_conflict_allowed(row,data['organization_name'],data['ein']):
+            clean['wa_ein_conflict']=row['wa_ein_conflict']
+            clean['interpreted_status']=row.get('status','Unable to Confirm')
         if data['state']=='NJ' and row.get('nj_ein_conflict') is True:
             clean['nj_ein_conflict']=True
         if group_review_allowed(sys.modules[__name__],row,data['organization_name'],data['ein']):
             clean['group_identity'] = row['group_identity']
             clean['interpreted_status'] = row.get('status','Unable to Confirm')
         clean["suggested"] = row.get("suggested") is True
-        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY", "OR"}:
+        if data["state"] in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY", "OR", "MI"}:
             # Keep the master interpretation of complete state evidence in the
             # signed snapshot. Identity acceptance cannot substitute a generic
             # Active label for a filing-history or charity-scope decision.
@@ -37913,11 +38038,13 @@ def identity_review_wi_status(row):
 
 
 def identity_review_state_status(state, row):
+    if state == 'WA' and row.get('wa_ein_conflict'):
+        return row.get('interpreted_status','Unable to Confirm')
     if state == "CA":
         from deployment.ca_nonregistration import review_status
         if review_status(row):
             return "Not Registered"
-    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY", "OR"}:
+    if state in {"AL", "NC", "NV", "TN", "AR", "ND", "KS", "SC", "NY", "ME", "CA", "CT", "OK", "NJ", "NH", "KY", "OR", "MI"}:
         status = row.get("interpreted_status")
         return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
             "Pending", "Suspended", "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",
@@ -37944,7 +38071,7 @@ def identity_review_state_status(state, row):
         if category == "Exempt Charity" and status in {"Current", "Upcoming Filing"}:
             return "Exempt"
     if state == "IL" and raw.casefold() == "good standing":
-        return status_from_calendar_date(expiry) if expiry else "Delinquent"
+        return status_from_calendar_date(expiry) if expiry else "Current"
     return status
 
 
@@ -38043,6 +38170,18 @@ def resolve_identity_review(payload, email, device):
             comments=note+f"User confirmed applicability of the related record. Entered EIN {base['ein']}; "
                 +f"registry EIN {chosen['ein']}. State record: {chosen['raw_status']}; interpreted status: {status}. "
                 +"Neither EIN nor the state's status was changed by the identity decision.")
+    elif base['state']=='WA' and len(accepted)==1 and accepted[0].get('wa_ein_conflict'):
+        from deployment.wa_conflict_review import allowed
+        chosen=accepted[0]
+        if not allowed(chosen,base['organization_name'],base['ein']):
+            raise ValueError('The Washington conflict proof no longer binds the selected record.')
+        status=identity_review_state_status('WA',chosen)
+        data.update(status=status,success=status not in {'Unable to Confirm','Needs Review'},
+            matched_registry_name=chosen['name'],matched_registry_identifier=chosen['identifier'],
+            source_url=chosen['url'],raw_status_text=chosen['raw_status'],
+            computed_due_date=chosen.get('expiration',''),verified_registry_ein=chosen['ein'],
+            comments=note+f"User confirmed the record despite the EIN discrepancy: entered {base['ein']}; registry {chosen['ein']}. "
+                +f"The source status remains {chosen['raw_status']}; interpreted as {status}. Neither EIN was changed.")
     elif base["state"] == "NJ" and len(accepted)==1 and nj_conflict_review_allowed(accepted[0],base['organization_name'],base['ein']):
         chosen=accepted[0];status=identity_review_state_status('NJ',chosen)
         data.update(status=status,success=status not in {'Unable to Confirm','Needs Review'},

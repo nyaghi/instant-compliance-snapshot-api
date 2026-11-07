@@ -376,17 +376,19 @@ def wa_name_fallback_result_link(page, org: Organization):
     # The completed public response supplies FEINs before any detail click.
     # A related-name result cannot replace the requested EIN. A partial page
     # or missing FEIN remains incomplete, never a no-registration finding.
-    decision = wa_name_response_identity(wa_search_tracker_state(page), org.ein)
+    decision = wa_name_response_identity(wa_search_tracker_state(page), org.ein, org.organization_name)
     if decision == "NO_VALUE":
         return decision
     if not isinstance(decision, dict):
         return None
+    if decision.get('_cc_ein_conflict') is True:
+        page._cc_wa_name_conflict=decision
     name = normalize_spaces(decision['EntityName'])
     links = page.get_by_role('link', name=name, exact=True)
     return links if links.count() == 1 and links.is_visible() else None
 
 
-def wa_name_response_identity(tracker, ein):
+def wa_name_response_identity(tracker, ein, name=''):
     if (not tracker.get('completed') or tracker.get('pending') or tracker.get('failed')
             or not 200 <= int(tracker.get('lastStatus') or 0) < 300):
         return None
@@ -407,6 +409,11 @@ def wa_name_response_identity(tracker, ein):
             if not row.get('EntityName') or not re.fullmatch(r'\d{2}-?\d{7}', str(row.get('FEINNumber') or '')):
                 return None
         matching = [row for row in rows if re.sub(r'\D', '', row['FEINNumber']) == requested]
+        if not matching and name:
+            from deployment.wa_conflict_review import possible
+            candidates=[r for r in rows if possible(name,r['EntityName'],requested,r['FEINNumber'])]
+            if len(candidates)==1:return {**candidates[0],'_cc_ein_conflict':True}
+            if candidates:return None
         return matching[0] if len(matching) == 1 else ('NO_VALUE' if not matching else None)
     except (ValueError, TypeError):
         return None
@@ -774,6 +781,7 @@ def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_
             detail_text = (read_wa_detail(page, result) if callable(globals().get("read_wa_detail"))
                            else page.locator("body").inner_text(timeout=15000))
             if callable(globals().get("apply_wa_detail_to_result")):
+                result._wa_name_conflict=getattr(page,'_cc_wa_name_conflict',None)
                 return apply_wa_detail_to_result(result, detail_text)
             status_text = extract_label(detail_text, "Status")
             renewal_text = (

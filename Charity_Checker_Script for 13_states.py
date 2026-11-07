@@ -950,6 +950,14 @@ def search_co(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        from deployment.gates2930_repairs import co_expired_restriction
+        expired_restriction = co_expired_restriction(body)
+        if expired_restriction:
+            result.raw_status_text = expired_restriction
+            result.status = "Delinquent"
+            result.source_note = "Colorado explicitly marks the registration Expired and says it may not solicit."
+            result.success = True
+            return result
         adverse_match = re.search(
             r"\b(revoked|suspended|may\s+not\s+solicit|may\s+not\s+raise\s+funds|may\s+not\s+operate|not\s+authorized\s+to\s+solicit)\b",
             body,

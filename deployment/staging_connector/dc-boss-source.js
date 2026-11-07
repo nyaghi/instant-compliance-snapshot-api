@@ -183,7 +183,14 @@ const CCDCSource=(()=>{
    end=Math.min(d.deadline_schema===1?d.expires_at*1000:start+60000,Date.now()+activeBudgetMs,d.expires_at*1000);if(rail)rail.job.activeExpiresAt=end;
    owned=await limited(CCSourceRail.create(rail,{url:SEARCH,...(rail?.options||{type:'popup',focused:false,width:1280,height:1000})}),'create',w=>chrome.windows.remove(w.id).catch(()=>{}));tab=owned?.tabs?.[0];if(rail)rail.windowId=owned.id;
    if(!Number.isInteger(owned?.id)||!Number.isInteger(tab?.id))throw Error('owned_window_unavailable');
-   await limited(chrome.debugger.attach({tabId:tab.id},'1.3'),'attach',()=>chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));attached=true;await command('Page.enable');
+   await limited(chrome.debugger.attach({tabId:tab.id},'1.3'),'attach',()=>chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));attached=true;
+   // Initialization may finish after Chrome's generic three-second timer.
+   // Spend only this capture's remaining allowance, reserving twenty seconds
+   // when available for source search, exact binding and the original image.
+   // If creation already consumed that reserve, preserve the prior three-second
+   // command allowance without taking the final five-second capture reserve.
+   const enableReserve=Math.min(20000,Math.max(5000,end-Date.now()-3000));
+   await command('Page.enable',{},enableReserve);
    let phase='type',meta=null;
    while(Date.now()<end-3000){
     let observed;

@@ -21,7 +21,7 @@ class KYScanCompletion(unittest.TestCase):
  def test_thirty_bound_contexts_keep_retrieval14_and_first_scan28(self):
   for i in range(30):
    self.org=c.checker.Organization('Period Control '+str(i),str(120000000+i))
-   _,args=self.call(ein=str(120000000+i));self.assertEqual(args.args,(self.org.ein,2025,24));self.assertEqual(args.kwargs,{'scanned_deadline':38})
+   _,args=self.call(ein=str(120000000+i));self.assertEqual(args.args,(self.org.ein,2025,24));self.assertEqual(args.kwargs,{'scanned_deadline':38,'ky_cover_scan':True})
  def test_other_state_identity_mode_and_unowned_context_keep_legacy_call(self):
   for kw in [{'state':'HI'},{'ein':'999999999'},{'name':'Different Name'},{'mode':'sales'},{'trial':False},{'none':True},{'parent':float('nan')},{'parent':float('inf')}]:
    with self.subTest(kw=kw):
