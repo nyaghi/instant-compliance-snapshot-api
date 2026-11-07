@@ -2,7 +2,7 @@ import copy,json,sys,time,unittest
 from pathlib import Path
 from datetime import date
 from types import SimpleNamespace as NS
-from unittest.mock import Mock,patch
+from unittest.mock import Mock,MagicMock,patch
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 import registry_snapshot_server as m
 from deployment import gates3133_repairs as g,short_alias_identity as identity,pa_detail_evidence as pa,co_budget
@@ -36,7 +36,7 @@ class Repairs(unittest.TestCase):
   for raw,want in [('Expired - may not solicit as of 08/16/2026','Suspended'),('Not authorized to solicit','Suspended'),('Current',''),('Withdrawn','Closed / Withdrawn / Canceled')]:
    r=NS(state='CO',ein=org.ein,matched_registry_name='TEACH FOR ALL INC',raw_status_text=raw)
    with self.subTest(raw=raw):self.assertEqual(m.co_status_from_registry_evidence(r,org),want)
-  page=Mock();page.locator.return_value.inner_text.return_value='Name: Teach for All Inc.\nStatus: Expired - may not solicit as of 08/16/2026'
+  page=MagicMock();page.locator.return_value.inner_text.return_value='Name: Teach for All Inc.\nStatus: Expired - may not solicit as of 08/16/2026'
   with patch.object(m.checker,'find_visible_input',return_value=Mock()),patch.object(m.checker,'safe_wait_for_network_idle'),patch.object(m.checker,'fast_sleep'):
    self.assertEqual(m.checker.search_co(page,org).status,'Suspended')
 

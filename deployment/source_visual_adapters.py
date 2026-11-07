@@ -1292,12 +1292,12 @@ def capture_owned_md_page(run,result,page,context,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:791:52:return',None)
-  stop=time.monotonic()+min(30.0,remaining)
+  stop=time.monotonic()+min(30.0,remaining);recovery_stop=min(stop+5,deadline-1)
   detail=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:793:9:new_page',context.new_page,locals());detach_observer=observe_visual_readiness(detail,fact);detail.set_extra_http_headers({});begin=time.perf_counter();fact['phase']='navigation';fact['waiting_for']='document_domcontentloaded'
   response=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:794:11:goto',detail.goto,locals(), hint['url'],referer=result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
   fact['waiting_for']=''
   fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
-  if response is None or response.status!=200:fact['outcome']='detail_navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:797:91:return',None)
+  if response is None or response.status!=200:fact['detail_http_status']=getattr(response,'status',None);fact['outcome']='detail_navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:797:91:return',None)
   def same_record():
    actual=urlsplit(detail.url)
    return actual.scheme=='https' and actual.hostname=='onestop.md.gov' and actual.path==u.path and not actual.username and not actual.password
@@ -1360,6 +1360,12 @@ def capture_owned_md_page(run,result,page,context,deadline):
   if detail is not None:
    try:workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:857:7:close',detail.close,locals())
    except Exception:fact['owned_page_close_error']=True
+  # Recover only access failures, never a rejected identity/status or blocked view.
+  if (not run.documents and 'recovery_stop' in locals() and
+      ((fact.get('outcome')=='detail_navigation_rejected' and (fact.get('detail_http_status') or 0)>=500)
+       or (fact.get('phase')=='navigation' and fact.get('error_type')=='TimeoutError'))):
+   from deployment.md_listing_evidence import capture as capture_md_listing
+   capture_md_listing(run,result,hint,context,recovery_stop)
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
 
 def capture_owned_md_empty(run,result,context,deadline):

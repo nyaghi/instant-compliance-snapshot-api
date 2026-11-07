@@ -916,15 +916,20 @@ def search_ca(page, org: Organization) -> StateResult:
 
 def search_co(page, org: Organization) -> StateResult:
     from deployment.co_budget import timeout as co_timeout
-    url = "https://www.coloradosos.gov/ccsa/pages/search/basic.xhtml"
+    query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
+    # A one-word name belongs in the charity-name index, not the basic index
+    # that also searches individuals, document numbers and other registrants.
+    name_only = not digits_only(org.ein) and len(query.split()) == 1
+    url = "https://www.coloradosos.gov/ccsa/pages/search/" + ("advanced.xhtml" if name_only else "basic.xhtml")
     result = StateResult(org.organization_name, org.ein, "CO", STATUS_UNKNOWN, url)
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=co_timeout(45000))
         safe_wait_for_network_idle(page, timeout=co_timeout(20000))
         fast_sleep(0.5)
 
-        query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
-        input_box = find_visible_input(page, [
+        if name_only:
+            page.get_by_role("radio", name="Charitable organization", exact=True).check(timeout=co_timeout(3000))
+        input_box = find_visible_input(page, ['input[id="advancedSearchForm:orgName"]'] if name_only else [
             'input[name*="search" i]',
             'input[id*="search" i]',
             'input[type="text"]',
@@ -936,8 +941,10 @@ def search_co(page, org: Organization) -> StateResult:
 
         input_box.fill("",timeout=co_timeout(30000))
         input_box.fill(query,timeout=co_timeout(30000))
-        page.keyboard.press("Enter")
-        safe_wait_for_network_idle(page, timeout=co_timeout(25000))
+        # Bind the wait to this form submission. The generic fast network-idle
+        # helper clips its timeout and can return during the new navigation.
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=co_timeout(25000)):
+            page.keyboard.press("Enter")
         fast_sleep(0.75)
 
         body = page.locator("body").inner_text(timeout=co_timeout(5000))
