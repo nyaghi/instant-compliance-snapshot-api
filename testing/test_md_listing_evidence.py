@@ -21,6 +21,9 @@ class ListingEvidence(unittest.TestCase):
   if mutation=='link':table=table.replace('62f96f50a51891019eb6c5b7','a'*24)
   if mutation=='duplicate':table+=table
   fixture='<html><body><input id="filter-'+m.FIELD+'" value="22-3087809"><div role="status">1 record</div>'+table+(' Verify you are human' if mutation=='blocked' else '')+'</body></html>'
+  if mutation=='slow':
+   import json
+   fixture='<html><body>Loading...<script>setTimeout(()=>document.body.innerHTML='+json.dumps(fixture.replace('<html><body>','').replace('</body></html>',''))+',7000)</script></body></html>'
   ctx=self.browser.new_context();requests=[]
   ctx.route('**/*',lambda route:(requests.append(route.request.url),route.fulfill(status=504 if mutation=='http' else 200,content_type='text/html',body=fixture)))
   result=dict(state='MD',ein='223087809',success=True,status='Current',matched_registry_name='International Research and Exchanges Board, Inc.',matched_registry_identifier='23836',source_url=m.LIST)
@@ -50,6 +53,8 @@ class ListingEvidence(unittest.TestCase):
     r,_=self.execute(mutation);self.assertEqual(r.documents,[])
  def test_expired_deadline_does_not_navigate(self):
   r,requests=self.execute(remaining=0);self.assertEqual(requests,[]);self.assertEqual(r.documents,[])
+ def test_observed_listing_loading_boundary_can_finish_within_ten_seconds(self):
+  r,requests=self.execute('slow',remaining=10);self.assertEqual(len(r.documents),1);self.assertLess(r.visual_adapter_facts[0]['total_ms'],10000)
 
 class RecoveryAdmission(unittest.TestCase):
  run_case=md_controls.MarylandFinishTests.run_case
@@ -58,6 +63,6 @@ class RecoveryAdmission(unittest.TestCase):
    with self.subTest(opts=opts),patch.object(m,'capture') as capture:
     self.run_case(**opts)
     self.assertEqual(capture.call_count,int(eligible))
-    if eligible:self.assertLessEqual(capture.call_args.args[-1],135)
+    if eligible:self.assertLessEqual(capture.call_args.args[-1],140)
 
 if __name__=='__main__':unittest.main()

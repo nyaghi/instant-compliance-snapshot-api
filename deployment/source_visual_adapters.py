@@ -1292,7 +1292,7 @@ def capture_owned_md_page(run,result,page,context,deadline):
  try:
   remaining=deadline-time.monotonic()-1
   if remaining<3:fact['outcome']='deadline_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_md_page:791:52:return',None)
-  stop=time.monotonic()+min(30.0,remaining);recovery_stop=min(stop+5,deadline-1)
+  stop=time.monotonic()+min(30.0,remaining);recovery_stop=min(stop+10,deadline-1)
   detail=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:793:9:new_page',context.new_page,locals());detach_observer=observe_visual_readiness(detail,fact);detail.set_extra_http_headers({});begin=time.perf_counter();fact['phase']='navigation';fact['waiting_for']='document_domcontentloaded'
   response=workflow_call('deployment/source_visual_adapters.py:capture_owned_md_page:794:11:goto',detail.goto,locals(), hint['url'],referer=result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
   fact['waiting_for']=''

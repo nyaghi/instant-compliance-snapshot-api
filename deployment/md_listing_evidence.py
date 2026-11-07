@@ -38,9 +38,9 @@ def capture(run,result,hint,context,stop):
  u=urlsplit(hint.get('url',''))
  if (u.scheme!='https' or u.netloc!='onestop.md.gov' or u.query or u.fragment
      or not re.fullmatch(r'/detail_views/62f3e17b7f7e3200016a4b6c/entry/[a-f0-9]{24}',u.path)):return
- start=time.monotonic();stop=min(stop,start+6);page=None
+ start=time.monotonic();stop=min(stop,start+10);page=None
  fact={'adapter':'MD-selected-listing-after-detail-failure','outcome':'not_started','capture_ms':0};run.visual_adapter_facts.append(fact)
- def timeout(reserve=0,cap=6):
+ def timeout(reserve=0,cap=10):
   left=stop-time.monotonic()-reserve
   if left<=0:raise TimeoutError('MD_listing_capture_deadline')
   return max(1,int(min(cap,left)*1000))
