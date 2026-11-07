@@ -1,0 +1,17 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const context={URL,window:{},document:{createElement:tag=>({tag,children:[],appendChild(x){this.children.push(x)},addEventListener(){},setAttribute(k,v){this[k]=v}})}};
+vm.createContext(context);vm.runInContext(fs.readFileSync('web-staging/identity-review.js','utf8'),context);
+const ui=context.window.CCIdentityReview;
+const base=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+assert.equal(base.state,'NM');assert.equal(base.status_reason,'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR');
+assert.equal(ui.statusLabel(base),'Site Not Reachable');
+const box={children:[],appendChild(x){this.children.push(x)}};
+ui.render(box,base,()=>{},()=>{});
+const texts=n=>[n.textContent||'',...(n.children||[]).flatMap(texts)];
+assert(texts(box).includes('Site Not Reachable'));assert(!texts(box).includes('Review required'));
+for(const state of ['NC','NV','MS','TN','CA'])assert.equal(ui.statusLabel({...base,state}),'Review required');
+for(const status_reason of ['NY_CONNECTOR_TAB_READY_TIMEOUT','NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR',''])assert.equal(ui.statusLabel({...base,status_reason}),'Review required');
+assert.equal(ui.statusLabel({...base,identity_review:{candidates:[{}]}}),'Confirm match');
+assert.equal(ui.statusLabel({...base,status:'Current'}),'Current');
+assert.equal(ui.statusLabel({state:'OR',status:'Site Not Reachable',reason_code:'OR_SOURCE_UNREACHABLE'}),'Site Not Reachable');
+console.log('Real server response -> UI status badge and explanation pass; 11 negative/retained controls pass.');
