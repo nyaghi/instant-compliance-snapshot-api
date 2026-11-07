@@ -2,6 +2,8 @@
 import json
 import re
 import time
+import base64
+import hashlib
 from datetime import date
 from urllib.parse import urlencode
 
@@ -122,3 +124,26 @@ def capture_renewal(page,run,proof,stop,fact):
     before=len(run.documents)
     run.document(url,raw,'image',text[:20000],note='Original accepted same-EIN RRF-1, through its complete accounting-period fields; accompanies the retained registration header.')
     fact['renewal_capture']='captured' if len(run.documents)>before else 'archive_rejected'
+    if len(run.documents)>before:
+        run.ca_renewal_image_binding=(hashlib.sha256(raw).hexdigest(),dict(proof))
+
+
+def pair_originals(run,ordered,row):
+    """Join only the two originals proven in this selected capture, in source order."""
+    binding=getattr(run,'ca_renewal_image_binding',None)
+    if not binding:return ordered
+    digest,proof=binding
+    name=row.get('matched_registry_name') or row.get('name')
+    identifier=str(row.get('matched_registry_identifier') or row.get('identifier') or '')
+    if (run.ein!=proof['ein'] or name!=proof['name'] or identifier!=proof['registration']):return ordered
+    hint=getattr(run,'source_detail_hints',{}).get(identifier,{})
+    if hint.get('accepted_renewal')!=proof:return ordered
+    renewal=[d for d in ordered if d[2]=='image' and d[0]==proof['url'] and hashlib.sha256(d[1]).hexdigest()==digest]
+    header=[d for d in ordered if d[2]=='image' and d[0]==hint.get('url') and name in d[3]
+        and re.search(r'(?<!\w)'+re.escape(identifier)+r'(?!\w)',d[3])]
+    if len(renewal)!=1 or len(header)!=1:return ordered
+    a,b=header[0],renewal[0]
+    raw=json.dumps([base64.b64encode(d[1]).decode('ascii') for d in [a,b]]).encode()
+    if len(raw)>3_000_000:return ordered
+    return [(a[0],raw,'image_pages',(a[3]+'\n'+b[3])[:20000],max(a[4],b[4]),
+        'Two original source images: selected registration header followed by its same-EIN accepted RRF-1 renewal.')]

@@ -74,11 +74,41 @@ class Repairs(unittest.TestCase):
   def detail(q):raise AssertionError('Unrelated EIN must not reach detail')
   r=m.search_ny_direct(m.checker.Organization('World Vision','951922279'),registry_search_provider=search,registry_detail_provider=detail)
   self.assertEqual(r.status,m.checker.STATUS_NOT_REGISTERED)
+ def test_ny_original_detail_before_later_query_replaces_grid(self):
+  calls=[];grid=[]
+  row={'orgID':'11-44-30','orgName':'WORLD VISION INTERNATIONAL','ein':None}
+  def search(q):
+   calls.append(q);grid[:]=[row] if q.get('orgName')=='World Vision' else []
+   return m.NYConnectorResponse(list(grid))
+  def detail(q):
+   self.assertTrue(any(r['orgID']==q['orgID'] for r in grid),'Detail lost its owning search grid')
+   calls.append(q)
+   return m.NYConnectorResponse(row|{'regStatute':'7A','documents':{'Annual Filing for Charitable Organizations':[]}})
+  with patch.object(m,'known_names_for_ein',side_effect=lambda ein:['WORLD VISION, INC.'] if m.canonical_ein_digits(ein)=='951922279' else []):
+   r=m.search_ny_direct(m.checker.Organization('World Vision','951922279'),registry_search_provider=search,registry_detail_provider=detail)
+  self.assertEqual(r.status,'Needs Review',r.source_note)
+  self.assertEqual(sum('orgID'in q for q in calls),1)
+  self.assertTrue(any('orgName'in q for q in calls[calls.index({'orgID':'11-44-30'})+1:]))
  def ca_fixture(self):
   entity={'id':'5301538','entityName':'LUTHERAN WORLD RELIEF INC.','fein':'132574963','entityStatus':'Listed'}
   reg={'id':'1026699','registrationNumber':'078450','registrationType':'Charitable Organization','registrationStatus':'Registered','reportingStatus':'Current','currentExpirationDate':'2025-09-30','complianceStatus':[]}
   row={'id':'0JjR16KMjbKuZsx9OeyzC','relatedEntity':{'id':'5301538'},'relatedRegistration':{'id':'1026699'},'stateCharityRegistrationNumber':'078450','fein':'13-2574963','officialName':'LUTHERAN WORLD RELIEF INC.','isShortFiscalYear':'No','countOfOpenDeficiencies':0,'newReportingStatus':'Current','newRegistrationStatus':'Registered','formType':'Form RRF-1','status':'Accepted','registrationMethod':'Renewal','fullAccountingPeriodBeginning':'2024-10-01','fullAccountingPeriodEnding':'2025-09-30','recievedDate':'2026-09-01'}
   return entity,reg,row
+ def test_ny_later_confirmed_identity_still_wins(self):
+  loose={'orgID':'11-44-30','orgName':'WORLD VISION INTERNATIONAL','ein':None}
+  exact={'orgID':'12-34-56','orgName':'WORLD VISION INC','ein':'951922279'}
+  grid=[];calls=[]
+  def search(q):
+   grid[:]=[] if 'ein'in q else [loose if q['orgName']=='World Vision' else exact]
+   return m.NYConnectorResponse(list(grid))
+  def detail(q):
+   self.assertEqual(grid[0]['orgID'],q['orgID']);calls.append(q)
+   return m.NYConnectorResponse(grid[0]|{'regStatute':'EXEMPT','documents':{}})
+  with patch.object(m,'known_names_for_ein',side_effect=lambda ein:['WORLD VISION, INC.'] if m.canonical_ein_digits(ein)=='951922279' else []):
+   r=m.search_ny_direct(m.checker.Organization('World Vision','951922279'),registry_search_provider=search,registry_detail_provider=detail)
+  self.assertEqual(r.status,'Exempt',r.source_note)
+  self.assertEqual(r.matched_registry_identifier,'951922279')
+  self.assertEqual(len(calls),2)
  def test_ca_bound_accepted_renewal(self):
   e,r,a=self.ca_fixture();self.assertIsNotNone(ca.accepted_period(m,e,r,[a],e['fein']))
   for change in [{'status':'Pending'},{'status':'Rejected'},{'fein':'123456789'},{'relatedRegistration':{'id':'wrong'}},{'officialName':'OTHER CHARITY'},{'fullAccountingPeriodBeginning':'2025-10-01'},{'countOfOpenDeficiencies':1},{'isShortFiscalYear':'Yes'}]:

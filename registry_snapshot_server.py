@@ -8842,7 +8842,9 @@ def final_four_clean_evidence(payload, query):
             return
         if type(value) is int and -1 <= value <= 10000:
             return
-        if isinstance(value, str) and len(value) <= 1500:
+        if (isinstance(value, str) and len(value) <= (6000
+                if state == "TN" and query.get("operation") == "detail" and depth == 2 and field == "Purpose"
+                else 1500)):
             return
         maximum = 10000 if state == "NV" and query.get("operation") == "search" and field == "rows" and depth == 1 else 500
         if isinstance(value, list) and len(value) <= maximum:
@@ -8882,7 +8884,7 @@ def final_four_clean_evidence(payload, query):
             return json.loads(json.dumps(payload))
         allowed = ({"Name", "Registration #", "Status", "Expiration Date", "Extension End Date", "Last Application Date", "Street", "City", "State", "Zip", "profile_url"} if state == "NC" else
                    {"Entity Name", "NV Business ID", "Entity Status", "Entity Type", "FEIN", "Solicits Charitable Contribution?", "IRS Registered Name", "Campaign Name", "Formation Date in Nevada", "Annual Renewal Due Date/Expiration Date"} if state == "NV" else
-                   {"Name", "CO Number", "Status", "Registration Date", "Expiration Date", "Address", "financial_periods", "financial_count", "financial_history_absent"})
+                   {"Name", "CO Number", "Status", "Registration Date", "Expiration Date", "Address", "financial_periods", "financial_count", "financial_history_absent", "Purpose"})
         fields = payload.get("fields")
         identity_key = {"NC": "Registration #", "NV": "NV Business ID", "TN": "CO Number"}[state]
         if state == "NV" and re.fullmatch(r"E\d{7,14}-\d", str(query.get("identifier", ""))):
@@ -15789,7 +15791,15 @@ def search_mi_name_fallback(page, org):
                     result.success = True
                     result.error = ""
                     return result
-            link.click(timeout=mi_action_timeout(active_page, 3000), no_wait_after=True)
+            if distinct_legal_alias:
+                # The official link's inline click targets a new window. Reuse
+                # Michigan's existing owned-page postback helper for this detail.
+                href = link.get_attribute("href", timeout=mi_action_timeout(active_page, 1000)) or ""
+                if not re.fullmatch(r"javascript:__doPostBack\('[A-Za-z0-9_$]+',''\)", href):
+                    return incomplete("Michigan selected detail has no supported public postback.")
+                module.click_result_link(frame, link, href)
+            else:
+                link.click(timeout=mi_action_timeout(active_page, 3000), no_wait_after=True)
             try:
                 active_page.wait_for_load_state("domcontentloaded", timeout=mi_action_timeout(active_page, 3500))
             except Exception:
@@ -28163,6 +28173,7 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
             selected = None
             selected_detail = None
             plausible_rows = {}
+            plausible_details = {}
             selected_for_review = False
             for query in queries:
                 rows = request_data(session, "RegistrySearch", query, list)
@@ -28219,11 +28230,18 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                         raise ValueError("New York search returned ambiguous organization identities")
                     selected = strongest[0]
                     break
+                if possible and len(plausible_rows)==1 and not plausible_details:
+                    # The owned browser can open only the current search's row.
+                    # Retain one original detail before later bounded queries
+                    # replace that grid; a later confirmed match still wins.
+                    row=next(iter(plausible_rows.values()))
+                    plausible_details[str(row['orgID'])]=request_data(session,'RegistryDetail',{'orgID':row['orgID']},dict)
             if selected is None and plausible_rows:
                 if len(plausible_rows) != 1:
                     raise ValueError('New York returned multiple unresolved candidate identities')
                 selected = next(iter(plausible_rows.values()))
                 selected_for_review = True
+                selected_detail=plausible_details.get(str(selected['orgID']))
             if selected is None:
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No qualifying registration record found"
@@ -30342,7 +30360,8 @@ def ky_filed_period_evidence(org, label):
         from math import isfinite
         run, parent = CURRENT.get(), DEADLINE.get()
         if (run is not None and run.state == "KY" and run.ein == canonical_ein_digits(org.ein)
-                and run.name == org.organization_name and isinstance(parent, (int, float)) and isfinite(parent)):
+                and run.name == getattr(org, "original_organization_name", org.organization_name)
+                and isinstance(parent, (int, float)) and isfinite(parent)):
             original_stop = min(original_stop, parent - 1.0)
             if original_stop <= started:
                 return {"ein": canonical_ein_digits(org.ein), "tax_year_label": label,

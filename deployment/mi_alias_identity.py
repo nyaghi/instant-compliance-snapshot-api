@@ -4,7 +4,9 @@ import time
 
 
 def materially_different(master,entered,selected):
-    return master.complete_name_identity_key(entered)!=master.complete_name_identity_key(selected)
+    # An omitted apostrophe is ordinary registry punctuation, not a new entity.
+    key=lambda value:master.complete_name_identity_key(re.sub(r"['’]",'',value))
+    return key(entered)!=key(selected)
 
 
 def detail_identity(master,org,frame,expected_name):

@@ -732,6 +732,9 @@ class CaptureRun:
             negative=completed_negative_result(row)
             # Only source visuals are eligible; no text/JSON substitute is permitted.
             ordered=sorted((d for d in self.documents if d[2] in {'image','image_pages','source_pdf'}),key=lambda d:({'image':3,'image_pages':3,'source_pdf':2}[d[2]],d[4]),reverse=True)
+            if self.state=='CA' and not negative:
+                from deployment.ca_accepted_renewal import pair_originals
+                ordered=pair_originals(self,ordered,row)
             if self.state=='MA' and not negative:
                 from deployment.ma_view_more_evidence import select
                 from deployment.ma_withheld_evidence import bound as ma_withheld_bound
