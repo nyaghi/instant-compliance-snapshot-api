@@ -10185,6 +10185,14 @@ def licensed_charity_identity(org, row, state, deadline):
         row["match"] = {"decision": "accepted", "score": 100, "reason": "USER_CONFIRMED_IDENTITY"}
         row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
         return "accepted"
+    if state == "TN" and not row.get("ein"):
+        primary_name = normalized_match_name(org.organization_name)
+        candidate_name = normalized_match_name(row["name"])
+        if primary_name.endswith(" foundation") and candidate_name == primary_name.removesuffix(" foundation"):
+            row["match"] = {"decision": "possible", "score": 55, "reason": "TN_DISTINCT_LEGAL_ENTITY_REVIEW"}
+            row["address_evidence"] = {"decision": "unavailable", "basis":
+                "The registry name omits Foundation and has no EIN to establish that it is the same legal entity."}
+            return "possible"
     if state == 'TN' and decision['decision']=='rejected' and not row.get('ein'):
         from deployment.gates2930_repairs import tn_historical_prefix
         if tn_historical_prefix([org.organization_name,*known_names_for_ein(org.ein)],row['name']):
@@ -12386,12 +12394,32 @@ def sc_official_detail_lookup(org) -> object | None:
                     if not raw_status:
                         lookup_incomplete = True
                         continue
-                    registry_name = str(best["name"])
+                    detail_names = re.findall(
+                        r'<span\b[^>]*\bid=["\']MainContent_lbl_CharityName["\'][^>]*>(.*?)</span>',
+                        detail_html, re.I | re.S,
+                    )
+                    detail_ids = re.findall(
+                        r'<span\b[^>]*\bid=["\']MainContent_lblCharityID["\'][^>]*>\s*(P\d+)\s*</span>',
+                        detail_html, re.I,
+                    )
+                    if len(detail_names) != 1 or detail_ids != [f"P{best['id']}"]:
+                        lookup_incomplete = True
+                        continue
+                    registry_name = sc_html_to_text(detail_names[0])
+                    if not registry_name:
+                        lookup_incomplete = True
+                        continue
                     filing_ein = ""
                     scope_review = separator_entity_scope_gap(original_name, registry_name, org.ein)
-                    if sc_related_entity_requires_ein(original_name, registry_name, org.ein):
-                        filing_ein = sc_detail_filing_ein(detail_html, time.monotonic() + 10, fetch_bytes=fetch_filing_bytes)
+                    changed_heading = (
+                        normalized_match_name(re.sub(r"^the\s+", "", registry_name, flags=re.I))
+                        != normalized_match_name(re.sub(r"^the\s+", "", str(best["name"]), flags=re.I))
+                    )
+                    if changed_heading or sc_related_entity_requires_ein(original_name, registry_name, org.ein):
+                        filing_ein = sc_detail_filing_ein(detail_html, min(deadline, time.monotonic() + 10), fetch_bytes=fetch_filing_bytes)
                         if filing_ein != canonical_ein_digits(org.ein):
+                            if changed_heading:
+                                identity_unconfirmed = True
                             unrelated_alias = sc_unrelated_alias_prefix(original_name, registry_name, org.ein)
                             if unrelated_alias:
                                 unrelated_alias_excluded = True
@@ -12402,9 +12430,7 @@ def sc_official_detail_lookup(org) -> object | None:
                             rejected_ids.add(str(best["id"]))
                             if filing_ein or not scope_review:
                                 continue
-                    if not registry_name_is_safe_against_targets(registry_name, targets, original_name, getattr(org, "ein", "")):
-                        registry_name = str(best["name"])
-                    public_id = sc_regex_value(detail_text, r"\bPublic\s+Id\s*:?\s*(P\d+)\b") or f"P{best['id']}"
+                    public_id = detail_ids[0]
                     due_raw = sc_regex_value(detail_text, r"\bDue\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})")
                     fiscal_year = sc_regex_value(
                         detail_text,
@@ -16802,6 +16828,10 @@ def normalize_registry_match_fields(result, org) -> None:
     from deployment.nv_confirmed_evidence import preserves_confirmed_detail
     if preserves_confirmed_detail(result):
         return  # Keep the selected source's full DBA/name for its original image.
+    if (result.state == "OK" and getattr(result, "reason_code", "") == "OK_SELECTED_CERTIFICATE_UNCONFIRMED"
+            and matched_name and re.fullmatch(r"\d+", matched_identifier)
+            and result.source_url == f"https://www.sos.ok.gov/corp/charityDetail.aspx?id={matched_identifier}"):
+        return  # A verified entity page remains evidence while its certificate is unresolved.
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         evidence = getattr(result, "va_entity_evidence", {})
         if (result.state == "VA" and getattr(result, "reason_code", "") == "VA_MATCHED_BY_EXACT_FEIN"
@@ -32797,7 +32827,10 @@ def ok_document_delivery_error(text: str) -> bool:
 
 def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str) -> OklahomaCertificateResult:
     """Recover an early transport failure once within the original action budget."""
-    certificate_stop = time.monotonic() + 7.0  # Existing 1s link + 1s form + 5s POST caps.
+    from deployment.state_snapshots import DEADLINE
+    started = time.monotonic()
+    state_stop = DEADLINE.get() - 1.0  # Leave time to archive the selected detail.
+    certificate_stop = min(started + 7.0, state_stop)
     document_id = re.match(r"^\s*(\d+)\b", latest_filing or "")
     if not document_id:
         return OklahomaCertificateResult(None, "The registration document number could not be identified.")
@@ -32837,6 +32870,11 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         )
         fields["__EVENTTARGET"] = postback.group(1)
         fields["__EVENTARGUMENT"] = ""
+        # Playwright can spend time resolving the link/form before the POST.
+        # Restore the POST allowance only for the verified action on this page.
+        now = time.monotonic()
+        if now < certificate_stop and page.url == detail_url:
+            certificate_stop = min(state_stop, started + 10.0, max(certificate_stop, now + 5.0))
         for certificate_attempt in range(2):
             try:
                 remaining = certificate_stop - time.monotonic()
@@ -32884,7 +32922,7 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                 observed_run.visual_adapter_facts.append({'adapter':'OK-certificate-delivery',
                     'outcome':'unavailable','error_type':type(exc).__name__,
                     'error_summary':re.sub(r'(?i)(cookie|authorization):[^\r\n]+',r'\1: [redacted]',str(exc))[:600],
-                    'elapsed_ms':round((time.monotonic()-certificate_stop+7)*1000)})
+                    'elapsed_ms':round((time.monotonic()-started)*1000)})
         except Exception:
             pass
     # The caller selected this latest filing from the live matched record. Reuse
@@ -33339,6 +33377,17 @@ def search_ok_precise(page, org, module):
                 )
                 result.success = True
                 return ok_attach_foundation_review(result, org, page)
+            if (certificate_evidence.failure_kind == "unreadable"
+                    and not getattr(org, "ok_foundation_review", None)
+                    and page.url == f"https://www.sos.ok.gov/corp/charityDetail.aspx?id={filing_number}"):
+                result.status = "Needs Review"
+                result.reason_code = "OK_SELECTED_CERTIFICATE_UNCONFIRMED"
+                result.source_url = page.url
+                result.raw_status_text = latest_filing
+                result.source_note = ("Oklahoma's matched entity page was reached. " + certificate_note
+                                      + " No registration deadline was confirmed.")
+                result.success = False
+                return result
             result.status = "Site Not Reachable"
             result.raw_status_text = latest_filing
             result.source_note = certificate_note + " The matched organization was found, but the state certificate could not be retrieved; no deadline was inferred."
@@ -34339,8 +34388,13 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     without_article = re.sub(r"^the\s+", "", name, flags=re.I)
     if without_article != name and len(distinctive_match_tokens(without_article)) >= 2:
         priority.extend(literal_name_retrieval_forms(without_article))
+    wrapped_acronym = bool(re.fullmatch(
+        r"[A-Z][A-Z0-9]{1,2}(?:,\s*|\s+)(?i:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)",
+        name,
+    ))
     priority = [value for value in priority if value and
-                (value in dash_components or not ms_search_variant_too_broad(value))]
+                (value in dash_components or (value == name and wrapped_acronym)
+                 or not ms_search_variant_too_broad(value))]
     generated = list(dict.fromkeys([*priority, *ms_preferred_search_variants(name, ein)]))
     planned = reviewed_queries_first(name, ein, generated, limit=6, transform=ascii_dash_search_name)
     # These are retrieval probes only; search_ms_fast still checks full row and

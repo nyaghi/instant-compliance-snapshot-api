@@ -568,12 +568,18 @@ def me_detail_name_bound(name,text,identifier):
   value=re.sub(r',\s*THE\s*$','',str(value),flags=re.I)
   value=re.sub(r'^THE\s+','',value.strip(),flags=re.I)
   return re.sub(r'[^a-z0-9]','',value.lower())
- headings=re.findall(r'CHARITABLE SOLICITATIONS\s+(.*?)\s+CHARITABLE ORGANIZATION\s+License Number:',text,re.S|re.I)
+ headings=re.findall(r'CHARITABLE SOLICITATIONS\s+(.*?)\s+CHARITABLE ORGANIZATION\s+License Number:\s*(CO\d+)\b',text,re.S|re.I)
  credentials=re.findall(r'License\s+Number:\s*(CO\d+)\b',text,re.I)
  if (not re.fullmatch(r'CO\d+',str(identifier),re.I) or len(headings)!=1
-     or len(credentials)!=1 or credentials[0].casefold()!=str(identifier).casefold() or not canonical(name)):
+     or sum(value.casefold()==str(identifier).casefold() for value in credentials)!=1
+     or headings[0][1].casefold()!=str(identifier).casefold() or not canonical(name)):
   return False
- if canonical(headings[0])==canonical(name):return True
+ if canonical(headings[0][0])==canonical(name):
+  if len(credentials)==1:return True
+  sections=re.findall(r'(?m)^CHARITABLE ORGANIZATION\s+License Number:\s*(CO\d+)\b',text,re.I)
+  current=re.search(r'(?m)^CHARITABLE ORGANIZATION\s+License Number:\s*'+re.escape(identifier)+r'\s+Status:\s*[^\n]+',text,re.I)
+  return sections==credentials and bool(current)
+ if len(credentials)!=1:return False
  sections=re.findall(r'Alias, DBA or Trade Name(?:\([^\n]*\))?[^\n]*\n\s*Name\s*\n(.*?)(?=\n(?:Purpose|License/Disciplinary Action|GENERAL INFORMATION|Filing)(?:\(|\s|$))',text,re.S|re.I)
  return len(sections)==1 and any(canonical(line)==canonical(name) for line in sections[0].splitlines() if line.strip())
 
