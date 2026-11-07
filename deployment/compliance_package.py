@@ -68,7 +68,8 @@ def label(row):
     review=row.get('identity_review')
     if isinstance(review,dict) and not row.get('identity_review_decision') and row.get('status') in {'Needs Review','Unable to Confirm','Unknown'}:
         return 'Confirm organization'
-    return text(row.get('display_status') or row['status'],100)
+    value = text(row.get('display_status') or row['status'],100)
+    return 'Closed / Withdrawn / Canceled / Inactive' if value == 'Closed / Withdrawn / Canceled' else value
 
 def category(row):
     s=row['status']

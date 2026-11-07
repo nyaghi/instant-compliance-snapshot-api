@@ -2603,7 +2603,16 @@ def search_ca_master(page, org):
     if not result.success or result.status != checker.STATUS_NOT_REGISTERED or len(canonical_ein_digits(org.ein)) != 9:
         return result
     try:
-        entities = __import__('deployment.search_observation',fromlist=['observed_named_call']).observed_named_call('CA',org.organization_name,'Public entity-name API lookup (source matching rule retained)','https://ca-rcf.evokeplatform.com/',checker.ca_evoke_entity_search_by_name,org.organization_name)
+        from deployment.gates3133_repairs import ca_name_queries
+        entities = []
+        for query in ca_name_queries(org.organization_name):
+            found = __import__('deployment.search_observation',fromlist=['observed_named_call']).observed_named_call('CA',query,'Public entity-name API lookup (source matching rule retained)','https://ca-rcf.evokeplatform.com/',checker.ca_evoke_entity_search_by_name,query)
+            if not isinstance(found, list) or len(found) >= 50:
+                raise ValueError("California name response reached its completeness limit")
+            entities.extend(found)
+            if any(ca_master_name_identity(org, candidate) != 'rejected' for candidate in found):
+                break
+        entities = list({str(candidate.get('id')): candidate for candidate in entities}.values())
         plausible = [(entity, ca_master_name_identity(org, entity)) for entity in entities]
         plausible = [(entity, outcome) for entity, outcome in plausible if outcome != "rejected"]
         if len(plausible) > 5:
@@ -7120,7 +7129,9 @@ def al_charity_search_evidence(payload):
         if not unnumbered:
             core = tuple(fields[h] for h in headers[:6])
             if identifier in credential_core and credential_core[identifier] != core:
-                raise ValueError("Alabama repeated credential has conflicting identity or standing")
+                from deployment.gates3133_repairs import al_out_of_scope_history
+                if not al_out_of_scope_history(credential_core[identifier],core):
+                    raise ValueError("Alabama repeated credential has conflicting identity or standing")
             credential_core[identifier] = core
         category = fields["Registration Type"]
         # The same lookup includes fundraisers, telephone sellers and health
@@ -8323,6 +8334,17 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 entity_number_detail = state == "NV" and row.get("business_identifier_missing") is True and nv_entity_number_detail_allowed(
                     row["identifier"], row["entity_type"], "", row.get("entity_number", ""))
                 missing_search_type = state == "NV" and nv_untyped_search_row_can_read_detail(row)
+                if (state == 'NV' and row['entity_type'] == 'NT7 Business License Other'
+                        and re.fullmatch(r'NV\d+', row['identifier'])):
+                    scope_query={'state':'NV','operation':'detail','identifier':row['identifier']}
+                    scope_detail=collect(scope_query)
+                    from deployment.gates3133_repairs import nv_verified_mark_record
+                    if (isinstance(scope_detail,dict) and scope_detail.get('query')==scope_query
+                            and scope_detail.get('complete') is True and nv_verified_mark_record(row,scope_detail)):
+                        excluded_nv_entities.append({'name':row['name'],'identifier':row['identifier'],
+                            'entity_type':row['entity_type'],'basis':'Same-entity complete mark-only history and Solicits Charitable Contribution: No'})
+                        seen.add(row['identifier'])
+                        continue
                 if state == "NV" and ((row.get("business_identifier_missing") is True and not entity_number_detail and not missing_search_type)
                         or not nv_entity_type_in(row["entity_type"]) and not missing_search_type):
                     # Unsupported filing categories need review, not a guess.
@@ -13816,8 +13838,11 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     address = reconciled_registry_address(org.ein, row.get("name", ""), row.get("location", ""), registry_state="ME",
                         deadline=time.monotonic() + max(0, search_deadline - time.perf_counter()))
                     row["address_evidence"] = address
-                    score = (score[0], registry_identity_preference(row.get("name", ""), org.organization_name, org.ein),
-                             0 if address["decision"] == "conflict" else 1, score[1])
+                    # ME: compare identity before the active-status tie break.
+                    # An active historical-alias namesake cannot displace the
+                    # exact national record merely because it is closed.
+                    score = (score[0] // 100, registry_identity_preference(row.get("name", ""), org.organization_name, org.ein),
+                             0 if address["decision"] == "conflict" else 1, score[0] % 100, score[1])
                     if score > best_score:
                         best_row, best_opener, best_score = row, opener, score
                 log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} rows={len(rows)}")
@@ -15149,6 +15174,19 @@ def search_bundled_extension_state(page, org, state: str):
 
 
 def search_co_with_name_fallback(page, org):
+    from deployment.co_budget import STOP
+    from deployment.state_snapshots import DEADLINE
+    # Healthy full plans in the 30-case audit finished within 30 seconds.
+    # Share twice that observed maximum rather than restarting long waits for
+    # each alias. Existing query order and matching rules remain unchanged.
+    token=STOP.set(min(time.monotonic()+60,DEADLINE.get()-5)) if trial_identity() else None
+    try:
+        return search_co_with_name_fallback_core(page,org)
+    finally:
+        if token is not None:STOP.reset(token)
+
+
+def search_co_with_name_fallback_core(page, org):
     result = checker.search_co(page, org)
     result = normalize_co_matched_closed_status(result, org)
     if public_status(result) == "Site Not Reachable":
@@ -15205,7 +15243,7 @@ def co_status_from_registry_evidence(result, org, body: str = "") -> str:
         text = co_registry_evidence_text(result, body)
         from deployment.gates2930_repairs import co_expired_restriction
         if co_expired_restriction(text):
-            return "Delinquent"
+            return "Suspended"
         if re.search(r"\b(withdrawn?|cancel(?:ed|led)?|closed|terminated|dissolved)\b", text, re.I):
             return "Closed / Withdrawn / Canceled"
         if re.search(r"\b(may\s+not\s+solicit|not\s+authorized|suspend(?:ed)?|revok(?:ed)?|cease\s+and\s+desist)\b", text, re.I):
@@ -15254,7 +15292,8 @@ def co_api_fallback_result(org):
             url,
             headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0"},
         )
-        with _history_http_call(urllib.request.urlopen, request, timeout=18) as response:
+        from deployment.co_budget import timeout as co_timeout
+        with _history_http_call(urllib.request.urlopen, request, timeout=co_timeout(18000)/1000) as response:
             rows = json.loads(response.read().decode("utf-8", errors="replace"))
     except Exception:
         return None
@@ -15295,7 +15334,7 @@ def co_api_fallback_result(org):
     expiration = parse_due_date(str(row.get("expirationdate") or "").split("T", 1)[0])
     from deployment.gates2930_repairs import co_expired_restriction
     if co_expired_restriction(raw_status):
-        status = "Delinquent"
+        status = "Suspended"
     elif re.search(r"\b(suspend|revok|notice\s*\d*|may\s+not|not\s+authorized)\b", raw_status, re.I):
         status = "Suspended"
     elif re.search(r"\b(withdraw|cancel|closed)\b", raw_status, re.I):
@@ -27102,6 +27141,9 @@ def search_pa_with_name_fallback(page, org):
         guard = lambda result: pa_guard_search_completion(result, org, observations + getattr(result, "_pa_api_attempts", []))
         result = guard(search_pa_with_name_fallback_core(page, org, guard,
                        wait_for_search, lambda: len(observations)))
+        if trial_identity():
+            from deployment.pa_detail_evidence import capture as capture_pa_detail
+            capture_pa_detail(page, org, result)
         result.source_attempts = [{key: row.get(key) for key in
             ("step", "ein", "name", "http_status", "complete", "failure",
              "started_seconds", "response_seconds", "completed_seconds", "row_count")}
@@ -28216,6 +28258,13 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                         candidate_ein = ""
                     score = score_candidate(org.organization_name, requested_ein,
                                             {"name": row["orgName"], "ein": candidate_ein})
+                    # Legacy search identifiers occur on unrelated public rows.
+                    # Retain them through transport, but never request an unsupported
+                    # detail or turn a possible legacy identity into a negative.
+                    if not re.fullmatch(r"[0-9]{2}-[0-9]{2}-[0-9]{2}", str(row["orgID"])):
+                        if score["decision"] in {"accepted", "possible"}:
+                            raise ValueError("New York possible match uses an unsupported legacy record identifier")
+                        continue
                     if score["decision"] == "accepted":
                         candidates[str(row["orgID"])] = (score["score"], row)
                     elif score["decision"] == "possible":
@@ -28525,7 +28574,7 @@ def ny_connector_clean_response(payload, expected_query):
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"orgID", "orgName", "ein"}:
             raise ValueError("The New York search row is incomplete.")
-        if not isinstance(row["orgID"], str) or not re.fullmatch(r"[0-9]{2}-[0-9]{2}-[0-9]{2}", row["orgID"]):
+        if not isinstance(row["orgID"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,31}", row["orgID"]):
             raise ValueError("The New York record identifier is invalid.")
         if not isinstance(row["orgName"], str) or not 1 <= len(row["orgName"].strip()) <= 500:
             raise ValueError("The New York organization name is invalid.")
@@ -29145,6 +29194,11 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return "Revoked"
     if re.search(pending_pattern, status_evidence, re.I):
         return "Pending"
+    if state == "VA":
+        from deployment.gates3133_repairs import va_effective_extension
+        extended = va_effective_extension(result, parse_due_date, date.today())
+        if extended:
+            return status_from_calendar_date(extended)
     if (state == "VA" and re.search(r"Not\s+Authorized\s+to\s+Solicit", result.raw_status_text or "", re.I)
             and not re.search(r"\bsuspended\b|cease\s+and\s+desist", status_evidence, re.I)):
         return ("Delinquent" if re.search(r"Registration\s+Status\s*:\s*(?:Expired|Lapsed|Delinquent)",
@@ -32731,7 +32785,8 @@ def ok_document_delivery_error(text: str) -> bool:
 
 
 def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str) -> OklahomaCertificateResult:
-    """Try the selected certificate once, then promptly use eligible live filing evidence."""
+    """Recover an early transport failure once within the original action budget."""
+    certificate_stop = time.monotonic() + 7.0  # Existing 1s link + 1s form + 5s POST caps.
     document_id = re.match(r"^\s*(\d+)\b", latest_filing or "")
     if not document_id:
         return OklahomaCertificateResult(None, "The registration document number could not be identified.")
@@ -32771,7 +32826,21 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         )
         fields["__EVENTTARGET"] = postback.group(1)
         fields["__EVENTARGUMENT"] = ""
-        response = page.request.post(detail_url, form=fields, timeout=5000)
+        for certificate_attempt in range(2):
+            try:
+                remaining = certificate_stop - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('OK certificate action allowance exhausted')
+                response = page.request.post(detail_url, form=fields, timeout=max(1,int(min(5,remaining)*1000)))
+                break
+            except Exception as delivery_error:
+                if (certificate_attempt or 'timeout' in type(delivery_error).__name__.lower()
+                        or 'timeout' in str(delivery_error).lower()
+                        or certificate_stop-time.monotonic()<1.5 or page.url!=detail_url):
+                    raise
+                current_action=link.get_attribute('href',timeout=max(1,int(min(.5,certificate_stop-time.monotonic())*1000))) or ''
+                if postback.group(1) not in current_action:
+                    raise
         pdf_bytes = response.body()
         if response.ok and pdf_bytes.startswith(b"%PDF"):
             # Preserve the selected response for page two; no second request and
@@ -32796,7 +32865,17 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                        f"{response.headers.get('content-type', 'unspecified content type')}, "
                        f"{len(pdf_bytes)} bytes; no PDF received.")
     except Exception as exc:
-        direct_note = f"Primary certificate request failed ({type(exc).__name__})."
+        direct_note = f"Selected certificate retrieval failed ({type(exc).__name__})."
+        try:
+            from deployment.state_snapshots import CURRENT
+            observed_run=CURRENT.get()
+            if observed_run is not None:
+                observed_run.visual_adapter_facts.append({'adapter':'OK-certificate-delivery',
+                    'outcome':'unavailable','error_type':type(exc).__name__,
+                    'error_summary':re.sub(r'(?i)(cookie|authorization):[^\r\n]+',r'\1: [redacted]',str(exc))[:600],
+                    'elapsed_ms':round((time.monotonic()-certificate_stop+7)*1000)})
+        except Exception:
+            pass
     # The caller selected this latest filing from the live matched record. Reuse
     # only after a transport failure, with the same live document action present.
     if live_action_confirmed:
@@ -32812,7 +32891,7 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                                "Confirm time-sensitive decisions directly with the state registry."))
     return OklahomaCertificateResult(
         None, "Oklahoma certificate service unavailable. " + direct_note
-        + " Certificate retrieval stopped after one bounded attempt; using eligible live filing evidence.",
+        + " Certificate retrieval stopped within its bounded allowance; using eligible live filing evidence.",
         "delivery_unavailable",
     )
 

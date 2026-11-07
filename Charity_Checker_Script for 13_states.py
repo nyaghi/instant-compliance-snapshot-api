@@ -915,11 +915,12 @@ def search_ca(page, org: Organization) -> StateResult:
         return result
 
 def search_co(page, org: Organization) -> StateResult:
+    from deployment.co_budget import timeout as co_timeout
     url = "https://www.coloradosos.gov/ccsa/pages/search/basic.xhtml"
     result = StateResult(org.organization_name, org.ein, "CO", STATUS_UNKNOWN, url)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=20000)
+        page.goto(url, wait_until="domcontentloaded", timeout=co_timeout(45000))
+        safe_wait_for_network_idle(page, timeout=co_timeout(20000))
         fast_sleep(0.5)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
@@ -933,13 +934,13 @@ def search_co(page, org: Organization) -> StateResult:
             result.error = "Could not find CO search input"
             return result
 
-        input_box.fill("")
-        input_box.fill(query)
+        input_box.fill("",timeout=co_timeout(30000))
+        input_box.fill(query,timeout=co_timeout(30000))
         page.keyboard.press("Enter")
-        safe_wait_for_network_idle(page, timeout=25000)
+        safe_wait_for_network_idle(page, timeout=co_timeout(25000))
         fast_sleep(0.75)
 
-        body = page.locator("body").inner_text(timeout=5000)
+        body = page.locator("body").inner_text(timeout=co_timeout(5000))
         registry_name = extract_labeled_value_from_text(body, ["Name"])
         if registry_name:
             result.matched_registry_name = registry_name
@@ -954,8 +955,8 @@ def search_co(page, org: Organization) -> StateResult:
         expired_restriction = co_expired_restriction(body)
         if expired_restriction:
             result.raw_status_text = expired_restriction
-            result.status = "Delinquent"
-            result.source_note = "Colorado explicitly marks the registration Expired and says it may not solicit."
+            result.status = "Suspended"
+            result.source_note = "Colorado explicitly prohibits solicitation; CharityClarity maps that restriction to Suspended."
             result.success = True
             return result
         adverse_match = re.search(

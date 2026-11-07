@@ -76,12 +76,15 @@ def preserves_review_match(result):
     state=getattr(result,'state','')
     reason=getattr(result,'reason_code','')
     if not ((state in STATES and reason=='SHORT_ALIAS_IDENTITY_REVIEW')
+            or (state=='ME' and getattr(result,'status_reason','')=='REGISTRY_ADDRESS_CONFLICT')
             or (state=='WV' and reason=='WV_SHORT_NAME_IDENTITY_UNCONFIRMED')
             or (state=='OR' and reason=='OR_MALFORMED_EIN_IDENTITY_REVIEW')):return False
     rows=(getattr(result,'_cc_identity_review',None) or {}).get('records',[])
     return (len(rows)==1 and rows[0].get('status') in FINAL
         and rows[0].get('name')==getattr(result,'matched_registry_name','')
         and str(rows[0].get('identifier') or '')==str(getattr(result,'matched_registry_identifier',''))
+        and (getattr(result,'status_reason','')!='REGISTRY_ADDRESS_CONFLICT'
+             or rows[0].get('url')==getattr(result,'source_url',''))
         and bool(rows[0].get('name')) and bool(rows[0].get('identifier')))
 
 def visual_result(data):
@@ -104,6 +107,7 @@ def visual_result(data):
         return {**data,'status':row['status'],'success':True,
             'matched_registry_name':row['name'],'matched_registry_identifier':row['identifier'],'source_url':row['url']}
     if not ((state in {'ME','SC'} and reason=='SHORT_ALIAS_IDENTITY_REVIEW')
+            or (state=='ME' and data.get('status_reason')=='REGISTRY_ADDRESS_CONFLICT')
             or (state=='WV' and reason=='WV_SHORT_NAME_IDENTITY_UNCONFIRMED')):return data
     rows=(data.get('_worker_identity_review') or {}).get('records',[])
     if len(rows)!=1:return data

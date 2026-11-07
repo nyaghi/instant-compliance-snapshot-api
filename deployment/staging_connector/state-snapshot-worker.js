@@ -663,7 +663,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
               await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:369:14:await",()=>(new Promise(resolve=>setTimeout(resolve,40))));
             }
             if(ilDetail&&typeof diagnostic==='function')try {diagnostic('il-view-ready',job,JSON.stringify({view,stable,cancelled,alive:alive(),probe:changed?.il_view_probe||null}));} catch { /* Passive observation cannot discard evidence. */ }
-            if(ilDetail) {
+            if(workerSettledDetail) {
               const required=changed?.summary_views;
               if(!Array.isArray(required)||!['["top"]','["top","expiration"]'].includes(JSON.stringify(required)))return null;
               // The source can reflow after initial metadata. Capture every
@@ -756,7 +756,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
       if(ncSelectedDetail&&(afterMeta?.source_detail!==true||afterMeta.source_binding!==ncBinding
           ||afterMeta.document_id!==ncDocument||afterMeta.source_page_fits!==true))return null;
       if(nyRequiredDetail&&afterMeta?.document_id!==meta.document_id)return null;
-      if(ilDetail&&(!Array.isArray(afterMeta?.capture_views)||afterMeta.capture_views.some(view=>!captureViews.includes(view))))return null;
+      if(workerSettledDetail&&(!Array.isArray(afterMeta?.capture_views)||afterMeta.capture_views.some(view=>!captureViews.includes(view))))return null;
       if((nmRequiredDetail||nyRequiredDetail)&&gaFullViewport&&afterMeta?.source_page_fits!==true)return null;
       if(nmRequiredDetail&&afterMeta?.source_record_bottom!==meta.source_record_bottom)return null;
       if(gaRequiredDetail&&(!afterMeta?.source_ga_primary_ready||!afterMeta.source_ga_primary_fits

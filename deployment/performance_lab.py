@@ -231,16 +231,13 @@ def final_four_asset(name, text):
                 }
                 traceNode.textContent = JSON.stringify(events);
               }''')
-        # Keep the full first-pass timing evidence in the existing download.
-        # An HTML comment leaves the visible spreadsheet unchanged and lets a
-        # diagnostic survive a browser-control disconnect without another run.
-        replace('      const blob = new Blob([html], { type: "application/vnd.ms-excel" });', '''      const labTrace = encodeURIComponent(JSON.stringify({
+        # Preserve first-pass diagnostics outside the human-facing worksheets.
+        replace('      const diagnostics = null;', '''      const diagnostics = {
         schema:"cc-lab-trace-v1",exported_at:new Date().toISOString(),
         events:Array.isArray(window.__CCLabStateTrace)?window.__CCLabStateTrace:[],
         workflow_observations:window.__CCWorkflowObservations||{},
         observation_overflow:window.__CCWorkflowObservationOverflow===true
-      }));
-      const blob = new Blob([`<!--CC_LAB_TRACE_V1:${labTrace}-->`,html], { type: "application/vnd.ms-excel" });''')
+      };''')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
           result.reviewed_alternate_names = [...alternateNames];''')
         environment_label = 'Staging' if identity.get('permanent_staging') else 'Isolated Trial'

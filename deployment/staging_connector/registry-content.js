@@ -885,7 +885,7 @@
     // requires the existing bound filing-history reader to establish charity
     // scope; it receives no new query, retry, or time allowance.
     const missingEntityType=['','-'].includes(String(fields['Entity Type']||'').trim());
-    if (skipHistory && !entityNumberDetail && !missingEntityType) return evidence;
+    if (skipHistory && !entityNumberDetail && !missingEntityType && fields['Entity Type']!=='NT7 Business License Other') return evidence;
     try {
       // ORION mounts the entity fields before its filing-history request has
       // rendered. Reading the table immediately can discard the solicitation
@@ -1640,7 +1640,7 @@
     // those rows for master identity review; blank numbers are not duplicate
     // licenses. Repeated numbered credentials or identical rows still fail.
     const numbered=rows.filter(r=>r[1]).map(r=>r[1]);
-    if (rows.length!==page.total || (() => {const cores=new Map();return rows.some(r=>{if(!r[1])return false;const core=JSON.stringify(r.slice(0,6));if(cores.has(r[1])&&cores.get(r[1])!==core)return true;cores.set(r[1],core);return false;});})()
+    if (rows.length!==page.total || (() => {const cores=new Map();return rows.some(r=>{if(!r[1])return false;const core=r.slice(0,6),prior=cores.get(r[1]);if(prior&&JSON.stringify(prior)!==JSON.stringify(core)&&!(['Commercial Co-Venturer','Commercial Telephone Seller','Health Studio','Professional Fundraiser'].includes(prior[3])&&[0,1,3,4].every(i=>prior[i]===core[i])))return true;cores.set(r[1],core);return false;});})()
         || new Set(rows.map(r=>JSON.stringify(r))).size!==rows.length) throw new Error('REGISTRY_TOTAL_CHANGED');
     return {state:'AL',query,complete:true,verification_pending:false,headers:page.headers,rows,total:page.total};
   }
@@ -2255,7 +2255,7 @@
     const inView=!loading&&targets.every(el=>{const b=el.getBoundingClientRect();return snapshotSummaryPainted(el)&&b.top>=top&&b.bottom<=bottom&&b.left>=0&&b.right<=innerWidth;});
     const shape=[r.x,r.y,r.width,r.height,dialog.clientHeight,dialog.scrollHeight,dialog.scrollTop,
       ...targets.flatMap(el=>{const b=el.getBoundingClientRect();return [b.x,b.y,b.width,b.height];})].map(x=>Math.round(x)).join(',');
-    return {ok:true,view_ready:opaque&&inView,view_shape:shape,view_text:targets.map(text).join('\n'),view_protocol:'worker-settle-1',...(IL?{summary_views:snapshotSummaryPlan(dialog)}:{}),...((IL||TN)?{il_view_probe:{view:m.view,opaque,in_view:inView,viewport:[innerWidth,innerHeight],dialog:[r.x,r.y,r.width,r.height,dialog.clientHeight,dialog.scrollTop].map(Math.round),targets:targets.map(el=>{const b=el.getBoundingClientRect();return [b.left,b.top,b.right,b.bottom].map(Math.round);})}}:{})};
+    return {ok:true,view_ready:opaque&&inView,view_shape:shape,view_text:targets.map(text).join('\n'),view_protocol:'worker-settle-1',...((IL||TN)?{summary_views:snapshotSummaryPlan(dialog)}:{}),...((IL||TN)?{il_view_probe:{view:m.view,opaque,in_view:inView,viewport:[innerWidth,innerHeight],dialog:[r.x,r.y,r.width,r.height,dialog.clientHeight,dialog.scrollTop].map(Math.round),targets:targets.map(el=>{const b=el.getBoundingClientRect();return [b.left,b.top,b.right,b.bottom].map(Math.round);})}}:{})};
   }
 
   async function snapshotView(m) {

@@ -153,7 +153,7 @@
     return { kind: "search", query: request.query, http_status: status,
       success: payload?.success === true, statusCode: payload?.statusCode,
       rows: rows.map(row => {
-        if (!row || typeof row.orgID !== "string" || !/^[0-9]{2}-[0-9]{2}-[0-9]{2}$/.test(row.orgID) ||
+        if (!row || typeof row.orgID !== "string" || !/^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(row.orgID) ||
           typeof row.orgName !== "string" || !row.orgName.trim() || row.orgName.length > 500) throw new Error("NY_CONNECTOR_SEARCH_IDENTITY_INVALID");
         if (!Object.hasOwn(row, "ein")) throw new Error("NY_CONNECTOR_SEARCH_EIN_MISSING");
         // NY uses null in some search rows but an empty string in the detail.

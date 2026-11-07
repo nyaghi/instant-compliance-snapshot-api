@@ -138,7 +138,6 @@
               CharityClarity Aurora interprets public charitable-solicitation records and displays the reported status in plain English, immediately on this page. No credit card is required.
             </p>
             <div class="mb-6 flex flex-wrap items-center gap-3">
-              <a href="#snapshotForm" class="inline-flex items-center justify-center rounded-full bg-[#C62828] px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#A61E1E] focus:outline-none focus:ring-2 focus:ring-[#C62828] focus:ring-offset-2">Run a Free State Check</a>
               <a href="mailto:info@compliance-express.com?subject=CharityClarity Aurora%20information" target="_blank" rel="noopener" class="text-sm font-semibold text-[#0B2A5B] underline underline-offset-4">Ask about CharityClarity Aurora</a>
             </div>
 
@@ -195,7 +194,7 @@
 
                 <div class="flex gap-3 sm:col-span-2"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-sky-500"></span><p><span class="font-semibold text-slate-900">Exempt</span> = Public registry indicates the organization is exempt from charitable registration or annual filing requirements in that state</p></div>
 
-                <div class="flex gap-3 sm:col-span-2"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-slate-400"></span><p><span class="font-semibold text-slate-900">Closed / Withdrawn / Canceled</span> = Public registry indicates the registration is no longer active under a closed, withdrawn, canceled, inactive, retired, terminated, or voluntarily deactivated status</p></div>
+                <div class="flex gap-3 sm:col-span-2"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-slate-400"></span><p><span class="font-semibold text-slate-900">Closed / Withdrawn / Canceled / Inactive</span> = Public registry indicates the registration is no longer active under a closed, withdrawn, canceled, inactive, retired, terminated, or voluntarily deactivated status</p></div>
 
               </div>
 
@@ -528,6 +527,7 @@
 
   <script src="/ny-connector.js?v=2026.09.29.1-aurora"></script>
   <script src="/organization-identity.js?v=20261013.7"></script>
+  <script src="/excel-export.js?v=29.2OE"></script>
   <script src="/identity-review.js?v=2026.11.03.29.2NS"></script>
   <script>
 
@@ -1210,50 +1210,15 @@
     }
 
     function downloadExcel() {
-
-      const header = ["Organization", "EIN", "State", "Status", "Matched Registry Name", "Matched Registry ID", "Initial Registration Date", "Last Renewal / Filed Year", "Initial Date Source Label", "Initial Date Meaning", "Initial Date Source", "Renewal / Filing Label", "Renewal / Filing Meaning", "Renewal / Filing Source", "Comments"];
-
-      const rows = latestResults.map((result) => [
-
-        result.organization_name || "",
-
-        formatEin(result.ein || ""),
-
-        result.state || "",
-
-        window.CCIdentityReview?.statusLabel(result) || (result.status === 'Needs Review' ? 'Unable to Confirm' : result.status || ""),
-
-        result.matched_registry_name || "",
-
-        result.matched_registry_identifier || "",
-
-        result.registration_date || "",
-        result.renewal_filing_value || result.renewal_date || "",
-        result.registration_date ? result.registration_date_source_label || "" : "",
-        result.registration_date ? result.registration_date_note || "" : "",
-        result.registration_date ? result.registration_date_source_url || "" : "",
-        (result.renewal_filing_value || result.renewal_date) ? result.renewal_filing_label || result.renewal_date_source_label || "" : "",
-        (result.renewal_filing_value || result.renewal_date) ? result.renewal_filing_note || result.renewal_date_note || "" : "",
-        (result.renewal_filing_value || result.renewal_date) ? result.renewal_filing_source_url || result.renewal_date_source_url || "" : "",
-        commentsWithRegistryFooter(result)
-
-      ]);
-
-      const html = `<table><tr>${header.map((cell) => `<th>${cell}</th>`).join("")}</tr>${rows.map((row) => `<tr>${row.map((cell) => `<td>${String(cell).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</td>`).join("")}</tr>`).join("")}</table>`;
-
-      const blob = new Blob([html], { type: "application/vnd.ms-excel" });
-
+      const diagnostics = null;
+      const blob = window.CCExcelExport.build(latestResults, {comments: commentsWithRegistryFooter, diagnostics});
       const link = document.createElement("a");
-
       link.href = URL.createObjectURL(blob);
-
-      link.download = `compliance-express-charity-clarity-${new Date().toISOString().slice(0, 10)}.xls`;
-
+      link.download = `compliance-express-charity-clarity-${new Date().toISOString().slice(0, 10)}.xlsx`;
       link.click();
-
-      URL.revokeObjectURL(link.href);
-
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     }
+
 
 
 

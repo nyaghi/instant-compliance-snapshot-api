@@ -57,7 +57,7 @@ test('diagnostic reasons distinguish response failures without accepting incompl
   const cases=[
     [503,good,'HTTP_ERROR'],[200,{...good,success:false},'UNSUCCESSFUL'],
     [200,{...good,data:null},'ROWS_INVALID'],
-    [200,{...good,data:[{...row,orgID:'bad'}]},'IDENTITY_INVALID'],
+    [200,{...good,data:[{...row,orgID:'bad/id'}]},'IDENTITY_INVALID'],
     [200,{...good,data:[{orgID:row.orgID,orgName:row.orgName}]},'EIN_MISSING'],
     [200,{...good,data:[{...row,ein:123456789}]},'EIN_TYPE'],
     [200,{...good,data:[{...row,ein:'x'.repeat(101)}]},'EIN_FORMAT'],

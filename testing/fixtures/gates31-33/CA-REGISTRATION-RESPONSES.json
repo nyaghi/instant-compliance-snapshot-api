@@ -1,0 +1,123 @@
+[
+  {
+    "entity": {
+      "id": "5301769",
+      "objectId": "entity",
+      "version": 2,
+      "entityType": "Business",
+      "entityName": "JACKIE ROBINSON FOUNDATION, INC.",
+      "entityStatus": "Listed",
+      "legalName": "JACKIE ROBINSON FOUNDATION, INC.",
+      "outOfState": "No",
+      "entityId": "5301769",
+      "sosId": "1888553",
+      "registrations": "081772,",
+      "officialAddress": {
+        "line1": "ONE HUDSON SQUARE",
+        "line2": "75 VARICK STREET, 2ND FLOOR",
+        "city": "NEW YORK",
+        "state": "NY",
+        "zipCode": "10013",
+        "county": "NEW YORK"
+      },
+      "converted": true
+    },
+    "registrations": [
+      {
+        "id": "1338734",
+        "objectId": "registrations",
+        "version": 2,
+        "entityRelated": {
+          "id": "5301769",
+          "name": "JACKIE ROBINSON FOUNDATION, INC.  - 5301769"
+        },
+        "registrationType": "Charitable Organization",
+        "registrationStatus": "Not Registered",
+        "complianceStatus": [],
+        "is990Required": "Yes",
+        "termBond": "Continuous",
+        "solicitations": []
+      },
+      {
+        "id": "1027354",
+        "objectId": "registrations",
+        "version": 8,
+        "entityRelated": {
+          "id": "5301769",
+          "name": "JACKIE ROBINSON FOUNDATION, INC.  - 5301769"
+        },
+        "registrationType": "Charitable Organization",
+        "registrationNumber": "081772",
+        "registrationStatus": "Delinquent",
+        "initialRegistrationDate": "2006-06-30",
+        "reportingStatus": "Past Due",
+        "complianceStatus": [],
+        "currentIssuanceDate": "2006-06-30",
+        "renewalEvaluationDate": "2027-06-30",
+        "currentExpirationDate": "2018-06-30",
+        "is990Required": "Yes",
+        "fiscalYearDate": "2017-06-30",
+        "termBond": "Continuous",
+        "solicitations": []
+      }
+    ],
+    "interpretation": [
+      "Delinquent/Non-compliant",
+      "Entity Status: Listed | Registration Type: Charitable Organization | Registration Status: Delinquent | Reporting Status: Past Due | Registration Number: 081772 | Current Expiration Date: 2018-06-30 | Renewal Evaluation Date: 2027-06-30",
+      "081772",
+      "2018-06-30"
+    ]
+  },
+  {
+    "entity": {
+      "id": "6558781",
+      "objectId": "entity",
+      "version": 3,
+      "entityType": "Business",
+      "entityName": "JACKIE ROBINSON FOUNDATION, INC.",
+      "entityStatus": "Withdrawn",
+      "legalName": "JACKIE ROBINSON FOUNDATION, INC.",
+      "outOfState": "No",
+      "entityId": "6558781",
+      "sosId": "1586950",
+      "officialAddress": {
+        "line1": "80 EIGHTH AVE.",
+        "city": "NEW YORK",
+        "state": "NY",
+        "zipCode": "10011",
+        "county": "NEW YORK"
+      },
+      "mailingAddress": {
+        "line1": "80 EIGHTH AVE.",
+        "city": "NEW YORK",
+        "state": "NY",
+        "zipCode": "10011",
+        "county": "NEW YORK"
+      },
+      "converted": true
+    },
+    "registrations": [
+      {
+        "id": "1592951",
+        "objectId": "registrations",
+        "version": 1,
+        "entityRelated": {
+          "id": "6558781",
+          "name": "JACKIE ROBINSON FOUNDATION, INC.  - 6558781"
+        },
+        "registrationType": "Charitable Organization",
+        "registrationStatus": "Not Registered",
+        "complianceStatus": [],
+        "is990Required": "Yes",
+        "termBond": "Continuous",
+        "solicitations": []
+      }
+    ],
+    "interpretation": [
+      "Not Registered",
+      "Entity Status: Withdrawn | Registration Type: Charitable Organization | Registration Status: Not Registered",
+      "6558781",
+      null
+    ]
+  }
+]

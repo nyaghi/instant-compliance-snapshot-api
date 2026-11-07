@@ -2244,7 +2244,15 @@ def capture_selected_nj_source(master,result,run,deadline):
     size=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1700:9:evaluate',page.locator('body').evaluate,locals(), '(el)=>({width:el.scrollWidth,height:el.scrollHeight})')
     if size['width']<=0 or size['height']<=0 or size['width']*size['height']>20000000:fact['outcome']='source_size_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1701:125:return',None)
     if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1702:66:return',None)
-    fact['phase']='capture';begin=time.perf_counter();raw=workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1703:58:screenshot',page.screenshot,locals(), type='jpeg',quality=75,full_page=True,timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
+    fact['phase']='capture';begin=time.perf_counter()
+    try:
+     raw=page.screenshot(type='jpeg',quality=75,full_page=True,timeout=max(1,int(min(1.5,stop-time.monotonic()-1)*1000)))
+    except Exception as capture_error:
+     if ('Timeout' not in type(capture_error).__name__ or time.monotonic()+2>=stop
+         or page.url!=hint['url'] or page.evaluate(NJ_VISIBLE_FIELDS)!=fields
+         or page.evaluate(NJ_VISIBLE_GEOMETRY) is not True):raise
+     fact['capture_recovery']='same_selected_record_once'
+     raw=page.screenshot(type='jpeg',quality=75,full_page=True,timeout=max(1,int(min(4,stop-time.monotonic()-1)*1000)))
     fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
     if page.url!=hint['url'] or workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1705:32:evaluate',page.evaluate,locals(), NJ_VISIBLE_FIELDS)!=fields or workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1705:76:evaluate',page.evaluate,locals(), NJ_VISIBLE_GEOMETRY) is not True or workflow_call('deployment/source_visual_adapters.py:capture_selected_nj_source:1705:126:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int((stop-time.monotonic()-.5)*1000)))!=text:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1705:256:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_selected_nj_source:1706:78:return',None)

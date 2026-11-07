@@ -131,6 +131,7 @@
     }
   }
   function statusLabel(result) {
+    if (result.status === 'Closed / Withdrawn / Canceled') return 'Closed / Withdrawn / Canceled / Inactive';
     if (boundedSourceFailure(result)) return result.status;
     const inconclusive = unresolvedStatuses.has(result.status);
     if (inconclusive && result.identity_review?.candidates?.some(candidate => !candidate.decision)) return 'Confirm match';

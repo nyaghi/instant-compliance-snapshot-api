@@ -127,6 +127,9 @@ def validate_asset(asset, *, ein, state, run_id):
     if 'or_export_evidence' in asset:
         from deployment.or_export_evidence import validate
         meta['or_export_evidence']=validate(asset['or_export_evidence'],meta)
+    if 'ma_status_extract' in asset:
+        from deployment.ma_status_extract import validate
+        meta['ma_status_extract']=validate(asset['ma_status_extract'],meta)
     return meta,raw
 
 def asset_for(raw, *, kind, state, ein, run_id, source_url, **meta):
@@ -753,6 +756,9 @@ class CaptureRun:
                         certificate_row={**row,'matched_registry_name':name,'matched_registry_identifier':identifier,
                             'status':bound['status'],'success':True,'raw_status_text':bound.get('raw_status','')}
                 ordered=pair_selected_certificate(self,ordered,certificate_row)
+            if self.state=='PA' and not negative:
+                from deployment.pa_detail_evidence import select as select_pa_detail
+                ordered=select_pa_detail(self,ordered)
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))
@@ -812,6 +818,10 @@ class CaptureRun:
                     from deployment.or_export_evidence import extract
                     supporting=extract(self.ein,name,public_text,url)
                     if supporting:asset['or_export_evidence']=supporting
+                if self.state=='MA' and not negative:
+                    from deployment.ma_status_extract import extract
+                    supporting=extract(self,row)
+                    if supporting:asset['ma_status_extract']=supporting
                 asset['captured_at']=stamp;assets.append(asset);break
         if assets:data['_worker_source_archives']=assets
         data['evidence_capture_ms']=round(self.capture_ms,2)
@@ -1306,6 +1316,9 @@ def render_pdf(meta,raw):
     if meta.get('or_export_evidence'):
         from deployment.or_export_evidence import append
         return append(out.getvalue(),meta['or_export_evidence'])
+    if meta.get('ma_status_extract'):
+        from deployment.ma_status_extract import append
+        return append(out.getvalue(),meta['ma_status_extract'])
     return out.getvalue()
 
 
