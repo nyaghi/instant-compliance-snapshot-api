@@ -16,6 +16,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from deployment.ok_source import ARCHIVED_HOSTS as OK_ARCHIVED_HOSTS
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 MAX_BYTES = 3_000_000
@@ -44,7 +45,7 @@ OFFICIAL_HOSTS = {
  'NH': {'www.doj.nh.gov','mm.nh.gov'}, 'NJ': {'charportal.dca.njoag.gov'},
  'NM': {'secure.nmdoj.gov'}, 'NV': {'orion.nv.gov'},
  'NY': {'charities-search.ag.ny.gov','charities-search-api.ag.ny.gov'},
- 'OH': {'charitableregistration.ohioago.gov'}, 'OK': {'www.sos.ok.gov'},
+ 'OH': {'charitableregistration.ohioago.gov'}, 'OK': OK_ARCHIVED_HOSTS,
  'OR': {'justice.oregon.gov'}, 'PA': {'www.charities.pa.gov'},
  'RI': {'ridbrprod-search.state-reg-eastern.tylerapp.com','ridbrprod.state-reg-eastern.tylerapp.com'},
  'SC': {'search.scsos.com'}, 'TN': {'tncab.tnsos.gov'},

@@ -5,6 +5,7 @@ requests, matching, retries, waits, screenshot or status decisions.
 """
 import re,time
 from urllib.parse import urlsplit,parse_qs
+from deployment.ok_source import SEARCH_URL as OK_SEARCH_URL
 from deployment.state_snapshots import CURRENT
 from deployment.search_history import SourceQueryReceipt
 from deployment.history_returned_rows import returned_record_details
@@ -12,7 +13,7 @@ from deployment.history_returned_rows import returned_record_details
 URLS={'WV':'https://erls.wvsos.gov/OnlineCharitiesSearch/Search',
       'AR':'https://sos-corp-search.ark.org/index.php/charity',
       'CT':'https://www.elicense.ct.gov/lookup/licenselookup.aspx',
-      'OK':'https://www.sos.ok.gov/corp/charityInquiryFind.aspx',
+      'OK':OK_SEARCH_URL,
       'ME':'https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx'}
 AR_RESULTS_URL='https://sos-corp-search.ark.org/charity/results'
 

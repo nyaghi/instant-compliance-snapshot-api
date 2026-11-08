@@ -1,5 +1,6 @@
 """Retain the original certificate already returned by the selected OK filing."""
 import io,re,time
+from deployment.ok_source import ARCHIVED_HOSTS
 from urllib.parse import urlsplit,parse_qsl
 from pypdf import PdfReader,PdfWriter
 
@@ -9,7 +10,7 @@ def retain_certificate(run,url,document_number,name,raw):
     run.visual_adapter_facts.append(fact)
     try:
         u=urlsplit(url);query=parse_qsl(u.query)
-        if (u.scheme!='https' or u.netloc!='www.sos.ok.gov' or u.path!='/corp/charityDetail.aspx'
+        if (u.scheme!='https' or u.netloc not in ARCHIVED_HOSTS or u.path!='/corp/charityDetail.aspx'
             or len(query)!=1 or query[0][0]!='id' or not re.fullmatch(r'\d+',query[0][1])
             or not re.fullmatch(r'\d+',document_number) or not name
             or not isinstance(raw,bytes) or not raw.startswith(b'%PDF') or len(raw)>20_000_000):return

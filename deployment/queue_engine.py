@@ -516,7 +516,9 @@ def execute(master, job, source_finished=None, trace_path=None):
     or_probe = None
     or_unavailable = None
     if job['state'] == 'OR':
-        from deployment.or_reachability import check, unavailable_result, collector_recovery_allowed, SOURCE
+        from deployment.or_reachability import (
+            check, unavailable_result, collector_recovery_allowed, completed_live_negative, SOURCE,
+        )
         try: row = master.or_snapshot_row_for_ein(p['ein'])
         except (OSError, ValueError, RuntimeError): row = None
         source = SOURCE
@@ -546,10 +548,12 @@ def execute(master, job, source_finished=None, trace_path=None):
     if or_unavailable is not None:
         # The normal collector and original-page identity guards are unchanged.
         # An offline row alone cannot certify recovery from failed live access.
-        recovered = (results[0].get('evidence_capture') == 'captured'
-                     and bool(results[0].get('_worker_source_archives')))
-        or_probe['collector_recovery']['original_evidence_captured'] = recovered
-        if not recovered:
+        original_captured = (results[0].get('evidence_capture') == 'captured'
+                             and bool(results[0].get('_worker_source_archives')))
+        live_negative = completed_live_negative(results[0], p)
+        or_probe['collector_recovery']['original_evidence_captured'] = original_captured
+        or_probe['collector_recovery']['completed_live_negative'] = live_negative
+        if not original_captured and not live_negative:
             or_probe['collector_recovery']['collector_status'] = results[0].get('status', '')
             results[0] = or_unavailable
     if or_probe is not None: results[0]['or_reachability'] = or_probe

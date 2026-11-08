@@ -37,7 +37,7 @@ class GateRepairs(unittest.TestCase):
         name = "American Civil Liberties Union Foundation Inc."
         org = master.checker.Organization(name, "13-6213516")
         identifier = "4312076366"
-        url = f"https://www.sos.ok.gov/corp/charityDetail.aspx?id={identifier}"
+        url = master.OK_DETAIL_URL + identifier
         raw = "78036050002 Renewal Registration August 18, 2026 10"
         result = master.checker.StateResult(
             name, org.ein, "OK", "Needs Review", url, raw_status_text=raw,

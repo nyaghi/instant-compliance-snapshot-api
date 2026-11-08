@@ -37,6 +37,25 @@ class CollectorRecoveryTests(unittest.TestCase):
                 self.assertEqual(value['status'],'Site Not Reachable')
                 self.assertFalse(value['success']);self.assertEqual(value['evidence_url'],'')
 
+    def test_completed_negative_can_recover_with_bound_portal_history(self):
+        from deployment.search_history import SourceQueryReceipt, finish_worker_history
+        run = SimpleNamespace(state='OR', ein='131930701', name='Test', run_id='test')
+        query = {'state':'OR', 'operation':'search', 'name':'Test', 'source_kind':'state_portal',
+                 'url':m.SOURCE+'/Charity/results'}
+        SourceQueryReceipt(run, query).complete(0)
+        result = finish_worker_history(run, {'state':'OR', 'ein':'13-1930701', 'status':'Not Registered', 'success':True})
+        value, _, _ = self.run_case(result=result)
+        self.assertEqual(value['status'], 'Not Registered')
+        self.assertTrue(value['or_reachability']['collector_recovery']['completed_live_negative'])
+        for mismatch in [
+            {'organization_name':'Other'},
+            {'search_failed_receipts':[{}]},
+            {'completed':[]},
+        ]:
+            damaged = {**result, '_worker_search_history':{**result['_worker_search_history'], **mismatch}}
+            rejected, _, _ = self.run_case(result=damaged)
+            self.assertEqual(rejected['status'], 'Site Not Reachable')
+
     def test_capture_flag_without_original_archive_is_not_recovery(self):
         value,_,_=self.run_case(result=dict(status='Current',success=True,evidence_capture='captured'))
         self.assertEqual(value['status'],'Site Not Reachable')

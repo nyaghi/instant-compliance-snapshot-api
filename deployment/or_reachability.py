@@ -73,6 +73,32 @@ def collector_recovery_allowed(reason, attempts, deadline, *, clock=None):
                     for a in attempts))
 
 
+def completed_live_negative(result, payload):
+    """Require a persisted-history-ready, query-bound Oregon portal response."""
+    from deployment.search_history import manifest
+    if (result.get('state') != 'OR' or result.get('success') is not True
+            or result.get('status') != 'Not Registered'):
+        return False
+    history = result.get('_worker_search_history')
+    if (not isinstance(history, dict) or history.get('organization_name') != payload['organization_name']
+            or re.sub(r'\D', '', history.get('ein', '')) != re.sub(r'\D', '', payload.get('ein', ''))
+            or history.get('search_failed_receipts')):
+        return False
+    try:
+        manifest(history, result, {}, time.time())
+        searches = [entry for entry in history['completed'] if entry['query']['operation'] == 'search']
+        return bool(searches) and all(
+            entry['query'].get('source_kind') == 'state_portal'
+            and entry['query'].get('name')
+            and entry['query'].get('url', '').lower() == SOURCE.lower() + '/charity/results'
+            and entry['search_receipt'].get('outcome') == 'Completed source response'
+            and type(entry['search_receipt'].get('returned_rows')) is int
+            for entry in searches
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def unavailable_result(payload, version, reason, attempts=(), elapsed=0):
     assert reason in REASONS
     if reason == 'OR_SOURCE_TIME_LIMIT':

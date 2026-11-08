@@ -138,6 +138,8 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
+from deployment.ok_source import DETAIL_URL as OK_DETAIL_URL, HOST as OK_HOST, SEARCH_URL as OK_SEARCH_URL
+
 APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.29.1-staging").strip() or "2026.09.29.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 HEAD_START_HANDOFF_LOCK = threading.Lock()
@@ -12252,6 +12254,21 @@ def sc_unrelated_alias_prefix(original: str, candidate: str, ein: str = "") -> b
 
 
 
+def sc_reordered_broad_name(original: str, candidate: str, query: str, ein: str) -> bool:
+    """A token probe alone does not make a reordered legal name an alias."""
+    if len(query.split()) != 1:
+        return False
+    names = [original, *known_names_for_ein(ein)]
+    explicit = names + [alias for name in names for alias in explicit_name_alias_segments(name)]
+    key = complete_name_identity_key(candidate)
+    if not key or any(key == complete_name_identity_key(name) for name in explicit):
+        return False
+    connectors = {"a", "an", "and", "for", "of", "on", "the", "to"}
+    primary = [token for token in complete_name_identity_key(original).split() if token not in connectors]
+    returned = key.split()
+    return len(primary) >= 2 and primary != returned and sorted(primary) == sorted(returned)
+
+
 def sc_result_page_stream(body, post, deadline, expected_query):
     current=1;seen=set();paged=False
     for _ in range(20):
@@ -12512,6 +12529,9 @@ def sc_official_detail_lookup(org) -> object | None:
                             if changed_heading:
                                 identity_unconfirmed = True
                             unrelated_alias = sc_unrelated_alias_prefix(original_name, registry_name, org.ein)
+                            if not changed_heading and not scope_review and sc_reordered_broad_name(
+                                    original_name, registry_name, query, org.ein):
+                                unrelated_alias = True
                             if unrelated_alias:
                                 unrelated_alias_excluded = True
                             if not filing_ein and not unrelated_alias and not scope_review:
@@ -16931,7 +16951,7 @@ def normalize_registry_match_fields(result, org) -> None:
         return  # Keep the selected source's full DBA/name for its original image.
     if (result.state == "OK" and getattr(result, "reason_code", "") == "OK_SELECTED_CERTIFICATE_UNCONFIRMED"
             and matched_name and re.fullmatch(r"\d+", matched_identifier)
-            and result.source_url == f"https://www.sos.ok.gov/corp/charityDetail.aspx?id={matched_identifier}"):
+            and result.source_url == OK_DETAIL_URL + matched_identifier):
         return  # A verified entity page remains evidence while its certificate is unresolved.
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         evidence = getattr(result, "va_entity_evidence", {})
@@ -19008,6 +19028,7 @@ def search_mn(page, org):
                 return True
             return registry_name_is_safe_against_targets(row_text, safe_targets, org.organization_name, org.ein)
 
+        from deployment.mn_empty_response import complete as mn_completed_empty_response
         name_fallback_started = time.perf_counter()
         result.queries_attempted = []
         name_plan_complete = True
@@ -19027,8 +19048,10 @@ def search_mn(page, org):
                 name_plan_failure = "Minnesota's name search reached its existing time allowance before completing every planned query."
                 break
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            checker.safe_wait_for_network_idle(page, timeout=5000)
             org_box = checker.find_visible_input(page, ["#txtOrg", 'input[name="txtOrg"]'])
+            if not org_box:
+                checker.safe_wait_for_network_idle(page, timeout=5000)
+                org_box = checker.find_visible_input(page, ["#txtOrg", 'input[name="txtOrg"]'])
             if not org_box:
                 name_plan_complete = False
                 name_plan_failure = "Minnesota's organization-name search form was unavailable."
@@ -19036,17 +19059,34 @@ def search_mn(page, org):
             org_box.fill("")
             org_box.fill(variant)
             try:
-                page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=5000)
+                with page.expect_navigation(wait_until="domcontentloaded", timeout=7000) as submission:
+                    submitted = org_box.evaluate('''(input) => {
+                        const form = input.form;
+                        const button = form?.querySelector('input[type="submit"][name="cmdSearch"]');
+                        if (!button || button.disabled || !button.getClientRects().length
+                            || form.method.toLowerCase() !== 'post'
+                            || form.action !== 'https://www.ag.state.mn.us/Charity/Search/Results.asp') return false;
+                        form.requestSubmit(button);
+                        return true;
+                    }''', timeout=2000)
+                    if not submitted:
+                        page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=5000)
+                response = submission.value
+                if response is None or response.status != 200:
+                    raise ValueError("Minnesota name response did not complete")
             except Exception:
-                page.keyboard.press("Enter")
+                name_plan_complete = False
+                name_plan_failure = "Minnesota's submitted organization-name response could not be verified."
+                continue
+            result.queries_attempted.append(variant)
+            # The official result page is server rendered. Once the existing
+            # validator confirms the submitted query, no idle wait is needed.
+            if mn_completed_empty_response(page, variant):
+                continue
             checker.safe_wait_for_network_idle(page, timeout=7000)
             time.sleep(0.5)
             text = readable_page_text(page)
-            result.queries_attempted.append(variant)
-            if no_registry_results_seen(text):
-                continue
-            from deployment.mn_empty_response import complete as mn_completed_empty_response
-            if mn_completed_empty_response(page, variant):
+            if no_registry_results_seen(text) or mn_completed_empty_response(page, variant):
                 continue
             try:
                 row_candidates = page.evaluate(
@@ -32583,7 +32623,7 @@ def search_ok_with_variants(page, org, module):
                     organization_name=original_name,
                     status=module.STATUS_NOT_FOUND,
                     raw_status_text=f"No safely matching filing number link. Rejected candidate: {matched_name}",
-                    source_url=module.OK_SEARCH_URL,
+                    source_url=OK_SEARCH_URL,
                     source_note=(
                         "Oklahoma returned a registry row for a generated query variant, but the row did not meet "
                         "CharityClarity's identity guardrails against the original requested organization name."
@@ -32615,7 +32655,7 @@ def search_ok_with_variants(page, org, module):
                 f"Oklahoma lookup budget expired after {len(attempted_variants)} of "
                 f"{len(planned_variants)} bounded name/alias variants completed"
             ),
-            source_url=module.OK_SEARCH_URL,
+            source_url=OK_SEARCH_URL,
             source_note=(
                 "Oklahoma search did not complete the bounded name/alias search path before "
                 "CharityClarity's state wall-time cap, so no final negative conclusion was made."
@@ -32736,8 +32776,8 @@ def ok_choose_safe_result_row_on_page(page, org, module):
                 # Pagination numbers are links too. Only a real charity
                 # detail URL identifies a registration row on page one.
                 href = link.get_attribute("href", timeout=ok_action_timeout(org, 1000)) or ""
-                parsed = urlparse(urljoin("https://www.sos.ok.gov/corp/charityInquiryFind.aspx", href))
-                if (parsed.hostname != "www.sos.ok.gov"
+                parsed = urlparse(urljoin(OK_SEARCH_URL, href))
+                if (parsed.hostname != OK_HOST
                         or not parsed.path.lower().endswith("/charitydetail.aspx")
                         or parse_qs(parsed.query).get("id") != [link_text]):
                     continue
@@ -32842,6 +32882,16 @@ def ok_latest_filing_from_candidates(candidates: list[str], module) -> str:
     if dated:
         return max(dated, key=lambda item: item[0])[1]
     return undated[0] if undated else ""
+
+
+def ok_detail_record_text(text: str) -> str:
+    # The replacement portal prints office hours below the record, including
+    # "Closed on all legal holidays". That is not entity status evidence.
+    return re.split(r"(?im)^\s*Oklahoma Secretary of State\s*$", text, maxsplit=1)[0]
+
+
+def ok_filing_row_text(text: str) -> str:
+    return re.sub(r"^Open PDF\s+", "", re.sub(r"\s+", " ", text).strip(), flags=re.I)
 
 
 def ok_terminal_closed_text(*texts: str) -> bool:
@@ -33005,16 +33055,29 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         return due, note
 
     try:
-        link = page.get_by_role("link", name=document_number, exact=True)
-        postback = re.search(r"__doPostBack\('([^']+)'", link.get_attribute("href", timeout=1000) or "")
-        if not postback or not re.fullmatch(r"ctl00\$DefaultContent\$grdFilingList\$ctl\d+\$lnkAction", postback.group(1)):
-            return OklahomaCertificateResult(None, "The selected registration document did not expose a valid registry action.")
+        direct_url = ""
+        if urlparse(detail_url).netloc == OK_HOST:
+            document = page.get_by_text(document_number, exact=True)
+            link = document.locator("xpath=ancestor::tr[1]").get_by_role("link", name="Open PDF", exact=True)
+            action_attribute = "onclick"
+            action = link.get_attribute(action_attribute, timeout=1000) or ""
+            expected_path = f"../CharityDocs/{document_number}.pdf"
+            if action != f'window.open("{expected_path}"); return false;':
+                return OklahomaCertificateResult(None, "The selected registration document did not expose a valid registry action.")
+            direct_url = urljoin(detail_url, expected_path)
+        else:
+            link = page.get_by_role("link", name=document_number, exact=True)
+            action_attribute = "href"
+            action = link.get_attribute(action_attribute, timeout=1000) or ""
+            postback = re.search(r"__doPostBack\('([^']+)'", action)
+            if not postback or not re.fullmatch(r"ctl00\$DefaultContent\$grdFilingList\$ctl\d+\$lnkAction", postback.group(1)):
+                return OklahomaCertificateResult(None, "The selected registration document did not expose a valid registry action.")
+            fields = page.locator("form").first.evaluate(
+                '(form) => Object.fromEntries(Array.from(new FormData(form).entries()).filter(([k,v]) => typeof v === "string"))', timeout=1000
+            )
+            fields["__EVENTTARGET"] = postback.group(1)
+            fields["__EVENTARGUMENT"] = ""
         live_action_confirmed = True
-        fields = page.locator("form").first.evaluate(
-            '(form) => Object.fromEntries(Array.from(new FormData(form).entries()).filter(([k,v]) => typeof v === "string"))', timeout=1000
-        )
-        fields["__EVENTTARGET"] = postback.group(1)
-        fields["__EVENTARGUMENT"] = ""
         # Playwright can spend time resolving the link/form before the POST.
         # Restore the POST allowance only for the verified action on this page.
         now = time.monotonic()
@@ -33025,7 +33088,13 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                 remaining = certificate_stop - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError('OK certificate action allowance exhausted')
-                response = page.request.post(detail_url, form=fields, timeout=max(1,int(min(5,remaining)*1000)))
+                timeout = max(1, int(min(5, remaining) * 1000))
+                if direct_url:
+                    response = page.request.get(direct_url, timeout=timeout, max_redirects=0)
+                    if response.url != direct_url:
+                        raise ValueError("Oklahoma certificate response left the selected document")
+                else:
+                    response = page.request.post(detail_url, form=fields, timeout=timeout)
                 break
             except Exception as delivery_error:
                 now = time.monotonic()
@@ -33038,9 +33107,8 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                     certificate_stop = min(state_stop, started + 10.0, max(certificate_stop, now + 3.0))
                 if certificate_stop - now < 1.5:
                     raise
-                current_action = link.get_attribute('href', timeout=max(1, int(min(.5, certificate_stop-now)*1000))) or ''
-                current_postback = re.search(r"__doPostBack\('([^']+)'", current_action)
-                if not current_postback or current_postback.group(1) != postback.group(1) or page.url != detail_url:
+                current_action = link.get_attribute(action_attribute, timeout=max(1, int(min(.5, certificate_stop-now)*1000))) or ''
+                if current_action != action or page.url != detail_url:
                     raise
         pdf_bytes = response.body()
         if response.ok and pdf_bytes.startswith(b"%PDF"):
@@ -33231,7 +33299,7 @@ def ok_open_selected_detail(page, link, org, module, filing_number):
     identifier = str(filing_number)
     if not re.fullmatch(r"[0-9]+", identifier):
         raise ValueError("Oklahoma selected filing number is invalid")
-    target = "https://www.sos.ok.gov/corp/charityDetail.aspx?id=" + identifier
+    target = OK_DETAIL_URL + identifier
     href = link.get_attribute("href", timeout=ok_action_timeout(org, 1000))
     if not href or urljoin(page.url, href) != target:
         raise ValueError("Oklahoma detail link does not match the selected record")
@@ -33268,7 +33336,7 @@ def ok_open_latest_equivalent_detail(page, org, module, selected):
     for name, identifier in candidates:
         if not re.fullmatch(r"[0-9]+", identifier):
             raise ValueError("Oklahoma duplicate filing number is invalid")
-        target = "https://www.sos.ok.gov/corp/charityDetail.aspx?id=" + identifier
+        target = OK_DETAIL_URL + identifier
         response = page.goto(target, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
         if response is None or response.status != 200 or page.url != target:
             raise TimeoutError("Oklahoma equivalent detail did not complete")
@@ -33277,14 +33345,14 @@ def ok_open_latest_equivalent_detail(page, org, module, selected):
         if (complete_name_identity_key(displayed) != complete_name_identity_key(name)
                 or not module.extract_labeled_value_from_text(text, ["Status"])):
             raise ValueError("Oklahoma equivalent detail identity is incomplete")
-        history = re.split(r"FILING HISTORY\s*:", text, flags=re.I)
+        history = re.split(r"(?im)^\s*FILING HISTORY\s*:?\s*$", ok_detail_record_text(text))
         if len(history) != 2:
             raise TimeoutError("Oklahoma equivalent filing history is incomplete")
         lines = [re.sub(r"\s+", " ", line).strip() for line in history[1].splitlines() if line.strip()]
         # The public table places cells on separate lines; use its actual rows.
         rows = page.locator("tr")
         for index in range(min(rows.count(), 200)):
-            line = re.sub(r"\s+", " ", rows.nth(index).inner_text(timeout=ok_action_timeout(org, 1000))).strip()
+            line = ok_filing_row_text(rows.nth(index).inner_text(timeout=ok_action_timeout(org, 1000)))
             if re.match(r"^\d+\s+", line):
                 lines.append(line)
         latest = ok_latest_filing_from_candidates(lines, module)
@@ -33324,7 +33392,7 @@ def ok_attach_foundation_review(result, org, page):
             or getattr(result,"matched_registry_identifier",None)!=identifier):return result
     url=str(page.url)
     parsed=urlparse(url)
-    if (parsed.hostname!="www.sos.ok.gov" or parsed.path.lower()!="/corp/charitydetail.aspx"
+    if (parsed.hostname!=OK_HOST or parsed.path.lower()!="/corp/charitydetail.aspx"
             or parse_qs(parsed.query).get("id")!=[identifier]):return result
     # Preserve the existing master calculation in the signed candidate.
     interpreted=result.status
@@ -33344,7 +33412,7 @@ def search_ok_precise(page, org, module):
         organization_name=org.organization_name,
         status=module.STATUS_UNKNOWN,
         raw_status_text="",
-        source_url=module.OK_SEARCH_URL,
+        source_url=OK_SEARCH_URL,
         source_note=(
             "Oklahoma uses the latest filing-history entry to classify the annual registration cycle. "
             "CharityClarity searches by organization-name/DBA variants because the public page does not expose EIN search, "
@@ -33353,11 +33421,17 @@ def search_ok_precise(page, org, module):
     )
     try:
         try:
-            workflow_call('source.step:search_ok_precise:goto:31043',page.goto,locals(), module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+            workflow_call('source.step:search_ok_precise:goto:31043',page.goto,locals(), OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
         except checker.PlaywrightTimeoutError:
             # Retry only this failed navigation, inside the original state's
             # allowance. No completed search/result is discarded or reused.
-            workflow_call('source.step:search_ok_precise:goto:31047',page.goto,locals(), module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+            workflow_call('source.step:search_ok_precise:goto:31047',page.goto,locals(), OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+
+        search_page = urlparse(page.url)
+        if (search_page.scheme != "https" or search_page.netloc != OK_HOST
+                or search_page.path.casefold() != "/corp/charityinquiryfind.aspx"):
+            result.error = "Oklahoma did not return the official charity search page."
+            return result
 
         try:
             workflow_call('source.step:search_ok_precise:click:31050',page.locator("#ctl00_DefaultContent_CharityNameSearch1_RadioButtonList1_0").click,locals(), timeout=ok_action_timeout(org, 8000))
@@ -33389,7 +33463,7 @@ def search_ok_precise(page, org, module):
         workflow_call('source.step:search_ok_precise:fill:31076',name_input.fill,locals(), search_name, timeout=ok_action_timeout(org, 4000))
 
         from deployment.validated_search_history import begin_query, finish_ok
-        _cc_history = begin_query('OK',search_name,module.OK_SEARCH_URL)
+        _cc_history = begin_query('OK',search_name,OK_SEARCH_URL)
         clicked = False
         for candidate in [
             page.locator("#ctl00_DefaultContent_CharityNameSearch1_SearchNameButton").first,
@@ -33437,7 +33511,8 @@ def search_ok_precise(page, org, module):
 
         matched_name, filing_number = ok_open_latest_equivalent_detail(page, org, module, selected)
 
-        detail_text = workflow_call('source.step:search_ok_precise:body_text:31124',module.body_text,locals(), page, timeout=15000)
+        detail_text = ok_detail_record_text(workflow_call(
+            'source.step:search_ok_precise:body_text:31124', module.body_text, locals(), page, timeout=15000))
         tentative_name = getattr(org, "ok_tentative_candidate_name", "")
         if tentative_name:
             if not ok_tentative_detail_corroborated(detail_text, tentative_name, org.ein, module):
@@ -33472,7 +33547,8 @@ def search_ok_precise(page, org, module):
             row_count = min(workflow_call('source.step:search_ok_precise:count:31156',rows.count,locals()), 200)
             for index in range(row_count):
                 try:
-                    row_text = re.sub(r"\s+", " ", workflow_call('source.step:search_ok_precise:inner_text:31159',rows.nth(index).inner_text,locals(), timeout=1000)).strip()
+                    row_text = ok_filing_row_text(workflow_call(
+                        'source.step:search_ok_precise:inner_text:31159', rows.nth(index).inner_text, locals(), timeout=1000))
                 except Exception:
                     continue
                 if re.match(r"^\d+\s+", row_text):
@@ -33531,7 +33607,7 @@ def search_ok_precise(page, org, module):
                 return ok_attach_foundation_review(result, org, page)
             if (certificate_evidence.failure_kind == "unreadable"
                     and not getattr(org, "ok_foundation_review", None)
-                    and page.url == f"https://www.sos.ok.gov/corp/charityDetail.aspx?id={filing_number}"):
+                    and page.url == OK_DETAIL_URL + filing_number):
                 result.status = "Needs Review"
                 result.reason_code = "OK_SELECTED_CERTIFICATE_UNCONFIRMED"
                 result.source_url = page.url

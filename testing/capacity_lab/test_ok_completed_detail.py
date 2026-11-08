@@ -9,8 +9,8 @@ from testing.capacity_lab.ok_detail_scope import strip_ok_completed_detail
 
 SETTINGS={'PUBLIC_BASE_URL':'https://instant-compliance-snapshot-api-hn4v.onrender.com',
           'CE_LAB_OK_COMPLETED_DETAIL':'1'}
-SOURCE='https://www.sos.ok.gov/corp/charitysearch.aspx'
-TARGET='https://www.sos.ok.gov/corp/charityDetail.aspx?id=1234567890'
+SOURCE='https://business.sos.ok.gov/corp/charitysearch.aspx'
+TARGET='https://business.sos.ok.gov/corp/charityDetail.aspx?id=1234567890'
 
 class ReadyDetail(unittest.TestCase):
     def setUp(self):
