@@ -210,14 +210,51 @@ class OklahomaCertificateRecoveryTests(unittest.TestCase):
         self.page.evaluate.assert_not_called()
         self.assertIn("primary request", note)
 
-    def test_timeout_immediately_uses_filing_without_retry(self):
+    def test_persistent_timeout_uses_filing_after_one_retry(self):
         self.page.request.post.side_effect = TimeoutError("upstream timeout")
         evidence = self.fetch()
         self.assertTrue(cc.ok_certificate_service_unavailable(evidence))
         self.assertEqual(self.calculate(note=evidence), date(2027, 6, 15))
-        self.page.request.post.assert_called_once()
+        self.assertEqual(self.page.request.post.call_count, 2)
         self.page.evaluate.assert_not_called()
         self.page.goto.assert_not_called()
+
+    def test_late_playwright_timeout_recovers_exact_document_within_ceiling(self):
+        clock = [100.0]
+        reply = Mock(ok=True)
+        reply.body.return_value = b"%PDF-original"
+        def post(url, *, form, timeout):
+            if self.page.request.post.call_count == 1:
+                clock[0] = 106.8
+                raise RuntimeError("APIRequestContext.post: Request timed out after 1834 ms")
+            self.assertEqual(url, self.page.url)
+            self.assertGreaterEqual(timeout, 2990)
+            self.assertLessEqual(clock[0] + timeout / 1000, 110.0)
+            self.assertEqual(form["__EVENTTARGET"], "ctl00$DefaultContent$grdFilingList$ctl26$lnkAction")
+            return reply
+        self.page.request.post.side_effect = post
+        with patch.object(cc.time, "monotonic", side_effect=lambda: clock[0]), patch.object(
+                cc, "ok_certificate_expiration", return_value=(date(2027, 1, 28), "verified")):
+            self.assertEqual(self.fetch()[0], date(2027, 1, 28))
+        self.assertEqual(self.page.request.post.call_count, 2)
+
+    def test_changed_document_action_blocks_timeout_retry(self):
+        link = self.page.get_by_role.return_value
+        first = link.get_attribute.return_value
+        link.get_attribute.side_effect = [first, first.replace("ctl26", "ctl27")]
+        self.page.request.post.side_effect = TimeoutError("timeout")
+        self.assertIsNone(self.fetch()[0])
+        self.page.request.post.assert_called_once()
+
+    def test_expired_certificate_ceiling_blocks_timeout_retry(self):
+        clock = [100.0]
+        def post(*args, **kwargs):
+            clock[0] = 110.0
+            raise TimeoutError("timeout")
+        self.page.request.post.side_effect = post
+        with patch.object(cc.time, "monotonic", side_effect=lambda: clock[0]):
+            self.assertIsNone(self.fetch()[0])
+        self.page.request.post.assert_called_once()
 
     def test_persistent_520_is_registry_unavailability(self):
         self.page.evaluate.return_value = {"ok": False, "status": 520, "content_type": "text/html", "pdf_base64": ""}

@@ -6917,7 +6917,9 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                 if normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
                     parsed["search_name"] = row["name"]
             elif normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
-                raise ValueError("Selected detail name changed from the search result")
+                if not (state == "GA" and ga_numbered_terminal_name_variant({**parsed, "location": row["location"]}, row["name"])
+                        and normalized_match_name(row["name"]) == normalized_match_name(org.organization_name)):
+                    raise ValueError("Selected detail name changed from the search result")
             seen.add(identity)
             record = {**row, **parsed, "url": IL_GA_SOURCES[state]}
             if state == "GA":
@@ -9547,9 +9549,29 @@ def final_four_connector_request(payload, origin):
                         record, reason, diagnostic=reader_stage)}
             try:
                 evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
-            except (ValueError, TypeError, KeyError):
-                return 200, {"phase": "complete", "result": final_four_connector_failure(
-                    record, diagnostic="SERVER_EVIDENCE_REJECTED")}
+            except (ValueError, TypeError, KeyError) as exc:
+                result = final_four_connector_failure(record, diagnostic="SERVER_EVIDENCE_REJECTED")
+                if record["state"] == "NC" and pending["query"].get("operation") == "search":
+                    # Only static parser reasons may leave the server. Do not
+                    # expose the public card, signed token, or rejected fields.
+                    known = {
+                        "Unexpected search evidence fields", "Unexpected search row fields",
+                        "Registry evidence exceeded its field bound", "Registry evidence exceeded its message bound",
+                        "NC search did not return a complete result set for the requested name",
+                        "NC search row is incomplete", "NC result repeated a record across pages",
+                        "North Carolina search mode differs from the requested public form",
+                        "North Carolina charity result is incomplete", "North Carolina source names are incomplete",
+                        "North Carolina displayed name has no bound legal-name evidence",
+                        "North Carolina result is not an identified charity license",
+                        "North Carolina profile link is not an official charity record",
+                        "North Carolina unissued review row has conflicting license dates",
+                        "North Carolina unissued application has conflicting license dates",
+                        "North Carolina expired numberless record has no expiration date",
+                        "North Carolina extension was granted but its end date is incomplete",
+                        "Unrecognized North Carolina expiration", "Unrecognized North Carolina extension",
+                    }
+                    result["lab_diagnostic"]["validation_reason"] = str(exc) if str(exc) in known else "Unclassified search validation error"
+                return 200, {"phase": "complete", "result": result}
             from deployment.state_snapshots import connector_archive
             connector_archive(record,payload,pending['query'],evidence)
             # Optional history counts the validated source response before the
@@ -10174,6 +10196,18 @@ def il_missing_fein_identity(org, row, deadline):
     return unavailable
 
 
+def ga_numbered_terminal_name_variant(row, full_name):
+    """A narrow source spelling difference suitable only for identity review."""
+    words = normalized_match_name(row.get("name", "")).split()
+    return (not row.get("ein") and not row.get("location")
+            and re.fullmatch(r"CH[0-9]+", row.get("identifier", ""))
+            and row.get("license_category") == "Charity"
+            and row.get("raw_status", "").casefold() == "active"
+            and len(words) >= 4 and len(words[-1]) >= 6
+            and len(distinctive_match_tokens(row["name"])) >= 3
+            and normalized_match_name(full_name).split() == [*words[:-1], words[-1] + "ness"])
+
+
 def licensed_charity_identity(org, row, state, deadline):
     """Shared master name/EIN and cross-state office checks; never address-only."""
     names = [row["name"], *row.get("aliases", [])]
@@ -10340,6 +10374,13 @@ def licensed_charity_identity(org, row, state, deadline):
         targets = [org.organization_name, *known_names_for_ein(org.ein)]
         if not any(ordered_subset(candidate_words, normalized_match_name(target).split())
                    or ordered_subset(normalized_match_name(target).split(), candidate_words) for target in targets):
+            # GA can drop a terminal noun suffix on the selected numbered
+            # detail. Preserve this full-name variant for identity review only.
+            if state == "GA" and any(ga_numbered_terminal_name_variant(row, target) for target in targets):
+                row["match"] = {"decision": "possible", "score": 55, "reason": "GA_TERMINAL_NAME_VARIANT"}
+                row["address_evidence"] = {"decision": "unavailable", "basis":
+                    "The selected Georgia credential shows a shortened final word and no corroborating office address."}
+                return "possible"
             return "rejected"
     # This bounded cross-check resolves only DC's related-name candidates.
     if state == "DC" and decision["decision"] == "possible":
@@ -10830,6 +10871,18 @@ def ri_charity_detail(raw, deadline, headers):
     name = str(detail.get("name") or "").removeprefix("Details for ").strip()
     if normalized_match_name(name) != normalized_match_name(raw["title"]): raise ValueError("Rhode Island detail name changed")
     values, address = {}, ""
+
+    def business_address_key(lines):
+        # Tyler can print the locality in both the street and city lines.
+        # Strip only an exact repeated city, with state/ZIP and country intact.
+        if len(lines) != 3 or lines[-1].casefold() != "united states":
+            return None
+        locality = re.fullmatch(r"(.+?),\s*[A-Za-z ]+\s+\d{5}(?:-\d{4})?", lines[1])
+        if not locality:
+            return None
+        street = re.sub(r",\s*" + re.escape(locality[1]) + r"\s*,?\s*$", "", lines[0], flags=re.I)
+        return street.casefold(), lines[1].casefold(), lines[2].casefold()
+
     for tile in detail.get("tiles", []):
         for step in tile.get("steps", []):
             # Relationship/agent start dates are not charity registration dates.
@@ -10840,7 +10893,11 @@ def ri_charity_detail(raw, deadline, headers):
                     if not label or not isinstance(value, list): continue
                     normalized = [re.sub(r"\s+", " ", str(v)).strip() for v in value if v is not None and str(v).strip()]
                     if label in values and values[label] != normalized:
-                        raise ValueError("Rhode Island repeats conflicting selected detail values")
+                        current = business_address_key(normalized) if label == "Business Address" else None
+                        if current is None or current != business_address_key(values[label]):
+                            raise ValueError("Rhode Island repeats conflicting selected detail values")
+                        # Keep the registry's shorter original spelling for corroboration.
+                        normalized = min(values[label], normalized, key=lambda lines: len(lines[0]))
                     values[label] = normalized
     credential = values.get("Credential", [])
     if "Charitable Organization" not in credential or not credential or not re.fullmatch(r"CO\.\d+", credential[0]):
@@ -32901,12 +32958,19 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                 response = page.request.post(detail_url, form=fields, timeout=max(1,int(min(5,remaining)*1000)))
                 break
             except Exception as delivery_error:
-                if (certificate_attempt or 'timeout' in type(delivery_error).__name__.lower()
-                        or 'timeout' in str(delivery_error).lower()
-                        or certificate_stop-time.monotonic()<1.5 or page.url!=detail_url):
+                now = time.monotonic()
+                if certificate_attempt or page.url != detail_url:
                     raise
-                current_action=link.get_attribute('href',timeout=max(1,int(min(.5,certificate_stop-time.monotonic())*1000))) or ''
-                if postback.group(1) not in current_action:
+                if ('timeout' in type(delivery_error).__name__.lower()
+                        or re.search(r'\b(?:timeout|timed out)\b', str(delivery_error), re.I)):
+                    # Use the already established ten-second ceiling only on
+                    # a failed POST. A healthy document still needs one call.
+                    certificate_stop = min(state_stop, started + 10.0, max(certificate_stop, now + 3.0))
+                if certificate_stop - now < 1.5:
+                    raise
+                current_action = link.get_attribute('href', timeout=max(1, int(min(.5, certificate_stop-now)*1000))) or ''
+                current_postback = re.search(r"__doPostBack\('([^']+)'", current_action)
+                if not current_postback or current_postback.group(1) != postback.group(1) or page.url != detail_url:
                     raise
         pdf_bytes = response.body()
         if response.ok and pdf_bytes.startswith(b"%PDF"):
