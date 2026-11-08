@@ -693,6 +693,10 @@ class CaptureRun:
                 self.documents.pop(disposable)
             self.documents.append((url,raw,kind,public_text,time.time(),note or workflow_call('deployment/state_snapshots.py:document:416:80:get',self.provenance.get,locals(), url,'')))
         except (ValueError,UnicodeError):return trace_return('deployment/state_snapshots.py:document:417:41:return',None)
+    def allow_selected_screenshot(self, page, stop, matches_text):
+        """Scope the capture allowance to one already selected official page."""
+        self.selected_screenshot = (page, page.url, stop, matches_text)
+
     def page(self,page):
         """Capture before its existing context closes; do not navigate or scroll."""
         if self.state=='NJ' and getattr(self,'nj_unnumbered_capture_guard',False):return
@@ -760,8 +764,18 @@ class CaptureRun:
                 '(b)=>({width:Math.max(b.scrollWidth,document.documentElement.scrollWidth,innerWidth),height:Math.max(b.scrollHeight,document.documentElement.scrollHeight,innerHeight)})',timeout=min(300,hi_timeout(.4)) if self.state=='HI' else (co_timeout(5,2) if self.state=='CO' else ma_timeout(1) if self.state=='MA' else hi_timeout(1.0) if self.state=='HI' else fl_timeout(1.5) if fl_owned else max(1,int(min(2.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state=='AK' else 300))
             if not size or size['width']<=0 or size['height']<=0 or size['width']*size['height']>MAX_PIXELS:
                 self.errors.append('source_page_exceeds_capture_bound');return trace_return('deployment/state_snapshots.py:page:461:72:return',None)
+            selected_timeout = None
+            selected = getattr(self, 'selected_screenshot', None)
+            if selected:
+                selected_page, selected_url, selected_stop, matches_text = selected
+                if page is selected_page and original_url == selected_url and matches_text(text):
+                    remaining = min(selected_stop, DEADLINE.get()) - time.monotonic() - 0.5
+                    if remaining <= 0:
+                        self.errors.append('capture_skipped_near_task_deadline')
+                        return
+                    selected_timeout = max(1, int(min(3.0, remaining) * 1000))
             observed('screenshot')
-            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=min(1000,hi_timeout(.2)) if self.state=='HI' else ((co_timeout(1,5) if self.state=='CO' else ma_timeout(5) if self.state=='MA' else hi_timeout(.5) if self.state=='HI' else fl_timeout(.5) if fl_owned else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'AK','OK','ME'} or (self.state in {'WV','RI'} and hasattr(self,'page_capture_stop')) else 1000)))
+            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=selected_timeout if selected_timeout is not None else min(1000,hi_timeout(.2)) if self.state=='HI' else ((co_timeout(1,5) if self.state=='CO' else ma_timeout(5) if self.state=='MA' else hi_timeout(.5) if self.state=='HI' else fl_timeout(.5) if fl_owned else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'AK','OK','ME'} or (self.state in {'WV','RI'} and hasattr(self,'page_capture_stop')) else 1000)))
             if self.state=='WA' and workflow_call('deployment/state_snapshots.py:page:464:36:is_visible',page.locator('#loaderDiv').is_visible,locals()):
                 self.errors.append('WA_source_overlay_returned_during_capture');return trace_return('deployment/state_snapshots.py:page:465:80:return',None)
             observed('post_capture_binding')

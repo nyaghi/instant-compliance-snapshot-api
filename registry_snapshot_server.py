@@ -18616,6 +18616,7 @@ def search_fl_with_transport(page, org, transport):
                 continue
             classified = finish_fl_candidate(result, best_candidate)
             if classified is not None:
+                classified._cc_fl_selected_row_text = best_candidate["row_text"]
                 return classified
             best_result = result
             continue
@@ -36769,7 +36770,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         'state':'FL','ein':ein,'status':public_status(result),'success':result.success,
                         'matched_registry_name':result.matched_registry_name,
                         'matched_registry_identifier':result.matched_registry_identifier,
-                        'source_url':result.source_url},page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34456:69:get',DEADLINE.get,locals()))
+                        'source_url':result.source_url,
+                        'selected_legacy_row':getattr(result, '_cc_fl_selected_row_text', '')},page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34456:69:get',DEADLINE.get,locals()))
                 except Exception:pass
             elif state == "NJ":
                 result = search_nj_with_name_fallback(page, org)
@@ -36959,6 +36961,12 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             elif state == "MN":
                 result = search_mn(page, org)
                 body = registry_page_body(page)
+                try:
+                    from deployment.state_snapshots import CURRENT, DEADLINE
+                    from deployment.source_visual_adapters import allow_owned_mn_screenshot
+                    allow_owned_mn_screenshot(sys.modules[__name__], CURRENT.get(), result, page, DEADLINE.get())
+                except Exception:
+                    pass
             elif state == "OH":
                 result = search_oh(page, org)
                 body = registry_page_body(page)

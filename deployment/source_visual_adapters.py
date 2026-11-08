@@ -239,6 +239,11 @@ def capture_selected_source(master,result,run,deadline):
     before=len(run.documents);capture=time.perf_counter()
     # Preserve RI's existing absolute visual stop inside the screenshot call.
     if run.state in {'RI','OR'}:run.page_capture_stop=stop
+    if run.state == 'OH':
+     run.allow_selected_screenshot(page, stop, lambda visible: (
+         bool(re.search(r'(?<!\d)' + run.ein[:2] + r'-?' + run.ein[2:] + r'(?!\d)', visible))
+         and normalize(result['matched_registry_name']) in normalize(visible)
+         and not re.search(r'verify you are human|user validation required|access denied|just a moment|server error|runtime error', visible, re.I)))
     if run.state=='HI':run.page_capture_stop=min(stop,getattr(run,'page_capture_stop',float('inf')))
     # Owned ContextCaptureProxy captures once; its close must not capture again.
     workflow_call('deployment/source_visual_adapters.py:capture_selected_source:182:4:capture',context.capture,locals())
@@ -1501,10 +1506,45 @@ def capture_owned_me_page(run,result,page,context,deadline):
   if hasattr(run,'page_capture_stop'):del run.page_capture_stop
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
 
+def allow_owned_mn_screenshot(master, run, result, page, deadline):
+ """Extend the selected EIN detail's screenshot within the existing task deadline."""
+ if (run is None or run.state != 'MN' or not result.success
+     or getattr(result, 'reason_code', '') != 'MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE'
+     or not result.matched_registry_name or not getattr(result, 'fiscal_year_end', '')
+     or re.sub(r'\D', '', result.ein) != run.ein):
+  return
+ url = urlsplit(page.url)
+ feins = parse_qs(url.query).get('FederalID', [])
+ if (url.netloc != 'www.ag.state.mn.us' or url.scheme != 'https'
+     or url.path != '/Charity/Search/CHR_GeneralInfo.asp'
+     or len(feins) != 1 or re.sub(r'\D', '', feins[0]) != run.ein):
+  return
+ from deployment.state_snapshots import key
+
+ def matches_text(text):
+  year_end = master.mn_latest_fiscal_year_end_from_text(text)
+  return (year_end is not None and master.format_date(year_end) == result.fiscal_year_end
+          and key(result.matched_registry_name) in key(text)
+          and bool(re.search(r'(?<!\d)' + run.ein[:2] + r'-?' + run.ein[2:] + r'(?!\d)', text)))
+
+ run.allow_selected_screenshot(page, deadline, matches_text)
+
+
 def capture_owned_fl_page(master,run,result,page,context,deadline):
  """Photograph the already-selected FL license in the existing owned browser."""
  if run is not None and run.state=='FL' and workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:991:44:get',result.get,locals(), 'status')=='Not Registered':
   return trace_return('deployment/source_visual_adapters.py:capture_owned_fl_page:992:2:return',(workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:992:9:capture_owned_fl_empty',capture_owned_fl_empty,locals(), master,run,result,page,deadline)))
+ if run is not None and run.state == 'FL':
+  selected_row = result.get('selected_legacy_row')
+  identifier = result.get('matched_registry_identifier') or ''
+  if (selected_row and result.get('success') is True
+      and re.sub(r'\D', '', result['ein']) == run.ein
+      and result['source_url'] == page.url == master.FL_CHECK_A_CHARITY_URL
+      and re.fullmatch(r'CH\d+', identifier)
+      and re.search(r'\b' + identifier + r'\b', selected_row, re.I)):
+   expected_row = ' '.join(selected_row.split())
+   run.allow_selected_screenshot(page, deadline, lambda text: expected_row in ' '.join(text.split()))
+   return
  if run is None or run.state!='FL' or selected_url(run,result) is None:return trace_return('deployment/source_visual_adapters.py:capture_owned_fl_page:993:71:return',None)
  if getattr(run,'selected_visual_attempted',False):return trace_return('deployment/source_visual_adapters.py:capture_owned_fl_page:994:51:return',None)
  run.selected_visual_attempted=True

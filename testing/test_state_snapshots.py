@@ -268,6 +268,67 @@ class Snapshots(unittest.TestCase):
         with s.CaptureRun('Fixture','123456789','OR'):
             self.assertEqual(s.ContextCaptureProxy(BrokenContext()).close(),'original-close-still-executed')
 
+    def test_selected_page_capture_survives_observed_one_second_timeout(self):
+        from deployment import source_visual_adapters as adapters
+
+        samples = [
+            ('OH', 'Rocky Mountain Elk Foundation, Inc', '810421425', '281861',
+             'https://charitableregistration.ohioago.gov/Charities/OrganizationDetails?Id=281861',
+             'Organization Name: Rocky Mountain Elk Foundation, Inc\nEmployer Identification Number (EIN): 81-0421425\nFiscal Year End: 12/31\nRegistration Status: Active', 1022),
+            ('FL', 'PATH', '911157127', 'CH22808', c.FL_CHECK_A_CHARITY_URL,
+             'PATH License/Registration Number CH22808 (Suspended)', 1065),
+            ('MN', 'PATH', '911157127', '',
+             'https://www.ag.state.mn.us/Charity/Search/CHR_GeneralInfo.asp?FederalID=911157127&Yr=CURR&cmdSearch=View',
+             'PATH\nFederal ID: 91-1157127\nFiscal Year Ending: 12/31/2024', 1907),
+        ]
+        for state, name, ein, identifier, url, body, latency in samples:
+            for scenario in ('legacy', 'selected', 'changed', 'different page', 'deadline'):
+                with self.subTest(state=state, scenario=scenario), s.CaptureRun(name, ein, state) as run:
+                    calls = []
+                    def screenshot(**kw):
+                        calls.append(kw['timeout'])
+                        if kw['timeout'] < latency:
+                            raise TimeoutError('Replayed screenshot exceeded allowance')
+                        return image(name, identifier)
+                    page = SimpleNamespace(url=url, screenshot=screenshot)
+                    page.inner_text = lambda *args, **kw: body
+                    page.locator = lambda _: SimpleNamespace(evaluate=lambda *args, **kw: {'width': 1000, 'height': 1200})
+                    stop = time.monotonic() + (0.7 if scenario == 'deadline' else 8)
+                    if scenario != 'legacy':
+                        if state == 'FL':
+                            adapters.capture_owned_fl_page(c, run, {
+                                'state': state, 'ein': ein, 'success': True, 'status': 'Suspended',
+                                'source_url': url, 'matched_registry_identifier': identifier,
+                                'selected_legacy_row': body,
+                            }, page, None, stop)
+                        elif state == 'MN':
+                            adapters.allow_owned_mn_screenshot(c, run, SimpleNamespace(
+                                success=True, reason_code='MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE',
+                                matched_registry_name=name, fiscal_year_end=c.format_date(c.date(2024,12,31)),
+                                ein=ein,
+                            ), page, stop)
+                        else:
+                            run.allow_selected_screenshot(page, stop, lambda text: text == body)
+                        self.assertIs(run.selected_screenshot[0], page)
+                    if scenario == 'changed':
+                        page.inner_text = lambda *args, **kw: 'Different organization and credential'
+                    if scenario == 'different page':
+                        page = SimpleNamespace(**vars(page))
+                    run.page(page)
+                    self.assertEqual(bool(run.documents), scenario == 'selected')
+                    self.assertEqual(len(calls), 1)
+                    if scenario == 'selected':
+                        self.assertEqual(calls[0], 3000)
+                        status = 'Suspended' if state == 'FL' else 'Delinquent'
+                        result = run.finish(dict(state=state, ein=ein, status=status, success=True,
+                                                 matched_registry_name=name, matched_registry_identifier=identifier))
+                        self.assertEqual(result['status'], status)
+                        self.assertEqual(len(result.get('_worker_source_archives', [])), 1)
+                    elif scenario == 'deadline':
+                        self.assertLessEqual(calls[0], 200)
+                    else:
+                        self.assertEqual(calls[0], 1000)
+
     def test_thirty_jpeg_captures_keep_decoded_pixels_and_full_page_ratio(self):
         for org in COHORT:
             source=Image.open(io.BytesIO(image(org['name'],'111')));raw=io.BytesIO();source.save(raw,format='JPEG',quality=75)
