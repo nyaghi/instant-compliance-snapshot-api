@@ -91,6 +91,43 @@ class Gate38EntityScope(unittest.TestCase):
 
 
 class ArkansasEvidence(unittest.TestCase):
+    def test_name_limit_uses_existing_slot_and_keeps_exact_truncated_row_as_candidate(self):
+        self.check_limited_name(AAAS, AAAS[:50])
+
+    def test_original_prefix_can_recover_truncated_candidate_without_more_queries(self):
+        prefix = "American Association for the Advancement of"
+        self.check_limited_name(prefix, prefix)
+
+    def check_limited_name(self, first_query, expected_query):
+        page = MagicMock()
+        query = [""]
+        submissions = []
+        capped = AAAS[:50]
+        page.locator.return_value.fill.side_effect = lambda value: query.__setitem__(0, value)
+        def click(**kwargs):
+            submissions.append(query[0])
+            page.url = receipt.AR_RESULTS_URL + "?" + urlencode({"name": query[0]})
+        page.get_by_role.return_value.click.side_effect = click
+        candidate = dict(name=capped, status="Current", type="Charity", registration_date="2008-12-15")
+        with patch.object(c, "ar_reviewed_search_plan", return_value=([first_query, "Later variant"], {})), \
+                patch.object(c, "ar_wait_for_search_form", return_value=True), \
+                patch.object(c, "safe_wait_for_network_idle"), \
+                patch.object(c, "registry_page_body", return_value="Back to Search Form Registration Date"), \
+                patch.object(c, "ar_result_rows", return_value=[candidate]), \
+                patch("deployment.source_visual_adapters.capture_ar_review_page") as capture:
+            result = c.search_ar_precise(page, c.checker.Organization(AAAS, "53-0196568"))
+        self.assertEqual(submissions, [expected_query])
+        self.assertFalse(result.success)
+        self.assertEqual(result.status_reason, "AR_NAME_LENGTH_IDENTITY_REVIEW")
+        self.assertFalse(result._cc_identity_review["search_complete"])
+        self.assertEqual(result._cc_identity_review["records"][0]["name"], capped)
+        self.assertEqual(result._cc_identity_review["records"][0]["status"], "Current")
+        capture.assert_called_once()
+
+    def test_name_limit_leaves_other_queries_unchanged(self):
+        for value in [AAAS[:50], AAAS + " Inc.", "American-Association for the Advancement of Science", PARENT]:
+            self.assertEqual(c.ar_one_character_limit_query(AAAS, value), value)
+
     def test_same_run_report_distinguishes_no_match_from_incomplete(self):
         ein = "530196568"
         exact = AAAS

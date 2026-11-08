@@ -33639,6 +33639,15 @@ def ar_wait_for_bound_result(page, name: str, timeout_ms: int):
         pass
 
 
+def ar_one_character_limit_query(identity_name: str, planned_name: str) -> str:
+    """Replace an unsendable exact name with a retrieval-only Arkansas query."""
+    if (len(planned_name) == 51 and re.fullmatch(r"[A-Za-z0-9 .,()&'-]{50}[A-Za-z]", planned_name)
+            and planned_name.casefold() == identity_name.casefold()
+            and len(distinctive_match_tokens(planned_name)) >= 2):
+        return planned_name[:50]
+    return planned_name
+
+
 def ar_result_rows(page, org=None) -> list[dict]:
     from deployment.validated_search_history import ar_rows_start, ar_row, ar_rows_failed
     ar_rows_start()
@@ -33932,6 +33941,7 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
     result = checker.StateResult(org.organization_name, org.ein, "AR", checker.STATUS_UNKNOWN, AR_SEARCH_URL)
     original_name = getattr(org, "organization_name", "") or ""
     identity_name = getattr(org, "original_organization_name", original_name)
+    limited_identity = ar_one_character_limit_query(identity_name, identity_name)
     variants = ar_preferred_name_variants(org)
     for variant in organization_name_variants(
         original_name,
@@ -33990,7 +34000,9 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
 
     if _completed_empty_queries:
         record_progress()
-    for variant in planned_variants:
+    for requested_variant in planned_variants:
+        variant = ar_one_character_limit_query(identity_name, requested_variant)
+        used_limit_query = variant != requested_variant
         # Empty retrieval evidence is literal, not the more permissive name
         # identity normalization. "Institute Inc." cannot cover "Institute"
         # or "Institute, Inc."; keep those existing fallback searches.
@@ -34009,6 +34021,8 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
         nav_timeout_ms = max(3000, min(12000, int(remaining * 1000)))
         settle_timeout_ms = max(1000, min(2500, int(remaining * 500)))
         observed = {"query": variant}
+        if used_limit_query:
+            observed["requested_full_name"] = requested_variant
         observation_started = time.perf_counter()
         if _query_observations is not None:
             _query_observations.append(observed)
@@ -34092,12 +34106,20 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 rows_seen += len(parsed_rows)
             elif result_shell_seen and not explicit_no_results:
                 result_shell_without_rows = True
+            limit_candidate_name = ""
             for row in parsed_rows:
                 row_name = row.get("name", "")
                 if not row_name:
                     continue
                 variant_targets = organization_match_target_variants(original_name, getattr(org, "ein", ""))
-                if identity_name != original_name and distinct_foundation_name_scope(identity_name, row_name):
+                if (limited_identity != identity_name and not unusable_read and len(parsed_rows) == 1
+                        and (used_limit_query or len(variant) >= 32 and limited_identity.casefold().startswith(variant.casefold() + " "))
+                        and row_name.casefold() == limited_identity.casefold() and row.get("type", "").casefold() in {"charity", "charity registration"}
+                        and ar_status_from_text(row.get("status", "")) != checker.STATUS_UNKNOWN
+                        and not (row.get("ein") or row.get("fein"))):
+                    identity = "unconfirmed_scope"
+                    limit_candidate_name = row_name
+                elif identity_name != original_name and distinct_foundation_name_scope(identity_name, row_name):
                     identity = ar_candidate_identity(row, identity_name, variant_targets, getattr(org, "ein", ""))
                 else:
                     identity = ar_candidate_identity(row, original_name, variant_targets, getattr(org, "ein", ""))
@@ -34132,6 +34154,14 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                     from deployment.source_visual_adapters import capture_ar_review_page
                     capture_ar_review_page(page,org,list(scope_candidates.values()),parsed_rows)
                 except Exception:pass
+            if limit_candidate_name and not best:
+                pending = scope_identity_review_result(org, "AR", [scope_candidates[limit_candidate_name]], False, AR_SEARCH_URL)
+                if getattr(pending, "_cc_identity_review", None):
+                    pending.status_reason = "AR_NAME_LENGTH_IDENTITY_REVIEW"
+                    pending.source_note = ("The Arkansas registry returned one record matching the first 50 characters "
+                        "of the entered name, but its displayed name omits the final character "
+                        "and has no EIN. Confirm or reject the original state record before applying its status.")
+                    return pending
             if best:
                 break
         except Exception as exc:
