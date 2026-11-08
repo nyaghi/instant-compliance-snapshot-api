@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from urllib.parse import urlencode, urlparse, parse_qs
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as c
+from deployment.validated_search_history import AR_RESULTS_URL
 
 EIN='473272024'; NAME='Every Woman Treaty Inc.'
 FORMER='INTERNATIONAL COMMISSION ON VIOLENCE AGAINST WOMEN AND GIRLS'
@@ -21,7 +22,7 @@ class ArkansasCompletionTests(unittest.TestCase):
         def fill(value):
             if value:query[0]=value
         def click(**kwargs):
-            submitted.append(query[0]);page.url=c.AR_SEARCH_URL+'?'+urlencode({'name':'Wrong Identity' if stale else query[0]})
+            submitted.append(query[0]);page.url=AR_RESULTS_URL+'?'+urlencode({'name':'Wrong Identity' if stale else query[0]})
             elapsed[0]+=seconds_per_query
         page.locator.return_value.fill.side_effect=fill
         page.get_by_role.return_value.click.side_effect=click

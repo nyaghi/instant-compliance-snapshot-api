@@ -14,6 +14,14 @@ URLS={'WV':'https://erls.wvsos.gov/OnlineCharitiesSearch/Search',
       'CT':'https://www.elicense.ct.gov/lookup/licenselookup.aspx',
       'OK':'https://www.sos.ok.gov/corp/charityInquiryFind.aspx',
       'ME':'https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx'}
+AR_RESULTS_URL='https://sos-corp-search.ark.org/charity/results'
+
+def ar_results_bound(url,name):
+    u=urlsplit(str(url))
+    params=parse_qs(u.query,keep_blank_values=True)
+    return (not u.fragment and u._replace(query='',fragment='').geturl()==AR_RESULTS_URL
+            and params.get('name')==[name] and not set(params)-{'name','type'}
+            and ('type' not in params or params['type']==['Charity Registration']))
 
 class Query:
     def __init__(self,run,name,url):
@@ -128,8 +136,7 @@ def ar_row(values):
 def finish_ar(active,body,url,empty):
     try:
         if active is None or active.run.state!='AR' or active.bad_read:return
-        u=urlsplit(url)
-        if u._replace(query='',fragment='').geturl()!=active.url or parse_qs(u.query).get('name')!=[active.name]:return
+        if not ar_results_bound(url,active.name):return
         if re.search(r'captcha|verify you are human|request could not be satisfied',body,re.I):return
         if empty:
             if active.rows or not re.search(r'\bNo\s+Results\s+Found\b',body,re.I):return

@@ -1327,6 +1327,13 @@ def downloaded_record(master,result):
         if not info.get('usable'):return
         identifier=str(result.get('matched_registry_identifier') or '')
         name=str(result.get('matched_registry_name') or '')
+        if run.state=='KY' and result.get('status_reason')=='KY_FOUNDATION_SCOPE_IDENTITY_REVIEW':
+            candidates=(result.get('_worker_identity_review') or {}).get('records',[])
+            if len(candidates)==1 and candidates[0].get('_identity_outcome')=='possible':
+                # Same original-page extraction, bound to the signed candidate
+                # rather than promoted to the organization's selected evidence.
+                identifier=str(candidates[0].get('identifier') or '')
+                name=str(candidates[0].get('name') or '')
         if not identifier and not name:return
         source_url=public_url(info['source_url'],run.state)
         run.provenance[source_url]='Source file downloaded: '+str(info.get('downloaded_at','unverified'))+'. Publisher date: '+str(info.get('source_date') or 'not stated by source')+'.'

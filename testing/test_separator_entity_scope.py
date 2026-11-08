@@ -99,7 +99,8 @@ class StatePathControls(unittest.TestCase):
   from urllib.parse import urlencode
   page=MagicMock();query=[''];page.url=c.AR_SEARCH_URL
   page.locator.return_value.fill.side_effect=lambda value:query.__setitem__(0,value)
-  page.get_by_role.return_value.click.side_effect=lambda **kw:setattr(page,'url',c.AR_SEARCH_URL+'?'+urlencode({'name':query[0]}))
+  from deployment.validated_search_history import AR_RESULTS_URL
+  page.get_by_role.return_value.click.side_effect=lambda **kw:setattr(page,'url',AR_RESULTS_URL+'?'+urlencode({'name':query[0]}))
   parent=dict(name=self.parent,type='Charity Registration',status='Close',registration_date='2017-07-20')
   def is_brand():return query[0].strip().upper() in {'GIGI',"GIGI'S PLAYHOUSE",'GIGI PLAYHOUSE','GIGIS PLAYHOUSE'}
   with patch.object(c,'ar_wait_for_search_form',return_value=True),patch.object(c,'safe_wait_for_network_idle'),patch.object(c,'registry_page_body',side_effect=lambda p:'Registration Date Back to Search Form' if is_brand() else 'No Results Found Back to Search Form'),patch.object(c,'ar_result_rows',side_effect=lambda p,o:[parent] if is_brand() else []):

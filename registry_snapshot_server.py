@@ -11076,9 +11076,12 @@ def separator_entity_scope_gap(original_name: str, registry_name: str, ein: str 
     return bool((scope_declared or scope_in_reviewed_name) and distinctive_match_tokens(qualifier))
 
 
-def scope_identity_review_result(org, state, rows, complete, source, *, freshness=""):
+def scope_identity_review_result(org, state, rows, complete, source, *, freshness="", foundation_scope_name=""):
     """Keep source-backed, specific separated-name candidates for signed review."""
-    rows = [row for row in rows if len(distinctive_match_tokens(row["name"])) >= 2]
+    rows = [row for row in rows if len(distinctive_match_tokens(row["name"])) >= 2 or (
+        foundation_scope_name and len(complete_name_identity_key(foundation_scope_name).split()) >= 3
+        and distinctive_match_tokens(row["name"])
+        and distinct_foundation_name_scope(foundation_scope_name, row["name"]))]
     if not rows:
         return checker.StateResult(org.organization_name, org.ein, state,
             "Not Registered" if complete else "Unable to Confirm", source, success=complete,
@@ -16473,6 +16476,16 @@ def complete_name_identity_key(value: str) -> str:
     return re.sub(r"(?:\s+(?:inc|incorporated|corp|corporation|llc|ltd|limited))+$", "", value).strip()
 
 
+def distinct_foundation_name_scope(left: str, right: str) -> bool:
+    """A complete name and that same name plus Foundation are not proof of identity."""
+    if not re.search(r"\bfoundation\b", f"{left} {right}", re.I):
+        return False
+    def key(value):
+        return re.sub(r"^the\s+|\s+the$", "", complete_name_identity_key(value))
+    a, b = sorted((key(left), key(right)), key=len)
+    return bool(a and b == f"{a} foundation")
+
+
 WEAK_NAME_MATCH_TOKENS = {
     "a", "action", "an", "and", "association", "america", "american",
     "americans", "care", "center", "centre", "charitable", "charities",
@@ -17280,7 +17293,8 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     if re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", combined, re.I):
         score -= 100
     result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
-    return ct_shortened_identity_review(org, result, detail_text), score
+    reviewed = ct_shortened_identity_review(org, result, detail_text)
+    return reviewed, score if reviewed else -10000
 
 
 
@@ -17357,7 +17371,8 @@ def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str],
     if re.search(r"\bEXEMPT\b", combined, re.I):
         score += 10
     result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
-    return ct_shortened_identity_review(org, result, row_text), score
+    reviewed = ct_shortened_identity_review(org, result, row_text)
+    return reviewed, score if reviewed else -10000
 
 
 
@@ -17381,22 +17396,43 @@ def ct_shortened_institutional_queries(original_name: str, ein: str) -> list[str
     return probes
 
 
-def ct_shortened_identity_review(org, result, detail_text=""):
+def ct_shortened_identity_review(org, result, detail_text="", *, source_name=""):
     """A retrieved institution without Foundation remains a signed choice."""
+    original = getattr(org, "original_organization_name", org.organization_name)
+    foundation_gap = distinct_foundation_name_scope(original, source_name or result.matched_registry_name)
     targets = [org.organization_name, *known_names_for_ein(org.ein)]
     target_keys = {normalized_match_name(v) for v in targets}
-    if (getattr(result, "identity_anchor", "") in {"CT_DETAIL_DBA_ALIAS", "CT_AJAX_DBA_ALIAS"}
+    if (not foundation_gap and getattr(result, "identity_anchor", "") in {"CT_DETAIL_DBA_ALIAS", "CT_AJAX_DBA_ALIAS"}
             and any(normalized_match_name(v) in target_keys for v in ct_identity_names_from_detail(detail_text))):
         # A full approved name displayed as DBA already passed the existing
         # detail-identity check; this guard must not downgrade that proof.
         return result
-    if normalized_match_name(result.matched_registry_name) in target_keys:
+    if not foundation_gap and normalized_match_name(result.matched_registry_name) in target_keys:
         return result
-    if normalized_match_name(result.matched_registry_name) not in {
+    if not foundation_gap and normalized_match_name(result.matched_registry_name) not in {
             normalized_match_name(v) for v in ct_shortened_institutional_queries(org.organization_name, org.ein)}:
         return result
     if not re.fullmatch(r"CHR\.[0-9A-Z.-]+", result.matched_registry_identifier, re.I):
+        if foundation_gap:
+            result.status = "Needs Review"
+            result.success = False
+            result.matched_registry_name = ""
+            result.matched_registry_identifier = ""
+            result.selection_rank = (-1, 0, 0)
+            result.source_note = "Connecticut returned a related Foundation or parent name without a usable charity credential. Its status was not applied."
         return result
+    if foundation_gap:
+        # Only an explicit EIN in this selected credential's source text can
+        # resolve a scope difference. An alias or a bare number cannot.
+        credentials = {value.upper() for value in re.findall(r"\bCHR\.\d{7}(?:-EXEMPT)?(?![\w.-])", detail_text, re.I)}
+        eins = {canonical_ein_digits(value) for value in re.findall(
+            r"\b(?:Federal\s+(?:Tax\s+ID|EIN)|FEIN|EIN)\s*[:#]\s*(\d{2}-?\d{7})\b", detail_text, re.I)}
+        expected_ein = canonical_ein_digits(org.ein)
+        if credentials == {result.matched_registry_identifier.upper()} and len(eins) == 1 and len(expected_ein) == 9:
+            return result if expected_ein in eins else None
+        result.matched_registry_name = source_name or result.matched_registry_name
+        # Do not let a candidate outrank a confirmed row on this results page.
+        result.selection_rank = (-1, 0, 0)
     address = text_between_labels(detail_text, "Address", ["Registration", "Credential", "Status", "Expiration Date"])
     row = {"name": result.matched_registry_name, "identifier": result.matched_registry_identifier,
            "ein": "", "url": result.source_url, "location": address[:500],
@@ -17409,6 +17445,11 @@ def ct_shortened_identity_review(org, result, detail_text=""):
     result.source_note = ("Connecticut returned an institutional name without Foundation and without a source EIN. "
         "The shortened search is retrieval evidence, not confirmation that the institution and foundation are the same entity. "
         "Use Accept or Reject match. Rejecting this candidate does not establish non-registration.")
+    if foundation_gap:
+        result.source_note = ("Connecticut returned a related Foundation or parent record without an EIN to establish identity. "
+            "Use Accept or Reject match. Rejecting this candidate does not establish non-registration.")
+        result.matched_registry_name = ""
+        result.matched_registry_identifier = ""
     return result
 
 
@@ -17816,6 +17857,8 @@ def search_ct(page, org):
                     score -= 300
                 rank = (name_score, registry_exact_active_tiebreak(row_name, safe_targets, text_between_labels(
                     row_text, "Status", ["Status Reason", "City", "DBA", "Details"])), score)
+                if distinct_foundation_name_scope(original_name, row_name):
+                    rank = (-1, 0, 0)
                 if rank > best_rank:
                     best_rank = rank
                     best_score = score
@@ -17890,7 +17933,9 @@ def search_ct(page, org):
             ) or "Connecticut registry record found"
             result.source_note = "CT uses the selected public-registry detail record, including exemption, noncompliance, and expiration fields."
             result.success = True
-            return ct_shortened_identity_review(org, result, detail_segment)
+            reviewed = ct_shortened_identity_review(org, result, detail_segment, source_name=best_candidate["row_name"])
+            if reviewed is not None:
+                return reviewed
         except Exception as exc:
             last_error = f"CT error: {exc}"
             if best_result is not None:
@@ -30445,7 +30490,8 @@ def ky_registry_column_name_is_safe(candidate_name: str, original_name: str, ein
 
 
 def ky_snapshot_registry_name_is_safe(registry_name: str, targets: list[str], original_name: str, ein: str = "") -> bool:
-    if institutional_entity_extension_requires_review(original_name, registry_name, ein):
+    if (distinct_foundation_name_scope(original_name, registry_name)
+            or institutional_entity_extension_requires_review(original_name, registry_name, ein)):
         return False
     names = ky_registry_name_variants(registry_name)
     if len(names) > 1:
@@ -30615,6 +30661,7 @@ def search_ky_strict_snapshot(org):
     tied_records = []
     near_rows = []
     abbreviated_dba_rows = set()
+    foundation_rows = set()
     from deployment.search_observation import dataset_scope as _history_dataset_scope
     _history_ky_records = load_ky_snapshot_records()
     with _history_dataset_scope(targets,
@@ -30635,10 +30682,14 @@ def search_ky_strict_snapshot(org):
                 continue
             abbreviated_dba_gap = (org.organization_name == original_name
                                    and ky_abbreviated_dba_review_candidate(org, registry_name))
-            if (one_letter_gap or abbreviated_dba_gap) and not user_confirmed_row:
+            foundation_gap = review_prefilter and distinct_foundation_name_scope(original_name, registry_name)
+            if (one_letter_gap or abbreviated_dba_gap or foundation_gap) and not user_confirmed_row:
                 near_rows.append((registry_id, registry_name, filed_year, record_text))
                 if abbreviated_dba_gap:
                     abbreviated_dba_rows.add(registry_id)
+                if foundation_gap:
+                    foundation_rows.add(registry_id)
+                    continue
             names = [registry_name] if user_confirmed_row else ky_registry_name_variants(registry_name)
             # Some legal-name cells contain an explicit DBA marker themselves.
             # Keep both stated identities; every segment still needs the guard below.
@@ -30692,6 +30743,11 @@ def search_ky_strict_snapshot(org):
                         "and an abbreviated DBA matching the entered brand prefix. The source row has no EIN; "
                         "these clues do not confirm identity. Review the record and select Accept or Reject. "
                         "CharityClarity will calculate standing from the same source filing row only after acceptance.")
+                if foundation_rows:
+                    result.status_reason = "KY_FOUNDATION_SCOPE_IDENTITY_REVIEW"
+                    result.raw_status_text = "Kentucky returned a related Foundation or parent name."
+                    result.source_note = ("Kentucky's list does not include an EIN for this record. "
+                        "Review the filing row and select Accept or Reject before using its status.")
                 result._cc_identity_review = {
                     "records": [{"name": name, "identifier": identifier, "ein": "",
                                  "url": downloadable_data_info("KY").get("source_url", ""),
@@ -30699,7 +30755,7 @@ def search_ky_strict_snapshot(org):
                                  "expiration": "", "initial": "", "location": "",
                                  "_identity_outcome": "possible", "status": "Needs Review"}
                                 for identifier, name, year, _ in near_rows[:10]],
-                    "search_complete": len(near_rows) <= 10, "exclusive": True, "freshness": "",
+                    "search_complete": not foundation_rows and len(near_rows) <= 10, "exclusive": True, "freshness": "",
                 }
             return result
         if any(index > 0 for _, index in tied_records) and len({identifier for identifier, _ in tied_records}) > 1:
@@ -33560,6 +33616,29 @@ def ar_registration_date_ordinal(value: str) -> int:
     return parsed.toordinal() if parsed else 0
 
 
+def ar_wait_for_bound_result(page, name: str, timeout_ms: int):
+    """Use the old 600 ms settle allowance for observable response readiness."""
+    if timeout_ms <= 0:
+        return
+    from deployment.validated_search_history import AR_RESULTS_URL
+    try:
+        page.wait_for_function(
+            r"""([source, name]) => {
+                const url = new URL(location.href);
+                if (url.origin + url.pathname !== source ||
+                    url.searchParams.getAll('name').length !== 1 ||
+                    url.searchParams.get('name') !== name) return false;
+                const text = document.body?.innerText || '';
+                if (/\bNo\s+Results\s+Found\b|403\s+ERROR|request could not be satisfied|human verification|captcha/i.test(text)) return true;
+                return [...document.querySelectorAll('table tbody tr')].some(row =>
+                    row.getClientRects().length && row.cells.length >= 4 &&
+                    row.cells[0].innerText.trim() && row.cells[2].innerText.trim());
+            }""", arg=[AR_RESULTS_URL, name], timeout=timeout_ms)
+    except Exception:
+        # A timeout is not a negative response; the caller validates the final read.
+        pass
+
+
 def ar_result_rows(page, org=None) -> list[dict]:
     from deployment.validated_search_history import ar_rows_start, ar_row, ar_rows_failed
     ar_rows_start()
@@ -33581,6 +33660,9 @@ def ar_result_rows(page, org=None) -> list[dict]:
                 ar_rows_failed()
                 continue
             if row_values and not re.search(r"\bNo\s+Results\s+Found\b", " ".join(row_values), re.I):
+                if not row_values[0] or not row_values[2]:
+                    ar_rows_failed()
+                    continue
                 ar_row(row_values)
                 rows.append({
                     "name": structured_registry_name(row_values[0],
@@ -33661,7 +33743,8 @@ def ar_candidate_identity(row: dict, original_name: str, targets: list[str], ein
     if len(candidate_ein) == 9 and len(expected_ein) == 9:
         return "accept" if candidate_ein == expected_ein else "reject"
     name = str(row.get("name") or "")
-    if (separator_entity_scope_gap(original_name, name, ein)
+    if (distinct_foundation_name_scope(original_name, name)
+            or separator_entity_scope_gap(original_name, name, ein)
             or institutional_entity_extension_requires_review(original_name, name, ein)):
         return "unconfirmed_scope"
     if institution_infix_conflict(original_name, name):
@@ -33848,6 +33931,7 @@ def ar_completed_empty_identities(empty_queries, prefixes, planned_queries=()):
 def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observations=None):
     result = checker.StateResult(org.organization_name, org.ein, "AR", checker.STATUS_UNKNOWN, AR_SEARCH_URL)
     original_name = getattr(org, "organization_name", "") or ""
+    identity_name = getattr(org, "original_organization_name", original_name)
     variants = ar_preferred_name_variants(org)
     for variant in organization_name_variants(
         original_name,
@@ -33951,7 +34035,7 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 return result
             page.locator('input[name="name"]').fill("")
             page.locator('input[name="name"]').fill(variant)
-            from deployment.validated_search_history import begin_query, finish_ar
+            from deployment.validated_search_history import begin_query, finish_ar, ar_results_bound
             _cc_history = begin_query('AR', variant, AR_SEARCH_URL)
             phase_started = time.perf_counter()
             page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=min(5000, nav_timeout_ms))
@@ -33961,7 +34045,7 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
             safe_wait_for_network_idle(page, timeout=settle_timeout_ms)
             observed["network_idle_wait_seconds"] = round(time.perf_counter() - phase_started, 6)
             phase_started = time.perf_counter()
-            page.wait_for_timeout(600)
+            ar_wait_for_bound_result(page, variant, min(600, max(0, int((deadline - time.perf_counter()) * 1000))))
             observed["settle_wait_seconds"] = round(time.perf_counter() - phase_started, 6)
             body = registry_page_body(page)
             if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
@@ -33971,25 +34055,38 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 result.error = "AR registry returned bot-verification or block page after submit"
                 result.success = False
                 return result
-            explicit_no_results = bool(re.search(r"\bNo\s+Results\s+Found\b", body, re.I))
-            result_shell_seen = bool(re.search(r"Back\s+to\s+Search\s+Form|Registration\s+Date|No\s+Results\s+Found", body, re.I))
+            bound = ar_results_bound(page.url, variant)
+            explicit_no_results = bound and bool(re.search(r"\bNo\s+Results\s+Found\b", body, re.I))
+            result_shell_seen = bound and bool(re.search(r"Back\s+to\s+Search\s+Form|Registration\s+Date|No\s+Results\s+Found", body, re.I))
+            if bound:
+                reached = True
+            parsed_rows = ar_result_rows(page, org) if bound else []
+            observed["result_read"] = ("unbound" if not bound else "contradictory" if explicit_no_results and parsed_rows
+                else "rows" if parsed_rows else "empty" if explicit_no_results else "incomplete")
+            if observed["result_read"] in {"unbound", "contradictory"}:
+                result_shell_without_rows = True
+                continue
             if result_shell_seen:
                 reached = True
             if explicit_no_results:
                 explicit_no_results_seen = True
-            parsed_rows = ar_result_rows(page, org)
             finish_ar(_cc_history, body, page.url, explicit_no_results)
-            if parsed_rows or explicit_no_results:
+            unusable_read = (_cc_history is not None and (
+                _cc_history.bad_read or parsed_rows and not _cc_history.rows_valid)
+                or len(parsed_rows) >= 100
+                or bool(re.search(r"(?:Nexts+Page|Pages+d+s+ofs+[2-9]d*)", body, re.I)))
+            if not unusable_read and (parsed_rows or explicit_no_results):
                 completed_variants.append(variant)
+            elif unusable_read:
+                result_shell_without_rows = True
+                observed["result_read"] = "incomplete"
             # A prefix can cover its associated full identity only on this
             # submitted search's complete, explicitly empty result page.
-            if explicit_no_results and not parsed_rows:
-                submitted = parse_qs(urlparse(str(page.url)).query).get("name", [])
-                if submitted == [variant]:
-                    empty_variants.append(variant)
-                    if (_completed_empty_queries is not None
-                            and variant.casefold() not in {q.casefold() for q in _completed_empty_queries}):
-                        _completed_empty_queries.append(variant)
+            if explicit_no_results and not parsed_rows and not unusable_read:
+                empty_variants.append(variant)
+                if (_completed_empty_queries is not None
+                        and variant.casefold() not in {q.casefold() for q in _completed_empty_queries}):
+                    _completed_empty_queries.append(variant)
             record_progress()
             if parsed_rows:
                 rows_seen += len(parsed_rows)
@@ -34000,7 +34097,10 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 if not row_name:
                     continue
                 variant_targets = organization_match_target_variants(original_name, getattr(org, "ein", ""))
-                identity = ar_candidate_identity(row, original_name, variant_targets, getattr(org, "ein", ""))
+                if identity_name != original_name and distinct_foundation_name_scope(identity_name, row_name):
+                    identity = ar_candidate_identity(row, identity_name, variant_targets, getattr(org, "ein", ""))
+                else:
+                    identity = ar_candidate_identity(row, original_name, variant_targets, getattr(org, "ein", ""))
                 if identity not in {"accept", "accept_with_ein_caution"}:
                     if identity in {"unconfirmed_scope", "unconfirmed"}:
                         scope_candidates[row_name] = dict(name=row_name, identifier="", ein="", location="",
@@ -34045,7 +34145,8 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
             complete = bool(reached and not result_shell_without_rows and not missing_retrieval_queries()
                 and reviewed_identity_queries_completed(completed_variants + ar_completed_empty_identities(
                     empty_variants, empty_prefixes, planned_variants), required_identities))
-            return scope_identity_review_result(org, "AR", list(scope_candidates.values()), complete, AR_SEARCH_URL)
+            return scope_identity_review_result(org, "AR", list(scope_candidates.values()), complete, AR_SEARCH_URL,
+                                                foundation_scope_name=identity_name)
         result.queries_attempted = list(attempted_variants)
         result.source_attempts = [
             f"Arkansas attempted bounded high-signal name/alias queries: {', '.join(attempted_variants)}."
@@ -34088,6 +34189,7 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 completed_variants + ar_completed_empty_identities(empty_variants, empty_prefixes, planned_variants), [name])]
             missing = list(dict.fromkeys([*missing, *missing_retrieval_queries()]))
             result.raw_status_text = "Arkansas public charity search did not complete every required name search"
+            result.status_reason = "AR_REQUIRED_SEARCH_INCOMPLETE"
             result.source_note = (
                 "Arkansas public charity search was reachable, but a required search did not return a complete result. "
                 + (f"Unconfirmed name searches: {', '.join(missing)}. " if missing else "A result page remained incomplete. ")
@@ -34363,7 +34465,8 @@ def search_ar_name_variants_once(page, org):
         if retry_status in {"Site Not Reachable", "Not Registered", "Unknown"}:
             continue
         matched_name = getattr(retry_result, "matched_registry_name", "") or retry_name
-        if not registry_name_is_safe_for_org(matched_name, original_name, getattr(org, "ein", "")):
+        if (not getattr(retry_result, "_cc_identity_review", None)
+                and not registry_name_is_safe_for_org(matched_name, original_name, getattr(org, "ein", ""))):
             continue
         retry_result.organization_name = original_name
         retry_result.source_note = " ".join(part for part in [
