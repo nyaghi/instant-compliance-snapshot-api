@@ -13,6 +13,20 @@ class FocusedRegistryRecovery(unittest.TestCase):
         self.assertEqual(master.ok_filing_row_text("Open PDF\n123\tRenewal Registration"),
                          "123 Renewal Registration")
 
+    def test_ok_date_extraction_supports_both_bound_filing_tables(self):
+        result = master.checker.StateResult(
+            "Example Foundation", "12-3456789", "OK", "Current", master.OK_DETAIL_URL + "123",
+            matched_registry_name="Example Foundation", matched_registry_identifier="123", success=True)
+        header = ("Entity Name:\nExample Foundation\nFiling Number:\n123\n"
+                  "Entity Type:\nCharitable Organization\nOriginal Filing Date:\nJul 5 2022\n")
+        for title, action in [("FILING HISTORY:", ""), ("Filing History", "Open PDF\t")]:
+            body = (header + title + "\n" + action + "456\tRenewal Registration\tJune 9, 2026\t4\n"
+                    "Oklahoma Secretary of State\n789\tRenewal Registration\tAugust 1, 2026\t4")
+            data = master.registration_date_metadata(result, "Current", body)
+            self.assertEqual(data["renewal_date"], "2026-06-09")
+            other = master.registration_date_metadata(result, "Current", body.replace("Filing Number:\n123", "Filing Number:\n987"))
+            self.assertFalse(other.get("renewal_date"))
+
     def test_ok_document_action_bound_to_selected_row(self):
         page = Mock(url=master.OK_DETAIL_URL + "123")
         link = page.get_by_text.return_value.locator.return_value.get_by_role.return_value

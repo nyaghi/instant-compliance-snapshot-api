@@ -25077,7 +25077,8 @@ def registration_date_metadata(result, final_status=None, body="") -> dict:
                 and re.search(r"^Entity Type:\s*\nCharitable Organization\s*$", detail, re.M)):
             value = one_value(detail, r"^Original Filing Date:[ \t]*\r?\n([^\r\n]+)")
             label, kind = "Original Filing Date", "initial_registration_filing_date"
-            history = detail.split("FILING HISTORY", 1)[-1] if "FILING HISTORY" in detail else ""
+            sections = re.split(r"(?im)^\s*FILING HISTORY\s*:?\s*$", ok_detail_record_text(detail))
+            history = "\n".join(ok_filing_row_text(line) for line in sections[1].splitlines()) if len(sections) == 2 else ""
             dates = [registration_source_date(v) for v in re.findall(r"^\d+[ \t]+Renewal Registration[ \t]+([A-Za-z]+ \d{1,2}, \d{4})[ \t]+\d+[ \t]*$", history, re.M)]
             dates = [d for d in dates if d]
             renewal = max(dates).isoformat() if dates else ""
