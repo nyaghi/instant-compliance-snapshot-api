@@ -1,0 +1,106 @@
+{
+  "query": {
+    "state": "NC",
+    "operation": "search",
+    "name": "Mercy Housing"
+  },
+  "records_found": 7,
+  "rows": [
+    {
+      "Expiration Date": "5/15/2026",
+      "License": "SL004564",
+      "CSL Legal Name": "Mercy Housing, Inc.",
+      "CSL Type": "Charitable Organization",
+      "Status": "Current Active – Filing Extension Granted",
+      "Extension End Date": "11/15/2026",
+      "display_name": "Mercy Housing, Inc.",
+      "aliases": [],
+      "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8104983"
+    },
+    {
+      "Expiration Date": "5/15/2018",
+      "License": "SL009785",
+      "CSL Legal Name": "Mercy Housing California",
+      "CSL Type": "Charitable Organization",
+      "Status": "Cancelled",
+      "Extension End Date": "8/15/2018",
+      "display_name": "Mercy Housing California",
+      "aliases": [],
+      "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/11898617"
+    },
+    {
+      "Expiration Date": "",
+      "License": "",
+      "CSL Legal Name": "Mercy Housing Colorado",
+      "CSL Type": "In-Process",
+      "Status": "In-Process",
+      "Extension End Date": "8/15/2008",
+      "display_name": "Mercy Housing Colorado",
+      "aliases": [],
+      "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8874721"
+    },
+    {
+      "Expiration Date": "5/15/2026",
+      "License": "SL004669",
+      "CSL Legal Name": "Mercy Housing Lakefront",
+      "CSL Type": "Charitable Organization",
+      "Status": "Current Active – Filing Extension Granted",
+      "Extension End Date": "11/15/2026",
+      "display_name": "Mercy Housing Lakefront",
+      "aliases": [],
+      "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8750016"
+    },
+    {
+      "Expiration Date": "",
+      "License": "EX001789",
+      "CSL Legal Name": "Mercy Housing Midwest",
+      "CSL Type": "CSL Exempt Organization",
+      "Status": "CSL Exempt",
+      "display_name": "Mercy Housing Midwest",
+      "aliases": [],
+      "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8718294"
+    },
+    {
+      "Expiration Date": "5/15/2018",
+      "License": "SL010570",
+      "CSL Legal Name": "Mercy Housing Northwest",
+      "CSL Type": "Charitable Organization",
+      "Status": "Cancelled",
+      "Extension End Date": "8/15/2018",
+      "display_name": "Mercy Housing Northwest",
+      "aliases": [],
+      "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/12609403"
+    },
+    {
+      "Expiration Date": "5/15/2026",
+      "License": "SL008357",
+      "CSL Legal Name": "Mercy Housing Southeast",
+      "CSL Type": "Charitable Organization",
+      "Status": "Current Active – Filing Extension Granted",
+      "Extension End Date": "11/15/2026",
+      "display_name": "Mercy Housing Southeast",
+      "aliases": [],
+      "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8820177"
+    }
+  ],
+  "parent_profile": {
+    "Name": "Mercy Housing, Inc.",
+    "Registration #": "SL004564",
+    "Status": "Current Active – Filing Extension Granted",
+    "Expiration Date": "5/15/2026",
+    "Last Application Date": "7/14/2026",
+    "Extension End Date": "11/15/2026",
+    "Street": "1600 Broadway Ste 2000",
+    "City": "Denver",
+    "State": "CO",
+    "Zip": "80202-4929",
+    "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8104983"
+  },
+  "colorado_profile": {
+    "status": "In-Process",
+    "issued_number": "",
+    "last_application": "6/29/2009",
+    "extension": "8/15/2008",
+    "url": "https://www.sosnc.gov/online_services/search/charities_profile/8874721"
+  }
+}

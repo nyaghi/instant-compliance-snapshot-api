@@ -7249,7 +7249,21 @@ def nc_charity_record_evidence(fields):
     if unissued:
         # The public profile ID is an identity/deduplication key, never an
         # invented issued license number. Master matching still applies.
-        if not expired_unnumbered and (fields["Expiration Date"].strip() or str(fields.get("Extension End Date") or "").strip()):
+        base = fields["Expiration Date"].strip()
+        extension_text = str(fields.get("Extension End Date") or "").strip()
+        if (kind == "In-Process" and raw == "In-Process" and not base
+                and re.fullmatch(r"[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}", extension_text)):
+            historical = final_four_source_date(extension_text, "North Carolina extension")
+            if historical < date.today():
+                # A past extension on a numberless application is historical
+                # metadata, not a current filing deadline or an issued license.
+                # Retain the official profile for identity screening. If it
+                # could be the requested entity, keep the existing scope hold.
+                return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1],
+                            ein="", aliases=aliases, raw_status=raw, status="Unable to Confirm",
+                            url=fields["profile_url"], license_category=kind,
+                            unsupported_registration_scope=True)
+        if not expired_unnumbered and (base or extension_text):
             raise ValueError("North Carolina unissued application has conflicting license dates")
         expiration = final_four_source_date(fields["Expiration Date"], "North Carolina expiration")
         extension = final_four_source_date(fields.get("Extension End Date"), "North Carolina extension")
