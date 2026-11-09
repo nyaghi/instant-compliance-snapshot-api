@@ -9145,7 +9145,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "Alabama presented another verification challenge after two bounded code submissions; the search remains incomplete." if state == "AL" and attempts >= 2 and reason == "NY_CONNECTOR_AL_VERIFICATION_REQUIRED" else
            "Alabama's verification image could not be read with sufficient confidence; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_IMAGE_UNCERTAIN" else
            "Alabama's verification reader was unavailable or ran out of time; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_READER_UNAVAILABLE" else
-           "North Carolina temporarily limited requests before all required searches finished. Completed records were retained, but the remaining search could not be completed. Retry after North Carolina allows requests again, or review its official lookup." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
+           "North Carolina temporarily limited requests (HTTP 429) before all required searches finished. Completed records were retained, but the remaining search could not be completed. Retry after North Carolina allows requests again, or review its official lookup." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
            "Tennessee temporarily limited registry requests (HTTP 429). CharityClarity stopped further Tennessee requests during the source cooldown; retry after the registry permits requests again." if state == "TN" and reason == "NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED" else
            "New Mexico returned its public unexpected-error page for the submitted search." if state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR' else
            "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
@@ -34051,6 +34051,22 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
     empty_variants = list(_completed_empty_queries or ())
     required_identities = equivalent_name_queries(original_name, org.ein)
 
+    # A display name can combine two independently reviewed names. Only a
+    # return to the original form can be superseded by exact empty searches
+    # for both components. Other incomplete or contradictory results still block.
+    components = licensed_compound_retrieval_names(original_name)
+    reviewed_component_keys = {
+        identity_name_key(re.sub(r"^\(DBA\)\s*", "", name, flags=re.I))
+        for name in known_names_for_ein(org.ein)
+    }
+    if (len(components) == 2 and re.search(r"\s+[-\u2013\u2014]+\s+", original_name)
+            and all(identity_name_key(part) in reviewed_component_keys for part in components)
+            and original_name in planned_variants):
+        planned_variants = list(dict.fromkeys([original_name, *components, *planned_variants]))
+    else:
+        components = []
+    combined_form_returned = False
+
     # Arkansas searches literal text. Completing "Name, Inc." does not prove
     # that the suffix-free query completed, even though both identify the same
     # organization. Require the useful literal form before certifying absence.
@@ -34155,7 +34171,11 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
             observed["result_read"] = ("unbound" if not bound else "contradictory" if explicit_no_results and parsed_rows
                 else "rows" if parsed_rows else "empty" if explicit_no_results else "incomplete")
             if observed["result_read"] in {"unbound", "contradictory"}:
-                result_shell_without_rows = True
+                if (components and variant == original_name and observed["result_read"] == "unbound"
+                        and page.url == AR_SEARCH_URL):
+                    combined_form_returned = True
+                else:
+                    result_shell_without_rows = True
                 continue
             if result_shell_seen:
                 reached = True
@@ -34248,6 +34268,9 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
             observed["total_seconds"] = round(time.perf_counter() - observation_started, 6)
 
     if not best:
+        if combined_form_returned:
+            empty_queries = {query.casefold() for query in empty_variants}
+            result_shell_without_rows |= any(part.casefold() not in empty_queries for part in components)
         if scope_candidates:
             complete = bool(reached and not result_shell_without_rows and not missing_retrieval_queries()
                 and reviewed_identity_queries_completed(completed_variants + ar_completed_empty_identities(

@@ -40,12 +40,14 @@
       const history=/^\/state-evidence\/([a-f0-9]{64})\/search-history\.pdf$/.exec(r.search_history_url||'');
       const completedNegative=r.success===true&&(r.status==='Not Registered'||r.state==='IL'&&r.status==='Not Registered / Non-Compliant');
       const validHistory=history&&(!r.evidence_bundle_url||r.evidence_bundle_url===`/state-evidence/${history[1]}/evidence.zip`);
-      const path=r.evidence_url||(validHistory&&(completedNegative||r.identity_review_evidence_final===true)?history[0]:'');
+      const incompleteArkansas=r.state==='AR'&&r.success===false&&r.status_reason==='AR_REQUIRED_SEARCH_INCOMPLETE';
+      const path=r.evidence_url||(validHistory&&(completedNegative||incompleteArkansas||r.identity_review_evidence_final===true)?history[0]:'');
+      const evidenceType=path?(path===history?.[0]?(incompleteArkansas?'Search attempts':'Search history'):'State snapshot'):'';
       const pendingSnapshot = r.state === 'GA' && r.identity_review?.candidates?.some(candidate =>
         !candidate.decision && candidate.identifier === r.matched_registry_identifier
         && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(candidate.evidence_url || ''));
       const evidenceLabel = pendingSnapshot ? 'Snapshot available after match confirmation' : 'Snapshot unavailable';
-      return [r.state,label(r),path?new URL(path,location.origin).href:evidenceLabel,r.source_url||'',r.registration_date_source_label||'',r.registration_date_note||'',r.renewal_filing_label||r.renewal_date_source_label||'',r.renewal_filing_note||r.renewal_date_note||''];
+      return [r.state,label(r),path?new URL(path,location.origin).href:evidenceLabel,r.source_url||'',r.registration_date_source_label||'',r.registration_date_note||'',r.renewal_filing_label||r.renewal_date_source_label||'',r.renewal_filing_note||r.renewal_date_note||'',evidenceType];
     });
     const styles=declaration+`<styleSheet xmlns="${ns}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/><color rgb="FF243447"/></font><font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF16324F"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf applyNumberFormat="1" numFmtId="49" fontId="1" fillId="2" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf applyNumberFormat="1" numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf applyNumberFormat="1" numFmtId="49" fontId="0" fillId="3" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
     const files={
@@ -55,7 +57,7 @@
       'xl/_rels/workbook.xml.rels':declaration+`<Relationships xmlns="${relns}"><Relationship Id="rId1" Type="${office}worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${office}worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="${office}styles" Target="styles.xml"/></Relationships>`,
       'xl/styles.xml':styles,
       'xl/worksheets/sheet1.xml':sheet(['Organization','EIN','State','Status','Initial registration','Latest renewal / filing','Registry name','Registry ID','Comments'],rows,[32,14,9,29,20,22,32,20,70]),
-      'xl/worksheets/sheet2.xml':sheet(['State','Status','State evidence','Official registry','Initial date label','Initial date explanation','Latest filing label','Latest filing explanation'],evidence,[9,29,60,60,25,55,25,55])
+      'xl/worksheets/sheet2.xml':sheet(['State','Status','State evidence','Official registry','Initial date label','Initial date explanation','Latest filing label','Latest filing explanation','Evidence type'],evidence,[9,29,60,60,25,55,25,55,22])
     };
     // Staging diagnostics remain a separate non-display part of the ZIP. They
     // never become worksheet cells, formulas, macros or customer-facing text.

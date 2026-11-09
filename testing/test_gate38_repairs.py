@@ -91,6 +91,42 @@ class Gate38EntityScope(unittest.TestCase):
 
 
 class ArkansasEvidence(unittest.TestCase):
+    def test_return_to_form_needs_empty_receipts_for_both_reviewed_names(self):
+        legal = "Global Resource for Advancing Cancer Education"
+        entered = legal + " — GRACE"
+        for scenario in ("both_covered", "alias_incomplete", "alias_unverified", "different_route"):
+            with self.subTest(scenario=scenario):
+                page = MagicMock()
+                aliases = [legal, "CANCERGRACE"]
+                if scenario != "alias_unverified":
+                    aliases.append("(DBA) GRACE")
+                query = [""]
+                page.locator.return_value.fill.side_effect = lambda value: query.__setitem__(0, value)
+
+                def submit(**kwargs):
+                    if query[0] == entered:
+                        page.url = c.AR_SEARCH_URL + ("?error=1" if scenario == "different_route" else "")
+                    elif query[0] == "GRACE" and scenario == "alias_incomplete":
+                        page.url = c.AR_SEARCH_URL
+                    else:
+                        page.url = receipt.AR_RESULTS_URL + "?" + urlencode({"name": query[0]})
+
+                page.get_by_role.return_value.click.side_effect = submit
+                with (patch.object(c, "known_names_for_ein", return_value=aliases),
+                      patch.object(c, "ar_wait_for_search_form", return_value=True),
+                      patch.object(c, "safe_wait_for_network_idle"),
+                      patch.object(c, "ar_wait_for_bound_result"),
+                      patch.object(c, "registry_page_body", side_effect=lambda p:
+                          "No Results Found" if p.url.startswith(receipt.AR_RESULTS_URL) else "Search form"),
+                      patch.object(c, "ar_result_rows", return_value=[])):
+                    result = c.search_ar_precise(page, c.checker.Organization(entered, "56-2676328"))
+                self.assertEqual(result.success, scenario == "both_covered")
+                if result.success:
+                    self.assertEqual(result.status, c.checker.STATUS_NOT_REGISTERED)
+                    self.assertIn("GRACE", result.queries_completed)
+                else:
+                    self.assertEqual(result.status_reason, "AR_REQUIRED_SEARCH_INCOMPLETE")
+
     def test_name_limit_uses_existing_slot_and_keeps_exact_truncated_row_as_candidate(self):
         self.check_limited_name(AAAS, AAAS[:50])
 
