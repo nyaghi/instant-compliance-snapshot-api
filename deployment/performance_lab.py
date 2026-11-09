@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 import threading
 import time
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse, urlunparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -403,6 +403,23 @@ def shared_readiness_asset(text):
     return text.replace(old, replacement, 1).replace(anchor, helper + anchor, 1)
 
 
+def staging_collector_entry(path):
+    """Restore the existing interactive registry rail on normal staging entry."""
+    entry = urlparse(path)
+    if entry.netloc or entry.scheme or entry.path not in {
+            '/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/',
+            '/registry-snapshot', '/registry-snapshot/'}:
+        return None
+    layouts = [value for key, value in parse_qsl(entry.query, keep_blank_values=True)
+               if key == 'collector_layout']
+    if layouts:
+        if entry.path != '/' and layouts == ['duo']:
+            return urlunparse(('', '', '/', '', entry.query, ''))
+        return None
+    query = entry.query + '&collector_layout=duo' if entry.query else 'collector_layout=duo'
+    return urlunparse(('', '', '/', '', query, ''))
+
+
 def alerts_navigation(data, anchor, *, aurora=False):
     if os.environ.get('CE_PERMANENT_STAGING') != '1' or not trial_identity():
         return data
@@ -465,7 +482,7 @@ def lab_asset(path):
                        'https://staging.compliance-express.com'):
             text = text.replace(origin, LAB_ORIGIN)
         if file.name == 'index.html':
-            text=alerts_navigation(text,'<form id="snapshotForm"',aurora=True)
+            text=alerts_navigation(text,'<!-- Aurora product navigation -->',aurora=True)
             title = 'CharityClarity Staging — ' if os.environ.get('CE_PERMANENT_STAGING') == '1' else 'Performance Lab — '
             text = text.replace('<title>', '<title>'+title, 1)
             text = text.replace('<body', '<body data-performance-lab="true"', 1)
@@ -574,6 +591,15 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
                 from deployment.alerts import handle
                 return handle(alerts,self,self.path,origin=LAB_ORIGIN,include_body=include_body)
             if not self.authorized(): return
+            if os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity():
+                target = staging_collector_entry(self.path)
+                if target:
+                    self.send_response(302)
+                    self.send_header('Location', target)
+                    self.send_header('Content-Length', '0')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.end_headers()
+                    return
             if self.path.startswith('/state-evidence/'):
                 from deployment.search_history import serve as serve_search_evidence
                 serve_search_evidence(self,include_body)
