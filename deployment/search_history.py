@@ -188,8 +188,8 @@ def attach(record,result,store=None,now=None):
     if record.get('state') not in STATES or record.get('purpose')!='registration':return data
     if not needs_search_history(result):
         from deployment.identity_evidence import retain
-        return retain(record,data,store or ss.STORE)
-    store=store or ss.STORE
+        return retain(record,data,store or ss.STORE_OVERRIDE.get() or ss.STORE)
+    store=store or ss.STORE_OVERRIDE.get() or ss.STORE
     if store is None:return data
     try:
         snapshot=ss.matching_reference(result,record.get('source_snapshots',[]))
