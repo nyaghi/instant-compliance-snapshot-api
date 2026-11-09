@@ -1851,6 +1851,8 @@
       observation.visibility=document.visibilityState;
       const panel=document.querySelector('#printDiv1');
       observation.panel_present=!!panel;observation.panel_visible=!!panel&&visible(panel);
+      const modal=document.querySelector('#modalwindow');
+      observation.empty_dialog=!panel&&!!modal&&visible(modal)&&!text(modal);
       if(!panel||!visible(panel)){observation.phase=panel?'panel-hidden':'panel-absent';return null;}
       const fields={};
       for(const tr of panel.querySelectorAll('tr')) {
@@ -2651,7 +2653,10 @@ try {
       const trialReason=(NC||NV||TN) && /^REGISTRY_(?:(?:NC|NV|TN)_[A-Z_]+|WRONG_ORIGIN|COMMAND_INVALID|RESPONSE_INCOMPLETE)$/.test(code)
         ? 'NY_CONNECTOR_'+code : null;
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
-      reply({ok:false,reason:trialReason || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
+      const msDetailUnavailable=MS&&m.action==='registry-ms'&&m.query?.operation==='detail'
+        &&code==='REGISTRY_RESPONSE_INCOMPLETE'&&msLastDiagnostic?.detail?.click_dispatched
+        &&msLastDiagnostic.detail.empty_dialog===true;
+      reply({ok:false,reason:(msDetailUnavailable?'NY_CONNECTOR_MS_DETAIL_UNAVAILABLE':trialReason) || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
         ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState}} : {}),
         ...(MS ? {ms_diagnostic:{...msLastDiagnostic,source_error:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'}} : {}),
         ...(TN ? {tn_diagnostics:tnLastDiagnostics} : {}),

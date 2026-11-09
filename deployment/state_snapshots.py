@@ -252,6 +252,8 @@ def matching_reference(result, refs):
                         and r.get('identifier')!='@completed-search']
         else:
             candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
+    if state=='MS' and result.get('status_reason')!='MS_DUPLICATE_EXEMPT_DETAIL_UNAVAILABLE':
+        candidates=[r for r in candidates if r.get('operation')=='detail']
     if state=='NC':
         # A result list may contain another expanded record. Only the original
         # selected profile is evidence for a positive or review credential.
@@ -1196,6 +1198,11 @@ def _connector_archive(record,payload,query,evidence):
                 return
         text=incoming.get('public_text','')
         if not isinstance(text,str) or len(text)>20000:return
+        if record['state']=='MS' and query.get('operation')=='search':
+            ms_rows=evidence.get('rows',[])
+            if (len(ms_rows)!=2 or ms_rows[0]!=ms_rows[1]
+                    or not re.search(r'\bExempt(?:ed)?\b',text,re.I)):
+                return
         rows=[]
         def walk(value):
             if len(rows)>1000:return

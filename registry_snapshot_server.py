@@ -8740,6 +8740,40 @@ def ms_browser_clean_evidence(payload, query):
     return json.loads(json.dumps(payload))
 
 
+def ms_duplicate_exempt_detail_fallback(record, payload):
+    """Use a completed exact-name grid only when the state opened a blank detail."""
+    pending = record.get("pending") or {}
+    query = pending.get("query", {})
+    if (record.get("state") != "MS" or payload.get("reason") != "NY_CONNECTOR_MS_DETAIL_UNAVAILABLE"
+            or payload.get("query_id") != pending.get("query_id")
+            or query.get("operation") != "detail" or not record.get("completed")):
+        return None
+    search = record["completed"][-1]
+    evidence = search["evidence"]
+    if (search["query"].get("operation") != "search" or evidence["total"] != 2
+            or len(evidence["rows"]) != 2):
+        return None
+    row, duplicate = evidence["rows"]
+    name, identifier = row["name"], row["identifier"]
+    if (row != duplicate or identifier != query.get("identifier")
+            or normalized_match_name(name) != normalized_match_name(record["organization_name"])
+            or not re.fullmatch(r"(?:Current\s*[-\u2013\u2014]\s*)?Exempt(?:ed)?",
+                                row["raw_status"].strip(), re.I)):
+        return None
+    org = checker.Organization(record["organization_name"], record["ein"])
+    result = checker.StateResult(org.organization_name, org.ein, "MS", "Exempt", MS_BROWSER_SOURCE)
+    result.success = True
+    result.matched_registry_name = name
+    result.matched_registry_identifier = identifier
+    result.raw_status_text = row["raw_status"]
+    result.status_reason = "MS_DUPLICATE_EXEMPT_DETAIL_UNAVAILABLE"
+    result.source_note = "Mississippi lists this filing as exempt. The detail page is not available."
+    started = time.perf_counter() - max(0, time.time() - record["issued"])
+    data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "MS", started)
+    data["comments"] += " The detail page is not available."
+    return data
+
+
 def ms_browser_lookup(org, evidence, alternate_names=()):
     """Use the master name plan, identity guard and status interpreter on public browser evidence."""
     module = state_batch_modules(['MS'])[load_state_batch_bundle().STATE_TO_MODULE['MS']]
@@ -9518,6 +9552,10 @@ def final_four_connector_request(payload, origin):
                              "check_token": ny_connector_pack(record),
                              "lookup_remaining_ms": max(0, int((record["expires"]-now)*1000)),
                              "expires_in": max(0, int(record["expires"]-now))}
+            ms_fallback = ms_duplicate_exempt_detail_fallback(record, payload)
+            if ms_fallback is not None:
+                from deployment.state_snapshots import attach_links
+                return 200, {"phase": "complete", "result": attach_links(ms_fallback, record.get("source_snapshots", []))}
             if nc_specific_name_recovery(record, payload, now):
                 record["pending"] = None
                 specific_nc_fresh_transport = True
@@ -12424,11 +12462,13 @@ def sc_official_detail_lookup(org) -> object | None:
         include_name_segments=True,
         max_queries=18,
     )
-    # Prefer the existing full primary-name query without its legal suffix
-    # before a historical alias; retain the query set, allowance and guards.
-    literal_primary = {q.casefold() for q in literal_name_retrieval_forms(original_name)[:1]}
-    search_queries = ([q for q in search_queries if q.casefold() in literal_primary]
-                      + [q for q in search_queries if q.casefold() not in literal_primary])
+    # The source searches literal text. The full primary name without its
+    # legal suffix may be absent from the generated queries.
+    primary_forms = literal_name_retrieval_forms(original_name)
+    if primary_forms:
+        primary = primary_forms[0]
+        search_queries = [primary] + [query for query in search_queries if query.casefold() != primary.casefold()]
+        search_queries = search_queries[:18]
     last_html = ""
     transport_errors = 0
     lookup_incomplete = False
@@ -33370,6 +33410,13 @@ def ok_open_latest_equivalent_detail(page, org, module, selected):
             terminal_dates = [value for value in terminal_dates if value and value <= date.today()]
             filed = max(terminal_dates) if terminal_dates else None
             event_basis = "terminal_status_filing"
+        elif filed is None and status.strip().casefold() == "expired":
+            # An exemption notice dates the record; it does not change the
+            # current portal status or supply a renewal date.
+            notice_dates = [module.parse_ok_filing_date(line) for line in lines
+                            if re.match(r"^\d+\s+Notice of Registration Exemption\s+", line, re.I)]
+            filed = max((value for value in notice_dates if value and value <= date.today()), default=None)
+            event_basis = "exemption_notice_filing"
         if filed is None or filed > date.today():
             raise TimeoutError("Oklahoma equivalent record recency is incomplete")
         collected.append((filed, name, identifier, target, event_basis))

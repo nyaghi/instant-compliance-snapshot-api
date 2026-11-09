@@ -711,10 +711,16 @@ async function performSearch(job, query, id) {
   const alEmptySource=job.registryState==='AL'&&alCompletedSource
     &&response.evidence.total===0&&Array.isArray(response.evidence.rows)&&response.evidence.rows.length===0;
   const alRepeatedEmpty=alEmptySource&&(job.alEmptySnapshotSaved===true||job.alFinalEmptyProtocol===true);
+  const msRows=response.evidence?.rows;
+  const msDuplicateExemptGrid=job.registryState==='MS'&&query.operation==='search'
+    &&response.ok===true&&response.evidence?.complete===true&&response.evidence.total===2
+    &&Array.isArray(msRows)&&msRows.length===2&&msRows[0].name===msRows[1].name
+    &&msRows[0].identifier===msRows[1].identifier&&msRows[0].raw_status===msRows[1].raw_status
+    &&/^(?:Current\s*[-\u2013\u2014]\s*)?Exempt(?:ed)?$/i.test(msRows[0].raw_status);
   const selectedDetailOnly=P.TRIAL_ORIGIN && (
     (job.registryState==='IL'&&!Object.hasOwn(query,'identifier')) ||
     (job.registryState==='NY'&&!Object.hasOwn(query,'orgID')) ||
-    (job.registryState==='MS'&&query.operation==='search'));
+    (job.registryState==='MS'&&query.operation==='search'&&!msDuplicateExemptGrid));
   // Completed empty searches publish the actual names-searched report. Do not
   // spend a capture slot or attach a debugger to an empty source grid. A found
   // record (including Unregistered/Exempt), detail, or incomplete result keeps
