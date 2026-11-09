@@ -962,7 +962,7 @@ def search_co(page, org: Organization) -> StateResult:
         result._cc_co_record_eins = {
             digits_only(value) for value in re.findall(
                 r"^[ \t\u00a0]*(?:FEIN|EIN)[ \t\u00a0]*:?[ \t\u00a0]*(?:\r?\n[ \t\u00a0]*)?"
-                r"([0-9]{2}[ \t\u00a0-]?[0-9]{7})[ \t\u00a0]*\r?$",
+                r"([0-9]{2}[ \t\u00a0-]?[0-9]{7})(?=[ \t\u00a0]*(?:\r?$|\t|[ ]Form\b))",
                 body, re.I | re.M,
             )
         }

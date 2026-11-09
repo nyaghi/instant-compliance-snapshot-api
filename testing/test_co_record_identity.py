@@ -42,7 +42,7 @@ class ColoradoRecordIdentity(unittest.TestCase):
 
     def test_saved_trust_failure_rejects_foundation_and_retains_completed_ein_no_match(self):
         result = self.browser_lookup(
-            [NO_MATCH, detail(FOUNDATION, "EIN\t52-1516071")],
+            [NO_MATCH, detail(FOUNDATION, "EIN\t52-1516071\tForm\tCorporation")],
             expected_queries=["521521276", TRUST],
         )
         self.assertEqual(master.public_status(result), "Not Registered")
@@ -52,7 +52,7 @@ class ColoradoRecordIdentity(unittest.TestCase):
 
     def test_matching_ein_search_keeps_status_and_single_query(self):
         result = self.browser_lookup(
-            [detail(TRUST, "EIN\t52-1521276")], expected_queries=["521521276"]
+            [detail(TRUST, "EIN\t52-1521276\tForm\tCorporation")], expected_queries=["521521276"]
         )
         self.assertEqual(result.matched_registry_name, TRUST)
         self.assertEqual(master.public_status(result), "Current")
