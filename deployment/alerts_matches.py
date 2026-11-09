@@ -29,24 +29,36 @@ def auto_confirm(alerts, c, org, state, workflow, result):
                 or base.get('source_truth_conflict')):
             return result,None
         records=signed['records']
-        exact=[r for r in records if r.get('ein') and
+        eligible=[r for r in records if r.get('reviewable') and r.get('identifier')
+                  and r['identifier'] not in blocked
+                  and (r.get('group_identity') or not r.get('ein')
+                       or master.canonical_ein_digits(r['ein'])==org['ein'])]
+        exact=[r for r in eligible if r.get('ein') and
                master.canonical_ein_digits(r['ein'])==org['ein']]
-        # When a registry doesn't expose EINs, accept its sole proposed
-        # match. Never choose among competing records without a unique EIN.
+        suggested=[r for r in eligible if r.get('suggested') is True or
+                   r['identifier']==base.get('matched_registry_identifier')]
         if len(exact)==1:
             row=exact[0]
-        elif not exact and len(records)==1 and not records[0].get('ein'):
-            row=records[0]
+        elif len(suggested)==1 and (not exact or suggested[0] in exact):
+            row=suggested[0]
+        elif len(eligible)==1:
+            row=eligible[0]
         else:
             return result,None
-        identifier=row.get('identifier')
-        if (not row.get('reviewable') or not identifier or identifier in blocked
-                or row.get('group_identity')):
-            return result,None
-        resolved=master.resolve_identity_review({'token':review['token'],'candidate_id':row['id'],
+        identifier=row['identifier']
+        token=review['token']
+        if len(records)>1 and not signed.get('exclusive'):
+            # Only the unattended decision selects one record here. Keep
+            # the signed candidates and the ordinary status resolver intact.
+            token=master.identity_review_pack({**signed,'exclusive':True})
+        resolved=master.resolve_identity_review({'token':token,'candidate_id':row['id'],
             'action':'accept','state':state,'ein':base['ein']},EMAIL,device)
-        if (not isinstance(resolved,dict) or resolved.get('success') is not True
-                or resolved.get('matched_registry_identifier')!=identifier):
+        if not isinstance(resolved,dict):
+            return result,None
+        chosen=resolved.get('matched_registry_identifier')
+        accepted=any(d.get('candidate_id')==row['id'] and d.get('decision')=='accept'
+                     for d in resolved.get('identity_review_history',[]))
+        if chosen!=identifier and (chosen or not accepted or resolved.get('success') is True):
             return result,None
         clean={k:v for k,v in resolved.items() if k not in ('identity_review','_worker_identity_review')}
         clean.update(confirmation_required=False,checked_at_epoch=result.get('checked_at_epoch'))
@@ -72,22 +84,30 @@ def correct(alerts,c,account,payload):
                   (account,ein)).fetchone()
     if not org:
         return False
-    chosen=c.execute('SELECT m.* FROM cc_alert_auto_matches m JOIN cc_alert_confirmed s '
-                     'ON s.account=m.account AND s.ein=m.ein AND s.state=m.state AND s.checked=m.checked '
-                     'WHERE m.account=%s AND m.ein=%s AND m.state=%s AND m.identifier=%s AND m.workflow=%s',
+    chosen=c.execute('SELECT m.* FROM cc_alert_auto_matches m '
+                     'WHERE m.account=%s AND m.ein=%s AND m.state=%s AND m.identifier=%s AND m.workflow=%s AND NOT m.corrected '
+                     'AND NOT EXISTS (SELECT 1 FROM cc_alert_auto_matches n WHERE n.account=m.account '
+                     'AND n.ein=m.ein AND n.state=m.state AND n.checked>m.checked AND NOT n.corrected) '
+                     'AND NOT EXISTS (SELECT 1 FROM cc_alert_confirmed s WHERE s.account=m.account '
+                     'AND s.ein=m.ein AND s.state=m.state AND s.checked>m.checked)',
                      (*key,identifier,workflow)).fetchone()
     if not chosen:
         return False
+    current=c.execute('SELECT m.checked,m.previous FROM cc_alert_auto_matches m JOIN cc_alert_confirmed s '
+                      'ON s.account=m.account AND s.ein=m.ein AND s.state=m.state AND s.checked=m.checked '
+                      'WHERE m.account=%s AND m.ein=%s AND m.state=%s AND m.identifier=%s AND NOT m.corrected',
+                      (*key,identifier)).fetchone()
     c.execute('INSERT INTO cc_alert_rejected_matches VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING',
               (*key,identifier))
     c.execute('UPDATE cc_alert_auto_matches SET corrected=true WHERE account=%s AND ein=%s AND state=%s AND identifier=%s',
               (*key,identifier))
-    c.execute('DELETE FROM cc_alert_confirmed WHERE account=%s AND ein=%s AND state=%s AND checked=%s',
-              (*key,chosen['checked']))
-    prior=chosen['previous']
-    if prior:
-        c.execute('INSERT INTO cc_alert_confirmed VALUES (%s,%s,%s,%s,%s,%s)',
-                  (*key,prior['status'],prior['evidence'],prior['checked']))
+    if current:
+        c.execute('DELETE FROM cc_alert_confirmed WHERE account=%s AND ein=%s AND state=%s AND checked=%s',
+                  (*key,current['checked']))
+        prior=current['previous']
+        if prior:
+            c.execute('INSERT INTO cc_alert_confirmed VALUES (%s,%s,%s,%s,%s,%s)',
+                      (*key,prior['status'],prior['evidence'],prior['checked']))
     now=alerts.now(c)
     c.execute('UPDATE cc_alert_orgs SET due=least(due,%s) WHERE account=%s AND ein=%s',(now,account,ein))
     return True

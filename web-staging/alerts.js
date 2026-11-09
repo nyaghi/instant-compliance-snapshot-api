@@ -139,7 +139,7 @@
       const row=el('div',null,'alert-row');
       const org=model.organizations.find(x=>x.ein===match.ein);
       row.append(el('strong',match.state),el('span',org?.name || ein(match.ein)),
-        el('span','Automatically accepted: '+match.name+' ('+match.identifier+')','muted'),el('span',match.status));
+        el('span','Automatically accepted: '+match.name+' ('+match.identifier+')','muted'),el('span',match.status || 'Status not confirmed'));
       if(match.has_evidence){
         const evidence=el('a','View evidence');
         evidence.href='/api/alerts/match-evidence/'+match.ein+'/'+match.state;

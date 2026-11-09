@@ -177,11 +177,15 @@ class Alerts:
             inserted = c.execute('INSERT INTO cc_alert_checks VALUES (%s,%s,%s,%s,%s,%s,%s,%s) '
                                  'ON CONFLICT DO NOTHING RETURNING state',
                                  (*org_key, run['id'], checked, status, evidence, failure)).fetchone()
-            if not inserted or not status:
+            if not inserted:
                 continue
             previous = c.execute('SELECT status,evidence,checked FROM cc_alert_confirmed '
                                  'WHERE account=%s AND ein=%s AND state=%s', org_key).fetchone()
             if previous and previous['checked'] >= checked:
+                continue
+            if not status:
+                if match:
+                    record(c,org_key,match,run['id'],checked,None)
                 continue
             identifier = (result or {}).get('matched_registry_identifier')
             prior_auto = None
@@ -317,10 +321,17 @@ class Alerts:
                              'AND NOT EXISTS (SELECT 1 FROM cc_alert_confirmed s WHERE s.account=h.account '
                              'AND s.ein=h.ein AND s.state=h.state AND s.checked>=h.checked) '
                              'ORDER BY h.checked DESC LIMIT 200',(account,self.now(c)-HISTORY_DAYS*DAY)).fetchall()
-        matches=c.execute("SELECT m.ein,m.state,m.identifier,m.workflow,m.name,m.checked,s.status,s.evidence<>'' AS has_evidence "
-                          'FROM cc_alert_auto_matches m JOIN cc_alert_confirmed s '
-                          'ON s.account=m.account AND s.ein=m.ein AND s.state=m.state AND s.checked=m.checked '
-                          'WHERE m.account=%s AND NOT m.corrected ORDER BY m.ein,m.state',(account,)).fetchall()
+        matches=c.execute("SELECT m.ein,m.state,m.identifier,m.workflow,m.name,m.checked,coalesce(s.status,h.status) AS status, "
+                          "coalesce(s.evidence,h.evidence,'')<>'' AS has_evidence "
+                          'FROM cc_alert_auto_matches m LEFT JOIN cc_alert_checks h USING(account,ein,state,workflow) '
+                          'LEFT JOIN cc_alert_confirmed s ON s.account=m.account AND s.ein=m.ein '
+                          'AND s.state=m.state AND s.checked=m.checked '
+                          'WHERE m.account=%s AND NOT m.corrected AND (s.checked IS NOT NULL OR h.checked IS NOT NULL) '
+                          'AND NOT EXISTS (SELECT 1 FROM cc_alert_auto_matches n WHERE n.account=m.account '
+                          'AND n.ein=m.ein AND n.state=m.state AND n.checked>m.checked AND NOT n.corrected) '
+                          'AND NOT EXISTS (SELECT 1 FROM cc_alert_confirmed s WHERE s.account=m.account '
+                          'AND s.ein=m.ein AND s.state=m.state AND s.checked>m.checked) '
+                          'ORDER BY m.ein,m.state',(account,)).fetchall()
         return {'organizations':orgs,'matches':matches,'changes':changes[:100], 'next':changes[99]['id'] if len(changes)>100 else None,
                 'unseen':self.badge(c,account),'states':len(self.states),'failures':failures}
 

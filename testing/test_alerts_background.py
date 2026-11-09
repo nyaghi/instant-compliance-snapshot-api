@@ -95,6 +95,33 @@ class AlertsBackgroundTests(TestCase):
         self.check('competing',2,'Needs Review',identity_review={'token':'signed'})
         self.assertEqual(len(decisions),1)
 
+    def test_recommended_match_is_selected_and_can_be_changed_without_status(self):
+        record={'base':{'state':'CO','ein':EIN},'records':[
+            {'id':'alternate','identifier':'other','name':'Other Registry Name','reviewable':True},
+            {'id':'recommended','identifier':'license','name':'Recommended Registry Name','reviewable':True,
+             'suggested':True}]}
+        tokens=[]
+        def pack(value):
+            tokens.append(value)
+            return 'exclusive-review'
+        def resolve(payload, *_):
+            self.assertEqual((payload['token'],payload['candidate_id']),('exclusive-review','recommended'))
+            return {**run('resolved',NOW,'Unable to Confirm',evidence_url='',success=False)['jobs'][0]['result'],
+                    'identity_review_history':[{'candidate_id':'recommended','decision':'accept'}]}
+        self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,identity_review_unpack=lambda *a:record,
+            identity_review_pack=pack,resolve_identity_review=resolve)
+        self.check('base',0,'Current')
+        result=self.check('auto',1,'Needs Review',identity_review={'token':'signed'})
+        self.assertTrue(tokens[0]['exclusive'])
+        self.assertEqual(len(tokens[0]['records']),2)
+        match,=result['matches']
+        self.assertEqual((match['identifier'],match['status']),('license',None))
+        self.assertEqual(result['unseen'],0)
+        self.assertTrue(correct(self.a,self.c,ACCOUNT,
+                        {'ein':EIN,'state':'CO','workflow':'auto','identifier':'license'}))
+        self.assertEqual(self.c.execute('SELECT status FROM cc_alert_confirmed').fetchone()['status'],'Current')
+        self.assertEqual(self.a.dashboard(self.c,ACCOUNT,2**63-1)['matches'],[])
+
     def test_conflicting_candidate_stays_unconfirmed(self):
         self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,
             identity_review_unpack=lambda *a:{'base':{'state':'CO','ein':EIN},
