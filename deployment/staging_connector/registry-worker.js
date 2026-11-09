@@ -84,11 +84,17 @@ async function registryTnAfterCommand(response){
   }
   await saveRuntime();
 }
+function registryQuietAlerts(job) {
+  try {
+    const source=new URL(job.sender.url);
+    return source.origin===P.TRIAL_ORIGIN && source.pathname==='/alerts-runner.html';
+  } catch { return false; }
+}
 function registryTrialLayout(origin) {
   const source=new URL(origin.url);
   if(!P.TRIAL_ORIGIN || source.origin!==P.TRIAL_ORIGIN
       || !['/','/instant-compliance-snapshot','/instant-compliance-snapshot/',
-        '/connector/final-four-validation.html','/alerts-runner.html'].includes(source.pathname))return '';
+        '/connector/final-four-validation.html'].includes(source.pathname))return '';
   if(source.searchParams.get('collector_layout')==='duo')return 'duo';
   if(source.pathname==='/connector/final-four-validation.html') {
     const requested=source.searchParams.get('collector_layout');
@@ -229,8 +235,9 @@ async function registryTrialWindowOptions(job, origin) {
     left:bounds.left+8+(fallbackSlot%columns)*(width+8),top:bounds.top+8+Math.floor(fallbackSlot/columns)*(height+8)}));
 }
 async function registryCreateOwnedTab(job,url,origin) {
+  const quiet=registryQuietAlerts(job);
   let tab;
-  if(P.TRIAL_ORIGIN && job.registryState==='NV' && job.nvSourceInitiallyMinimized===undefined) {
+  if(!quiet && P.TRIAL_ORIGIN && job.registryState==='NV' && job.nvSourceInitiallyMinimized===undefined) {
     try {job.nvSourceInitiallyMinimized=(await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:233:41:await",()=>(chrome.windows.get(origin.windowId)))).state==='minimized';}
     catch {job.nvSourceInitiallyMinimized=false;}
   }
@@ -238,7 +245,7 @@ async function registryCreateOwnedTab(job,url,origin) {
   // In the opt-in rail, Mississippi also needs a visible document: repeated
   // no-match searches in a hidden source tab delay its Kendo grid watchdog.
   // The mature connector and unrelated trial states retain their existing path.
-  if(P.TRIAL_ORIGIN && (['NV','NY','IL','NC'].includes(job.registryState)
+  if(!quiet && P.TRIAL_ORIGIN && (['NV','NY','IL','NC'].includes(job.registryState)
       || job.registryState==='TN'&&['coordinated','duo'].includes(registryTrialLayout(origin))
       || ['MS','AL','GA','NM'].includes(job.registryState)&&registryTrialLayout(origin)==='duo') && new URL(origin.url).origin===P.TRIAL_ORIGIN){
     let placement=await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:243:20:await",()=>(registryTrialWindowOptions(job,origin)));
@@ -294,6 +301,7 @@ async function registryTennesseeOwnedWindow(tab,source) {
   return siblings.length===1 && siblings[0].id===tab.id && tab.active;
 }
 async function registryExposeReusedNyTab(job, origin) {
+  if(registryQuietAlerts(job))return false;
   // The layout creates windows in front, but a retained NY or TN page
   // can be covered when the validation page is brought forward for another
   // run. Expose only its isolated window; preserve the document and session.
@@ -321,6 +329,7 @@ async function registryExposeReusedNyTab(job, origin) {
   } catch { return wfReturn(job,"registry-worker.js:registryExposeReusedNyTab:304:12:return",(false)); } // No extra request or recovery when focus is unavailable.
 }
 async function registryNevadaVisibleSnapshot(job) {
+  if(registryQuietAlerts(job))return null;
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.nvVisibilityAttempted || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryNevadaVisibleSnapshot:307:103:return",(null));
   try {
     const tab=await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:309:14:await",()=>(chrome.tabs.get(job.tab))), source=await wfAwait(job,"registry-worker.js:registryNevadaVisibleSnapshot:309:53:await",()=>(chrome.tabs.get(job.sender.tab.id)));
@@ -477,6 +486,7 @@ async function registryNevadaExposeWindow(job,previous) {
   await wfAwait(job,"registry-worker.js:registryNevadaExposeWindow:444:2:await",()=>(saveRuntime()));return wfReturn(job,"registry-worker.js:registryNevadaExposeWindow:444:22:return",(restore));
 }
 async function registryNevadaMakeVisible(job, initialVisible) {
+  if(registryQuietAlerts(job))return null;
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !initialVisible || job.closed || job.nvVisibilityAttempted
       || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryNevadaMakeVisible:448:65:return",(null));
   try {
@@ -865,6 +875,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   }
 }
 async function registryNorthCarolinaVisibility(job,stillPending=()=>true,onActivated=()=>{}) {
+  if(registryQuietAlerts(job))return null;
   // Same-document visibility recovery, as used for Illinois. The state's own
   // scripts may finish a passive verification; no checkbox, challenge, token,
   // cookie, reload, additional request, or budget extension is performed here.
@@ -993,6 +1004,7 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
 
 }
 async function registryIllinoisOwnedVisibility(job) {
+  if(registryQuietAlerts(job))return undefined;
   if (job.closed || !owned.has(job.tab)) return wfReturn(job,"registry-worker.js:registryIllinoisOwnedVisibility:870:41:return",undefined);
   const observation={phase:'entry'};
   try {
@@ -1029,6 +1041,7 @@ async function registryIllinoisOwnedVisibility(job) {
   }
 }
 async function registryIllinoisVerification(job, collect) {
+  if(registryQuietAlerts(job))return {ok:false,reason:"NY_CONNECTOR_IL_VERIFICATION_PENDING"};
   // Preserve the verification document. Reloading here resets Illinois's
   // normal challenge instead of recovering it. Only activate our owned tab;
   // the state's own code must enable Search before collection can proceed.

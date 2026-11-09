@@ -43,7 +43,7 @@
     if (path==='/alerts/' || path==='/alerts' || path==='/alerts.html') {
       if (message.action==='status') {
         const {[PROFILE]:profile}=await chrome.storage.local.get(PROFILE);
-        return {ok:true,enabled:!!profile};
+        return {ok:true,enabled:!!profile,quiet:true};
       }
       if (message.action==='enable' && /^[A-Za-z0-9_-]{43}$/.test(message.profile || '')) {
         await chrome.storage.local.set({[PROFILE]:message.profile});
@@ -64,7 +64,7 @@
     if (record?.id!==sender.tab.id) return {ok:false};
     if (message.action==='config') {
       const {[PROFILE]:profile}=await chrome.storage.local.get(PROFILE);
-      return {ok:!!profile,profile};
+      return {ok:!!profile,profile,quiet:true};
     }
     if (message.action==='done') {
       await closeOwned(record);

@@ -1,6 +1,17 @@
 (() => {
   const $ = id => document.getElementById(id);
   const page = $('alerts');
+  $('returnToAurora')?.addEventListener('click', event => {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    try {
+      const aurora = window.opener;
+      if (!aurora || aurora.closed || aurora.location.origin !== location.origin
+          || !aurora.document.getElementById('snapshotForm')) return;
+      aurora.focus();
+      window.close();
+      event.preventDefault();
+    } catch { /* Direct visits and cross-origin openers use the ordinary link. */ }
+  });
   const demo = !!page && new URLSearchParams(location.search).get('example') === '1';
   const labels = {adverse:'Needs attention', favorable:'Favorable changes', other:'Other changes'};
   const local = {organizations: [], changes: [], failures: [], unseen: 0, states: 38, next:null};
@@ -161,11 +172,12 @@
   async function browserSetting(){
     if(demo || !window.CCAlertsBrowser)return;
     const setting=await window.CCAlertsBrowser('status');
-    background.hidden=!setting.ok;
-    $('background-status').textContent=!setting.ok?'Update the CharityClarity Chrome connector to enable automatic checks.':
-      setting.enabled?'Automatic checks run when this Chrome profile is open. Registry windows may briefly appear.':
+    const ready=setting.ok && setting.quiet === true;
+    background.hidden=!ready;
+    $('background-status').textContent=!ready?'Update the CharityClarity Chrome connector to enable background checks.':
+      setting.enabled?'Automatic checks use background tabs while this Chrome profile is open.':
       'Enable automatic checks on this computer.';
-    if(!setting.ok)return;
+    if(!ready)return;
     background.textContent=setting.enabled?'Stop checks in this browser':'Run checks in this browser';
     background.onclick=async()=>{
       background.disabled=true;

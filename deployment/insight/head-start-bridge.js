@@ -5,12 +5,12 @@
   const fields = () => ({name:document.getElementById('organizationName'),ein:document.getElementById('ein')});
   const normalizeEin = value => String(value || '').replace(/\D/g,'');
   const normalizeName = value => String(value || '').trim().replace(/\s+/g,' ').toLowerCase();
-  const insightButtonMarkup = '<span class="cc-journey-lead">Continue to</span><span class="cc-journey-mark cc-journey-mark--insight"><img src="/head-start/charityclarity-wordmark.png" alt=""><span class="cc-journey-script" aria-hidden="true">Insight</span></span>';
+  const insightButtonMarkup = '<span class="cc-journey-mark cc-journey-mark--signature"><img src="/head-start/charityclarity-wordmark.png" alt=""><span class="cc-journey-script" aria-hidden="true">Insight</span></span>';
   function brandInsightButton(button) {
     if(!button || button.dataset.ccInsightBrand)return;
     button.dataset.ccInsightBrand='true';
     button.classList.add('cc-journey-cta');
-    button.setAttribute('aria-label','Continue to CharityClarity Insight');
+    button.setAttribute('aria-label','Generate CharityClarity Insight');
     button.innerHTML=insightButtonMarkup;
   }
   let assessment = null, applied = false;

@@ -1,5 +1,5 @@
 {
-  "build": "background-alerts",
+  "build": "quiet-alerts",
   "version": "0.6.135",
-  "scope": "Opt-in Chrome scheduling for Alerts with the existing registry collectors."
+  "scope": "Opt-in scheduled checks use inactive Chrome tabs without focus recovery."
 }

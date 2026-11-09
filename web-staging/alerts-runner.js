@@ -15,7 +15,7 @@
       if(browser.ok)break;
       await pause(600);
     }
-    if(!browser?.ok)return;
+    if(!browser?.ok || browser.quiet !== true)return;
     const deadline=Date.now()+480000;
     while(Date.now()<deadline){
       const job=await post('claim',{profile:browser.profile});

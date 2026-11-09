@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity — Background Alerts",
+  "name": "CharityClarity — Quiet Alerts",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
   "description": "Staging: explicit New Mexico HTTP outage reporting; prior evidence and identity repairs preserved.",
@@ -133,5 +133,5 @@
       "run_at": "document_start"
     }
   ],
-  "version_name": "0.6.135 Background Alerts"
+  "version_name": "0.6.135 Quiet Alerts"
 }
