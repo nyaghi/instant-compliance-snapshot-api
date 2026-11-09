@@ -1,4 +1,10 @@
-.cc-product-links{display:flex;flex-wrap:wrap;gap:.7rem;margin-bottom:1rem}
+.cc-product-buttons{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+.cc-product-buttons>.cc-journey-cta{box-sizing:border-box;flex:1 1 165px;max-width:234px;min-width:0}
+.cc-product-buttons .cc-journey-mark{max-width:100%}
+.cc-alert-cta{position:relative;text-decoration:none}
+.cc-alert-cta .cc-journey-mark img{position:absolute;left:3%;top:-2px;width:94%;height:auto}
+.cc-alert-cta .cc-alert-count{position:absolute;top:-7px;right:-7px;border:2px solid #fff;background:#0b2a5b;min-width:1.85em;min-height:1.85em}
+.cc-alert-cta .cc-journey-script{bottom:1px}
 .cc-alert-button{display:inline-flex;align-items:center;gap:.5rem;border:1px solid #0b2a5b;border-radius:999px;padding:.55rem .9rem;background:#fff;color:#0b2a5b;font-weight:650;text-decoration:none;white-space:nowrap}
 .cc-alert-button:hover{background:#eaf1f8}
 .cc-alert-button:focus-visible{outline:3px solid #0b2a5b;outline-offset:3px}

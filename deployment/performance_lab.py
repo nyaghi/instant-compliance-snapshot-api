@@ -380,7 +380,7 @@ def insight_asset(name, text):
         ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length || !window.CCHeadStart?.hasAssessment();'),
         ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
         ('</head>', '  <link rel="stylesheet" href="/head-start/journey.css?v=20261011.1">\n</head>'),
-        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.5"></script>\n  <script src="/sales-extract.js?v=3"></script>\n</body>'),
+        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.6"></script>\n  <script src="/sales-extract.js?v=3"></script>\n</body>'),
     ]
     for old, new in replacements:
         if text.count(old) != 1:
@@ -409,8 +409,12 @@ def alerts_navigation(data, anchor, *, aurora=False):
     link = ('<a href="/alerts/" class="cc-alert-button" data-cc-alerts-link>CharityClarity Alerts '
             '<span class="cc-alert-count" aria-hidden="true" hidden></span></a>')
     if aurora:
-        link = ('<nav class="cc-product-links" aria-label="CharityClarity products">'
-                '<a href="/head-start/" class="cc-alert-button">Head Start</a>'+link+'</nav>')
+        link = ('<nav id="ccProductButtons" class="cc-product-buttons" aria-label="CharityClarity products">'
+                '<a href="/alerts/" class="cc-journey-cta cc-alert-cta" data-cc-alerts-link aria-label="CharityClarity Alerts">'
+                '<span class="cc-journey-mark" aria-hidden="true">'
+                '<img src="/head-start/charityclarity-wordmark.png" alt="">'
+                '<span class="cc-journey-script">Alerts</span></span>'
+                '<span class="cc-alert-count" aria-hidden="true" hidden></span></a></nav>')
     return (data.replace(anchor, link+anchor, 1)
                 .replace('</head>', '<link rel="stylesheet" href="/alerts.css"></head>', 1)
                 .replace('</body>', '<script src="/alerts.js" defer></script></body>', 1))
@@ -461,7 +465,7 @@ def lab_asset(path):
                        'https://staging.compliance-express.com'):
             text = text.replace(origin, LAB_ORIGIN)
         if file.name == 'index.html':
-            text=alerts_navigation(text,'<div class="mb-6 flex flex-wrap items-center gap-3">',aurora=True)
+            text=alerts_navigation(text,'<form id="snapshotForm"',aurora=True)
             title = 'CharityClarity Staging — ' if os.environ.get('CE_PERMANENT_STAGING') == '1' else 'Performance Lab — '
             text = text.replace('<title>', '<title>'+title, 1)
             text = text.replace('<body', '<body data-performance-lab="true"', 1)

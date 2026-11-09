@@ -24,10 +24,16 @@
   back.classList.add('cc-journey-cta');
   back.setAttribute('aria-label','CharityClarity Head Start');
   back.innerHTML='<span class="cc-journey-mark"><img src="/head-start/head-start-logo.png" alt="CharityClarity Head Start"></span>';
-  back.style.margin='0 0 12px';
   card.append(title,description,message);
   const form=document.getElementById('snapshotForm');
-  form.before(back);form.before(card);
+  const productButtons=document.getElementById('ccProductButtons');
+  if (productButtons) {
+    productButtons.prepend(back);
+  } else {
+    back.style.margin='0 0 12px';
+    form.before(back);
+  }
+  form.before(card);
 
   function validate(value) {
     if(!value || value.schema_version !== 'cc.head-start/1' || !value.organization_name || !/^\d{9}$/.test(normalizeEin(value.ein)) ||
