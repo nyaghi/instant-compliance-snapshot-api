@@ -132,12 +132,25 @@ class AlertsTests(unittest.TestCase):
         self.assertEqual(len(start['failures']),1)
         self.assertEqual(self.check('recovery',1,'Current')['unseen'],0)
         for i,kw in enumerate([{'confirmation_required':True},{'identity_anchor':'POSSIBLE_NAME'},
-                               {'ein':'999999999'},{'evidence_url':'https://example.org/file'},{'success':False}],2):
+                               {'ein':'999999999'},{'source_truth_conflict':True},{'success':False}],2):
             self.assertEqual(self.check(str(i),i,'Delinquent',**kw)['unseen'],0)
         status=self.c.execute('SELECT status FROM cc_alert_confirmed').fetchone()['status']
         self.assertEqual(status,'Current')
         change=self.check('valid-negative',7,'Not Registered',evidence_url='',search_history_url=HISTORY)
         self.assertEqual(change['changes'][0]['previous'],'Current')
+
+    def test_status_only_baseline_and_change_with_optional_evidence(self):
+        initial=self.check('first',0,'Current',evidence_url='')
+        self.assertEqual(initial['organizations'][0]['confirmed'],1)
+        self.assertEqual(initial['unseen'],0)
+        change=self.check('worse',1,'Delinquent',evidence_url='https://example.org/file')
+        self.assertEqual(change['unseen'],1)
+        alert,=change['changes']
+        self.assertFalse(alert['has_evidence'])
+        self.assertEqual((alert['previous'],alert['status']),('Current','Delinquent'))
+        self.assertEqual(handle(self.a,Handler(self.session),f"/api/alerts/evidence/{alert['id']}",
+                                origin=ORIGIN)[0],404)
+        self.assertEqual(self.check('same',2,'Delinquent',evidence_url='')['unseen'],1)
 
     def test_badge_seen_idempotent_and_tenant_scope(self):
         self.check('first',0,'Current')

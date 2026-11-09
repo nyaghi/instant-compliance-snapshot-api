@@ -72,6 +72,29 @@ class AlertsBackgroundTests(TestCase):
                          (ACCOUNT,)).fetchone()['status'],'Current')
         self.assertEqual(after['matches'],[])
 
+    def test_sole_signed_match_without_ein_or_snapshot_records_what_was_accepted(self):
+        selected={'ein':'','id':'candidate','identifier':'state-license','name':'Registry Name',
+                  'reviewable':True}
+        record={'base':{'state':'CO','ein':EIN},'records':[selected]}
+        decisions=[]
+        def resolve(payload, *_):
+            decisions.append(payload)
+            return {**run('resolved',NOW,'Delinquent',evidence_url='')['jobs'][0]['result'],
+                    'matched_registry_identifier':'state-license'}
+        self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,
+            identity_review_unpack=lambda *a:record,resolve_identity_review=resolve)
+        self.check('baseline',0,'Current',evidence_url='')
+        dashboard=self.check('auto',1,'Needs Review',evidence_url='',identity_review={'token':'signed'})
+        self.assertEqual((decisions[0]['action'],decisions[0]['candidate_id']),('accept','candidate'))
+        match,=dashboard['matches']
+        self.assertEqual((match['name'],match['identifier'],match['has_evidence']),
+                         ('Registry Name','state-license',False))
+        change,=dashboard['changes']
+        self.assertEqual((change['match_name'],change['match_identifier']),('Registry Name','state-license'))
+        record['records'].append({**selected,'identifier':'another','id':'other'})
+        self.check('competing',2,'Needs Review',identity_review={'token':'signed'})
+        self.assertEqual(len(decisions),1)
+
     def test_conflicting_candidate_stays_unconfirmed(self):
         self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,
             identity_review_unpack=lambda *a:{'base':{'state':'CO','ein':EIN},

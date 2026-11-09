@@ -100,11 +100,12 @@
         for(const x of rows){
           const row=el('div',null,'alert-row');
           row.append(el('strong',x.state),el('span',x.previous+' → '+x.status),el('span',time(x.checked),'muted'));
-          if(!demo){const link=el('a','View evidence');link.href='/api/alerts/evidence/'+x.id;link.target='_blank';link.rel='noopener';row.append(link);}
+          if(!demo && x.has_evidence){const link=el('a','View evidence');link.href='/api/alerts/evidence/'+x.id;link.target='_blank';link.rel='noopener';row.append(link);}
           if(x.corrected){
             row.append(el('span','Match corrected','muted'));
           }else if(x.automatic){
-            row.append(el('span','Automatically confirmed','muted'));
+            row.append(el('span',x.match_name && x.match_identifier
+              ? 'Automatically accepted: '+x.match_name+' ('+x.match_identifier+')' : 'Automatically accepted','muted'));
           }
           if(!x.seen && !x.corrected){
             row.append(el('span','New','alert-new'));
@@ -137,12 +138,14 @@
     for(const match of model.matches || []){
       const row=el('div',null,'alert-row');
       const org=model.organizations.find(x=>x.ein===match.ein);
-      row.append(el('strong',match.state),el('span',org?.name || ein(match.ein)),el('span',match.name),
-        el('span',match.status),el('span','Automatically confirmed','muted'));
-      const evidence=el('a','View evidence');
-      evidence.href='/api/alerts/match-evidence/'+match.ein+'/'+match.state;
-      evidence.target='_blank';evidence.rel='noopener';
-      row.append(evidence);
+      row.append(el('strong',match.state),el('span',org?.name || ein(match.ein)),
+        el('span','Automatically accepted: '+match.name+' ('+match.identifier+')','muted'),el('span',match.status));
+      if(match.has_evidence){
+        const evidence=el('a','View evidence');
+        evidence.href='/api/alerts/match-evidence/'+match.ein+'/'+match.state;
+        evidence.target='_blank';evidence.rel='noopener';
+        row.append(evidence);
+      }
       const action=el('button','Change match');
       const controls=el('div');
       controls.hidden=true;
@@ -219,7 +222,7 @@
       while(batch.next){batch=await api('/api/alerts?before='+batch.next);rows.push(...batch.changes);}
       const workbook=window.CCExcelExport.buildAlerts(rows.map(x=>[x.name,ein(x.ein),x.state,x.previous,x.status,
         labels[x.direction],new Date(x.checked*1000).toISOString(),x.corrected?'Match corrected':x.seen?'Seen':'Unseen',
-        demo?'':new URL('/api/alerts/evidence/'+x.id,location.origin).href]));
+        !demo && x.has_evidence ? new URL('/api/alerts/evidence/'+x.id,location.origin).href : '']));
       const href=URL.createObjectURL(workbook), a=el('a');
       a.href=href;a.download='CharityClarity-Alerts.xlsx';a.click();
       setTimeout(()=>URL.revokeObjectURL(href),10000);

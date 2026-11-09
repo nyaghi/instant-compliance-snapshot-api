@@ -123,8 +123,6 @@ def observation(job, ein, submitted, finished, version):
         evidence = history if HISTORY.fullmatch(history) else snapshot if SNAPSHOT.fullmatch(snapshot) else ''
     else:
         evidence = snapshot if SNAPSHOT.fullmatch(snapshot) else ''
-    if not evidence:
-        return checked, None, None, 'Supporting evidence unavailable'
     return checked, status, evidence, None
 
 
@@ -306,7 +304,8 @@ class Alerts:
                          '(SELECT max(s.checked) FROM cc_alert_confirmed s WHERE s.account=o.account AND s.ein=o.ein)) AS last_checked '
                          'FROM cc_alert_orgs o WHERE o.account=%s ORDER BY o.name,o.ein', (account,)).fetchall()
         changes = c.execute('SELECT a.id,o.name,a.ein,a.state,a.previous,a.status,a.direction,a.checked,a.seen, '
-                            'coalesce(m.corrected,false) AS corrected, m.identifier IS NOT NULL AS automatic '
+                            "a.evidence<>'' AS has_evidence, coalesce(m.corrected,false) AS corrected, "
+                            'm.identifier IS NOT NULL AS automatic, m.name AS match_name, m.identifier AS match_identifier '
                             'FROM cc_alert_changes a JOIN cc_alert_orgs o USING(account,ein) '
                             'LEFT JOIN cc_alert_auto_matches m ON m.account=a.account AND m.ein=a.ein AND m.state=a.state AND m.workflow=a.workflow '
                             'WHERE a.account=%s AND a.id<%s AND a.checked>=%s ORDER BY a.id DESC LIMIT 101',
@@ -318,7 +317,7 @@ class Alerts:
                              'AND NOT EXISTS (SELECT 1 FROM cc_alert_confirmed s WHERE s.account=h.account '
                              'AND s.ein=h.ein AND s.state=h.state AND s.checked>=h.checked) '
                              'ORDER BY h.checked DESC LIMIT 200',(account,self.now(c)-HISTORY_DAYS*DAY)).fetchall()
-        matches=c.execute('SELECT m.ein,m.state,m.identifier,m.workflow,m.name,m.checked,s.status '
+        matches=c.execute("SELECT m.ein,m.state,m.identifier,m.workflow,m.name,m.checked,s.status,s.evidence<>'' AS has_evidence "
                           'FROM cc_alert_auto_matches m JOIN cc_alert_confirmed s '
                           'ON s.account=m.account AND s.ein=m.ein AND s.state=m.state AND s.checked=m.checked '
                           'WHERE m.account=%s AND NOT m.corrected ORDER BY m.ein,m.state',(account,)).fetchall()
@@ -429,13 +428,13 @@ def handle(alerts, handler, path, *, origin, operator=False, include_body=True):
                                   'ON m.account=s.account AND m.ein=s.ein AND m.state=s.state AND m.checked=s.checked '
                                   'WHERE s.account=%s AND s.ein=%s AND s.state=%s AND NOT m.corrected',
                                   (account,*match.groups())).fetchone()
-                    if row:
+                    if row and row['evidence']:
                         return row['evidence']
                 match=re.fullmatch(r'/api/alerts/evidence/([0-9]{1,19})',parsed.path)
                 if handler.command in {'GET','HEAD'} and match and int(match[1])<2**63:
                     row=c.execute('SELECT evidence FROM cc_alert_changes WHERE account=%s AND id=%s AND checked>=%s',
                                   (account,int(match[1]),alerts.now(c)-HISTORY_DAYS*DAY)).fetchone()
-                    if row:
+                    if row and row['evidence']:
                         return row['evidence']
                 return reply(404,{'error':'Not found.'})
         except (ValueError,TypeError,KeyError):

@@ -9,7 +9,6 @@ def auto_confirm(alerts, c, org, state, workflow, result):
     if master is None or not result or result.get('source_truth_conflict'):
         return result, None
     from deployment.alerts_browser import EMAIL
-    from deployment.alerts import SNAPSHOT
     key=(org['account'],org['ein'],state)
     blocked={r['identifier'] for r in c.execute(
         'SELECT identifier FROM cc_alert_rejected_matches WHERE account=%s AND ein=%s AND state=%s',key).fetchall()}
@@ -29,20 +28,25 @@ def auto_confirm(alerts, c, org, state, workflow, result):
         if (base['state']!=state or master.canonical_ein_digits(base['ein'])!=org['ein']
                 or base.get('source_truth_conflict')):
             return result,None
-        exact=[r for r in signed['records'] if r.get('ein') and
+        records=signed['records']
+        exact=[r for r in records if r.get('ein') and
                master.canonical_ein_digits(r['ein'])==org['ein']]
-        if len(exact)!=1:
+        # When a registry doesn't expose EINs, accept its sole proposed
+        # match. Never choose among competing records without a unique EIN.
+        if len(exact)==1:
+            row=exact[0]
+        elif not exact and len(records)==1 and not records[0].get('ein'):
+            row=records[0]
+        else:
             return result,None
-        row=exact[0]
         identifier=row.get('identifier')
         if (not row.get('reviewable') or not identifier or identifier in blocked
-                or row.get('group_identity') or not SNAPSHOT.fullmatch(row.get('evidence_url') or '')):
+                or row.get('group_identity')):
             return result,None
         resolved=master.resolve_identity_review({'token':review['token'],'candidate_id':row['id'],
             'action':'accept','state':state,'ein':base['ein']},EMAIL,device)
         if (not isinstance(resolved,dict) or resolved.get('success') is not True
-                or resolved.get('matched_registry_identifier')!=identifier
-                or resolved.get('evidence_url')!=row['evidence_url']):
+                or resolved.get('matched_registry_identifier')!=identifier):
             return result,None
         clean={k:v for k,v in resolved.items() if k not in ('identity_review','_worker_identity_review')}
         clean.update(confirmation_required=False,checked_at_epoch=result.get('checked_at_epoch'))
