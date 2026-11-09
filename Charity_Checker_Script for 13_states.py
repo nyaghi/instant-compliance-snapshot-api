@@ -958,6 +958,15 @@ def search_co(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        # Read the selected summary's EIN field, never digits from the query or other fields.
+        result._cc_co_record_eins = {
+            digits_only(value) for value in re.findall(
+                r"^[ \t\u00a0]*(?:FEIN|EIN)[ \t\u00a0]*:?[ \t\u00a0]*(?:\r?\n[ \t\u00a0]*)?"
+                r"([0-9]{2}[ \t\u00a0-]?[0-9]{7})[ \t\u00a0]*\r?$",
+                body, re.I | re.M,
+            )
+        }
+
         from deployment.gates2930_repairs import co_expired_restriction
         expired_restriction = co_expired_restriction(body)
         if expired_restriction:

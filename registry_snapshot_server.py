@@ -15375,7 +15375,11 @@ def search_co_with_name_fallback(page, org):
 
 
 def search_co_with_name_fallback_core(page, org):
+    requested_ein = canonical_ein_digits(org.ein)
     result = checker.search_co(page, org)
+    record_eins = getattr(result, "_cc_co_record_eins", set())
+    if requested_ein and record_eins and record_eins != {requested_ein}:
+        return co_unverified_browser_result(org, result.source_url, "The record returned by the EIN search displays a different or conflicting EIN.")
     result = normalize_co_matched_closed_status(result, org)
     if public_status(result) == "Site Not Reachable":
         api_result = co_api_fallback_result(org)
@@ -15391,6 +15395,7 @@ def search_co_with_name_fallback_core(page, org):
             return result
     if public_status(result) != "Not Registered":
         return result
+    possible_match = False
     for variant in organization_name_variants(
         org.organization_name,
         org.ein,
@@ -15404,15 +15409,35 @@ def search_co_with_name_fallback_core(page, org):
         fallback = checker.search_co(page, variant_org)
         if public_status(fallback) == "Site Not Reachable":
             return copy_name_fallback_result(org, fallback)
-        fallback = normalize_co_matched_closed_status(fallback, org)
         if public_status(fallback) == "Not Registered":
             continue
-        if result_registry_name_is_safe(fallback, org.organization_name, org.ein):
+        record_eins = getattr(fallback, "_cc_co_record_eins", set())
+        if requested_ein and record_eins and record_eins != {requested_ein}:
+            result._cc_co_unbound_page = True
+            result.source_note = "Colorado found no record for the requested EIN. A name search returned a record with a different or conflicting EIN, so that record was excluded."
+            continue
+        match = score_candidate(org.organization_name, org.ein, {"name": fallback.matched_registry_name})
+        if (requested_ein and record_eins == {requested_ein}) or (
+            match["decision"] == "accepted" and result_registry_name_is_safe(fallback, org.organization_name, org.ein)
+        ):
+            fallback = normalize_co_matched_closed_status(fallback, org)
             fallback.source_note = (
                 (fallback.source_note or "Colorado public search found a matching organization-name record.")
                 + " CharityClarity used a name fallback after the EIN search returned no matching record."
             )
             return copy_name_fallback_result(org, fallback)
+        if fallback.matched_registry_name:
+            result._cc_co_unbound_page = True
+        possible_match |= match["decision"] == "possible"
+    if possible_match:
+        return co_unverified_browser_result(org, result.source_url, "A name search returned a possible match without a confirmed EIN or strong name match.")
+    return result
+
+
+def co_unverified_browser_result(org, source_url, note):
+    result = checker.StateResult(org.organization_name, org.ein, "CO", "Unable to Confirm", source_url)
+    result.source_note = note
+    result._cc_co_unbound_page = True
     return result
 
 
@@ -15495,16 +15520,15 @@ def co_api_fallback_result(org):
     targets = organization_match_target_variants(org.organization_name, ein)
     safe_rows = [
         row for row in rows
-        if result_registry_name_is_safe(
-            SimpleNamespace(
-                matched_registry_name=row.get("name") or "",
-                matched_registry_identifier=row.get("entityid") or "",
-                raw_status_text=" ".join(str(row.get(key) or "") for key in ("currentstatus", "filingtype", "expirationdate")),
-            ),
-            org.organization_name,
-            ein,
+        if isinstance(row, dict) and canonical_ein_digits(row.get("fein") or "") == ein
+        and (
+            result_registry_name_is_safe(
+                SimpleNamespace(matched_registry_name=row.get("name") or ""),
+                org.organization_name,
+                ein,
+            )
+            or normalized_name(row.get("name") or "") in targets
         )
-        or normalized_name(row.get("name") or "") in targets
     ]
     if not safe_rows:
         result = checker.StateResult(org.organization_name, format_ein(ein), "CO", checker.STATUS_NOT_REGISTERED, url)
@@ -37080,8 +37104,9 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 except Exception:pass
             elif state == "CO":
                 result = search_co_with_name_fallback(page, org)
-                body = registry_page_body(page) if result.success else ""
-                if not (getattr(result, "matched_registry_name", "") or "").strip():
+                co_unbound_page = getattr(result, "_cc_co_unbound_page", False)
+                body = registry_page_body(page) if result.success and not co_unbound_page else ""
+                if body and not (getattr(result, "matched_registry_name", "") or "").strip():
                     co_name = checker.extract_labeled_value_from_text(body, ["Name"])
                     if co_name and useful_registry_name(co_name):
                         result.matched_registry_name = co_name
@@ -37458,9 +37483,9 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 body = registry_page_body(page)
             else:
                 raise ValueError(f"Unsupported state: {state}")
-            if page and state == "CO":
+            if page and state == "CO" and not co_unbound_page:
                 result._cc_registration_date_evidence = co_registration_renewal_evidence(page, result, body, lookup_started)
-            if page:
+            if page and not (state == "CO" and co_unbound_page):
                 if not body and not (state == "CO" and not result.success):
                     body = registry_page_body(page)
                 if CAPTURE_EVIDENCE_SCREENSHOTS and not (state == "CO" and not result.success):
