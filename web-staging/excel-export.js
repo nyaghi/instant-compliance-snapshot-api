@@ -23,15 +23,17 @@
     const count=Object.keys(files).length;
     return new Blob([...chunks,...directory,header(22,[[0,4,0x06054b50],[8,2,count],[10,2,count],[12,4,size],[16,4,offset]])],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   }
-  function sheet(headers, rows, widths) {
+  function sheet(headers, rows, widths, links=[]) {
     const cell=(value,c,r,style)=>`<c r="${col(c)}${r}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${xml(value)}</t></is></c>`;
     const row=(values,r)=>{
       const lines=Math.max(...values.map((v,c)=>String(v??'').split('\n').reduce((n,s)=>n+Math.max(1,Math.ceil(s.length/Math.max(4,widths[c]-3))),0)));
       const height=r===1?32:Math.min(409,Math.max(32,lines*16+10));
       return `<row r="${r}" ht="${height}" customHeight="1">${values.map((v,c)=>cell(v,c,r,r===1?1:r%2?3:2)).join('')}</row>`;
     };
-    return declaration+`<worksheet xmlns="${ns}"><dimension ref="A1:${col(headers.length-1)}${rows.length+1}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="18"/><cols>${widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${row(headers,1)}${rows.map((v,i)=>row(v,i+2)).join('')}</sheetData><autoFilter ref="A1:${col(headers.length-1)}${rows.length+1}"/><printOptions horizontalCentered="1"/><pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup orientation="landscape" paperSize="9" fitToWidth="1" fitToHeight="0"/><headerFooter><oddHeader>&amp;LCompliance Express | CharityClarity</oddHeader><oddFooter>&amp;RPage &amp;P of &amp;N</oddFooter></headerFooter></worksheet>`;
+    const hyperlinks=links.length?`<hyperlinks>${links.map((x,i)=>`<hyperlink ref="I${x.row}" r:id="rId${i+1}"/>`).join("")}</hyperlinks>`:'';
+    return declaration+`<worksheet xmlns="${ns}" xmlns:r="${office.slice(0,-1)}"><dimension ref="A1:${col(headers.length-1)}${rows.length+1}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="18"/><cols>${widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${row(headers,1)}${rows.map((v,i)=>row(v,i+2)).join('')}</sheetData><autoFilter ref="A1:${col(headers.length-1)}${rows.length+1}"/>${hyperlinks}<printOptions horizontalCentered="1"/><pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup orientation="landscape" paperSize="9" fitToWidth="1" fitToHeight="0"/><headerFooter><oddHeader>&amp;LCompliance Express | CharityClarity</oddHeader><oddFooter>&amp;RPage &amp;P of &amp;N</oddFooter></headerFooter></worksheet>`;
   }
+  const styles=declaration+`<styleSheet xmlns="${ns}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/><color rgb="FF243447"/></font><font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF16324F"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf applyNumberFormat="1" numFmtId="49" fontId="1" fillId="2" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf applyNumberFormat="1" numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf applyNumberFormat="1" numFmtId="49" fontId="0" fillId="3" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
   function build(results, options={}) {
     const label=r=>window.CCIdentityReview?.statusLabel(r)||(r.status==='Closed / Withdrawn / Canceled'?'Closed / Withdrawn / Canceled / Inactive':r.status||'Unknown');
     const ein=v=>{const s=String(v||'').replace(/\D/g,'');return s.length===9?s.slice(0,2)+'-'+s.slice(2):String(v||'');};
@@ -49,7 +51,6 @@
       const evidenceLabel = pendingSnapshot ? 'Snapshot available after match confirmation' : 'Snapshot unavailable';
       return [r.state,label(r),path?new URL(path,location.origin).href:evidenceLabel,r.source_url||'',r.registration_date_source_label||'',r.registration_date_note||'',r.renewal_filing_label||r.renewal_date_source_label||'',r.renewal_filing_note||r.renewal_date_note||'',evidenceType];
     });
-    const styles=declaration+`<styleSheet xmlns="${ns}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/><color rgb="FF243447"/></font><font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF16324F"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf applyNumberFormat="1" numFmtId="49" fontId="1" fillId="2" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf applyNumberFormat="1" numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf applyNumberFormat="1" numFmtId="49" fontId="0" fillId="3" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
     const files={
       '[Content_Types].xml':declaration+'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="json" ContentType="application/json"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
       '_rels/.rels':declaration+`<Relationships xmlns="${relns}"><Relationship Id="rId1" Type="${office}officeDocument" Target="xl/workbook.xml"/></Relationships>`,
@@ -64,5 +65,20 @@
     if(options.diagnostics)files['cc-diagnostics.json']=JSON.stringify(options.diagnostics);
     return zip(files);
   }
-  window.CCExcelExport=Object.freeze({build});
+  function buildAlerts(rows) {
+    const headers=['Organization','EIN','State','Previous status','New status','Change','Checked (UTC)','Review','Evidence'];
+    const links=rows.flatMap((r,i)=>/^https?:\/\/[^\s]+\/api\/alerts\/evidence\/[1-9]\d*$/.test(r[8])?[{row:i+2,url:r[8]}]:[]);
+    const files={
+      '[Content_Types].xml':declaration+'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+      '_rels/.rels':declaration+`<Relationships xmlns="${relns}"><Relationship Id="rId1" Type="${office}officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+      'xl/workbook.xml':declaration+`<workbook xmlns="${ns}" xmlns:r="${office.slice(0,-1)}"><sheets><sheet name="Alerts" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      'xl/_rels/workbook.xml.rels':declaration+`<Relationships xmlns="${relns}"><Relationship Id="rId1" Type="${office}worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${office}styles" Target="styles.xml"/></Relationships>`,
+      'xl/styles.xml':styles,
+      'xl/worksheets/sheet1.xml':sheet(headers,rows,[42,15,9,26,26,22,27,14,55],links)
+    };
+    if(links.length)files['xl/worksheets/_rels/sheet1.xml.rels']=declaration+
+      `<Relationships xmlns="${relns}">${links.map((x,i)=>`<Relationship Id="rId${i+1}" Type="${office}hyperlink" Target="${xml(x.url)}" TargetMode="External"/>`).join('')}</Relationships>`;
+    return zip(files);
+  }
+  window.CCExcelExport=Object.freeze({build,buildAlerts});
 })();

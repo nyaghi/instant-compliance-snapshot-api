@@ -155,16 +155,22 @@ class SQLiteStore:
         with self.lock,closing(sqlite3.connect(self.path)) as c,c:c.execute('UPDATE snapshots SET pdf=? WHERE id=? AND pdf IS NULL',(pdf,ident))
 
 class PostgresStore:
-    def __init__(self,pool,*,provisional_enabled=False):
+    def __init__(self,pool,*,provisional_enabled=False,alerts_owner=None):
         self.pool=pool
         self.provisional_enabled=provisional_enabled
+        self.alerts_owner=alerts_owner
 
     def save(self,meta,raw,*,provisional=False):
         from psycopg.types.json import Jsonb
         ident=secrets.token_hex(32)
         with self.pool.connection(timeout=.25) as c:
             c.execute("SET LOCAL statement_timeout = '500ms'")
-            if provisional:
+            if self.alerts_owner:
+                c.execute("WITH saved AS (INSERT INTO cc_state_snapshots(id,metadata,source) "
+                          "VALUES(%s,%s,%s) RETURNING id) INSERT INTO cc_alert_artifacts "
+                          "SELECT id,%s,%s,extract(epoch FROM clock_timestamp()) FROM saved",
+                          (ident,Jsonb({**meta,'alerts_owned':True}),raw,*self.alerts_owner))
+            elif provisional:
                 c.execute("WITH saved AS (INSERT INTO cc_state_snapshots(id,metadata,source) "
                           "VALUES(%s,%s,%s) RETURNING id) INSERT INTO cc_state_snapshot_scratch "
                           "SELECT id,CURRENT_TIMESTAMP+interval '1 day' FROM saved",(ident,Jsonb(meta),raw))
@@ -347,6 +353,8 @@ def persist_worker_result(queue,result,job,store=None):
     data=dict(result);assets=data.pop('_worker_source_archives',[])
     if isinstance(workflow_call('deployment/state_snapshots.py:persist_worker_result:253:18:get',data.get,locals(), 'evidence_metrics'),dict):data['evidence_metrics']={**data['evidence_metrics'],'archive_ms':0}
     history=data.pop('_worker_search_history',None)
+    if store is None and queue is not None and job.get('alerts_owned'):
+        store=PostgresStore(queue.pool,alerts_owner=(job['workflow_id'],job['state']))
     if workflow_call('deployment/state_snapshots.py:persist_worker_result:255:7:get',workflow_call('deployment/state_snapshots.py:persist_worker_result:255:7:get',data.get,locals(), '_worker_desktop_evidence',{}).get,locals(), 'operation')=='empty_search' and isinstance(history,dict):
         data['_worker_desktop_history']=history
     if not assets:
@@ -1434,10 +1442,14 @@ def serve(handler,include_body=True,store=None):
     try:value=saved_pdf(match[1],store)
     except Exception:handler._send_json(503,{'error':'Saved state snapshot is temporarily unavailable. No registry search was run.'});return True
     if value is None:handler._send_json(404,{'error':'No saved source capture is available. No registry search was run.'});return True
-    meta,pdf=value;handler.send_response(200)
+    meta,pdf=value
+    private=bool(meta.get('alerts_owned'))
+    if private and not getattr(handler,'cc_alerts_evidence_authorized',False):
+        handler._send_json(404,{'error':'Saved state snapshot not found.'});return True
+    handler.send_response(200)
     for name,val in [('Content-Type','application/pdf'),('Content-Length',str(len(pdf))),
                      ('Content-Disposition','inline; filename="'+meta['state']+'-state-snapshot.pdf"'),
-                     ('Cache-Control','private, max-age=86400'),('X-Content-Type-Options','nosniff')]:handler.send_header(name,val)
+                     ('Cache-Control','no-store' if private else 'private, max-age=86400'),('X-Content-Type-Options','nosniff')]:handler.send_header(name,val)
     handler.end_headers()
     if include_body:handler.wfile.write(pdf)
     return True

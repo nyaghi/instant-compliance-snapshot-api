@@ -400,6 +400,16 @@ def shared_readiness_asset(text):
     return text.replace(old, replacement, 1).replace(anchor, helper + anchor, 1)
 
 
+def alerts_navigation(data, anchor):
+    if os.environ.get('CE_PERMANENT_STAGING') != '1' or not trial_identity():
+        return data
+    link = ('<a href="/alerts/" data-cc-alerts-link>CharityClarity Alerts '
+            '<span class="cc-alert-count" hidden></span></a>')
+    return (data.replace(anchor, link+anchor, 1)
+                .replace('</head>', '<link rel="stylesheet" href="/alerts.css"></head>', 1)
+                .replace('</body>', '<script src="/alerts.js" defer></script></body>', 1))
+
+
 def lab_asset(path):
     path = unquote(urlparse(path).path)
     if path.startswith('/assets/pdfjs/'):
@@ -408,6 +418,11 @@ def lab_asset(path):
         types={'.mjs':'text/javascript','.js':'text/javascript','.wasm':'application/wasm','.bcmap':'application/octet-stream','.ttf':'font/ttf','.pfb':'application/octet-stream'}
         if not file.is_relative_to(root) or file.suffix.lower() not in types or not file.is_file():return None
         return file.read_bytes(),types[file.suffix.lower()]
+    if path in ('/alerts','/alerts/','/alerts.html','/alerts.js','/alerts.css'):
+        if os.environ.get('CE_PERMANENT_STAGING') != '1' or not trial_identity():
+            return None
+        file = ROOT/'web-staging'/('alerts.html' if path in ('/alerts','/alerts/') else path.lstrip('/'))
+        return file.read_bytes(), mimetypes.guess_type(file)[0]
     if path in ('/head-start', '/head-start/'):
         path = '/head-start/index.html'
     if path.startswith('/head-start/') or path in ('/head-start-bridge.js', '/sales-extract.js'):
@@ -415,7 +430,10 @@ def lab_asset(path):
         file = (root/path.lstrip('/')).resolve()
         if (not file.is_relative_to(root) or file.suffix.lower() not in {'.html','.js','.css','.png','.svg','.ttf'} or not file.is_file()):
             return None
-        return file.read_bytes(), mimetypes.guess_type(file)[0] or 'application/octet-stream'
+        data=file.read_bytes()
+        if path=='/head-start/index.html':
+            data=alerts_navigation(data.decode(),'<button class="textbtn" id="sourcesBtn">').encode()
+        return data, mimetypes.guess_type(file)[0] or 'application/octet-stream'
     if path == '/connector/final-four-validation.html' and trial_identity():
         return (ROOT/'deployment/final-four-validation.html').read_bytes(), 'text/html'
     if path in ('/', '/registry-snapshot', '/registry-snapshot/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/'):
@@ -437,6 +455,7 @@ def lab_asset(path):
                        'https://staging.compliance-express.com'):
             text = text.replace(origin, LAB_ORIGIN)
         if file.name == 'index.html':
+            text=alerts_navigation(text,'<a href="/instant-compliance-snapshot" class="font-semibold')
             title = 'CharityClarity Staging — ' if os.environ.get('CE_PERMANENT_STAGING') == '1' else 'Performance Lab — '
             text = text.replace('<title>', '<title>'+title, 1)
             text = text.replace('<body', '<body data-performance-lab="true"', 1)
@@ -453,7 +472,7 @@ def lab_asset(path):
     return data, mimetypes.guess_type(file)[0] or 'application/octet-stream'
 
 
-def build_handler(master, key, capacity=None, durable=None):
+def build_handler(master, key, capacity=None, durable=None, alerts=None):
     if durable is not None:
         from deployment import state_snapshots
         state_snapshots.STORE = state_snapshots.PostgresStore(
@@ -539,6 +558,9 @@ def build_handler(master, key, capacity=None, durable=None):
                 if include_body:self.wfile.write(body)
                 return
             if not self.authorized(): return
+            if alerts is not None and (urlparse(self.path).path == '/api/alerts' or self.path.startswith('/api/alerts/')):
+                from deployment.alerts import handle
+                return handle(alerts,self,self.path,origin=LAB_ORIGIN,include_body=include_body)
             if self.path.startswith('/state-evidence/'):
                 from deployment.search_history import serve as serve_search_evidence
                 serve_search_evidence(self,include_body)
@@ -553,11 +575,17 @@ def build_handler(master, key, capacity=None, durable=None):
                 # database. The approved pool never exposes this endpoint.
                 with durable.transaction() as (connection, _):
                     evidence = {}
-                    for table, limit in (('cc_lab_settings', 1), ('cc_lab_workflows', 1000), ('cc_lab_jobs', 40000)):
-                        count = connection.execute('SELECT count(*) AS n FROM ' + table).fetchone()['n']
+                    sources = {
+                        'cc_lab_settings': ('SELECT * FROM cc_lab_settings',1),
+                        'cc_lab_workflows': ("SELECT * FROM cc_lab_workflows WHERE scope NOT LIKE 'alerts:%'",1000),
+                        'cc_lab_jobs': ("SELECT j.* FROM cc_lab_jobs j JOIN cc_lab_workflows w "
+                                        "ON w.id=j.workflow_id WHERE w.scope NOT LIKE 'alerts:%'",40000),
+                    }
+                    for table,(query,limit) in sources.items():
+                        count=connection.execute('SELECT count(*) AS n FROM ('+query+') AS allowed').fetchone()['n']
                         if count > limit:
                             return self._send_json(413, {'error': 'Trial export needs a paginated archival pass'})
-                        evidence[table] = connection.execute('SELECT * FROM ' + table).fetchall()
+                        evidence[table]=connection.execute(query).fetchall()
                 data = json.loads(json.dumps(evidence, default=str))
                 return self._send_json(200, {'app_version': master.APP_VERSION, 'evidence': data}, {'Cache-Control':'no-store'})
             if self.path == '/api/lab/metrics':
@@ -598,6 +626,10 @@ def build_handler(master, key, capacity=None, durable=None):
 
         def do_POST(self):
             if not self.authorized(): return
+            if alerts is not None and self.path.startswith('/api/alerts/'):
+                from deployment.alerts import handle
+                operator=self.headers.get('Authorization','').startswith('Bearer ')
+                return handle(alerts,self,self.path,origin=LAB_ORIGIN,operator=operator)
             if trial_access_expired() and self.path in ('/api/workflow', '/api/discover-names',
                     '/api/check', '/api/ny-connector', '/api/final-four-connector'):
                 return self._send_json(503, {'code': 'PERFORMANCE_LAB_EXPIRED',
@@ -715,7 +747,16 @@ def main():
     elif os.environ.get('CE_LAB_FAIR_CAPACITY') == '1':
         from deployment.lab_capacity import install
         capacity = install(master, int(os.environ['CE_MAX_BROWSER_LOOKUPS']))
-    master.RegistrySnapshotHandler = build_handler(master, master.ADMIN_PASSCODE, capacity, durable)
+    alerts=None
+    if durable is not None and os.environ.get('CE_PERMANENT_STAGING')=='1' and os.environ.get('CE_LAB_ROLE')=='api':
+        from deployment.alerts import Alerts
+        try:
+            alerts=Alerts(durable,master.SUPPORTED_STATES,master.APP_VERSION)
+            alerts.initialize()
+        except Exception as exc:
+            alerts=None
+            print('Alerts initialization unavailable: '+type(exc).__name__,flush=True)
+    master.RegistrySnapshotHandler = build_handler(master, master.ADMIN_PASSCODE, capacity, durable, alerts)
     if durable is None:
         master.main()
         return
@@ -741,9 +782,25 @@ def main():
             cleanup_thread=threading.Thread(target=clean_unused_captures,daemon=True,name='lab-snapshot-cleanup')
             cleanup_thread.start()
             print('Temporary snapshot cleanup enabled on staging API.',flush=True)
+        alerts_thread=None
+        if alerts is not None:
+            def monitor_alerts():
+                next_expiry=0
+                while not stop_cleanup.wait(12):
+                    try:
+                        if time.monotonic()>=next_expiry:
+                            alerts.expire_history()
+                            alerts.prune_artifacts()
+                            next_expiry=time.monotonic()+600
+                        alerts.tick()
+                    except Exception as exc:
+                        print('Alerts monitoring deferred: '+type(exc).__name__,flush=True)
+            alerts_thread=threading.Thread(target=monitor_alerts,daemon=True,name='charityclarity-alerts')
+            alerts_thread.start()
         try: server.serve_forever()
         finally:
             stop_cleanup.set()
+            if alerts_thread:alerts_thread.join(2)
             if cleanup_thread:cleanup_thread.join(2)
             if supervisor:
                 supervisor.stop()

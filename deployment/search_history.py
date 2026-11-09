@@ -399,6 +399,8 @@ def serve(handler,include_body=True,store=None):
         item=loaded(match[1],store)
         if item is None:handler._send_json(404,{'error':'Saved evidence not found.'});return
         meta,doc,pdf=item
+        if meta.get('alerts_owned') and not getattr(handler,'cc_alerts_evidence_authorized',False):
+            handler._send_json(404,{'error':'Saved evidence not found.'});return
         if match[2]=='evidence.zip':body=bundle(match[1],store);mime='application/zip'
         else:
             body=render_pdf(doc);mime='application/pdf'

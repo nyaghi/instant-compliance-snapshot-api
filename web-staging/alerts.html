@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CharityClarity Alerts | Compliance Express</title>
+  <link rel="stylesheet" href="/alerts.css">
+  <script src="/excel-export.js" defer></script>
+  <script src="/alerts.js" defer></script>
+</head>
+<body class="alerts-page">
+  <header class="alerts-header">
+    <a href="/"><img src="/head-start/compliance-express-logo.png" alt="Compliance Express" width="175"></a>
+    <nav aria-label="CharityClarity products">
+      <a href="/head-start/">Head Start</a>
+      <a href="/instant-compliance-snapshot">Aurora</a>
+      <a href="/instant-compliance-snapshot#resultPanel">Insights</a>
+      <a href="/alerts/" data-cc-alerts-link aria-current="page">Alerts <span class="cc-alert-count" hidden></span></a>
+    </nav>
+  </header>
+  <main id="alerts">
+    <p class="eyebrow">CHARITYCLARITY</p>
+    <h1>Alerts</h1>
+    <p class="intro">See confirmed changes to your organizations’ state registration statuses.</p>
+    <p id="example-label" class="notice" hidden>Example data for the demo. These are sample organizations and changes.</p>
+    <p id="message" role="status" aria-live="polite"></p>
+    <div id="account-view" hidden>
+      <div class="toolbar">
+        <button id="add" class="primary" type="button" aria-expanded="false">Add Organization</button>
+        <button id="download" type="button">Download Excel</button>
+      </div>
+      <form id="enroll" hidden>
+        <label>Organization name <input name="name" required maxlength="300"></label>
+        <label>EIN <input name="ein" required maxlength="10" inputmode="numeric" placeholder="12-3456789" pattern="[0-9]{2}-?[0-9]{7}"></label>
+        <button type="submit" class="primary">Save organization</button>
+      </form>
+      <section aria-labelledby="changes-title" class="panel">
+        <h2 id="changes-title">Status changes</h2>
+        <p class="muted">Changes stay new until you mark them seen. History covers the last 10 days.</p>
+        <div id="changes"></div>
+        <button id="more" type="button" hidden>Show older changes</button>
+      </section>
+      <section aria-labelledby="orgs-title" class="panel">
+        <h2 id="orgs-title">Monitored organizations</h2>
+        <div id="organizations"></div>
+      </section>
+      <details class="panel">
+        <summary>Recent check failures</summary>
+        <p class="muted">These checks did not change the last confirmed status.</p>
+        <div id="failures"></div>
+      </details>
+    </div>
+  </main>
+</body>
+</html>

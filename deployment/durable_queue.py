@@ -643,6 +643,7 @@ class Queue:
                 return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,
                         'payload': w['payload'], 'version': w['source_version'], 'run_seconds': max(0, run_until-now),
                         'submitted': w['submitted'], 'claimed': now,
+                        'alerts_owned': w.get('scope','').startswith('alerts:'),
                         **({'sales_identity': seed['result'] if seed['result'] is not None and not seed['error'] else
                             {'state':'@sales_identity','ein':w['ein'],'app_version':w['source_version'],
                              'sources':{},'errors':{'identity':seed['error'] or 'INCOMPLETE'}}}
