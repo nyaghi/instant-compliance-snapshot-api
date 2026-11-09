@@ -21,6 +21,22 @@ def auto_confirm(alerts, c, org, state, workflow, result):
         master.attach_identity_review(public,result['_worker_identity_review'])
         review=public.get('identity_review')
     if not isinstance(review,dict) or not review.get('token'):
+        # A collector can supply a complete status and a selected record
+        # without creating a review card (e.g. NC's name-only selection).
+        from deployment.alerts import STATUS, SYNONYMS
+        status=result.get('status')
+        identifier=result.get('matched_registry_identifier')
+        name=result.get('matched_registry_name')
+        if (result.get('success') is True and result.get('identity_anchor')=='POSSIBLE_NAME'
+                and not result.get('confirmation_required') and not result.get('_worker_identity_review')
+                and not result.get('identity_review') and isinstance(status,str)
+                and result.get('state')==state and result.get('app_version')==alerts.version
+                and str(result.get('ein','')).replace('-','')==org['ein']
+                and SYNONYMS.get(status,status) in STATUS
+                and status not in {'Not Registered','Not Registered / Non-Compliant'}
+                and isinstance(identifier,str) and identifier and identifier not in blocked
+                and isinstance(name,str) and name.strip()):
+            return {**result,'identity_anchor':'user_reviewed'}, {'identifier':identifier,'name':name}
         return result,None
     try:
         signed=master.identity_review_unpack(review['token'],EMAIL,device)
@@ -29,21 +45,11 @@ def auto_confirm(alerts, c, org, state, workflow, result):
                 or base.get('source_truth_conflict')):
             return result,None
         records=signed['records']
-        eligible=[r for r in records if r.get('reviewable') and r.get('identifier')
-                  and r['identifier'] not in blocked
-                  and (r.get('group_identity') or not r.get('ein')
-                       or master.canonical_ein_digits(r['ein'])==org['ein'])]
-        exact=[r for r in eligible if r.get('ein') and
-               master.canonical_ein_digits(r['ein'])==org['ein']]
-        suggested=[r for r in eligible if r.get('suggested') is True or
-                   r['identifier']==base.get('matched_registry_identifier')]
-        if len(exact)==1:
-            row=exact[0]
-        elif len(suggested)==1 and (not exact or suggested[0] in exact):
-            row=suggested[0]
-        elif len(eligible)==1:
-            row=eligible[0]
-        else:
+        # Match the presentation order of the signed review cards. A prior
+        # user rejection is sticky; the next eligible card can be selected.
+        row=next((r for r in records if r.get('reviewable') and r.get('identifier')
+                  and r['identifier'] not in blocked),None)
+        if not row:
             return result,None
         identifier=row['identifier']
         token=review['token']

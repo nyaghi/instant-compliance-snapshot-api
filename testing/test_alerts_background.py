@@ -82,7 +82,8 @@ class AlertsBackgroundTests(TestCase):
             return {**run('resolved',NOW,'Delinquent',evidence_url='')['jobs'][0]['result'],
                     'matched_registry_identifier':'state-license'}
         self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,
-            identity_review_unpack=lambda *a:record,resolve_identity_review=resolve)
+            identity_review_unpack=lambda *a:record,identity_review_pack=lambda *a:'exclusive',
+            resolve_identity_review=resolve)
         self.check('baseline',0,'Current',evidence_url='')
         dashboard=self.check('auto',1,'Needs Review',evidence_url='',identity_review={'token':'signed'})
         self.assertEqual((decisions[0]['action'],decisions[0]['candidate_id']),('accept','candidate'))
@@ -93,9 +94,10 @@ class AlertsBackgroundTests(TestCase):
         self.assertEqual((change['match_name'],change['match_identifier']),('Registry Name','state-license'))
         record['records'].append({**selected,'identifier':'another','id':'other'})
         self.check('competing',2,'Needs Review',identity_review={'token':'signed'})
-        self.assertEqual(len(decisions),1)
+        self.assertEqual(len(decisions),2)
+        self.assertEqual(decisions[1]['candidate_id'],'candidate')
 
-    def test_recommended_match_is_selected_and_can_be_changed_without_status(self):
+    def test_first_match_is_selected_and_can_be_changed_without_status(self):
         record={'base':{'state':'CO','ein':EIN},'records':[
             {'id':'alternate','identifier':'other','name':'Other Registry Name','reviewable':True},
             {'id':'recommended','identifier':'license','name':'Recommended Registry Name','reviewable':True,
@@ -105,9 +107,9 @@ class AlertsBackgroundTests(TestCase):
             tokens.append(value)
             return 'exclusive-review'
         def resolve(payload, *_):
-            self.assertEqual((payload['token'],payload['candidate_id']),('exclusive-review','recommended'))
+            self.assertEqual((payload['token'],payload['candidate_id']),('exclusive-review','alternate'))
             return {**run('resolved',NOW,'Unable to Confirm',evidence_url='',success=False)['jobs'][0]['result'],
-                    'identity_review_history':[{'candidate_id':'recommended','decision':'accept'}]}
+                    'identity_review_history':[{'candidate_id':'alternate','decision':'accept'}]}
         self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,identity_review_unpack=lambda *a:record,
             identity_review_pack=pack,resolve_identity_review=resolve)
         self.check('base',0,'Current')
@@ -115,17 +117,33 @@ class AlertsBackgroundTests(TestCase):
         self.assertTrue(tokens[0]['exclusive'])
         self.assertEqual(len(tokens[0]['records']),2)
         match,=result['matches']
-        self.assertEqual((match['identifier'],match['status']),('license',None))
+        self.assertEqual((match['identifier'],match['status']),('other',None))
         self.assertEqual(result['unseen'],0)
         self.assertTrue(correct(self.a,self.c,ACCOUNT,
-                        {'ein':EIN,'state':'CO','workflow':'auto','identifier':'license'}))
+                        {'ein':EIN,'state':'CO','workflow':'auto','identifier':'other'}))
         self.assertEqual(self.c.execute('SELECT status FROM cc_alert_confirmed').fetchone()['status'],'Current')
         self.assertEqual(self.a.dashboard(self.c,ACCOUNT,2**63-1)['matches'],[])
+
+    def test_selected_name_only_status_is_accepted_and_logged(self):
+        self.a.master=SimpleNamespace()
+        d=self.check('name-selected',0,'Exempt',identity_anchor='POSSIBLE_NAME',
+                     matched_registry_identifier='EX003050',matched_registry_name='YWCA of the U.S.A.',
+                     evidence_url='')
+        self.assertEqual(d['organizations'][0]['confirmed'],1)
+        self.assertEqual(d['unseen'],0)
+        self.assertEqual((d['matches'][0]['name'],d['matches'][0]['identifier']),
+                         ('YWCA of the U.S.A.','EX003050'))
+        conflicting=self.check('conflict',1,'Delinquent',identity_anchor='POSSIBLE_NAME',
+                               source_truth_conflict=True,matched_registry_identifier='EX003050',
+                               matched_registry_name='YWCA of the U.S.A.')
+        self.assertEqual(conflicting['unseen'],0)
 
     def test_conflicting_candidate_stays_unconfirmed(self):
         self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,
             identity_review_unpack=lambda *a:{'base':{'state':'CO','ein':EIN},
-                'records':[{'ein':'876543210','reviewable':True,'evidence_url':URL}]})
+                'records':[{'ein':'876543210','id':'candidate','name':'Conflicting name',
+                            'identifier':'different','reviewable':True,'evidence_url':URL}]},
+            resolve_identity_review=lambda *a:{'success':False})
         data=self.check('conflicting',0,'Needs Review',identity_review={'token':'signed'})
         self.assertEqual(data['matches'],[])
         self.assertEqual(data['unseen'],0)

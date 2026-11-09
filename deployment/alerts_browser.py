@@ -148,7 +148,7 @@ def lookup(alerts, master, handler, origin):
 
 def retain(alerts, lease_row, state, result):
     fields = ('ein','state','app_version','status','success','error','confirmation_required','identity_review',
-              'identity_anchor','source_truth_conflict','matched_registry_identifier','evidence_url',
+              'identity_anchor','source_truth_conflict','matched_registry_identifier','matched_registry_name','evidence_url',
               'search_history_url')
     with alerts.transaction() as c:
         now=alerts.now(c)
