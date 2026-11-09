@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity — New Mexico Availability",
+  "name": "CharityClarity — Background Alerts",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
   "description": "Staging: explicit New Mexico HTTP outage reporting; prior evidence and identity repairs preserved.",
@@ -8,7 +8,8 @@
     "storage",
     "browsingData",
     "cookies",
-    "debugger"
+    "debugger",
+    "alarms"
   ],
   "host_permissions": [
     "https://charityclarity-final-four-29-2.onrender.com/*",
@@ -132,5 +133,5 @@
       "run_at": "document_start"
     }
   ],
-  "version_name": "0.6.135 Combined Source Evidence"
+  "version_name": "0.6.135 Background Alerts"
 }

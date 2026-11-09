@@ -16,7 +16,7 @@
       {name:'Sample Community Foundation',ein:'012345678',confirmed:38,last_checked:time},
       {name:'Sample Learning Fund',ein:'012345679',confirmed:37,last_checked:time}
     ];
-    local.failures = [{name:'Sample Learning Fund',state:'NJ',checked:time,failure:'Registry unavailable or result unconfirmed'}];
+    local.failures = [{name:'Sample Learning Fund',ein:'012345679',state:'NJ',checked:time,failure:'Registry unavailable or result unconfirmed'}];
     local.unseen = local.changes.filter(x => !x.seen).length;
   }
 
@@ -90,7 +90,12 @@
           const row=el('div',null,'alert-row');
           row.append(el('strong',x.state),el('span',x.previous+' → '+x.status),el('span',time(x.checked),'muted'));
           if(!demo){const link=el('a','View evidence');link.href='/api/alerts/evidence/'+x.id;link.target='_blank';link.rel='noopener';row.append(link);}
-          if(!x.seen){
+          if(x.corrected){
+            row.append(el('span','Match corrected','muted'));
+          }else if(x.automatic){
+            row.append(el('span','Automatically confirmed','muted'));
+          }
+          if(!x.seen && !x.corrected){
             row.append(el('span','New','alert-new'));
             const button=el('button','Mark seen');button.type='button';
             button.setAttribute('aria-label','Mark '+x.name+' '+x.state+' change seen');
@@ -100,20 +105,79 @@
               catch(err){report(err.message);button.disabled=false;}
             };
             row.append(button);
-          }else row.append(el('span','Seen','muted'));
+          }else if(!x.corrected)row.append(el('span','Seen','muted'));
           output.append(row);
         }
       }
     }
     $('more').hidden=!model.next;
     $('organizations').replaceChildren(model.organizations.length ? table(
-      ['Organization','EIN','Baseline','Last checked'],
-      model.organizations.map(x=>[x.name,ein(x.ein),x.checking?'Checking now': x.confirmed===model.states?'Confirmed':x.confirmed+' / '+model.states+' states confirmed',time(x.last_checked)])
+      ['Organization','EIN','Last checked','Coverage'],
+      model.organizations.map(x=>{
+        const missing=(model.failures || []).filter(issue=>issue.ein===x.ein).map(issue=>issue.state);
+        const coverage=x.checking?'Checking now':!x.last_checked?'First check queued':
+          missing.length?'Awaiting a result in '+[...new Set(missing)].sort().join(', '):'';
+        return [x.name,ein(x.ein),time(x.last_checked),coverage];
+      })
     ):el('p','Add an organization to start monitoring.'));
-    $('failures').replaceChildren(model.failures.length ? table(['Organization','State','Checked','Issue'],
-      model.failures.map(x=>[x.name,x.state,time(x.checked),x.failure])):el('p','No failed checks recorded.'));
+    const matches=$('matches');
+    matches.replaceChildren();
+    $('automatic-matches').hidden=!model.matches?.length;
+    for(const match of model.matches || []){
+      const row=el('div',null,'alert-row');
+      const org=model.organizations.find(x=>x.ein===match.ein);
+      row.append(el('strong',match.state),el('span',org?.name || ein(match.ein)),el('span',match.name),
+        el('span',match.status),el('span','Automatically confirmed','muted'));
+      const evidence=el('a','View evidence');
+      evidence.href='/api/alerts/match-evidence/'+match.ein+'/'+match.state;
+      evidence.target='_blank';evidence.rel='noopener';
+      row.append(evidence);
+      const action=el('button','Change match');
+      const controls=el('div');
+      controls.hidden=true;
+      const reject=el('button','Reject this match');
+      reject.type=action.type='button';
+      action.setAttribute('aria-expanded','false');
+      action.onclick=()=>{
+        controls.hidden=!controls.hidden;
+        action.setAttribute('aria-expanded',String(!controls.hidden));
+      };
+      reject.onclick=async()=>{
+        reject.disabled=true;
+        try{
+          const {ein,state,identifier,workflow}=match;
+          await api('/api/alerts/change-match',{ein,state,identifier,workflow});
+          await load();
+          report('Match rejected. A new check is queued.');
+        }catch(err){report(err.message);reject.disabled=false;}
+      };
+      controls.append(el('p','Reject this record and check the state again.'),reject);
+      row.append(action,controls);
+      matches.append(row);
+    }
   }
   async function load() {model=await api('/api/alerts');render();}
+  const background=$('background');
+  async function browserSetting(){
+    if(demo || !window.CCAlertsBrowser)return;
+    const setting=await window.CCAlertsBrowser('status');
+    background.hidden=!setting.ok;
+    $('background-status').textContent=!setting.ok?'Update the CharityClarity Chrome connector to enable automatic checks.':
+      setting.enabled?'Automatic checks run when this Chrome profile is open. Registry windows may briefly appear.':
+      'Enable automatic checks on this computer.';
+    if(!setting.ok)return;
+    background.textContent=setting.enabled?'Stop checks in this browser':'Run checks in this browser';
+    background.onclick=async()=>{
+      background.disabled=true;
+      try{
+        const profile=setting.enabled?null:(await api('/api/alerts/runner/enable',{})).profile;
+        const changed=await window.CCAlertsBrowser(setting.enabled?'disable':'enable',profile);
+        if(!changed.ok)throw Error('Chrome could not change this setting. Try again.');
+        await browserSetting();
+      }catch(err){report(err.message);}
+      finally{background.disabled=false;}
+    };
+  }
   $('add').onclick=()=>{
     const form=$('enroll');
     form.hidden=!form.hidden;
@@ -142,7 +206,7 @@
       let batch=await api('/api/alerts');const rows=[...batch.changes];
       while(batch.next){batch=await api('/api/alerts?before='+batch.next);rows.push(...batch.changes);}
       const workbook=window.CCExcelExport.buildAlerts(rows.map(x=>[x.name,ein(x.ein),x.state,x.previous,x.status,
-        labels[x.direction],new Date(x.checked*1000).toISOString(),x.seen?'Seen':'Unseen',
+        labels[x.direction],new Date(x.checked*1000).toISOString(),x.corrected?'Match corrected':x.seen?'Seen':'Unseen',
         demo?'':new URL('/api/alerts/evidence/'+x.id,location.origin).href]));
       const href=URL.createObjectURL(workbook), a=el('a');
       a.href=href;a.download='CharityClarity-Alerts.xlsx';a.click();
@@ -155,6 +219,7 @@
       const fragment=new URLSearchParams(location.hash.slice(1)), claim=fragment.get('account-session');
       if(claim && !demo){history.replaceState(null,'',location.pathname+location.search);await api('/api/alerts/session',{claim});}
       await load();
+      await browserSetting();
     }catch(err){report(err.message);}
   })();
   window.addEventListener('focus',()=>{if(model && !demo && $('enroll').hidden)void load().catch(()=>{});});

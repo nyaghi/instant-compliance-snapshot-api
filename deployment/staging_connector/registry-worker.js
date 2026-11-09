@@ -88,7 +88,7 @@ function registryTrialLayout(origin) {
   const source=new URL(origin.url);
   if(!P.TRIAL_ORIGIN || source.origin!==P.TRIAL_ORIGIN
       || !['/','/instant-compliance-snapshot','/instant-compliance-snapshot/',
-        '/connector/final-four-validation.html'].includes(source.pathname))return '';
+        '/connector/final-four-validation.html','/alerts-runner.html'].includes(source.pathname))return '';
   if(source.searchParams.get('collector_layout')==='duo')return 'duo';
   if(source.pathname==='/connector/final-four-validation.html') {
     const requested=source.searchParams.get('collector_layout');

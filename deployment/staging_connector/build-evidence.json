@@ -1,5 +1,5 @@
 {
-  "build": "nm-http-outage-repair",
+  "build": "background-alerts",
   "version": "0.6.135",
-  "scope": "New Mexico explicit Chrome HTTP5xx failure detection only; all other connector behavior preserved."
+  "scope": "Opt-in Chrome scheduling for Alerts with the existing registry collectors."
 }

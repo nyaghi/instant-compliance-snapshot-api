@@ -66,7 +66,7 @@ class AlertsBrowser(unittest.TestCase):
                     page.get_by_label('Organization name').fill('Example & Charity')
                     page.get_by_label('EIN').fill('01-2345678')
                     page.get_by_role('button',name='Save organization').click()
-                    page.get_by_text('0 / 38 states confirmed').wait_for()
+                    page.get_by_text('First check queued').wait_for()
                     self.assertEqual(len(model['organizations']),1)
                     model['changes']=[
                         {'id':3,'name':'Example & Charity','ein':'012345678','state':'CO','previous':'Upcoming Filing',

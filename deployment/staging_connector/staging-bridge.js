@@ -116,6 +116,15 @@
   window.addEventListener("message", async event => {
     if (event.source !== window || event.origin !== ORIGIN) return;
     const m = event.data;
+    if (m?.channel === 'cc-alerts-browser-v1' && m.direction === 'request'
+        && ['config','done','status','enable','disable'].includes(m.action)
+        && ['/alerts/','/alerts','/alerts.html','/alerts-runner.html'].includes(location.pathname)) {
+      const result = await chrome.runtime.sendMessage({
+        type:'cc-alerts-background',action:m.action,profile:m.profile
+      }).catch(()=>({ok:false}));
+      window.postMessage({channel:m.channel,direction:'response',id:m.id,result},ORIGIN);
+      return;
+    }
     if (m?.channel !== "cc-final-four-trial-v1" || m.direction !== "request" || !P.validId(m.id)) return;
     const ilRequest = P.TRIAL_ORIGIN === ORIGIN && (['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(m.intent)
       || ['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(m.query?.state) || ilLookups.has(m.lookup_id));

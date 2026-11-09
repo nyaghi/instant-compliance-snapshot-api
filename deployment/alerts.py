@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS cc_alert_artifacts (
     id text PRIMARY KEY REFERENCES cc_state_snapshots ON DELETE CASCADE,
     workflow text NOT NULL, state text NOT NULL, created double precision NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cc_alert_auto_matches (
+    account text, ein text, state text, workflow text, identifier text NOT NULL,
+    name text NOT NULL, checked double precision NOT NULL, previous jsonb,
+    corrected boolean NOT NULL DEFAULT false,
+    PRIMARY KEY(account,ein,state,workflow), FOREIGN KEY(account,ein) REFERENCES cc_alert_orgs
+);
+CREATE TABLE IF NOT EXISTS cc_alert_rejected_matches (
+    account text, ein text, state text, identifier text,
+    PRIMARY KEY(account,ein,state,identifier), FOREIGN KEY(account,ein) REFERENCES cc_alert_orgs
+);
 CREATE INDEX IF NOT EXISTS cc_alert_artifacts_group ON cc_alert_artifacts(workflow,state);
 CREATE INDEX IF NOT EXISTS cc_alert_artifacts_age ON cc_alert_artifacts(created);
 CREATE INDEX IF NOT EXISTS cc_alert_confirmed_evidence ON cc_alert_confirmed(evidence);
@@ -119,8 +129,9 @@ def observation(job, ein, submitted, finished, version):
 
 
 class Alerts:
-    def __init__(self, queue, states, version):
+    def __init__(self, queue, states, version, master=None):
         self.queue, self.states, self.version = queue, frozenset(states), version
+        self.master = master
 
     @contextmanager
     def transaction(self):
@@ -131,6 +142,9 @@ class Alerts:
         with self.transaction() as c:
             c.execute('SELECT pg_advisory_xact_lock(824527331)')
             c.execute(SCHEMA)
+            if self.master is not None:
+                from deployment.alerts_browser import SCHEMA as browser_schema
+                c.execute(browser_schema)
 
     @staticmethod
     def now(c):
@@ -154,7 +168,11 @@ class Alerts:
             raise ValueError('The check does not contain the enrolled state set.')
         c.execute('SELECT ein FROM cc_alert_orgs WHERE account=%s AND ein=%s FOR UPDATE',
                   (org['account'], org['ein']))
+        from deployment.alerts_matches import auto_confirm, record
         for state, job in sorted(by_state.items()):
+            result, match = auto_confirm(self,c,org,state,run['id'],job.get('result'))
+            if result is not job.get('result'):
+                job = {**job,'result':result}
             checked, status, evidence, failure = observation(job, org['ein'], run['submitted'],
                                                             run['finished'], self.version)
             org_key = (org['account'], org['ein'], state)
@@ -163,10 +181,21 @@ class Alerts:
                                  (*org_key, run['id'], checked, status, evidence, failure)).fetchone()
             if not inserted or not status:
                 continue
-            previous = c.execute('SELECT status,checked FROM cc_alert_confirmed '
+            previous = c.execute('SELECT status,evidence,checked FROM cc_alert_confirmed '
                                  'WHERE account=%s AND ein=%s AND state=%s', org_key).fetchone()
             if previous and previous['checked'] >= checked:
                 continue
+            identifier = (result or {}).get('matched_registry_identifier')
+            prior_auto = None
+            if self.master is not None and identifier and previous:
+                prior_auto = c.execute('SELECT name,previous FROM cc_alert_auto_matches '
+                    'WHERE account=%s AND ein=%s AND state=%s AND identifier=%s AND checked=%s AND NOT corrected',
+                    (*org_key,identifier,previous['checked'])).fetchone()
+            if not match and prior_auto:
+                match = {'name':prior_auto['name'],'identifier':identifier}
+            if match:
+                prior = prior_auto['previous'] if prior_auto else previous
+                record(c,org_key,match,run['id'],checked,prior)
             direction = classify_change(previous['status'] if previous else None, status)
             if direction:
                 c.execute('INSERT INTO cc_alert_changes (account,ein,state,workflow,previous,status,evidence,direction,checked) '
@@ -175,15 +204,18 @@ class Alerts:
             c.execute('INSERT INTO cc_alert_confirmed VALUES (%s,%s,%s,%s,%s,%s) '
                       'ON CONFLICT (account,ein,state) DO UPDATE SET status=excluded.status, '
                       'evidence=excluded.evidence, checked=excluded.checked', (*org_key, status, evidence, checked))
-        c.execute('UPDATE cc_alert_orgs SET due=greatest(due,%s),workflow=CASE WHEN workflow=%s THEN NULL ELSE workflow END '
-                  'WHERE account=%s AND ein=%s',
-                  (run['finished']+DAY,run['id'],org['account'],org['ein']))
+        c.execute('UPDATE cc_alert_orgs SET due=CASE WHEN (workflow=%s OR workflow IS NULL) AND due<=%s THEN %s ELSE due END,'
+                  'workflow=CASE WHEN workflow=%s THEN NULL ELSE workflow END WHERE account=%s AND ein=%s',
+                  (run['id'],run['submitted'],run['finished']+DAY,run['id'],org['account'],org['ein']))
 
     def expire_history(self):
         with self.transaction() as c:
             cutoff=self.now(c)-HISTORY_DAYS*DAY
             c.execute('DELETE FROM cc_alert_changes WHERE checked<%s',(cutoff,))
             c.execute('DELETE FROM cc_alert_checks WHERE checked<%s',(cutoff,))
+            c.execute('DELETE FROM cc_alert_auto_matches AS m WHERE checked<%s AND NOT EXISTS '
+                      '(SELECT 1 FROM cc_alert_confirmed s WHERE s.account=m.account AND s.ein=m.ein '
+                      'AND s.state=m.state AND s.checked=m.checked)',(cutoff,))
             c.execute('DELETE FROM cc_alert_sessions WHERE expires<=%s',(self.now(c),))
 
     def prune_artifacts(self):
@@ -203,6 +235,10 @@ class Alerts:
                         WHERE g.workflow=a.workflow AND g.state=a.state
                           AND (EXISTS (SELECT 1 FROM cc_alert_confirmed r WHERE r.evidence IN
                                   ('/state-snapshots/'||g.id||'.pdf','/state-evidence/'||g.id||'/search-history.pdf'))
+                            OR EXISTS (SELECT 1 FROM cc_alert_auto_matches m JOIN cc_alert_confirmed s
+                                        ON s.account=m.account AND s.ein=m.ein AND s.state=m.state AND s.checked=m.checked
+                                        WHERE NOT m.corrected AND m.previous->>'evidence' IN
+                                  ('/state-snapshots/'||g.id||'.pdf','/state-evidence/'||g.id||'/search-history.pdf'))
                             OR EXISTS (SELECT 1 FROM cc_alert_changes h WHERE h.evidence IN
                                   ('/state-snapshots/'||g.id||'.pdf','/state-evidence/'||g.id||'/search-history.pdf')))
                       )
@@ -220,9 +256,16 @@ class Alerts:
             if active:
                 status = self.queue.status('alerts:'+active['account'], active['workflow'])
                 if status['phase'] in TERMINAL:
+                    if self.master is not None:
+                        from deployment.alerts_browser import merge
+                        status = merge(self,c,status)
+                        if status is None:
+                            return
                     self.apply(c, active, status)
                     c.execute('UPDATE cc_lab_jobs SET result=NULL WHERE workflow_id=%s', (status['id'],))
                 return
+            if self.master is not None:
+                return  # The opted-in Chrome profile claims new checks.
             now = self.now(c)
             org = c.execute('SELECT o.* FROM cc_alert_orgs o JOIN cc_alert_accounts a USING(account) '
                             'WHERE a.monitoring AND o.due<=%s ORDER BY o.due,o.account,o.ein LIMIT 1',(now,)).fetchone()
@@ -251,7 +294,9 @@ class Alerts:
         return row['account'] if row else None
 
     def badge(self, c, account):
-        return c.execute('SELECT count(*) AS n FROM cc_alert_changes WHERE account=%s AND seen IS NULL AND checked>=%s',
+        return c.execute('SELECT count(*) AS n FROM cc_alert_changes a WHERE account=%s AND seen IS NULL AND checked>=%s '
+                         'AND NOT EXISTS (SELECT 1 FROM cc_alert_auto_matches m WHERE m.account=a.account '
+                         'AND m.ein=a.ein AND m.state=a.state AND m.workflow=a.workflow AND m.corrected)',
                          (account,self.now(c)-HISTORY_DAYS*DAY)).fetchone()['n']
 
     def dashboard(self, c, account, before):
@@ -260,14 +305,24 @@ class Alerts:
                          'greatest((SELECT max(h.checked) FROM cc_alert_checks h WHERE h.account=o.account AND h.ein=o.ein), '
                          '(SELECT max(s.checked) FROM cc_alert_confirmed s WHERE s.account=o.account AND s.ein=o.ein)) AS last_checked '
                          'FROM cc_alert_orgs o WHERE o.account=%s ORDER BY o.name,o.ein', (account,)).fetchall()
-        changes = c.execute('SELECT a.id,o.name,a.ein,a.state,a.previous,a.status,a.direction,a.checked,a.seen '
+        changes = c.execute('SELECT a.id,o.name,a.ein,a.state,a.previous,a.status,a.direction,a.checked,a.seen, '
+                            'coalesce(m.corrected,false) AS corrected, m.identifier IS NOT NULL AS automatic '
                             'FROM cc_alert_changes a JOIN cc_alert_orgs o USING(account,ein) '
+                            'LEFT JOIN cc_alert_auto_matches m ON m.account=a.account AND m.ein=a.ein AND m.state=a.state AND m.workflow=a.workflow '
                             'WHERE a.account=%s AND a.id<%s AND a.checked>=%s ORDER BY a.id DESC LIMIT 101',
                             (account,before,self.now(c)-HISTORY_DAYS*DAY)).fetchall()
-        failures = c.execute('SELECT o.name,h.state,h.checked,h.failure FROM cc_alert_checks h '
+        failures = c.execute('SELECT o.name,h.ein,h.state,h.checked,h.failure FROM cc_alert_checks h '
                              'JOIN cc_alert_orgs o USING(account,ein) WHERE h.account=%s AND h.failure IS NOT NULL '
-                             'AND h.checked>=%s ORDER BY h.checked DESC LIMIT 30',(account,self.now(c)-HISTORY_DAYS*DAY)).fetchall()
-        return {'organizations':orgs,'changes':changes[:100], 'next':changes[99]['id'] if len(changes)>100 else None,
+                             'AND h.checked>=%s AND NOT EXISTS (SELECT 1 FROM cc_alert_checks n WHERE n.account=h.account '
+                             'AND n.ein=h.ein AND n.state=h.state AND n.checked>h.checked) '
+                             'AND NOT EXISTS (SELECT 1 FROM cc_alert_confirmed s WHERE s.account=h.account '
+                             'AND s.ein=h.ein AND s.state=h.state AND s.checked>=h.checked) '
+                             'ORDER BY h.checked DESC LIMIT 200',(account,self.now(c)-HISTORY_DAYS*DAY)).fetchall()
+        matches=c.execute('SELECT m.ein,m.state,m.identifier,m.workflow,m.name,m.checked,s.status '
+                          'FROM cc_alert_auto_matches m JOIN cc_alert_confirmed s '
+                          'ON s.account=m.account AND s.ein=m.ein AND s.state=m.state AND s.checked=m.checked '
+                          'WHERE m.account=%s AND NOT m.corrected ORDER BY m.ein,m.state',(account,)).fetchall()
+        return {'organizations':orgs,'matches':matches,'changes':changes[:100], 'next':changes[99]['id'] if len(changes)>100 else None,
                 'unseen':self.badge(c,account),'states':len(self.states),'failures':failures}
 
     def operator(self, c, payload):
@@ -336,6 +391,18 @@ def handle(alerts, handler, path, *, origin, operator=False, include_body=True):
                     return reply(200,{'ok':True},{'Set-Cookie':f'{COOKIE}={session}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={7*DAY}'})
                 account=alerts.account(c,handler)
                 if not account:return reply(401,{'error':'An authenticated account session is required.'})
+                if handler.command=='POST' and alerts.master is not None:
+                    from deployment.alerts_browser import claim, enable, lease
+                    if parsed.path=='/api/alerts/runner/claim':
+                        return reply(200,claim(alerts,c,account,payload.get('profile')))
+                    if parsed.path=='/api/alerts/runner/enable':
+                        return reply(200,enable(alerts,c,account))
+                    if parsed.path=='/api/alerts/runner/finish':
+                        row=lease(alerts,c,account,payload.get('lease'))
+                        if row:
+                            c.execute('UPDATE cc_alert_browser_runs SET finished=true WHERE workflow=%s',
+                                      (row['workflow'],))
+                        return reply(200,{'ok':True})
                 if handler.command=='GET' and parsed.path=='/api/alerts/badge':
                     return reply(200,{'unseen':alerts.badge(c,account)})
                 if handler.command=='GET' and parsed.path=='/api/alerts':
@@ -346,12 +413,24 @@ def handle(alerts, handler, path, *, origin, operator=False, include_body=True):
                 if handler.command=='POST' and parsed.path=='/api/alerts/organizations':
                     added=alerts.enroll(c,account,payload.get('name'),payload.get('ein'),alerts.now(c))
                     return reply(201 if added else 200,{'added':added})
+                if handler.command=='POST' and parsed.path=='/api/alerts/change-match' and alerts.master is not None:
+                    from deployment.alerts_matches import correct
+                    return (reply(200,{'ok':True}) if correct(alerts,c,account,payload)
+                            else reply(409,{'error':'The match changed. Refresh and review the latest result.'}))
                 if handler.command=='POST' and parsed.path=='/api/alerts/seen':
                     ident=payload.get('id')
                     if type(ident) is not int or not 1<=ident<2**63:raise ValueError('Invalid alert.')
                     row=c.execute('UPDATE cc_alert_changes SET seen=coalesce(seen,%s) WHERE account=%s AND id=%s AND checked>=%s RETURNING id',
                                   (alerts.now(c),account,ident,alerts.now(c)-HISTORY_DAYS*DAY)).fetchone()
                     return reply(200,{'unseen':alerts.badge(c,account)}) if row else reply(404,{'error':'Alert not found.'})
+                match=re.fullmatch(r'/api/alerts/match-evidence/(\d{9})/([A-Z]{2})',parsed.path)
+                if handler.command in {'GET','HEAD'} and match:
+                    row=c.execute('SELECT s.evidence FROM cc_alert_confirmed s JOIN cc_alert_auto_matches m '
+                                  'ON m.account=s.account AND m.ein=s.ein AND m.state=s.state AND m.checked=s.checked '
+                                  'WHERE s.account=%s AND s.ein=%s AND s.state=%s AND NOT m.corrected',
+                                  (account,*match.groups())).fetchone()
+                    if row:
+                        return row['evidence']
                 match=re.fullmatch(r'/api/alerts/evidence/([0-9]{1,19})',parsed.path)
                 if handler.command in {'GET','HEAD'} and match and int(match[1])<2**63:
                     row=c.execute('SELECT evidence FROM cc_alert_changes WHERE account=%s AND id=%s AND checked>=%s',

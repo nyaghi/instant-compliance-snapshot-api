@@ -6,6 +6,7 @@
   <title>CharityClarity Alerts | Compliance Express</title>
   <link rel="stylesheet" href="/alerts.css">
   <script src="/excel-export.js" defer></script>
+  <script src="/alerts-browser.js" defer></script>
   <script src="/alerts.js" defer></script>
 </head>
 <body class="alerts-page">
@@ -15,7 +16,7 @@
       <a href="/head-start/">Head Start</a>
       <a href="/instant-compliance-snapshot">Aurora</a>
       <a href="/instant-compliance-snapshot#resultPanel">Insights</a>
-      <a href="/alerts/" data-cc-alerts-link aria-current="page">Alerts <span class="cc-alert-count" hidden></span></a>
+      <a href="/alerts/" data-cc-alerts-link aria-current="page">CharityClarity Alerts <span class="cc-alert-count" aria-hidden="true" hidden></span></a>
     </nav>
   </header>
   <main id="alerts">
@@ -28,6 +29,10 @@
       <div class="toolbar">
         <button id="add" class="primary" type="button" aria-expanded="false">Add Organization</button>
         <button id="download" type="button">Download Excel</button>
+      </div>
+      <div class="toolbar">
+        <button id="background" type="button" hidden>Run checks in this browser</button>
+        <span id="background-status" class="muted"></span>
       </div>
       <form id="enroll" hidden>
         <label>Organization name <input name="name" required maxlength="300"></label>
@@ -44,11 +49,10 @@
         <h2 id="orgs-title">Monitored organizations</h2>
         <div id="organizations"></div>
       </section>
-      <details class="panel">
-        <summary>Recent check failures</summary>
-        <p class="muted">These checks did not change the last confirmed status.</p>
-        <div id="failures"></div>
-      </details>
+      <section id="automatic-matches" class="panel" aria-labelledby="automatic-title" hidden>
+        <h2 id="automatic-title">Automatically confirmed matches</h2>
+        <div id="matches"></div>
+      </section>
     </div>
   </main>
 </body>

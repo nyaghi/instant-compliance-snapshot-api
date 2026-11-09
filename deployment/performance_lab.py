@@ -309,7 +309,10 @@ def final_four_asset(name, text):
         replace('...(Array.isArray(alternate_names) ? {alternate_names} : {})', '...(mode==="sales" ? {alternate_names:[]} : (Array.isArray(alternate_names) ? {alternate_names} : {}))')
         replace('{NY:"New York",IL:"Illinois",GA:"Georgia"}', '{NY:"New York",IL:"Illinois",GA:"Georgia",AL:"Alabama",NC:"North Carolina",NV:"Nevada",TN:"Tennessee",NM:"New Mexico",MS:"Mississippi"}')
         replace('    const supported = c =>', '    const finalFour = ["AL","NC","NV","TN","NM","MS"].includes(registryState);\n    const supported = c => (!finalFour || c.capabilities?.includes("final-four-public-v1")) &&')
-        replace('API + "/api/ny-connector"', 'API + (finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
+        replace('mode = "standard", sales_cutoff_seconds })', 'mode = "standard", sales_cutoff_seconds, alertLease })')
+        replace('JSON.stringify({ ...credentials, ...fields })',
+                'JSON.stringify({ ...credentials, ...fields, ...(alertLease ? {alert_lease:alertLease,alert_state:registryState} : {}) })')
+        replace('API + "/api/ny-connector"', 'API + (alertLease ? "/api/alerts/runner/lookup" : finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
         replace('headers: { "Content-Type": "application/json" }', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + admin_passcode }')
         replace('action: "start", state: registryState,', 'action: "start", mode, ...(finalFour && sales_cutoff_seconds!==undefined ? {sales_cutoff_seconds}:{}), state: registryState,')
         replace('recovery_protocol: "il-fresh-page-v1"', 'recovery_protocol: registryState === "AL" ? "al-unread-image-v1" : registryState === "NC" ? "nc-fresh-search-v1" : "il-fresh-page-v1"')
@@ -400,11 +403,14 @@ def shared_readiness_asset(text):
     return text.replace(old, replacement, 1).replace(anchor, helper + anchor, 1)
 
 
-def alerts_navigation(data, anchor):
+def alerts_navigation(data, anchor, *, aurora=False):
     if os.environ.get('CE_PERMANENT_STAGING') != '1' or not trial_identity():
         return data
-    link = ('<a href="/alerts/" data-cc-alerts-link>CharityClarity Alerts '
-            '<span class="cc-alert-count" hidden></span></a>')
+    link = ('<a href="/alerts/" class="cc-alert-button" data-cc-alerts-link>CharityClarity Alerts '
+            '<span class="cc-alert-count" aria-hidden="true" hidden></span></a>')
+    if aurora:
+        link = ('<nav class="cc-product-links" aria-label="CharityClarity products">'
+                '<a href="/head-start/" class="cc-alert-button">Head Start</a>'+link+'</nav>')
     return (data.replace(anchor, link+anchor, 1)
                 .replace('</head>', '<link rel="stylesheet" href="/alerts.css"></head>', 1)
                 .replace('</body>', '<script src="/alerts.js" defer></script></body>', 1))
@@ -418,7 +424,7 @@ def lab_asset(path):
         types={'.mjs':'text/javascript','.js':'text/javascript','.wasm':'application/wasm','.bcmap':'application/octet-stream','.ttf':'font/ttf','.pfb':'application/octet-stream'}
         if not file.is_relative_to(root) or file.suffix.lower() not in types or not file.is_file():return None
         return file.read_bytes(),types[file.suffix.lower()]
-    if path in ('/alerts','/alerts/','/alerts.html','/alerts.js','/alerts.css'):
+    if path in ('/alerts','/alerts/','/alerts.html','/alerts.js','/alerts.css','/alerts-runner.html','/alerts-runner.js','/alerts-browser.js'):
         if os.environ.get('CE_PERMANENT_STAGING') != '1' or not trial_identity():
             return None
         file = ROOT/'web-staging'/('alerts.html' if path in ('/alerts','/alerts/') else path.lstrip('/'))
@@ -455,7 +461,7 @@ def lab_asset(path):
                        'https://staging.compliance-express.com'):
             text = text.replace(origin, LAB_ORIGIN)
         if file.name == 'index.html':
-            text=alerts_navigation(text,'<a href="/instant-compliance-snapshot" class="font-semibold')
+            text=alerts_navigation(text,'<div class="mb-6 flex flex-wrap items-center gap-3">',aurora=True)
             title = 'CharityClarity Staging — ' if os.environ.get('CE_PERMANENT_STAGING') == '1' else 'Performance Lab — '
             text = text.replace('<title>', '<title>'+title, 1)
             text = text.replace('<body', '<body data-performance-lab="true"', 1)
@@ -549,18 +555,21 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
             # This empty test form contains no credentials or results. Its API
             # calls still require the private trial key, including the master
             # passcode checks. No customer/backend data becomes public.
-            if trial_identity() and urlparse(self.path).path in (
-                    '/connector/final-four-validation.html','/ny-connector.js','/optimized-workflows.js'):
+            asset_path=urlparse(self.path).path
+            test_assets={'/connector/final-four-validation.html','/ny-connector.js','/optimized-workflows.js'}
+            if alerts is not None:
+                test_assets.update(('/alerts-runner.html','/alerts-runner.js','/alerts-browser.js'))
+            if trial_identity() and asset_path in test_assets:
                 body,kind=lab_asset(self.path)
                 self.send_response(200);self.send_header('Content-Type',kind)
                 self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store')
                 self.end_headers()
                 if include_body:self.wfile.write(body)
                 return
-            if not self.authorized(): return
             if alerts is not None and (urlparse(self.path).path == '/api/alerts' or self.path.startswith('/api/alerts/')):
                 from deployment.alerts import handle
                 return handle(alerts,self,self.path,origin=LAB_ORIGIN,include_body=include_body)
+            if not self.authorized(): return
             if self.path.startswith('/state-evidence/'):
                 from deployment.search_history import serve as serve_search_evidence
                 serve_search_evidence(self,include_body)
@@ -625,11 +634,15 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
         def do_HEAD(self): return self._get(False)
 
         def do_POST(self):
-            if not self.authorized(): return
             if alerts is not None and self.path.startswith('/api/alerts/'):
+                if self.path == '/api/alerts/runner/lookup':
+                    from deployment.alerts_browser import lookup
+                    return lookup(alerts,master,self,LAB_ORIGIN)
                 from deployment.alerts import handle
-                operator=self.headers.get('Authorization','').startswith('Bearer ')
+                authorization=self.headers.get('Authorization','')
+                operator=authorization.startswith('Bearer ') and valid_authorization(authorization,key)
                 return handle(alerts,self,self.path,origin=LAB_ORIGIN,operator=operator)
+            if not self.authorized(): return
             if trial_access_expired() and self.path in ('/api/workflow', '/api/discover-names',
                     '/api/check', '/api/ny-connector', '/api/final-four-connector'):
                 return self._send_json(503, {'code': 'PERFORMANCE_LAB_EXPIRED',
@@ -751,7 +764,7 @@ def main():
     if durable is not None and os.environ.get('CE_PERMANENT_STAGING')=='1' and os.environ.get('CE_LAB_ROLE')=='api':
         from deployment.alerts import Alerts
         try:
-            alerts=Alerts(durable,master.SUPPORTED_STATES,master.APP_VERSION)
+            alerts=Alerts(durable,master.SUPPORTED_STATES,master.APP_VERSION,master)
             alerts.initialize()
         except Exception as exc:
             alerts=None

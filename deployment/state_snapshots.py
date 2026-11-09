@@ -25,6 +25,7 @@ CURRENT = ContextVar('state_snapshot_capture', default=None)
 REFERENCES = ContextVar('state_snapshot_references', default=())
 DEADLINE = ContextVar('state_snapshot_deadline',default=float('inf'))
 STORE = None
+STORE_OVERRIDE = ContextVar('state_snapshot_store_override', default=None)
 @contextmanager
 def task_deadline(job):
     token=DEADLINE.set(job.get('_deadline_monotonic',float('inf')))
@@ -211,7 +212,7 @@ def retain_references(refs,store=None):
         match=re.fullmatch(r'/state-snapshots/([a-f0-9]{64})\.pdf',ref['url'])
         if match:pending.setdefault(match[1],[]).append(ref)
     if not pending:return set()
-    store=store or STORE
+    store=store or STORE_OVERRIDE.get() or STORE
     retained=set()
     if store is not None and hasattr(store,'protect'):
         try:retained=store.protect(list(pending))
@@ -224,7 +225,7 @@ def retain_references(refs,store=None):
     return unavailable
 
 def archive(asset, *, ein, state, run_id, store=None, provisional=False):
-    store=store or STORE
+    store=store or STORE_OVERRIDE.get() or STORE
     if store is None:raise RuntimeError('Persistent source archive is not configured')
     meta,raw=validate_asset(asset,ein=ein,state=state,run_id=run_id)
     provisional=provisional and getattr(store,'provisional_enabled',False) is True
@@ -386,11 +387,12 @@ def persist_worker_result(queue,result,job,store=None):
 
 def persist_inline_result(master,result):
     """API-owned continuation: archive now, never expose private image bytes."""
-    if STORE is None:
+    store=STORE_OVERRIDE.get() or STORE
+    if store is None:
         data=dict(result);data.pop('_worker_source_archives',None)
         data.pop('_worker_search_history',None)
         data['evidence_capture']='unavailable';return data
-    data=persist_worker_result(None,result,{'state':result['state'],'payload':{'ein':result['ein']}},store=STORE)
+    data=persist_worker_result(None,result,{'state':result['state'],'payload':{'ein':result['ein']}},store=store)
     try:
         review=data.get('identity_review')
         if not review:return data
@@ -1424,7 +1426,7 @@ def render_pdf(meta,raw):
 
 
 def saved_pdf(ident,store=None):
-    store=store or STORE
+    store=store or STORE_OVERRIDE.get() or STORE
     if store is None:return None
     item=store.load(ident)
     if item is None:return None

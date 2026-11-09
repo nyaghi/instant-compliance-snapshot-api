@@ -958,3 +958,5 @@ chrome.runtime.onConnect.addListener(port => {
     // Heartbeats keep the transport alive without extending either deadline.
   }).catch(() => {}); });
 });
+
+importScripts("alerts-background.js");

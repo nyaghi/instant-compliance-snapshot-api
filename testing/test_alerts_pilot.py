@@ -24,10 +24,13 @@ class Connection:
         self.db = sqlite3.connect(':memory:')
         def postgres_rows(cursor, values):
             row=dict(zip((field[0] for field in cursor.description), values))
-            if 'aliases' in row:row['aliases']=json.loads(row['aliases'])
+            for key in ('aliases','previous','results'):
+                if isinstance(row.get(key),str) and row[key].startswith(('{','[','null')):
+                    row[key]=json.loads(row[key])
             return row
         self.db.row_factory = postgres_rows
         self.db.create_function('greatest',2,lambda a,b: max((v for v in (a,b) if v is not None),default=None))
+        self.db.create_function('least',2,min)
         self.db.execute('CREATE TABLE cc_state_snapshots(id text PRIMARY KEY)')
         self.db.executescript(SCHEMA.replace('bigserial PRIMARY KEY','integer PRIMARY KEY'))
         self.db.execute('CREATE TABLE cc_lab_workflows (id text, finished double precision)')
