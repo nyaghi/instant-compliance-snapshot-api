@@ -433,7 +433,7 @@ def alerts_navigation(data, anchor, *, aurora=False):
                 '<span class="cc-journey-script">Alerts</span></span>'
                 '<span class="cc-alert-count" aria-hidden="true" hidden></span></a></nav>')
     return (data.replace(anchor, link+anchor, 1)
-                .replace('</head>', '<link rel="stylesheet" href="/alerts.css?v=20261109.2"></head>', 1)
+                .replace('</head>', '<link rel="stylesheet" href="/alerts.css?v=20261109.3"></head>', 1)
                 .replace('</body>', '<script src="/alerts.js?v=20261109.1" defer></script></body>', 1))
 
 
