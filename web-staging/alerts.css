@@ -1,6 +1,7 @@
-.cc-product-buttons{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px}
-.cc-product-buttons>.cc-journey-cta{box-sizing:border-box;flex:1 1 165px;max-width:234px;min-width:0}
-.cc-product-buttons .cc-journey-mark{max-width:100%}
+.cc-product-buttons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:432px;margin-bottom:12px}
+.cc-product-buttons>.cc-journey-cta{box-sizing:border-box;min-width:0;min-height:72px;padding:5px 8px}
+.cc-product-buttons .cc-journey-mark{width:100%;max-width:186px}
+@media(max-width:340px){.cc-product-buttons{grid-template-columns:minmax(0,210px)}}
 .cc-alert-cta{position:relative;text-decoration:none}
 .cc-alert-cta .cc-alert-count{position:absolute;top:-7px;right:-7px;border:2px solid #fff;background:#0b2a5b;min-width:1.85em;min-height:1.85em}
 

@@ -23,7 +23,7 @@
   const back = document.createElement('button'); back.type='button'; back.id='ccBackToHeadStart';
   back.classList.add('cc-journey-cta');
   back.setAttribute('aria-label','CharityClarity Head Start');
-  back.innerHTML='<span class="cc-journey-mark"><img src="/head-start/head-start-logo.png" alt="CharityClarity Head Start"></span>';
+  back.innerHTML='<span class="cc-journey-mark cc-journey-mark--signature" aria-hidden="true"><img src="/head-start/charityclarity-wordmark.png" alt=""><span class="cc-journey-script">Head Start</span></span>';
   card.append(title,description,message);
   const form=document.getElementById('snapshotForm');
   const productButtons=document.getElementById('ccProductButtons');

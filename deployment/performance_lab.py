@@ -380,7 +380,7 @@ def insight_asset(name, text):
         ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length || !window.CCHeadStart?.hasAssessment();'),
         ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
         ('</head>', '  <link rel="stylesheet" href="/head-start/journey.css?v=20261109.1">\n</head>'),
-        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.7"></script>\n  <script src="/sales-extract.js?v=3"></script>\n</body>'),
+        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.8"></script>\n  <script src="/sales-extract.js?v=3"></script>\n</body>'),
     ]
     for old, new in replacements:
         if text.count(old) != 1:
@@ -433,7 +433,7 @@ def alerts_navigation(data, anchor, *, aurora=False):
                 '<span class="cc-journey-script">Alerts</span></span>'
                 '<span class="cc-alert-count" aria-hidden="true" hidden></span></a></nav>')
     return (data.replace(anchor, link+anchor, 1)
-                .replace('</head>', '<link rel="stylesheet" href="/alerts.css"></head>', 1)
+                .replace('</head>', '<link rel="stylesheet" href="/alerts.css?v=20261109.2"></head>', 1)
                 .replace('</body>', '<script src="/alerts.js?v=20261109.1" defer></script></body>', 1))
 
 
