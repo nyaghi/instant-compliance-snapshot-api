@@ -1,5 +1,5 @@
 """Original DOM pixels, signed identity context, and stale-image rejection offline."""
-import copy,json,time,unittest
+import copy,hashlib,json,time,unittest
 from pathlib import Path
 from unittest.mock import patch
 import registry_snapshot_server as c
@@ -61,10 +61,28 @@ class UnnumberedPixels(unittest.TestCase):
         original=self.page.screenshot
         def changed(**kwargs):
             image=original(**kwargs);self.page.locator('[data-automation-key=name] button').evaluate("el=>el.textContent='Different Charity'");return image
-        with patch.object(self.page,'screenshot',side_effect=changed):self.photo()
+        with patch.object(self.page,'screenshot',side_effect=changed) as shot:self.photo()
+        self.assertEqual(shot.call_count,1)
         self.assertEqual(self.run.documents,[])
         self.run.document(n.URL,original(type='jpeg'),'image','CHRISTIAN RESEARCH INSTITUTE Exempt')
         self.assertNotIn('_worker_source_archives',self.run.finish(self.row))
+    def test_transient_name_reflow_recaptures_same_candidate_and_only_keeps_second_image(self):
+        original=self.page.screenshot
+        images=[]
+        def reflow(**kwargs):
+            images.append(original(**kwargs))
+            if len(images)==1:
+                self.page.locator('[data-automation-key=name] button').evaluate("el=>{el.style.width='2000px';el.style.maxWidth='none';}")
+                # Distinguish the two images without changing any candidate value.
+                self.page.locator('h1').evaluate("el=>el.style.color='blue'")
+            return images[-1]
+        with patch.object(self.page,'screenshot',side_effect=reflow):self.photo()
+        self.assertEqual(len(images),2)
+        self.assertNotEqual(images[0],images[1])
+        self.assertEqual(len(self.run.documents),1)
+        self.assertEqual(set(self.run.nj_unnumbered_image_bindings),{hashlib.sha256(images[1]).hexdigest()})
+        self.assertEqual(self.run.visual_adapter_facts[-1]['capture_attempts'],2)
+        self.assertEqual(self.run.finish(self.row)['evidence_capture'],'captured')
     def test_exhausted_allowance_never_takes_photo_or_reuses_unbound_image(self):
         token=c.NJ_NAME_QUERY_DEADLINE.set(time.monotonic()-.1)
         try:

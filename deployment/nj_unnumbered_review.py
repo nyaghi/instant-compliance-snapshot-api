@@ -72,15 +72,31 @@ def capture(master,page,org,data):
         expected={'expected':fields,'query':query,'prepare':True}
         before=page.evaluate(VIEW,expected)
         if not before or not before['name_fits']or before['url']!=URL:fact['outcome']='source_binding_or_geometry_failed';return
-        size=page.locator('body').evaluate('(el)=>({width:el.scrollWidth,height:el.scrollHeight})')
-        if size['width']<=0 or size['height']<=0 or size['width']*size['height']>20_000_000:fact['outcome']='source_size_rejected';return
-        if stop-time.monotonic()<.1:fact['outcome']='deadline_reserve';return
-        begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=75,full_page=True,timeout=max(1,int(min(5,stop-time.monotonic())*1000)))
-        fact['capture_ms']=round((time.perf_counter()-begin)*1000,2);run.capture_ms+=fact['capture_ms']
-        after=page.evaluate(VIEW,{**expected,'prepare':False})
-        if before!=after or time.monotonic()>=stop:fact['outcome']='source_changed_or_capture_late';return
-        text=page.locator('body').inner_text(timeout=max(1,int(min(1,stop-time.monotonic())*1000)))
-        if time.monotonic()>=stop or re.search(r'verify you are human|access denied|just a moment',text,re.I):fact['outcome']='source_unavailable';return
+        for attempt in (1,2):
+            if stop-time.monotonic()<.1:fact['outcome']='deadline_reserve';return
+            if attempt==2:
+                # Discard the first image. Rebind the same completed response and
+                # exact public row before taking another, inside the original stop.
+                if (getattr(page,'_cc_nj_query_incomplete',True) is not False
+                        or getattr(page,'_cc_nj_completed_data',None) is not data
+                        or page.url!=URL or page.evaluate(VIEW,expected)!=before):
+                    fact['outcome']='source_changed';return
+            size=page.locator('body').evaluate('(el)=>({width:el.scrollWidth,height:el.scrollHeight})',
+                                             timeout=max(1,int(min(1,stop-time.monotonic())*1000)))
+            if size['width']<=0 or size['height']<=0 or size['width']*size['height']>20_000_000:fact['outcome']='source_size_rejected';return
+            if stop-time.monotonic()<.1:fact['outcome']='deadline_reserve';return
+            fact['capture_attempts']=attempt
+            begin=time.perf_counter();raw=page.screenshot(type='jpeg',quality=75,full_page=True,timeout=max(1,int(min(5,stop-time.monotonic())*1000)))
+            elapsed=round((time.perf_counter()-begin)*1000,2)
+            fact['capture_ms']=round(fact['capture_ms']+elapsed,2);run.capture_ms+=elapsed
+            if time.monotonic()>=stop:fact['outcome']='capture_late';return
+            after=page.evaluate(VIEW,{**expected,'prepare':False})
+            if time.monotonic()>=stop:fact['outcome']='capture_late';return
+            text=page.locator('body').inner_text(timeout=max(1,int(min(1,stop-time.monotonic())*1000)))
+            if time.monotonic()>=stop or re.search(r'verify you are human|access denied|just a moment',text,re.I):fact['outcome']='source_unavailable';return
+            if before==after:break
+        else:
+            fact['outcome']='source_changed';return
         before_documents=len(run.documents)
         run.nj_unnumbered_image_bindings[hashlib.sha256(raw).hexdigest()]=(fields['name'],'')
         run.document(URL,raw,'image',text,note='Original NJ unnumbered exemption row; source name wrapped to fit, public values unchanged. Identity confirmation is separate.')

@@ -547,6 +547,32 @@ def retry_selected_blank_initialization(master,page,fact,url,stop):
  if response is None or response.status!=200 or page.url!=url:
   raise ValueError('Same-selected-detail initialization reload was not confirmed')
 
+def ca_selected_object_retry_stop(fact,url,old_stop,state_deadline,now):
+ """Budget one reload for a loaded shell waiting on this exact registration."""
+ route=re.fullmatch(r'https://ca-rcf\.evokeplatform\.com(?::443)?/app/publicPortal/registrationDetails/(\d+)',url)
+ obs=fact.get('selected_readiness_observation',{});terminal=obs.get('terminal',{})
+ required=terminal.get('required',[])
+ if (not route or fact.get('adapter')!='CA-selected-registration-detail'
+     or fact.get('ca_selected_object_retry') or fact.get('initialization_continuation')
+     or obs.get('route_matches') is not True or obs.get('terminal_read')!='completed'
+     or obs.get('failed')!=0 or obs.get('pending_overflow')!=0 or obs.get('observer_error')
+     or terminal.get('document_state')!='complete' or terminal.get('form_count')!=0
+     or 'Registration' not in terminal.get('headings',[]) or not terminal.get('body_text_chars')
+     or len(required)!=5 or any(field.get('visible') is not False for field in required)
+     or any(terminal.get(key) is not False for key in ('expected_name_present','expected_id_present','verification_present','error_present'))):return None
+ # Both recorded stalls also had this same startup error. Its cause is unknown;
+ # other errors do not qualify for this narrow recovery.
+ errors=[(e.get('kind'),e.get('sha256')) for e in obs.get('errors',[])]
+ if errors not in ([],[('page_error','4eae459f9f1c3b7d')]):return None
+ path=f'/api/data/objects/registrations/instances/{route[1]}/object'
+ matching=[p for p in obs.get('pending',[]) if p.get('host')=='ca-rcf.evokeplatform.com'
+           and p.get('path')==path and p.get('type') in {'xhr','fetch'}]
+ if len(matching)!=1 or 'status' in matching[0]:return None
+ age=matching[0].get('age_seconds');elapsed=obs.get('elapsed_seconds')
+ if type(age) not in (int,float) or type(elapsed) not in (int,float) or not 5<=age<=elapsed+.01<float('inf'):return None
+ new_stop=min(old_stop+15,state_deadline-1)
+ return new_stop if new_stop-now>=8 else None
+
 def capture_selected_ca_source(master,result,run,deadline):
  """Photograph the selected actual registration, never the entity Listed label."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:224:5:get',result.get,locals(), 'state')!='CA' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:224:54:get',result.get,locals(), 'ein','')))!=run.ein
@@ -608,13 +634,28 @@ def capture_selected_ca_source(master,result,run,deadline):
        if label!='Registration Number' or type(ready_error).__name__!='TimeoutError':raise
        getattr(finish_readiness,'checkpoint',finish_readiness)()
        proposed_stop=initialization_completion_stop(fact,stop,deadline,time.monotonic())
-       if proposed_stop is None:raise
-       fact['initialization_continuation']={'count':1,'extra_cap_seconds':15,'extra_granted_seconds':round(proposed_stop-stop,3),'completion_reserve_seconds':5}
-       fact['initialization_boundary_observation']=json.loads(json.dumps(fact['selected_readiness_observation']))
+       blank_boot=proposed_stop is not None
+       if blank_boot:
+        reserve=5
+        fact['initialization_continuation']={'count':1,'extra_cap_seconds':15,'extra_granted_seconds':round(proposed_stop-stop,3),'completion_reserve_seconds':reserve}
+        fact['initialization_boundary_observation']=json.loads(json.dumps(fact['selected_readiness_observation']))
+       else:
+        if (page.url!=hint['url'] or not master.trial_identity()
+            or master.LAB_LOOKUP_MODE_CONTEXT.get()!='standard'):raise
+        proposed_stop=ca_selected_object_retry_stop(fact,hint['url'],stop,deadline,time.monotonic())
+        if proposed_stop is None:raise
+        reserve=2
+        fact['ca_selected_object_retry']={'count':1,'extra_granted_seconds':round(proposed_stop-stop,3),
+            'completion_reserve_seconds':reserve,'boundary_observation':json.loads(json.dumps(fact['selected_readiness_observation']))}
        stop=proposed_stop
        getattr(finish_readiness,'continue_until',lambda value:None)(stop)
-       retry_selected_blank_initialization(master,page,fact,hint['url'],stop)
-       workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:266:6:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-5)*1000)))
+       if blank_boot:
+        retry_selected_blank_initialization(master,page,fact,hint['url'],stop)
+       else:
+        response=page.reload(wait_until='commit',timeout=max(1,int(min(5,stop-time.monotonic()-reserve)*1000)))
+        if response is None or response.status!=200 or page.url!=hint['url']:
+         raise ValueError('Same-selected-registration reload was not confirmed')
+       workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:266:6:wait_for',page.get_by_text(label,exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-reserve)*1000)))
      finally:
       fact.setdefault('label_wait_seconds',{})[label]=round(time.perf_counter()-label_started,6)
     fact['waiting_for_label']=''

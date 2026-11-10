@@ -52,24 +52,31 @@ class Borrowed:
             return page
         context.new_page=new_page;return context
 
-def replay(browser,pw,state,org,*,wrong_id=False,answered_dependency=False,seconds=100):
+def replay(browser,pw,state,org,*,wrong_id=False,answered_dependency=False,seconds=100,selected_object=None,blocked=False,other_object=False,stays_pending=False):
     name=org['name'];ein=s.digits(org['ein']);clock=[0.0];requests=[];documents=[]
     identifier='117962'if state=='CA'else'677523'
     url=('https://ca-rcf.evokeplatform.com/app/publicPortal/registrationDetails/1006488'if state=='CA'else'https://vdacs.evokeplatform.com/app/publicPortal/registration/677523')
     origin=url.split('/app/')[0];boot=origin+'/api/webContent/themes'
+    shell=''
+    if selected_object:
+        url=origin+'/app/publicPortal/registrationDetails/'+selected_object
+        boot=origin+'/api/data/objects/registrations/instances/'+('1' if other_object else selected_object)+'/object'
+        shell='<h1>Registration</h1><h2>Initial Applications</h2>'
+        if blocked:shell+='<p>Access denied</p>'
     if state=='CA':
         core='<p>Entity Related</p><p>'+html.escape(name)+'</p><p class="formio-component-registrationNumber">Registration Number</p><p>'+('999999'if wrong_id else identifier)+'</p><p>Registration Type</p><p>Charitable Organization</p><p>Registration Status</p><p>Registered</p><p>Initial Registration Date</p><p>06/30/2006</p><p>Current Expiration Date</p><p>11/15/2025</p><h2>CHARITABLE ORGANIZATION DETAILS</h2>'
         body='<div class="formio-form">'+core+'</div>';hint={'name':name,'url':url}
     else:
         fields=[('calculatedRegistrationStatusLabel','Status','Registered'),('renewalStatus','Renewal Status','Eligible'),('initialIssueDate','Initial Registration Date','05/07/2020'),('dateOfLastRenewal','Date of Last Renewal','04/20/2026'),('issueDate','Current Registration Date','04/20/2026'),('expirationDate','Expiration Date','11/15/2026'),('extensionDate','Extension Date','')]
         body='<p>'+html.escape(name)+'</p><p>Registration ID: '+('999999'if wrong_id else identifier)+'</p><div class="formio-form"><h3>Registration Information</h3><p>Registration ID</p>'+''.join('<div class="formio-component-'+key+'"><label>'+label+'</label><p>'+value+'</p></div>'for key,label,value in fields)+'</div>'
-        hint={'name':name,'url':url,'registration_type':'Charity','source_fields':{key:value for key,label,value in fields}}
+        hint={'name':name,'url':url,'source_record_id':identifier,'registration_type':'Charity','source_fields':{key:value for key,label,value in fields}}
     loaded='<h1>LOCAL MODELED FIXTURE — NOT STATE EVIDENCE</h1>'+body
     def route(r):
         requests.append(r.request.url)
         if r.request.url==url:
             documents.append(r.request.url)
-            raw='<html><head><script>fetch("/api/webContent/themes")</script></head><body></body></html>'if len(documents)==1 else loaded
+            raw=(f'<html><head><script>fetch({json.dumps(boot)})</script></head><body>{shell}</body></html>'
+                 if len(documents)==1 or stays_pending else loaded)
             r.fulfill(status=200,content_type='text/html; charset=utf-8',body=raw)
         elif r.request.url==boot:
             if answered_dependency:r.fulfill(status=200,content_type='application/json',body='{}')
@@ -108,5 +115,22 @@ class BrowserRecovery(unittest.TestCase):
             for kwargs in [{'wrong_id':True},{'seconds':33},{'answered_dependency':True}]:
                 r=replay(self.browser,self.p,state,CONTEXTS[0],**kwargs);self.assertEqual(r['run'].documents,[],r['fact'])
                 if kwargs!={'wrong_id':True}:self.assertEqual(len(r['documents']),1)
+    def test_ca_selected_object_stall_reloads_only_the_same_registration(self):
+        for detail_id in ['1451199','1011132']:
+            with self.subTest(detail_id=detail_id):
+                r=replay(self.browser,self.p,'CA',CONTEXTS[0],selected_object=detail_id)
+                self.assertEqual(r['fact']['outcome'],'captured',r['fact'])
+                self.assertEqual(len(r['run'].documents),1)
+                self.assertEqual(len(r['documents']),2)
+                self.assertEqual(len(set(r['documents'])),1)
+                self.assertEqual(len(r['requests']),3)
+                self.assertEqual(r['fact']['ca_selected_object_retry']['extra_granted_seconds'],15)
+    def test_ca_selected_object_stall_is_bounded_and_rejects_unbound_sources(self):
+        for opts,count in [({'other_object':True},1),({'answered_dependency':True},1),({'blocked':True},1),
+                           ({'seconds':36},1),({'wrong_id':True},2),({'stays_pending':True},2)]:
+            with self.subTest(opts=opts):
+                r=replay(self.browser,self.p,'CA',CONTEXTS[0],selected_object='1451199',**opts)
+                self.assertEqual(len(r['documents']),count,r['fact'])
+                self.assertEqual(r['run'].documents,[],r['fact'])
 
 if __name__=='__main__':unittest.main()
