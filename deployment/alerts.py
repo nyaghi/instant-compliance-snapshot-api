@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS cc_alert_sessions (
 CREATE TABLE IF NOT EXISTS cc_alert_orgs (
     account text REFERENCES cc_alert_accounts, ein text, name text NOT NULL,
     aliases jsonb NOT NULL, enrolled double precision NOT NULL,
-    due double precision NOT NULL, workflow text,
+    due double precision NOT NULL, workflow text, stopped double precision,
     PRIMARY KEY(account, ein)
 );
 CREATE TABLE IF NOT EXISTS cc_alert_checks (
@@ -148,6 +148,7 @@ class Alerts:
         with self.transaction() as c:
             c.execute('SELECT pg_advisory_xact_lock(824527331)')
             c.execute(SCHEMA)
+            c.execute('ALTER TABLE cc_alert_orgs ADD COLUMN IF NOT EXISTS stopped double precision')
             if self.master is not None:
                 from deployment.alerts_browser import SCHEMA as browser_schema
                 c.execute(browser_schema)
@@ -160,20 +161,38 @@ class Alerts:
         if (not isinstance(name, str) or not 1 <= len(name.strip()) <= 300 or not isinstance(ein, str)
                 or not re.fullmatch(r'[0-9]{2}-?[0-9]{7}', ein) or ein.replace('-', '') == '000000000'):
             raise ValueError('Enter an organization name and a valid EIN.')
-        return bool(c.execute('INSERT INTO cc_alert_orgs (account,ein,name,aliases,enrolled,due) '
-                              'VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING ein',
-                              (account, ein.replace('-', ''), name.strip(), Jsonb(list(aliases)), enrolled, enrolled)).fetchone())
+        ein = ein.replace('-', '')
+        added = c.execute('INSERT INTO cc_alert_orgs (account,ein,name,aliases,enrolled,due) '
+                          'VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (account,ein) DO UPDATE SET '
+                          'name=excluded.name,aliases=excluded.aliases,enrolled=excluded.enrolled,due=excluded.due,stopped=NULL '
+                          'WHERE cc_alert_orgs.stopped IS NOT NULL RETURNING ein',
+                          (account,ein,name.strip(),Jsonb(list(aliases)),enrolled,enrolled)).fetchone()
+        if added:
+            c.execute('DELETE FROM cc_alert_confirmed WHERE account=%s AND ein=%s',(account,ein))
+        return bool(added)
+
+    def remove(self, c, account, ein):
+        if not isinstance(ein,str) or not re.fullmatch(r'[0-9]{2}-?[0-9]{7}',ein):
+            raise ValueError('Enter a valid EIN.')
+        c.execute('SELECT pg_advisory_xact_lock(824527332)')
+        return bool(c.execute('UPDATE cc_alert_orgs SET stopped=%s '
+                              'WHERE account=%s AND ein=%s AND stopped IS NULL RETURNING ein',
+                              (self.now(c),account,ein.replace('-',''))).fetchone())
 
     def apply(self, c, org, run):
         """Apply only a terminal, exact-EIN workflow. Per-state first success is silent."""
+        org = c.execute('SELECT * FROM cc_alert_orgs WHERE account=%s AND ein=%s FOR UPDATE',
+                        (org['account'],org['ein'])).fetchone()
+        if org['stopped'] is not None or (org['workflow'] == run['id'] and run['submitted'] < org['enrolled']):
+            c.execute('UPDATE cc_alert_orgs SET workflow=NULL WHERE account=%s AND ein=%s AND workflow=%s',
+                      (org['account'],org['ein'],run['id']))
+            return
         if (run['phase'] not in TERMINAL or run['ein'] != org['ein'] or run['kind'] != 'registration'
                 or run['source_version'] != self.version or run['submitted'] < org['enrolled'] - 1):
             raise ValueError('The check does not belong to this enrollment.')
         by_state = {j['state']: j for j in run['jobs']}
         if set(by_state) != self.states or len(by_state) != len(run['jobs']):
             raise ValueError('The check does not contain the enrolled state set.')
-        c.execute('SELECT ein FROM cc_alert_orgs WHERE account=%s AND ein=%s FOR UPDATE',
-                  (org['account'], org['ein']))
         from deployment.alerts_matches import auto_confirm, match_identifier, record
         for state, job in sorted(by_state.items()):
             result, match = auto_confirm(self,c,org,state,run['id'],job.get('result'))
@@ -279,7 +298,7 @@ class Alerts:
                 return  # The opted-in Chrome profile claims new checks.
             now = self.now(c)
             org = c.execute('SELECT o.* FROM cc_alert_orgs o JOIN cc_alert_accounts a USING(account) '
-                            'WHERE a.monitoring AND o.due<=%s ORDER BY o.due,o.account,o.ein LIMIT 1',(now,)).fetchone()
+                            'WHERE a.monitoring AND o.stopped IS NULL AND o.due<=%s ORDER BY o.due,o.account,o.ein LIMIT 1',(now,)).fetchone()
             if not org:
                 return
             if c.execute("SELECT 1 FROM cc_lab_workflows WHERE finished IS NULL LIMIT 1").fetchone():
@@ -313,9 +332,9 @@ class Alerts:
     def dashboard(self, c, account, before):
         orgs = c.execute('SELECT o.ein,o.name,o.enrolled,o.due,o.workflow IS NOT NULL AS checking, '
                          '(SELECT count(*) FROM cc_alert_confirmed s WHERE s.account=o.account AND s.ein=o.ein) AS confirmed, '
-                         'greatest((SELECT max(h.checked) FROM cc_alert_checks h WHERE h.account=o.account AND h.ein=o.ein), '
+                         'greatest((SELECT max(h.checked) FROM cc_alert_checks h WHERE h.account=o.account AND h.ein=o.ein AND h.checked>=o.enrolled), '
                          '(SELECT max(s.checked) FROM cc_alert_confirmed s WHERE s.account=o.account AND s.ein=o.ein)) AS last_checked '
-                         'FROM cc_alert_orgs o WHERE o.account=%s ORDER BY o.name,o.ein', (account,)).fetchall()
+                         'FROM cc_alert_orgs o WHERE o.account=%s AND o.stopped IS NULL ORDER BY o.name,o.ein', (account,)).fetchall()
         changes = c.execute('SELECT a.id,o.name,a.ein,a.state,a.previous,a.status,a.direction,a.checked,a.seen, '
                             "a.evidence<>'' AS has_evidence, coalesce(m.corrected,false) AS corrected, "
                             'm.identifier IS NOT NULL AS automatic, m.name AS match_name, m.identifier AS match_identifier '
@@ -324,7 +343,7 @@ class Alerts:
                             'WHERE a.account=%s AND a.id<%s AND a.checked>=%s ORDER BY a.id DESC LIMIT 101',
                             (account,before,self.now(c)-HISTORY_DAYS*DAY)).fetchall()
         failures = c.execute('SELECT o.name,h.ein,h.state,h.checked,h.failure FROM cc_alert_checks h '
-                             'JOIN cc_alert_orgs o USING(account,ein) WHERE h.account=%s AND h.failure IS NOT NULL '
+                             'JOIN cc_alert_orgs o USING(account,ein) WHERE h.account=%s AND o.stopped IS NULL AND h.checked>=o.enrolled AND h.failure IS NOT NULL '
                              'AND h.checked>=%s AND NOT EXISTS (SELECT 1 FROM cc_alert_checks n WHERE n.account=h.account '
                              'AND n.ein=h.ein AND n.state=h.state AND n.checked>h.checked) '
                              'AND NOT EXISTS (SELECT 1 FROM cc_alert_confirmed s WHERE s.account=h.account '
@@ -332,10 +351,10 @@ class Alerts:
                              'ORDER BY h.checked DESC LIMIT 200',(account,self.now(c)-HISTORY_DAYS*DAY)).fetchall()
         matches=c.execute("SELECT m.ein,m.state,m.identifier,m.workflow,m.name,m.checked,coalesce(s.status,h.status) AS status, "
                           "coalesce(s.evidence,h.evidence,'')<>'' AS has_evidence "
-                          'FROM cc_alert_auto_matches m LEFT JOIN cc_alert_checks h USING(account,ein,state,workflow) '
+                          'FROM cc_alert_auto_matches m JOIN cc_alert_orgs o USING(account,ein) LEFT JOIN cc_alert_checks h USING(account,ein,state,workflow) '
                           'LEFT JOIN cc_alert_confirmed s ON s.account=m.account AND s.ein=m.ein '
                           'AND s.state=m.state AND s.checked=m.checked '
-                          'WHERE m.account=%s AND NOT m.corrected AND (s.checked IS NOT NULL OR h.checked IS NOT NULL) '
+                          'WHERE m.account=%s AND o.stopped IS NULL AND m.checked>=o.enrolled AND NOT m.corrected AND (s.checked IS NOT NULL OR h.checked IS NOT NULL) '
                           'AND NOT EXISTS (SELECT 1 FROM cc_alert_auto_matches n WHERE n.account=m.account '
                           'AND n.ein=m.ein AND n.state=m.state AND n.checked>m.checked AND NOT n.corrected) '
                           'AND NOT EXISTS (SELECT 1 FROM cc_alert_confirmed s WHERE s.account=m.account '
@@ -432,6 +451,8 @@ def handle(alerts, handler, path, *, origin, operator=False, include_body=True):
                 if handler.command=='POST' and parsed.path=='/api/alerts/organizations':
                     added=alerts.enroll(c,account,payload.get('name'),payload.get('ein'),alerts.now(c))
                     return reply(201 if added else 200,{'added':added})
+                if handler.command=='POST' and parsed.path=='/api/alerts/organizations/remove':
+                    return reply(200,{'removed':alerts.remove(c,account,payload.get('ein'))})
                 if handler.command=='POST' and parsed.path=='/api/alerts/change-match' and alerts.master is not None:
                     from deployment.alerts_matches import correct
                     return (reply(200,{'ok':True}) if correct(alerts,c,account,payload)

@@ -106,17 +106,17 @@ def correct(alerts,c,account,payload):
             or not isinstance(workflow,str) or not 1<=len(workflow)<=100):
         raise ValueError('Invalid match correction.')
     key=(account,ein,state)
-    org=c.execute('SELECT ein FROM cc_alert_orgs WHERE account=%s AND ein=%s FOR UPDATE',
+    org=c.execute('SELECT enrolled FROM cc_alert_orgs WHERE account=%s AND ein=%s AND stopped IS NULL FOR UPDATE',
                   (account,ein)).fetchone()
     if not org:
         return False
     chosen=c.execute('SELECT m.* FROM cc_alert_auto_matches m '
-                     'WHERE m.account=%s AND m.ein=%s AND m.state=%s AND m.identifier=%s AND m.workflow=%s AND NOT m.corrected '
+                     'WHERE m.account=%s AND m.ein=%s AND m.state=%s AND m.identifier=%s AND m.workflow=%s AND NOT m.corrected AND m.checked>=%s '
                      'AND NOT EXISTS (SELECT 1 FROM cc_alert_auto_matches n WHERE n.account=m.account '
                      'AND n.ein=m.ein AND n.state=m.state AND n.checked>m.checked AND NOT n.corrected) '
                      'AND NOT EXISTS (SELECT 1 FROM cc_alert_confirmed s WHERE s.account=m.account '
                      'AND s.ein=m.ein AND s.state=m.state AND s.checked>m.checked)',
-                     (*key,identifier,workflow)).fetchone()
+                     (*key,identifier,workflow,org['enrolled'])).fetchone()
     if not chosen:
         return False
     current=c.execute('SELECT m.checked,m.previous FROM cc_alert_auto_matches m JOIN cc_alert_confirmed s '

@@ -37,7 +37,7 @@ class Connection:
         self.db.execute('CREATE TABLE cc_lab_jobs (workflow_id text, result text)')
 
     def execute(self, statement, params=()):
-        if statement.startswith('SELECT pg_try_advisory_xact_lock'):
+        if statement.startswith(('SELECT pg_try_advisory_xact_lock','SELECT pg_advisory_xact_lock')):
             return self.db.execute('SELECT 1 AS ok')
         return self.db.execute(statement.replace('%s','?').replace(' FOR UPDATE',''),
                                tuple(json.dumps(x.obj) if isinstance(x,Jsonb) else x for x in params))
@@ -187,6 +187,50 @@ class AlertsTests(unittest.TestCase):
         model=self.a.dashboard(self.c,ACCOUNT,2**63-1)
         self.assertEqual(len(model['organizations']),2)
         self.assertEqual(model['unseen'],0)
+
+    def test_remove_is_account_scoped_and_keeps_alert_history(self):
+        self.check('initial',0,'Current')
+        self.check('change',1,'Delinquent')
+        route='/api/alerts/organizations/remove'
+        body={'ein':'01-2345678','account':ACCOUNT}
+        self.assertEqual(handle(self.a,Handler(self.other,body),route,origin=ORIGIN)[:2],
+                         (200,{'removed':False}))
+        self.assertEqual(handle(self.a,Handler(self.session,body,origin='https://other.example'),route,origin=ORIGIN)[0],403)
+        self.assertEqual(handle(self.a,Handler(self.session,body),route,origin=ORIGIN)[:2],
+                         (200,{'removed':True}))
+        self.assertEqual(handle(self.a,Handler(self.session,body),route,origin=ORIGIN)[:2],
+                         (200,{'removed':False}))
+        self.a.clock=NOW+2*DAY+5
+        self.a.tick()
+        self.assertEqual(self.q.submissions,[])
+        model=self.a.dashboard(self.c,ACCOUNT,2**63-1)
+        self.assertEqual(model['organizations'],[])
+        self.assertEqual([x['status'] for x in model['changes']],['Delinquent'])
+
+    def test_readding_drops_stale_inflight_result_and_creates_a_new_baseline(self):
+        self.check('initial',0,'Current')
+        self.a.clock=NOW+DAY+5
+        self.a.tick()
+        self.assertEqual(len(self.q.submissions),1)
+        submitted=self.a.clock
+        self.a.clock+=5
+        self.assertTrue(self.a.remove(self.c,ACCOUNT,EIN))
+        self.a.clock+=5
+        self.assertTrue(self.a.enroll(self.c,ACCOUNT,'Example Organization',EIN,self.a.clock))
+        self.q.result=run('scheduled',submitted,'Delinquent')
+        self.a.tick()
+        model=self.a.dashboard(self.c,ACCOUNT,2**63-1)
+        self.assertIsNone(model['organizations'][0]['last_checked'])
+        self.assertFalse(model['organizations'][0]['checking'])
+        self.assertEqual(model['changes'],[])
+        self.q.result=None
+        self.a.tick()
+        self.assertEqual(len(self.q.submissions),2)
+        self.q.result=run('scheduled',self.a.clock,'Delinquent')
+        self.a.tick()
+        model=self.a.dashboard(self.c,ACCOUNT,2**63-1)
+        self.assertEqual(model['organizations'][0]['confirmed'],1)
+        self.assertEqual(model['changes'],[])
 
     def test_scheduler_due_immediately_then_roughly_24_hours(self):
         self.a.tick()

@@ -39,6 +39,11 @@
         sessionStorage.setItem('cc.alerts.example.seen',JSON.stringify(local.changes.filter(x=>x.seen).map(x=>x.id)));
         local.unseen = local.changes.filter(x => !x.seen).length;
       }
+      if (path.endsWith('/organizations/remove')) {
+        const length=local.organizations.length;
+        local.organizations=local.organizations.filter(x=>x.ein!==data.ein);
+        return {removed:local.organizations.length<length};
+      }
       if (path.endsWith('/organizations')) {
         const ein=data.ein.replace(/\D/g,'');
         if (local.organizations.some(x=>x.ein===ein)) return {added:false};
@@ -79,7 +84,15 @@
     const wrap=el('div',null,'table-scroll'), t=el('table'), h=el('thead'), b=el('tbody'), r=el('tr');
     for(const v of head){const c=el('th',v);c.scope='col';r.append(c);}
     h.append(r);
-    for(const values of rows){const row=el('tr');for(const v of values)row.append(el('td',v));b.append(row);}
+    for(const values of rows){
+      const row=el('tr');
+      for(const value of values){
+        const cell=el('td');
+        cell.append(value);
+        row.append(cell);
+      }
+      b.append(row);
+    }
     t.append(h,b);wrap.append(t);return wrap;
   }
   function matchLabel(name, identifier) {
@@ -93,15 +106,23 @@
     badge(model.unseen);
     const output=$('changes');
     output.replaceChildren();
-    if(!model.changes.length) output.append(el('p','No status changes to review.'));
     for(const dir of Object.keys(labels)){
       const group=model.changes.filter(x=>x.direction===dir);
-      if(!group.length)continue;
-      output.append(el('h3',labels[dir],'alert-change-'+dir));
+      if(dir==='other' && !group.length)continue;
+      const card=el('section',null,'alert-change-card alert-change-'+dir);
+      const title=el('h3',labels[dir]);
+      title.id='alert-change-title-'+dir;
+      card.setAttribute('aria-labelledby',title.id);
+      card.append(title);
+      output.append(card);
+      if(!group.length){
+        card.append(el('p',dir==='adverse'?'No changes need attention.':'No favorable changes.','muted'));
+        continue;
+      }
       const byOrg=new Map();
       for(const x of group){if(!byOrg.has(x.ein))byOrg.set(x.ein,[]);byOrg.get(x.ein).push(x);}
       for(const rows of byOrg.values()){
-        output.append(el('h4',rows[0].name));
+        card.append(el('h4',rows[0].name));
         for(const x of rows){
           const row=el('div',null,'alert-row');
           row.append(el('strong',x.state),el('span',x.previous+' → '+x.status),el('span',time(x.checked),'muted'));
@@ -121,7 +142,7 @@
             };
             row.append(button);
           }else if(!x.corrected)row.append(el('span','Seen','muted'));
-          output.append(row);
+          card.append(row);
         }
       }
     }
@@ -132,7 +153,21 @@
         const missing=(model.failures || []).filter(issue=>issue.ein===x.ein).map(issue=>issue.state);
         const coverage=x.checking?'Checking now':!x.last_checked?'First check queued':
           missing.length?'Awaiting a result in '+[...new Set(missing)].sort().join(', '):'';
-        return [x.name,ein(x.ein),time(x.last_checked),coverage];
+        const organization=el('div',null,'monitored-org-name');
+        const remove=el('button','Remove');
+        remove.type='button';
+        remove.setAttribute('aria-label','Remove '+x.name+' ('+ein(x.ein)+') from monitoring');
+        remove.onclick=async()=>{
+          if(!window.confirm('Stop monitoring '+x.name+'? Recent alerts will stay in your history.'))return;
+          remove.disabled=true;
+          try{
+            const result=await api('/api/alerts/organizations/remove',{ein:x.ein});
+            await load();
+            report(result.removed?'Monitoring stopped for '+x.name+'.':'This organization is already removed.');
+          }catch(err){report(err.message);remove.disabled=false;}
+        };
+        organization.append(el('span',x.name),remove);
+        return [organization,ein(x.ein),time(x.last_checked),coverage];
       })
     ):el('p','Add an organization to start monitoring.'));
     const matches=$('matches');

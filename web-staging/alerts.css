@@ -44,10 +44,18 @@
 .alerts-page th,.alerts-page td{text-align:left;vertical-align:top;padding:.55rem;border-bottom:1px solid #e1e8ef}
 .alerts-page th{color:#0b2a5b}
 .table-scroll{overflow-x:auto}
+.monitored-org-name{display:flex;flex-wrap:wrap;align-items:center;gap:.25rem .6rem}
+.monitored-org-name button{padding:.2rem .5rem;font-size:.85rem}
 .alerts-page summary{cursor:pointer;font-weight:700;color:#0b2a5b}
 
 #background-status:empty{display:none}
 #background-status{margin:.35rem 0}
 
-#changes .alert-change-adverse{color:#a52222}
-#changes .alert-change-favorable{color:#17643a}
+#changes{display:grid;gap:.8rem;margin:.9rem 0}
+.alert-change-card{border:1px solid #dbe3ec;border-left:4px solid #0b2a5b;border-radius:8px;padding:.85rem 1rem}
+.alert-change-card h3{margin:0}
+.alert-change-card > p{margin:.4rem 0 0}
+.alert-change-card.alert-change-adverse{border-left-color:#a52222}
+.alert-change-card.alert-change-adverse h3{color:#a52222}
+.alert-change-card.alert-change-favorable{border-left-color:#17643a}
+.alert-change-card.alert-change-favorable h3{color:#17643a}

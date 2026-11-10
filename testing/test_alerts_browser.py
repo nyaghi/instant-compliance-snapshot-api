@@ -46,7 +46,11 @@ class AlertsBrowser(unittest.TestCase):
                     model={'organizations':[],'changes':[],'failures':[],'unseen':0,'states':38,'next':None}
                     def api(route):
                         path=urlsplit(route.request.url).path
-                        if path.endswith('/organizations'):
+                        if path.endswith('/organizations/remove'):
+                            ein=route.request.post_data_json['ein']
+                            model['organizations']=[row for row in model['organizations'] if row['ein']!=ein]
+                            value={'removed':True}
+                        elif path.endswith('/organizations'):
                             row=route.request.post_data_json
                             model['organizations'].append({'name':row['name'],'ein':row['ein'].replace('-',''),
                                                            'confirmed':0,'last_checked':None})
@@ -60,7 +64,8 @@ class AlertsBrowser(unittest.TestCase):
                         route.fulfill(json=value)
                     page.route('**/api/alerts**',api)
                     page.goto(origin+'/alerts/')
-                    page.get_by_text('No status changes to review.').wait_for()
+                    page.get_by_text('No changes need attention.').wait_for()
+                    page.get_by_text('No favorable changes.').wait_for()
                     self.assertTrue(page.locator('.cc-alert-count').is_hidden())
                     page.get_by_role('button',name='Add Organization').click()
                     page.get_by_label('Organization name').fill('Example & Charity')
@@ -81,9 +86,9 @@ class AlertsBrowser(unittest.TestCase):
                     page.reload()
                     page.get_by_role('link',name='CharityClarity Alerts, 2 new').wait_for()
                     self.assertEqual(page.locator('#changes h3').all_text_contents(),['Needs attention','Favorable changes'])
-                    self.assertEqual(page.locator('.alert-change-adverse').evaluate(
+                    self.assertEqual(page.locator('.alert-change-adverse h3').evaluate(
                         'el => getComputedStyle(el).color'),'rgb(165, 34, 34)')
-                    self.assertEqual(page.locator('.alert-change-favorable').evaluate(
+                    self.assertEqual(page.locator('.alert-change-favorable h3').evaluate(
                         'el => getComputedStyle(el).color'),'rgb(23, 100, 58)')
                     self.assertEqual(page.get_by_text('Automatically accepted: Registry Name (123)',exact=True).count(),2)
                     self.assertEqual(page.locator('#changes').get_by_role('link',name='View evidence',exact=True).count(),0)
@@ -101,6 +106,16 @@ class AlertsBrowser(unittest.TestCase):
                         self.assertEqual({r.get('Target') for r in relations},
                                          {origin+'/api/alerts/evidence/2',origin+'/api/alerts/evidence/3'})
                     self.assertEqual(model['unseen'],1)
+                    monitored=page.get_by_role('region',name='Monitored organizations')
+                    remove=monitored.get_by_role('button',name='Remove Example & Charity (01-2345678) from monitoring')
+                    page.once('dialog',lambda dialog:dialog.dismiss())
+                    remove.click()
+                    self.assertEqual(len(model['organizations']),1)
+                    page.once('dialog',lambda dialog:dialog.accept())
+                    remove.click()
+                    monitored.get_by_text('Add an organization to start monitoring.').wait_for()
+                    self.assertEqual(model['organizations'],[])
+                    self.assertEqual(page.locator('#changes .alert-row').count(),2)
                     page.set_viewport_size({'width':390,'height':844})
                     page.goto(origin+'/alerts/?example=1')
                     page.get_by_text('Example data for the demo.',exact=False).wait_for()

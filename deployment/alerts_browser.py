@@ -46,7 +46,7 @@ def claim(alerts, c, account, profile):
         return {'retry': True}
     now = alerts.now(c)
     org = c.execute('SELECT o.* FROM cc_alert_orgs o JOIN cc_alert_accounts a USING(account) '
-                    'WHERE o.account=%s AND a.monitoring AND o.due<=%s ORDER BY o.due,o.ein LIMIT 1',
+                    'WHERE o.account=%s AND a.monitoring AND o.stopped IS NULL AND o.due<=%s ORDER BY o.due,o.ein LIMIT 1',
                     (account, now)).fetchone()
     if not org:
         return {}
