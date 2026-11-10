@@ -15971,40 +15971,44 @@ def mi_name_http_empty_queries(session, org, headers, lookup_deadline, *, unmatc
     return completed
 
 
-def search_mi_name_fallback(page, org):
+def search_mi_name_fallback(page, org, *, confirm_ein=False):
     module = state_extension_module("MI")
     patch_mi_module_for_fast_lookups(module)
     result = checker.StateResult(org.organization_name, org.ein, "MI", "Unable to Verify", module.MI_SEARCH_URL)
     safe_targets = organization_match_target_variants(org.organization_name, org.ein)
     started = time.perf_counter()
-    deadline = started + MI_LOOKUP_MAX_SECONDS
+    deadline = started + (20.0 if confirm_ein else MI_LOOKUP_MAX_SECONDS)
     lookup_deadline = getattr(page, "_cc_mi_lookup_deadline", None)
     if isinstance(lookup_deadline, (int, float)):
         deadline = min(deadline, lookup_deadline)
     result.success = False
-    result.reason_code = "MI_NAME_SEARCH_INCOMPLETE"
+    result.reason_code = "MI_NEGATIVE_CONFIRMATION_INCOMPLETE" if confirm_ein else "MI_NAME_SEARCH_INCOMPLETE"
     result.queries_attempted = []
     result.source_attempts = []
     def incomplete(message):
         result.status = "Unable to Verify"
-        result.raw_status_text = "Michigan organization-name search did not complete"
+        result.raw_status_text = ("Michigan EIN retry did not complete" if confirm_ein
+                                  else "Michigan organization-name search did not complete")
+        if confirm_ein:
+            result.error = ""
         result.source_note = message + " No negative registration conclusion was drawn."
         result.success = False
         return result
-    variants = mi_name_fallback_queries(org)
+    variants = [module.format_ein(org.ein)] if confirm_ein else mi_name_fallback_queries(org)
     if not variants:
         return incomplete("No usable organization-name query was available after the EIN search.")
 
     progress = getattr(page, "_cc_mi_search_progress", None)
     identity = (org.organization_name, canonical_ein_digits(org.ein))
-    if not isinstance(progress, dict) or progress.get("identity") != identity:
+    if confirm_ein or not isinstance(progress, dict) or progress.get("identity") != identity:
         progress = {}
     completed_empty_queries = list(progress.get("completed_empty_name_queries", []))
     completed_unmatched_queries = set(progress.get("http_completed_unmatched_name_queries", [])) if trial_identity() else set()
     result.source_attempts.extend(f"Completed Michigan name query via the same-session public form: {query}"
                                  for query in progress.get("http_completed_empty_name_queries", []))
-    opened_session = False
-    for variant in variants[:4]:
+    opened_session = bool(progress.get("browser_ein_confirmed_empty"))
+    confirmed_empty = False
+    for variant in variants[:1 if confirm_ein else 4]:
         if variant in completed_unmatched_queries:
             result.source_attempts.append(f"Reused complete Michigan name query: {variant}; every legal and alias name was checked with no qualifying candidate")
             continue
@@ -16041,8 +16045,10 @@ def search_mi_name_fallback(page, org):
                 return incomplete("Michigan could not open the name-search form.")
             opened_session = True
             active_page.locator("#ctl00_MainContent_txtName").fill("", timeout=mi_action_timeout(active_page, 3000))
-            active_page.locator("#ctl00_MainContent_txtName").fill(variant, timeout=mi_action_timeout(active_page, 3000))
-            active_page.locator("#ctl00_MainContent_txtEIN").fill("", timeout=mi_action_timeout(active_page, 3000))
+            if not confirm_ein:
+                active_page.locator("#ctl00_MainContent_txtName").fill(variant, timeout=mi_action_timeout(active_page, 3000))
+            active_page.locator("#ctl00_MainContent_txtEIN").fill(
+                variant if confirm_ein else "", timeout=mi_action_timeout(active_page, 3000))
             active_page.locator("#ctl00_MainContent_ddlName1").select_option("Includes", timeout=mi_action_timeout(active_page, 2000))
             active_page.locator("#ctl00_MainContent_ddlName2").select_option("All words", timeout=mi_action_timeout(active_page, 2000))
             result.queries_attempted.append(variant)
@@ -16054,7 +16060,29 @@ def search_mi_name_fallback(page, org):
             results_text = re.sub(r"\s+", " ", module.body_text(frame, timeout=mi_action_timeout(active_page, 3500))).strip()
             if not re.search(r"record\(s\) found|No records found|No results found", results_text, re.I):
                 return incomplete("Michigan returned an unrecognized name-results page.")
-            result.source_attempts.append(f"Completed Michigan name query: {variant}")
+            if confirm_ein:
+                echo = frame.locator("#ctl00_MainContent_lblSearchResults").inner_text(
+                    timeout=mi_action_timeout(active_page, 2000))
+                prefix = ("Results for the following input: Organization Type: Charity or Public Safety Organization "
+                          f"EIN: {variant};")
+                count = re.fullmatch(rf"{re.escape(prefix)}\s*(\d+) record\(s\) found",
+                                     re.sub(r"\s+", " ", echo).strip(), re.I)
+                if (frame.url != "https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx" or not count
+                        or time.perf_counter() >= deadline):
+                    return incomplete("Michigan did not confirm the submitted EIN in the browser result.")
+                if count.group(1) == "0":
+                    grid = frame.locator("#ctl00_MainContent_GridView1").inner_text(
+                        timeout=mi_action_timeout(active_page, 2000))
+                    if (grid.strip() != "No records found for your search criteria"
+                            or time.perf_counter() >= deadline):
+                        return incomplete("Michigan did not return a complete zero-record result.")
+                    result.source_attempts.append(f"Fresh Michigan browser EIN search returned zero records: {variant}")
+                    confirmed_empty = True
+                    break
+                if no_registry_results_seen(results_text):
+                    return incomplete("Michigan returned conflicting results for the submitted EIN.")
+            query_type = "EIN" if confirm_ein else "name"
+            result.source_attempts.append(f"Completed Michigan {query_type} query: {variant}")
             if no_registry_results_seen(results_text):
                 completed_empty_queries.append(variant)
                 progress["completed_empty_name_queries"] = list(completed_empty_queries)
@@ -16093,15 +16121,21 @@ def search_mi_name_fallback(page, org):
                     result.raw_status_text = " | ".join(part for part in [
                         "Status: Registration Pending" if row_pending else "",
                         f"License / Registration Expiration: {format_date(expiration_date)}" if expiration_date else "",
-                        "Matched by organization name after EIN search returned no exact result",
+                        "" if confirm_ein else "Matched by organization name after EIN search returned no exact result",
                     ] if part)
-                    result.source_note = "MI tried EIN search first, then used the public organization-name search result row when the EIN field returned no exact result."
+                    result.source_note = (
+                        "A fresh Michigan browser search returned a matching record for the exact EIN."
+                        if confirm_ein else
+                        "MI tried EIN search first, then used the public organization-name search result row when the EIN field returned no exact result."
+                    )
                     if row_pending:
                         result.source_note += " Michigan states organizations listed with Registration Pending are able to continue to solicit."
                     result.matched_registry_name = clean_registry_name(clicked_name)
                     row_identifier = re.match(r"\s*(\d{3,8})\b", selected_row_text)
                     result.matched_registry_identifier = (row_identifier.group(1) if row_identifier else "")
-                    result.reason_code = "MATCH_NAME_EXACT" if registry_exact_active_tiebreak(clicked_name, safe_targets, "Active") else "MATCH_NAME_SAFE"
+                    result.reason_code = ("MATCH_EIN_EXACT_PENDING" if row_pending else "MATCH_EIN_EXACT") if confirm_ein else (
+                        "MATCH_NAME_EXACT" if registry_exact_active_tiebreak(clicked_name, safe_targets, "Active") else "MATCH_NAME_SAFE"
+                    )
                     result.success = True
                     result.error = ""
                     return result
@@ -16169,10 +16203,13 @@ def search_mi_name_fallback(page, org):
                     fresh_page.close()
                 except Exception:
                     pass
+    if confirm_ein and not confirmed_empty:
+        return incomplete("Michigan returned candidates without a confirmed match in the fresh browser search.")
     result.status = checker.STATUS_NOT_REGISTERED
     result.raw_status_text = "No matching organization record"
-    result.source_note = "Michigan EIN and organization-name searches returned no matching result."
-    result.reason_code = "MI_COMPLETED_EIN_AND_NAME_SEARCH"
+    result.source_note = ("Michigan returned zero records for the exact EIN in the browser retry." if confirm_ein
+                          else "Michigan EIN and organization-name searches returned no matching result.")
+    result.reason_code = "MI_BROWSER_EIN_NO_MATCH" if confirm_ein else "MI_COMPLETED_EIN_AND_NAME_SEARCH"
     result.success = True
     result.error = ""
     return result
@@ -16226,8 +16263,8 @@ def mi_http_completed_ein_empty(response, formatted_ein):
             and text(parsed.grid)=="No records found for your search criteria")
 
 
-def search_mi_http_completion_probe(org, lookup_deadline=None):
-    """Probe Michigan's official EIN form before entering the slower browser frame path."""
+def search_mi_http_completion_probe(org, lookup_deadline=None, *, retry_empty_ein=None):
+    """Probe Michigan's EIN form and confirm an empty result before looking up names."""
     from deployment.search_observation import observed_http_call as _history_http_call
     if curl_requests is None:
         return None
@@ -16328,8 +16365,17 @@ def search_mi_http_completion_probe(org, lookup_deadline=None):
             submitted.raise_for_status()
             if trial_identity() and mi_http_completed_ein_empty(submitted, formatted_ein):
                 result._cc_mi_completed_exact_ein_empty = (org.organization_name, ein_digits)
+                if retry_empty_ein is not None:
+                    retry = retry_empty_ein()
+                    attempts = [f"Initial Michigan EIN search returned zero records: {formatted_ein}",
+                                *retry.source_attempts]
+                    if not retry.success or retry.reason_code != "MI_BROWSER_EIN_NO_MATCH":
+                        retry.source_attempts = attempts
+                        return retry
+                    result.source_attempts.extend(attempts)
+                    result._cc_mi_browser_ein_confirmed_empty = True
             submitted_text = sc_html_to_text(submitted.text or "")
-            if (mi_http_names_enabled(org) and lookup_deadline is not None
+            if (retry_empty_ein is None and mi_http_names_enabled(org) and lookup_deadline is not None
                     and re.search(r"\b0\s+record\(s\)\s+found\b|\bno\s+records?\s+found\b|\bno\s+results?\s+found\b", submitted_text, re.I)):
                 if trial_identity():
                     unmatched=[]
@@ -37408,7 +37454,12 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     org.organization_name, canonical_ein_digits(org.ein)) else {}
                 mi_probe_result = workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34535:34:get',progress.get,locals(), "completed_empty_ein_result")
                 if mi_probe_result is None:
-                    mi_probe_result = search_mi_http_completion_probe(org, lookup_deadline=mi_deadline)
+                    page._cc_mi_lookup_deadline = mi_deadline
+                    mi_probe_result = search_mi_http_completion_probe(
+                        org, lookup_deadline=mi_deadline,
+                        retry_empty_ein=(lambda: search_mi_name_fallback(page, org, confirm_ein=True))
+                        if trial_identity() else None,
+                    )
                     if (mi_probe_result is not None and mi_probe_result.success
                             and getattr(mi_probe_result, "reason_code", "") == "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"
                             and public_status(mi_probe_result) == "Not Registered"):
@@ -37459,8 +37510,14 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     if trial_identity() and completed_unmatched:
                         progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
                         progress["http_completed_unmatched_name_queries"] = list(completed_unmatched)
+                    if getattr(mi_probe_result, "_cc_mi_browser_ein_confirmed_empty", False):
+                        progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
+                        progress["browser_ein_confirmed_empty"] = (
+                            page.url == "https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx")
                     page._cc_mi_search_progress = progress
                     result = search_mi_name_fallback(page, org)
+                    if getattr(mi_probe_result, "_cc_mi_browser_ein_confirmed_empty", False):
+                        result.source_attempts = [*mi_probe_result.source_attempts, *result.source_attempts]
                 if (
                     public_status(result) == "Not Registered"
                     and re.search(
