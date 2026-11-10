@@ -2580,6 +2580,7 @@ def search_ca_master(page, org):
     registrations = getattr(result, "_cc_registration_records", None)
     from deployment.ca_accepted_renewal import reconcile
     reconcile(sys.modules[__name__],org,result,entity,registrations)
+    ca_apply_selected_reporting_status(org, result, entity, registrations)
     from deployment.ca_nonregistration import explicit_absence
     if (result.success is True and result.status.casefold() == checker.STATUS_NOT_REGISTERED.casefold()
             and isinstance(entity, dict)
@@ -10716,6 +10717,10 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
         if selected.get("expiration"):
             result.computed_due_date = selected["expiration"].isoformat()
             result.source_note += f"The displayed license expiration date is {selected['expiration'].isoformat()}. "
+        if (state == "GA" and result.status == "Delinquent" and selected["raw_status"].strip().casefold() == "active"
+                and selected.get("expiration") and selected["expiration"] < date.today()):
+            result.source_note += ("Georgia's Active label and the past expiration are both shown. "
+                                   "The calculated filing status is based on the displayed expiration; verify the discrepancy with the registry. ")
         if result.status == "Pending":
             result.source_note += "The state reports a pending application or renewal. Review state communications for outstanding requirements; the displayed expiration alone does not establish delinquency while this pending status is shown. "
         result.source_note += f"CharityClarity reports {result.status}. The public record does not display an EIN; matching uses the organization name, reviewed alternate names, and available organization-location evidence."
@@ -18976,6 +18981,31 @@ def mn_status_from_fiscal_year(year: int | None, fiscal_year_end: date | None = 
     return status_from_calendar_date(next_report_due)
 
 
+def apply_mn_confirmed_charity_extension(result, detail_text: str, fiscal_year_end: date | None) -> bool:
+    """Apply the AG's published charity extension calendar to the bound detail."""
+    if (not fiscal_year_end
+            or not re.search(r"(?im)^\s*Organization Type[ \t:]*\n?[ \t]*CHARITY[ \t]*$", detail_text)
+            or not re.search(r"(?im)^\s*Status[ \t:]*\n?[ \t]*Active[ \t]*$", detail_text)
+            or not re.search(r"(?im)^\s*Extension[ \t:]*\n?[ \t]*Granted[ \t]*$", detail_text)):
+        return False
+    base = mn_next_filing_due_from_fiscal_year(fiscal_year_end.year, fiscal_year_end)
+    if not base:
+        return False
+    # All charity extension deadlines are the 15th of the month eleven
+    # months after the next fiscal year ends (including December -> November).
+    month_offset = fiscal_year_end.month - 1 + 11
+    due = date(fiscal_year_end.year + 1 + month_offset // 12, month_offset % 12 + 1, 15)
+    result.status = status_from_calendar_date(due)
+    result.reason_code = result.status_reason = "MN_CONFIRMED_CHARITY_EXTENSION"
+    result.computed_due_date = format_date(due)
+    result.raw_status_text = result.raw_status_text.replace(" | Next Filing Due:", " | Base Filing Due:", 1)
+    result.raw_status_text += (f" | Status: Active | Extension: Granted | "
+                               f"Calculated Extended Filing Due: {format_date(due)}")
+    result.source_note = (f"Minnesota shows Active and Extension Granted. The extended filing deadline is "
+                          f"{format_date(due)}, calculated from the Attorney General's calendar for soliciting charities.")
+    return True
+
+
 def apply_mn_fiscal_year_status(result, year: int | None, fiscal_year_end: date | None = None) -> None:
     next_report_due = mn_next_filing_due_from_fiscal_year(year, fiscal_year_end)
     result.status = mn_status_from_fiscal_year(year, fiscal_year_end)
@@ -19123,6 +19153,10 @@ def search_mn(page, org):
             else:
                 result.matched_registry_name = extracted_registry_name
             result.matched_registry_identifier = checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
+            exact_ids = {canonical_ein_digits(value) for value in re.findall(
+                r"FEDERAL\s+ID#?\s*:?\s*(\d{2}-?\d{7})\b", detail_text, re.I)}
+            if len(ein_digits) == 9 and exact_ids == {ein_digits}:
+                apply_mn_confirmed_charity_extension(result, detail_text, fiscal_year_end)
             result.success = True
             return result
         safe_targets = organization_match_target_variants(org.organization_name, org.ein)
@@ -29568,6 +29602,34 @@ def explicit_no_registration_status(result, body: str) -> bool:
     ))
 
 
+def ca_apply_selected_reporting_status(org, result, entity, registrations):
+    """Use the exact selected charity's reporting field, never page history."""
+    ein = canonical_ein_digits(org.ein)
+    if (result.status not in {"Delinquent", checker.STATUS_DELINQUENT} or result.success is not True
+            or getattr(result, "_cc_ca_accepted_renewal", None)
+            or not isinstance(entity, dict) or not isinstance(registrations, list)
+            or len(ein) != 9 or canonical_ein_digits(str(entity.get("fein") or "")) != ein
+            or entity.get("entityStatus") != "Listed" or not result.matched_registry_identifier):
+        return
+    matches = [r for r in registrations if isinstance(r, dict)
+               and str(r.get("registrationNumber") or "") == str(result.matched_registry_identifier)]
+    if len(matches) != 1:
+        return
+    reg = matches[0]
+    expires = parsed_result_date(str(reg.get("currentExpirationDate") or ""))
+    if (reg.get("registrationType") != "Charitable Organization" or reg.get("registrationStatus") != "Registered"
+            or reg.get("complianceStatus") or not expires or expires >= date.today()):
+        return
+    reporting = reg.get("reportingStatus")
+    status = {"Current": "Current", "Due": "Upcoming Filing", "In Review": "Pending"}.get(reporting) if isinstance(reporting, str) else None
+    if not status:
+        return
+    result.status = status
+    result.status_reason = "CA_SELECTED_REGISTERED_REPORTING"
+    result.source_note = (f"California lists this charity registration as Registered and annual reporting as {reporting}. "
+                          "The displayed registration expiration is retained as published; it does not override these registry statuses.")
+
+
 def ca_explicit_primary_registry_status(result) -> str:
     """Return CA main Registry Status when it should trump page-history text."""
     raw_status = re.sub(r"\s+", " ", getattr(result, "raw_status_text", "") or "").strip()
@@ -29589,6 +29651,10 @@ def ca_explicit_primary_registry_status(result) -> str:
 def true_status_from_body(result, body: str) -> str:
     from deployment.ca_accepted_renewal import preserves
     if preserves(result):
+        return result.status
+    if (result.state == "CA" and getattr(result, "status_reason", "") == "CA_SELECTED_REGISTERED_REPORTING"):
+        return result.status
+    if (result.state == "MN" and getattr(result, "status_reason", "") == "MN_CONFIRMED_CHARITY_EXTENSION"):
         return result.status
     from deployment.ca_nonregistration import preserves_selected_record as preserves_ca_nonregistration
     if preserves_ca_nonregistration(result):
@@ -30031,6 +30097,10 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if (result.state, getattr(result, "status_reason", "")) in {
+        ("CA", "CA_SELECTED_REGISTERED_REPORTING"), ("MN", "MN_CONFIRMED_CHARITY_EXTENSION"),
+    }:
+        return result.source_note
     if result.state == "WA" and getattr(result, "reason_code", "") == "WA_CORROBORATED_EIN_CONFLICT_REVIEW":
         difference = re.match(r"Washington EIN conflict: entered \d{9}; registry \d{9}\.", result.raw_status_text or "")
         if difference:
@@ -30286,7 +30356,10 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
             filing = re.search(r"(?:Renewal Registration|Application for Registration)(?:\s*-\s*EZ)?\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})", raw, re.I)
             filed = parsed_result_date(filing.group(1)) if filing else None
             basis = f"the completed renewal filed on {format_date(filed)}" if filed else "the completed registration filing"
-            return (f"Calculated registration expiration: {format_date(calculated)} (certificate expiration not confirmed). "
+            certificate_note = ("the certificate was retrieved, but its printed expiration could not be read automatically"
+                                if "the certificate was retrieved, but its printed expiration could not be read automatically" in note
+                                else "certificate expiration not confirmed")
+            return (f"Calculated registration expiration: {format_date(calculated)} ({certificate_note}). "
                     f"The date is one year after {basis}. {comment_date_conclusion(calculated, status)} "
                     "This calculation concerns registration expiration; a separate Form 990-based filing deadline was not determined.")
         if certificate:
@@ -30355,6 +30428,9 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 f"Maryland's automatic extension runs through {format_date(due)}. {comment_date_conclusion(due, status)}")
     if state == "NH":
         base, effective = nh_effective_report_due_date(result, body)
+        if effective and base == effective and effective < date.today() and status == "Delinquent":
+            return (f"New Hampshire lists Good Standing and a report due date of {format_date(base)}. "
+                    "Delinquent here describes the past filing deadline, not a change to the registry's Good Standing label.")
         if effective and effective != base:
             return f"The state list shows a report due date of {format_date(base)}. The extension used for this check moves that date to {format_date(effective)}. {comment_date_conclusion(effective, status)}"
     if not due and context.get("due_date") and context.get("represented_year"):
@@ -33717,13 +33793,16 @@ def search_ok_precise(page, org, module):
             result.success = True
             return ok_attach_foundation_review(result, org, page)
         if ok_certificate_service_unavailable(certificate_evidence):
+            calculation_note = ("the certificate was retrieved, but its printed expiration could not be read automatically"
+                                if getattr(certificate_evidence, "failure_kind", "") == "unreadable"
+                                else "certificate expiration not confirmed")
             calculated_due = ok_calculated_registration_expiration(
                 latest_filing, certificate_evidence, detail_text, filing_candidates, module)
             if calculated_due:
                 result.status = status_from_calendar_date(calculated_due)
                 result.raw_status_text = f"{latest_filing} | Calculated Registration Expiration: {format_date(calculated_due)}"
                 result.source_note = (
-                    f"Calculated registration expiration: {format_date(calculated_due)} (certificate expiration not confirmed). One calendar year after the "
+                    f"Calculated registration expiration: {format_date(calculated_due)} ({calculation_note}). One calendar year after the "
                     f"completed registration/renewal filing dated {format_date(module.parse_ok_filing_date(latest_filing))}. "
                     "The live registry record safely matched the organization. This is the registration anniversary, "
                     "not a separately determined Form 990-based filing deadline. Confirm time-sensitive decisions directly with the state registry."
@@ -34904,6 +34983,14 @@ def dotted_leading_acronym(name: str) -> str:
     return ".".join(match.group(1)) + ". " + match.group(2)
 
 
+def wv_joined_hyphen_variant(name: str) -> str:
+    """One full legal-name spelling for a literal internal hyphen."""
+    name = canonical_name_punctuation(name)
+    if not re.fullmatch(r"[A-Za-z]+(?:-[A-Za-z]+)?(?: +[A-Za-z]+(?:-[A-Za-z]+)?){3,}", name) or name.count("-") != 1:
+        return ""
+    return name.replace("-", "")
+
+
 def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list[str]:
     """Search suffix-light WV names first while keeping row acceptance strict."""
     name = canonical_name_punctuation(name)
@@ -35047,12 +35134,27 @@ def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list
                     prioritized.pop(removable)
             if len(prioritized) <= len(planned):
                 planned = prioritized
+    joined = wv_joined_hyphen_variant(name)
+    if joined and planned:
+        already = [q for q in planned if q.casefold() != joined.casefold()]
+        if len(already) == len(planned):
+            protected = {canonical_name_punctuation(q).casefold() for q in [name, *known_names_for_ein(ein)]}
+            protected.update(q.casefold() for q in (ascii_name, ascii_name.replace("-", " ")))
+            removable = next((i for i in range(len(already)-1, 0, -1)
+                              if already[i].casefold() not in protected), None)
+            if removable is not None:
+                already.pop(removable)
+        if len(already) < len(planned):
+            planned = [already[0], joined, *already[1:]] if already else [joined]
     return planned
 
 
-def wv_core_search_completed(completed_queries: list[str], planned_queries: list[str], required_queries=None) -> bool:
+def wv_core_search_completed(completed_queries: list[str], planned_queries: list[str], required_queries=None, *, joined_query="") -> bool:
     """WV can decide a clean no-match after core legal-name probes finish."""
     if not completed_queries:
+        return False
+    if joined_query and joined_query in planned_queries and joined_query.casefold() not in {
+            q.strip().casefold() for q in completed_queries}:
         return False
     if planned_queries and "'" in planned_queries[0]:
         # A completed punctuation-stripped probe cannot stand in for this
@@ -35409,9 +35511,15 @@ def search_wv_precise(page, org, *, public_lookup=None):
         spaced_name = case_boundary_name_variant(org.organization_name)
         if spaced_name:
             safe_targets = list(dict.fromkeys([*safe_targets, spaced_name]))
+        joined_name = wv_joined_hyphen_variant(org.organization_name)
+        joined_key = complete_name_identity_key(joined_name) if joined_name else ""
+        def joined_identity(registry_name):
+            return bool(joined_key and complete_name_identity_key(registry_name) == joined_key)
         def safe_identity(registry_name, targets):
             if wv_unreviewed_indefinite_article_conflict(org.organization_name, registry_name, org.ein):
                 return False
+            if joined_identity(registry_name):
+                return True
             if spaced_name:
                 spaced_key = complete_name_identity_key(spaced_name)
                 if complete_name_identity_key(registry_name) == spaced_key:
@@ -35445,9 +35553,10 @@ def search_wv_precise(page, org, *, public_lookup=None):
             required_queries = list(dict.fromkeys([*required_queries, dotted_query]))
         if spaced_name:
             required_queries = list(dict.fromkeys([*required_queries, spaced_name]))
-        # Reviewed identities add real queries; keep a bounded allowance for them
-        # without changing the established small-name-list lookup window.
+        # The joined spelling replaces a generated query; it does not add time.
         deadline = time.perf_counter() + max(WV_LOOKUP_MAX_SECONDS, min(60.0, 5.0 + 6.0 * len(required_queries)))
+        if joined_name and joined_name in planned_queries:
+            required_queries = list(dict.fromkeys([*required_queries, joined_name]))
         deadline = min(deadline, progress.get("deadline", deadline))
         def action_timeout(cap):
             remaining = int((deadline - time.perf_counter()) * 1000)
@@ -35533,7 +35642,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 readable_record_rows += 1
                 if not location_identity_is_safe(registry_name) and not exact_legal_side(registry_name):
                     continue
-                score = target_name_score(registry_name, query_targets)
+                score = target_name_score(registry_name, [joined_name] if joined_identity(registry_name) else query_targets)
                 safe_candidate = score >= 450 and (safe_identity(registry_name, safe_targets) or exact_legal_side(registry_name))
                 if safe_candidate:
                     safe_rows.append((row,registry_id,registry_name,status_text,query_targets))
@@ -35567,7 +35676,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
             result.source_attempts = [
                 f"WV completed {len(completed_queries)} of {len(planned_queries)} bounded name/alias query attempts."
             ]
-            if saw_result_rows and wv_core_search_completed(completed_queries, planned_queries, required_queries):
+            if saw_result_rows and wv_core_search_completed(completed_queries, planned_queries, required_queries, joined_query=joined_name):
                 wv_completed_no_match_result(
                     result,
                     completed_queries,
@@ -35576,7 +35685,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 )
                 result.rejection_reason = "WV returned rows, but the best candidate did not meet the safe-match threshold."
                 return result
-            if wv_core_search_completed(completed_queries, planned_queries, required_queries):
+            if wv_core_search_completed(completed_queries, planned_queries, required_queries, joined_query=joined_name):
                 wv_completed_no_match_result(
                     result,
                     completed_queries,
@@ -35688,7 +35797,13 @@ def search_wv_precise(page, org, *, public_lookup=None):
             result.success = True
             return result
 
-        if len(re.sub(r"[^A-Za-z0-9]", "", matched_name)) < 4:
+        joined_match = joined_identity(registry_name) or joined_identity(matched_name)
+        if joined_match:
+            detail_id = text_between_labels(detail_text, "ID:", ["Initial Registration Date", "Last Registration Date", "Organization Name"])
+            if (not joined_identity(registry_name) or not joined_identity(matched_name)
+                    or (detail_id or "").strip(" :") != registry_id):
+                raise TimeoutError("West Virginia joined-name detail did not confirm the selected record")
+        if joined_match or len(re.sub(r"[^A-Za-z0-9]", "", matched_name)) < 4:
             # An acronym has little standalone identity information. Confirm
             # the same detail's DBA or organization address before classifying.
             dba = text_between_labels(detail_text, "DBA", ["Tax Information", "Restrictions", "Fundraising Counsels"])
@@ -35703,8 +35818,9 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 status_text = text_between_labels(detail_text, "Status", ["Street Address", "County", "DBA", "Tax Information", "Restrictions"]) or row_status
                 expiration_text = text_between_labels(detail_text, "Expiration Date", ["Contact Name", "Status", "Street Address", "County"]) or ""
                 result.status = "Needs Review"
-                result.reason_code = "WV_SHORT_NAME_IDENTITY_UNCONFIRMED"
-                result.source_note = "West Virginia returned a short organization name, but its detail DBA and organization address did not establish a consistent identity. Review the original record and accept or reject its identity."
+                result.reason_code = ("WV_JOINED_NAME_IDENTITY_UNCONFIRMED" if joined_match
+                                      else "WV_SHORT_NAME_IDENTITY_UNCONFIRMED")
+                result.source_note = ("West Virginia returned a joined spelling" if joined_match else "West Virginia returned a short organization name") + ", but its detail did not establish a consistent identity. Review the original record and accept or reject its identity."
                 result.success = False
                 result.address_evidence = address
                 result.matched_registry_name = matched_name

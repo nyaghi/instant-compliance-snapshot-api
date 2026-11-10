@@ -125,9 +125,11 @@ const CCDCSource=(()=>{
    if(Array.from(document.querySelectorAll('[role="progressbar"]')).some(visible))return {waiting:true};
    const tab=one('[role="tab"]',e=>e.innerText.startsWith('Licensing Results'));
    if(!tab)return {waiting:true};
-   if(tab.getAttribute('aria-selected')!=='true')tab.click();return {next:'row'};
+   if(tab.getAttribute('aria-selected')!=='true'){tab.click();return {next:'row'};}
+   // When licensing is already selected, inspect its exact row in this same
+   // source observation instead of scheduling another browser command.
   }
-  if(phase==='row'){
+  if(phase==='row'||phase==='licensing'){
    if(Array.from(document.querySelectorAll('[role="progressbar"]')).some(visible))return {waiting:true};
    if(!Array.from(document.querySelectorAll('.mat-column-licenseNumber')).some(visible))return {waiting:true};
    const clean=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');

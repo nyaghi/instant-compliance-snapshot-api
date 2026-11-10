@@ -1,5 +1,5 @@
 {
-  "build": "quiet-alerts",
+  "build": "gate40-staging-20261110",
   "version": "0.6.135",
-  "scope": "Opt-in scheduled checks use inactive Chrome tabs without focus recovery."
+  "scope": "Gate 40 collector placement and source evidence. Existing passive Illinois Alerts verification retained."
 }

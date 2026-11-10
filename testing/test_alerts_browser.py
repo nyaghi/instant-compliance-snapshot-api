@@ -71,7 +71,7 @@ class AlertsBrowser(unittest.TestCase):
                     model['changes']=[
                         {'id':3,'name':'Example & Charity','ein':'012345678','state':'CO','previous':'Upcoming Filing',
                          'status':'Current','direction':'favorable','checked':1794230000,'seen':None,
-                         'has_evidence':False,'automatic':True,'match_name':'Registry Name','match_identifier':'123'},
+                         'has_evidence':True,'automatic':True,'match_name':'Registry Name','match_identifier':'123'},
                         {'id':2,'name':'Example & Charity','ein':'012345678','state':'NY','previous':'Current',
                          'status':'Delinquent','direction':'adverse','checked':1794230000,'seen':None,'has_evidence':True},
                     ]
@@ -86,7 +86,7 @@ class AlertsBrowser(unittest.TestCase):
                     self.assertEqual(page.locator('.alert-change-favorable').evaluate(
                         'el => getComputedStyle(el).color'),'rgb(23, 100, 58)')
                     self.assertEqual(page.get_by_text('Automatically accepted: Registry Name (123)',exact=True).count(),2)
-                    self.assertEqual(page.get_by_role('link',name='View evidence',exact=True).count(),1)
+                    self.assertEqual(page.locator('#changes').get_by_role('link',name='View evidence',exact=True).count(),0)
                     page.get_by_role('button',name='Mark Example & Charity NY change seen').click()
                     page.get_by_role('link',name='CharityClarity Alerts, 1 new').wait_for()
                     self.assertEqual(page.get_by_text('Seen',exact=True).count(),1)
@@ -99,7 +99,7 @@ class AlertsBrowser(unittest.TestCase):
                         self.assertEqual(len(body.findall('.//{*}row')),3)
                         self.assertIn('Example & Charity',''.join(body.itertext()))
                         self.assertEqual({r.get('Target') for r in relations},
-                                         {origin+'/api/alerts/evidence/2'})
+                                         {origin+'/api/alerts/evidence/2',origin+'/api/alerts/evidence/3'})
                     self.assertEqual(model['unseen'],1)
                     page.set_viewport_size({'width':390,'height':844})
                     page.goto(origin+'/alerts/?example=1')

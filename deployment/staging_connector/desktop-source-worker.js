@@ -45,11 +45,11 @@
     function limit(p,label,late) {
       const begin=Date.now();let timer;
       const operation=Promise.resolve(p).then(v=>{if(closed||signal?.aborted){late?.(v);throw Error('closed');}return v;});
-      return Promise.race([cancelled,operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout:'+label)),Math.max(1,Math.min(label==='create'?end-Date.now()-6000:label==='Page.captureScreenshot'?end-Date.now()-3000:label==='Page.enable'?Math.min(6000,end-Date.now()-10000):3000,end-Date.now())));})])
+      return Promise.race([cancelled,operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout:'+label)),Math.max(1,Math.min(label==='create'?end-Date.now()-6000:label==='Page.captureScreenshot'?end-Date.now()-3000:label==='Page.enable'?Math.min(6000,end-Date.now()-10000):label==='initial_metadata'?Math.min(5000,end-Date.now()-4000):3000,end-Date.now())));})])
         .finally(()=>{clearTimeout(timer);steps.push({phase:label,seconds:(Date.now()-begin)/1000});});
     }
-    const command=(method,params={})=>{check();return limit(chrome.debugger.sendCommand({tabId:tab.id},method,params),method);};
-    const metadata=async()=>{
+    const command=(method,params={},label=method)=>{check();return limit(chrome.debugger.sendCommand({tabId:tab.id},method,params),label);};
+    const metadata=async(initial=false)=>{
       const r=await command('Runtime.evaluate',{expression:`JSON.stringify((()=>{
         const table=document.getElementById('ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults');
         const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none';
@@ -58,7 +58,7 @@
         return {url:location.href,ready:document.readyState,viewport_width:innerWidth,text:document.body?document.body.innerText:'',source_fields:table?{
           profession:profession?.innerText?.replace(/^Profession\\s*:\\s*/, '').trim(),name:name?.innerText?.replace(/^Firm Name\\s*:\\s*/, '').trim(),
           visible:visible(table)&&visible(profession)&&visible(name),rows:Array.from(table.rows).map(r=>Array.from(r.cells).map(c=>c.innerText.trim()))}:null};
-      })())`,returnByValue:true});
+      })())`,returnByValue:true},initial?'initial_metadata':'Runtime.evaluate');
       return JSON.parse(r.result?.value||'null');
     };
     try {
@@ -79,7 +79,7 @@
       await command('Page.enable');
       let m=null;
       while(Date.now()<end-4000) {
-        try {m=await metadata();}
+        try {m=await metadata(d.operation==='detail');}
         catch(error){
           if(!/Cannot find (?:default execution )?context|Execution context was destroyed|Inspected target navigated/i.test(String(error.message)))throw error;
           await new Promise(resolve=>setTimeout(resolve,200));continue;

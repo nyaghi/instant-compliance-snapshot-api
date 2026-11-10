@@ -171,7 +171,7 @@
       // Capture the viewport before collector work can make the page busy.
       const display = P.TRIAL_ORIGIN===ORIGIN && m.action==='acquire'
         ? {viewportWidth:window.innerWidth,outerWidth:window.outerWidth,
-           outerHeight:window.outerHeight,
+           outerHeight:window.outerHeight,screenX:window.screenX,screenY:window.screenY,
            chromeInsetTop:Math.max(0,Math.min(200,window.outerHeight-window.innerHeight))}
         : null;
       const request = { action: m.action, id: m.id, ...(m.query ? { query: m.query } : {}),

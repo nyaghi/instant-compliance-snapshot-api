@@ -187,11 +187,20 @@ async function registryTrialWindowOptions(job, origin) {
     }));
     // Acquire records the same viewport before concurrent registry work can
     // delay the read-only response. Reuse only for the same outer window size.
-    if(!Number.isFinite(viewportWidth) && job.trialDisplay?.outerWidth===bounds.width
-        && job.trialDisplay?.outerHeight===bounds.height) {
-      viewportWidth=job.trialDisplay.viewportWidth;
-      chromeInsetTop=job.trialDisplay.chromeInsetTop;
-      displaySource='acquire';
+    const cached=job.trialDisplay;
+    const exactSize=cached?.outerWidth===bounds.width && cached?.outerHeight===bounds.height;
+    // Windows reports the invisible resize border through chrome.windows,
+    // but the page can report the visible maximized rectangle. Require the
+    // matching origin and both dimensions before accepting that rectangle.
+    const maximizedFrame=bounds.state==='maximized' && boundsSource==='origin'
+      && cached?.outerWidth===bounds.width-16 && cached?.outerHeight===bounds.height-16
+      && cached?.screenX===bounds.left+8 && cached?.screenY===bounds.top+8;
+    if(!Number.isFinite(viewportWidth) && (exactSize || maximizedFrame)) {
+      viewportWidth=cached.viewportWidth;
+      chromeInsetTop=cached.chromeInsetTop;
+      displaySource=maximizedFrame?'acquire-maximized-frame':'acquire';
+      if(maximizedFrame)bounds={...bounds,left:cached.screenX,top:cached.screenY,
+        width:cached.outerWidth,height:cached.outerHeight};
     }
     // The rail is deliberately hidden below 1600 CSS pixels. At that size a
     // popup cannot fit beside the app; retain the existing coordinated-window
@@ -1048,7 +1057,6 @@ async function registryIllinoisOwnedVisibility(job) {
   }
 }
 async function registryIllinoisVerification(job, collect) {
-  if(registryQuietAlerts(job))return {ok:false,reason:"NY_CONNECTOR_IL_VERIFICATION_PENDING"};
   // Preserve the verification document. Reloading here resets Illinois's
   // normal challenge instead of recovering it. Only activate our owned tab;
   // the state's own code must enable Search before collection can proceed.
@@ -1059,6 +1067,9 @@ async function registryIllinoisVerification(job, collect) {
   const activeTrialCollector=P.TRIAL_ORIGIN && new URL(origin.url).origin===P.TRIAL_ORIGIN && tab.active;
   if (tab.url !== registryStart("IL") || (tab.windowId !== origin.windowId && !activeTrialCollector))
     throw new Error("NY_CONNECTOR_INCOMPLETE");
+  // Let an owned Alerts document finish passive verification without taking focus.
+  if(registryQuietAlerts(job))
+    return await wfAwait(job,"registry-worker.js:registryIllinoisVerification:alerts-passive",()=>collect(45000));
   const previous = (await wfAwait(job,"registry-worker.js:registryIllinoisVerification:916:20:await",()=>(chrome.tabs.query({active:true,windowId:tab.windowId}))))[0];
   diagnostic("il-verification",job,"same-document visibility recovery");
   try {

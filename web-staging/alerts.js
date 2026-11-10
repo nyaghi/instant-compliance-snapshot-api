@@ -105,7 +105,6 @@
         for(const x of rows){
           const row=el('div',null,'alert-row');
           row.append(el('strong',x.state),el('span',x.previous+' → '+x.status),el('span',time(x.checked),'muted'));
-          if(!demo && x.has_evidence){const link=el('a','View evidence');link.href='/api/alerts/evidence/'+x.id;link.target='_blank';link.rel='noopener';row.append(link);}
           if(x.corrected){
             row.append(el('span','Match corrected','muted'));
           }else if(x.automatic){

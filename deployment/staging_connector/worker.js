@@ -717,7 +717,16 @@ async function performSearch(job, query, id) {
     &&Array.isArray(msRows)&&msRows.length===2&&msRows[0].name===msRows[1].name
     &&msRows[0].identifier===msRows[1].identifier&&msRows[0].raw_status===msRows[1].raw_status
     &&/^(?:Current\s*[-\u2013\u2014]\s*)?Exempt(?:ed)?$/i.test(msRows[0].raw_status);
-  const selectedDetailOnly=P.TRIAL_ORIGIN && (
+  // A complete one-row TN search with a credential will get its own detail
+  // command. Do not attach a debugger to the intermediate grid as well.
+  const tnSingleDetail=job.registryState==='TN'&&query.operation==='search'
+    &&response.ok===true&&response.evidence?.complete===true
+    &&response.evidence.verification_pending!==true&&response.evidence.total===1
+    &&P.sameQuery(response.evidence.query,query)&&Array.isArray(response.evidence.rows)
+    &&response.evidence.rows.length===1
+    &&typeof response.evidence.rows[0].identifier==='string'
+    &&/^CO[0-9]+$/.test(response.evidence.rows[0].identifier);
+  const selectedDetailOnly=P.TRIAL_ORIGIN && (tnSingleDetail ||
     (job.registryState==='IL'&&!Object.hasOwn(query,'identifier')) ||
     (job.registryState==='NY'&&!Object.hasOwn(query,'orgID')) ||
     (job.registryState==='MS'&&query.operation==='search'&&!msDuplicateExemptGrid));
