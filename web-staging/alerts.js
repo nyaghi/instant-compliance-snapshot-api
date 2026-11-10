@@ -82,6 +82,11 @@
     for(const values of rows){const row=el('tr');for(const v of values)row.append(el('td',v));b.append(row);}
     t.append(h,b);wrap.append(t);return wrap;
   }
+  function matchLabel(name, identifier) {
+    const sourceId = identifier && !identifier.startsWith('ar-name:');
+    return 'Automatically accepted' + (name ? ': ' + name : '') + (sourceId ? ' (' + identifier + ')' : '');
+  }
+
   function render() {
     $('account-view').hidden=false;
     $('example-label').hidden=!demo;
@@ -92,7 +97,7 @@
     for(const dir of Object.keys(labels)){
       const group=model.changes.filter(x=>x.direction===dir);
       if(!group.length)continue;
-      output.append(el('h3',labels[dir]));
+      output.append(el('h3',labels[dir],'alert-change-'+dir));
       const byOrg=new Map();
       for(const x of group){if(!byOrg.has(x.ein))byOrg.set(x.ein,[]);byOrg.get(x.ein).push(x);}
       for(const rows of byOrg.values()){
@@ -104,8 +109,7 @@
           if(x.corrected){
             row.append(el('span','Match corrected','muted'));
           }else if(x.automatic){
-            row.append(el('span',x.match_name && x.match_identifier
-              ? 'Automatically accepted: '+x.match_name+' ('+x.match_identifier+')' : 'Automatically accepted','muted'));
+            row.append(el('span',matchLabel(x.match_name, x.match_identifier),'muted'));
           }
           if(!x.seen && !x.corrected){
             row.append(el('span','New','alert-new'));
@@ -139,7 +143,7 @@
       const row=el('div',null,'alert-row');
       const org=model.organizations.find(x=>x.ein===match.ein);
       row.append(el('strong',match.state),el('span',org?.name || ein(match.ein)),
-        el('span','Automatically accepted: '+match.name+' ('+match.identifier+')','muted'),el('span',match.status || 'Status not confirmed'));
+        el('span',matchLabel(match.name, match.identifier),'muted'),el('span',match.status || 'Status not confirmed'));
       if(match.has_evidence){
         const evidence=el('a','View evidence');
         evidence.href='/api/alerts/match-evidence/'+match.ein+'/'+match.state;
@@ -181,7 +185,7 @@
       setting.enabled?'Automatic checks use background tabs while this Chrome profile is open.':
       'Enable automatic checks on this computer.';
     if(!ready)return;
-    background.textContent=setting.enabled?'Stop checks in this browser':'Run checks in this browser';
+    background.textContent=setting.enabled?'Pause automatic checks in this browser':'Enable automatic checks in this browser';
     background.onclick=async()=>{
       background.disabled=true;
       try{

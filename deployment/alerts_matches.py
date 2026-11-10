@@ -1,7 +1,20 @@
 """Conservative automatic confirmation and reversible Alerts match decisions."""
+from hashlib import sha256
 import re
+import unicodedata
 
 from psycopg.types.json import Jsonb
+
+
+def match_identifier(state, identifier, name):
+    """Return a stable correction key for a named, unnumbered Arkansas row."""
+    if isinstance(identifier, str) and identifier.strip():
+        return identifier
+    if state == 'AR' and isinstance(name, str):
+        normalized_name = ' '.join(unicodedata.normalize('NFKC', name).casefold().split())
+        if normalized_name:
+            return 'ar-name:' + sha256(normalized_name.encode()).hexdigest()
+    return None
 
 
 def auto_confirm(alerts, c, org, state, workflow, result):
@@ -12,7 +25,9 @@ def auto_confirm(alerts, c, org, state, workflow, result):
     key=(org['account'],org['ein'],state)
     blocked={r['identifier'] for r in c.execute(
         'SELECT identifier FROM cc_alert_rejected_matches WHERE account=%s AND ein=%s AND state=%s',key).fetchall()}
-    if result.get('matched_registry_identifier') and result['matched_registry_identifier'] in blocked:
+    selected_key = match_identifier(state, result.get('matched_registry_identifier'),
+                                    result.get('matched_registry_name'))
+    if selected_key in blocked:
         return {**result,'confirmation_required':True}, None
     device='alerts-'+workflow
     review=result.get('identity_review')
@@ -25,7 +40,6 @@ def auto_confirm(alerts, c, org, state, workflow, result):
         # without creating a review card (e.g. NC's name-only selection).
         from deployment.alerts import STATUS, SYNONYMS
         status=result.get('status')
-        identifier=result.get('matched_registry_identifier')
         name=result.get('matched_registry_name')
         if (result.get('success') is True and result.get('identity_anchor')=='POSSIBLE_NAME'
                 and not result.get('confirmation_required') and not result.get('_worker_identity_review')
@@ -34,9 +48,9 @@ def auto_confirm(alerts, c, org, state, workflow, result):
                 and str(result.get('ein','')).replace('-','')==org['ein']
                 and SYNONYMS.get(status,status) in STATUS
                 and status not in {'Not Registered','Not Registered / Non-Compliant'}
-                and isinstance(identifier,str) and identifier and identifier not in blocked
+                and selected_key
                 and isinstance(name,str) and name.strip()):
-            return {**result,'identity_anchor':'user_reviewed'}, {'identifier':identifier,'name':name}
+            return {**result,'identity_anchor':'user_reviewed'}, {'identifier':selected_key,'name':name}
         return result,None
     try:
         signed=master.identity_review_unpack(review['token'],EMAIL,device)
@@ -47,11 +61,13 @@ def auto_confirm(alerts, c, org, state, workflow, result):
         records=signed['records']
         # Match the presentation order of the signed review cards. A prior
         # user rejection is sticky; the next eligible card can be selected.
-        row=next((r for r in records if r.get('reviewable') and r.get('identifier')
-                  and r['identifier'] not in blocked),None)
-        if not row:
+        for row in records:
+            identifier = row.get('identifier') or ''
+            selected_key = match_identifier(state, identifier, row.get('name'))
+            if row.get('reviewable') and selected_key and selected_key not in blocked:
+                break
+        else:
             return result,None
-        identifier=row['identifier']
         token=review['token']
         if len(records)>1 and not signed.get('exclusive'):
             # Only the unattended decision selects one record here. Keep
@@ -61,14 +77,18 @@ def auto_confirm(alerts, c, org, state, workflow, result):
             'action':'accept','state':state,'ein':base['ein']},EMAIL,device)
         if not isinstance(resolved,dict):
             return result,None
-        chosen=resolved.get('matched_registry_identifier')
+        chosen=resolved.get('matched_registry_identifier') or ''
         accepted=any(d.get('candidate_id')==row['id'] and d.get('decision')=='accept'
                      for d in resolved.get('identity_review_history',[]))
-        if chosen!=identifier and (chosen or not accepted or resolved.get('success') is True):
+        if identifier:
+            if chosen!=identifier and (chosen or not accepted or resolved.get('success') is True):
+                return result,None
+        elif (chosen or not accepted or (resolved.get('success') is True and
+                match_identifier(state, '', resolved.get('matched_registry_name')) != selected_key)):
             return result,None
         clean={k:v for k,v in resolved.items() if k not in ('identity_review','_worker_identity_review')}
         clean.update(confirmation_required=False,checked_at_epoch=result.get('checked_at_epoch'))
-        return clean,{'identifier':identifier,'name':row['name']}
+        return clean,{'identifier':selected_key,'name':row['name']}
     except (TypeError,ValueError,KeyError):
         return result,None
 

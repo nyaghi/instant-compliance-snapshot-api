@@ -116,7 +116,15 @@ def observation(job, ein, submitted, finished, version):
             or result.get('identity_anchor') == 'POSSIBLE_NAME'):
         return checked, None, None, 'Identity or source needs confirmation'
     if (result.get('success') is not True or result.get('error') or status not in STATUS):
-        return checked, None, None, 'Registry unavailable or result unconfirmed'
+        failure = 'Registry unavailable or result unconfirmed'
+        if job['state'] in {'NC','TN'} and result.get('failure_code'):
+            failure += ' (' + result['failure_code']
+            if 'completed_queries' in result:
+                failure += f", completed queries: {result['completed_queries']}"
+            if result.get('pending_operation'):
+                failure += ', pending: ' + result['pending_operation']
+            failure += ')'
+        return checked, None, None, failure
     snapshot = str(result.get('evidence_url') or '')
     history = str(result.get('search_history_url') or '')
     if status in {'Not Registered', 'Not Registered / Non-Compliant'}:
@@ -166,7 +174,7 @@ class Alerts:
             raise ValueError('The check does not contain the enrolled state set.')
         c.execute('SELECT ein FROM cc_alert_orgs WHERE account=%s AND ein=%s FOR UPDATE',
                   (org['account'], org['ein']))
-        from deployment.alerts_matches import auto_confirm, record
+        from deployment.alerts_matches import auto_confirm, match_identifier, record
         for state, job in sorted(by_state.items()):
             result, match = auto_confirm(self,c,org,state,run['id'],job.get('result'))
             if result is not job.get('result'):
@@ -187,7 +195,8 @@ class Alerts:
                 if match:
                     record(c,org_key,match,run['id'],checked,None)
                 continue
-            identifier = (result or {}).get('matched_registry_identifier')
+            identifier = match['identifier'] if match else match_identifier(
+                state, (result or {}).get('matched_registry_identifier'), (result or {}).get('matched_registry_name'))
             prior_auto = None
             if self.master is not None and identifier and previous:
                 prior_auto = c.execute('SELECT name,previous FROM cc_alert_auto_matches '

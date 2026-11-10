@@ -157,6 +157,18 @@ def retain(alerts, lease_row, state, result):
         if not row:
             return
         candidate={key:result[key] for key in fields if key in result}
+        diagnostic = result.get('lab_diagnostic')
+        if state in {'NC','TN'} and isinstance(diagnostic,dict):
+            code = diagnostic.get('code')
+            if isinstance(code,str) and re.fullmatch(r'[A-Z0-9_]{1,100}',code):
+                candidate['failure_code'] = code
+                completed = diagnostic.get('completed_count')
+                if type(completed) is int and 0 <= completed <= 100:
+                    candidate['completed_queries'] = completed
+                pending = diagnostic.get('pending_operation')
+                if pending in ('search','detail','filings'):
+                    candidate['pending_operation'] = pending
+
         candidate['checked_at_epoch']=now
         prior=row['results'].get(state)
         # A follow-up snapshot may complete Alabama's initial result. A failed

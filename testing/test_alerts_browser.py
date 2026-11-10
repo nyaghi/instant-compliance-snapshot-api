@@ -81,6 +81,10 @@ class AlertsBrowser(unittest.TestCase):
                     page.reload()
                     page.get_by_role('link',name='CharityClarity Alerts, 2 new').wait_for()
                     self.assertEqual(page.locator('#changes h3').all_text_contents(),['Needs attention','Favorable changes'])
+                    self.assertEqual(page.locator('.alert-change-adverse').evaluate(
+                        'el => getComputedStyle(el).color'),'rgb(165, 34, 34)')
+                    self.assertEqual(page.locator('.alert-change-favorable').evaluate(
+                        'el => getComputedStyle(el).color'),'rgb(23, 100, 58)')
                     self.assertEqual(page.get_by_text('Automatically accepted: Registry Name (123)',exact=True).count(),2)
                     self.assertEqual(page.get_by_role('link',name='View evidence',exact=True).count(),1)
                     page.get_by_role('button',name='Mark Example & Charity NY change seen').click()

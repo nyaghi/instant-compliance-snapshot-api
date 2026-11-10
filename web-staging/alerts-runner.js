@@ -23,11 +23,23 @@
       if(!job.lease)break;
       status.textContent='Checking '+job.name;
       try {
+        const checkDeadline = Math.min(deadline, Date.now() + 310000);
         const signal=AbortSignal.timeout(310000);
-        await Promise.allSettled(job.states.map(state=>window.CCNYConnector.lookup({
-          state,organization_name:job.name,ein:job.ein,alternate_names:job.aliases,
-          alertLease:job.lease,signal
-        })));
+        await Promise.allSettled(job.states.map(async state => {
+          const input = {
+            state, organization_name:job.name, ein:job.ein, alternate_names:job.aliases,
+            alertLease:job.lease, signal
+          };
+          const result = await window.CCNYConnector.lookup(input);
+          const diagnostic = result?.lab_diagnostic;
+          if (state === 'TN' && result?.success === false
+              && ['NY_CONNECTOR_TN_VERIFICATION_PENDING', 'NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'].includes(diagnostic?.code)
+              && diagnostic.completed_count === 0 && diagnostic.pending_operation === 'search'
+              && checkDeadline - Date.now() >= 60000 && !signal.aborted) {
+            await pause(3000);
+            if (!signal.aborted) await window.CCNYConnector.lookup(input);
+          }
+        }));
       } finally {
         await post('finish',{lease:job.lease});
       }

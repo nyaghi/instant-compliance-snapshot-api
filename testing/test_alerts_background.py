@@ -138,6 +138,40 @@ class AlertsBackgroundTests(TestCase):
                                matched_registry_name='YWCA of the U.S.A.')
         self.assertEqual(conflicting['unseen'],0)
 
+    def test_unnumbered_arkansas_match_is_accepted_and_correction_survives_repeat(self):
+        self.a.states=frozenset(('AR',))
+        name="Sexually Abused Children's Relief Endeavor -Sacred"
+        record={'base':{'state':'AR','ein':EIN},'records':[
+            {'id':'sacred','identifier':'','name':name,'reviewable':True}]}
+        def resolve(payload, *_):
+            self.assertEqual(payload['candidate_id'],'sacred')
+            return {**run('resolved',NOW,'Current')['jobs'][0]['result'], 'state':'AR',
+                    'matched_registry_identifier':'','matched_registry_name':name,
+                    'identity_review_history':[{'candidate_id':'sacred','decision':'accept'}]}
+        self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,
+            identity_review_unpack=lambda *a:record, resolve_identity_review=resolve)
+        def check(label, day, status, **fields):
+            workflow=run(label,NOW+day*86400,status,**fields)
+            workflow['jobs'][0].update(state='AR')
+            workflow['jobs'][0]['result']['state']='AR'
+            self.a.clock=NOW+day*86400+5
+            with self.a.transaction():
+                self.a.apply(self.c,self.org,workflow)
+            return self.a.dashboard(self.c,ACCOUNT,2**63-1)
+        check('baseline',0,'Delinquent')
+        first=check('review',1,'Needs Review',identity_review={'token':'signed'})
+        self.assertEqual(first['matches'][0]['status'],'Current')
+        identifier=first['matches'][0]['identifier']
+        selected=check('selected',2,'Current',identity_anchor='POSSIBLE_NAME',
+                       matched_registry_identifier='',matched_registry_name=name.upper())
+        self.assertEqual(selected['matches'][0]['identifier'],identifier)
+        self.assertTrue(correct(self.a,self.c,ACCOUNT,
+            {'ein':EIN,'state':'AR','workflow':'selected','identifier':identifier}))
+        replay=check('replay',3,'Needs Review',identity_review={'token':'signed'})
+        self.assertEqual(replay['matches'],[])
+        self.assertEqual(replay['unseen'],0)
+        self.assertEqual(self.c.execute('SELECT status FROM cc_alert_confirmed').fetchone()['status'],'Delinquent')
+
     def test_conflicting_candidate_stays_unconfirmed(self):
         self.a.master=SimpleNamespace(canonical_ein_digits=lambda s:s,
             identity_review_unpack=lambda *a:{'base':{'state':'CO','ein':EIN},

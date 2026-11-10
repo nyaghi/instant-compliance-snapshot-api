@@ -7323,6 +7323,8 @@ def nc_charity_record_evidence(fields):
         status = status_from_calendar_date(effective_due) if effective_due else "Current"
     if kind == "CSL Exempt Organization" and raw.casefold() == "csl exempt":
         status = "Exempt"
+    if kind == "CSL Exempt Organization" and raw.casefold() == "denied" and re.fullmatch(r"EX\d+", identifier):
+        status = "Delinquent"
     return dict(name=name, identifier=identifier, ein="", aliases=aliases, raw_status=raw, status=status,
                 expiration=effective_due, base_expiration=expiration, extension_end=extension,
                 initial=None, renewal=None, street="", location="", url=fields["profile_url"],
@@ -9232,7 +9234,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
                           'IMAGE_DIMENSIONS', 'READER_BUSY', 'IMAGE_BLANK',
                           'READER_DEADLINE', 'READS_UNCERTAIN', 'READER_EXCEPTION'}:
             data['lab_diagnostic']['verification_reader_stage'] = diagnostic
-    if state in {"NM", "MS", "NC"} or state == "NV" and trial_identity():
+    if state in {"NM", "MS", "NC", "TN"} or state == "NV" and trial_identity():
         pending = (record.get("pending") or {}).get("query") or {}
         data["lab_diagnostic"] = {
             "code": diagnostic or reason or "INCOMPLETE_EVIDENCE",
@@ -10709,12 +10711,12 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
         if result.status == "Pending":
             result.source_note += "The state reports a pending application or renewal. Review state communications for outstanding requirements; the displayed expiration alone does not establish delinquency while this pending status is shown. "
         result.source_note += f"CharityClarity reports {result.status}. The public record does not display an EIN; matching uses the organization name, reviewed alternate names, and available organization-location evidence."
-        if (state == "NC" and result.status == "Unable to Confirm"
-                and selected.get("raw_status") == "Denied"
+        if (state == "NC" and result.status == "Delinquent"
+                and selected.get("license_category") == "CSL Exempt Organization"
+                and selected.get("raw_status", "").casefold() == "denied"
                 and re.fullmatch(r"EX\d+", str(selected.get("identifier", "")))):
-            result.source_note += (" North Carolina lists this exemption record as Denied. "
-                "The available record does not establish the organization's current registration standing. "
-                "Review the captured state record or contact North Carolina to resolve this.")
+            result.source_note += (" North Carolina denied the exemption application. "
+                "CharityClarity treats that denial as Delinquent for tracking purposes.")
         address = selected.get("address_evidence", {})
         if selected.get("_optional_identity_review"):
             result.source_note += " The full name matches, but Georgia supplies no usable organization address to corroborate identity. Review the record and use Accept or Reject match if you can confirm its identity."
@@ -12254,8 +12256,15 @@ def sc_related_entity_requires_ein(original: str, candidate: str, ein: str = "")
     # Retrieval reductions are not additional reviewed identities. Preserve full
     # entered/reviewed names and explicit DBA/AKA segments, including punctuation,
     # leading-article and legal-form normalization already supported elsewhere.
-    explicit = [original, *known_names_for_ein(ein)]
+    reviewed = known_names_for_ein(ein)
+    explicit = [original, *reviewed]
     targets = explicit + [alias for name in explicit for alias in explicit_name_alias_segments(name)]
+    suffix = re.fullmatch(r"(.+?)\s*\(([^()]+)\)\s*", candidate)
+    if suffix and normalized_match_name(suffix[1]) == normalized_match_name(original):
+        alias_key = complete_name_identity_key(suffix[2])
+        if alias_key and not (set(alias_key.split()) & markers) and any(
+                alias_key == complete_name_identity_key(alias) for alias in reviewed):
+            return False
     return bool((set(normalized_match_name(candidate).split()) & markers)
                 - set(normalized_match_name(original).split())) or (
         score_candidate(original, ein, {"name": candidate})["decision"] != "accepted"
@@ -30766,7 +30775,7 @@ def search_ky_strict_snapshot(org):
     tied_records = []
     near_rows = []
     abbreviated_dba_rows = set()
-    foundation_rows = set()
+    foundation_rows = []
     from deployment.search_observation import dataset_scope as _history_dataset_scope
     _history_ky_records = load_ky_snapshot_records()
     with _history_dataset_scope(targets,
@@ -30788,13 +30797,13 @@ def search_ky_strict_snapshot(org):
             abbreviated_dba_gap = (org.organization_name == original_name
                                    and ky_abbreviated_dba_review_candidate(org, registry_name))
             foundation_gap = review_prefilter and distinct_foundation_name_scope(original_name, registry_name)
-            if (one_letter_gap or abbreviated_dba_gap or foundation_gap) and not user_confirmed_row:
+            if foundation_gap:
+                foundation_rows.append((registry_id, registry_name))
+                continue
+            if (one_letter_gap or abbreviated_dba_gap) and not user_confirmed_row:
                 near_rows.append((registry_id, registry_name, filed_year, record_text))
                 if abbreviated_dba_gap:
                     abbreviated_dba_rows.add(registry_id)
-                if foundation_gap:
-                    foundation_rows.add(registry_id)
-                    continue
             names = [registry_name] if user_confirmed_row else ky_registry_name_variants(registry_name)
             # Some legal-name cells contain an explicit DBA marker themselves.
             # Keep both stated identities; every segment still needs the guard below.
@@ -30848,11 +30857,6 @@ def search_ky_strict_snapshot(org):
                         "and an abbreviated DBA matching the entered brand prefix. The source row has no EIN; "
                         "these clues do not confirm identity. Review the record and select Accept or Reject. "
                         "CharityClarity will calculate standing from the same source filing row only after acceptance.")
-                if foundation_rows:
-                    result.status_reason = "KY_FOUNDATION_SCOPE_IDENTITY_REVIEW"
-                    result.raw_status_text = "Kentucky returned a related Foundation or parent name."
-                    result.source_note = ("Kentucky's list does not include an EIN for this record. "
-                        "Review the filing row and select Accept or Reject before using its status.")
                 result._cc_identity_review = {
                     "records": [{"name": name, "identifier": identifier, "ein": "",
                                  "url": downloadable_data_info("KY").get("source_url", ""),
@@ -30862,6 +30866,15 @@ def search_ky_strict_snapshot(org):
                                 for identifier, name, year, _ in near_rows[:10]],
                     "search_complete": not foundation_rows and len(near_rows) <= 10, "exclusive": True, "freshness": "",
                 }
+            elif foundation_rows:
+                related_id, related_name = foundation_rows[0]
+                result.status = "Unable to Confirm"
+                result.success = False
+                result.status_reason = "KY_RELATED_FOUNDATION_FOUND"
+                result.raw_status_text = "Related foundation found"
+                result.source_url = downloadable_data_info("KY").get("source_url", "")
+                result.source_note = (f"Kentucky lists {related_name} (record {related_id}) as a related entity. "
+                                      "That filing does not establish the requested organization's registration.")
             return result
         if any(index > 0 for _, index in tied_records) and len({identifier for identifier, _ in tied_records}) > 1:
             result.status = "Needs Review"
@@ -38696,6 +38709,16 @@ def resolve_identity_review(payload, email, device):
     if not selected or len(record["history"]) >= 100:
         raise ValueError("This candidate is unavailable for review. Rerun the state check.")
     action = payload["action"]
+    if (action == "accept" and base["state"] == "KY"
+            and distinct_foundation_name_scope(base["organization_name"], selected["name"])):
+        # Older result tabs may still carry a signed foundation choice.
+        data = {k: v for k, v in base.items() if k not in {"identity_review", "_worker_identity_review"}}
+        data.update(status="Unable to Confirm", success=False, confirmation_required=False,
+                    matched_registry_name="", matched_registry_identifier="",
+                    source_note=f"Kentucky lists {selected['name']} as a related entity. "
+                                "That filing does not establish the requested organization's registration.")
+        data["comments"] = data["source_note"]
+        return confirmation_result_for_public(data)
     decision = {"candidate_id": selected["id"], "identifier": selected["identifier"], "decision": action,
                 "reviewed_by": email, "reviewed_at": int(time.time())}
     record["owner"] = [email, device]
