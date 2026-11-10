@@ -351,7 +351,9 @@ class Alerts:
                              'ORDER BY h.checked DESC LIMIT 200',(account,self.now(c)-HISTORY_DAYS*DAY)).fetchall()
         matches=c.execute("SELECT m.ein,m.state,m.identifier,m.workflow,m.name,m.checked,coalesce(s.status,h.status) AS status, "
                           "coalesce(s.evidence,h.evidence,'')<>'' AS has_evidence "
-                          'FROM cc_alert_auto_matches m JOIN cc_alert_orgs o USING(account,ein) LEFT JOIN cc_alert_checks h USING(account,ein,state,workflow) '
+                          'FROM cc_alert_auto_matches m JOIN cc_alert_orgs o ON o.account=m.account AND o.ein=m.ein '
+                          'LEFT JOIN cc_alert_checks h ON h.account=m.account AND h.ein=m.ein '
+                          'AND h.state=m.state AND h.workflow=m.workflow '
                           'LEFT JOIN cc_alert_confirmed s ON s.account=m.account AND s.ein=m.ein '
                           'AND s.state=m.state AND s.checked=m.checked '
                           'WHERE m.account=%s AND o.stopped IS NULL AND m.checked>=o.enrolled AND NOT m.corrected AND (s.checked IS NOT NULL OR h.checked IS NOT NULL) '
