@@ -787,7 +787,9 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
       if (P.TRIAL_ORIGIN && job.registryState==='NV' && oldDocument===null && !nvRouteOnly
           && !job.finalFourSearchComplete && value?.nv_startup_unreachable===true
           && value.nv_readiness?.document_loaded===true && value.nv_readiness.inputs_present===false
-          && new URL(value.url).href===registryStart('NV') && Date.now()-started>=3000)
+          // Failed configuration can send the public search back to the portal landing route.
+          && [registryStart('NV'), registryOrigin('NV')+'/portal/public/#/'].includes(value.url)
+          && Date.now()-started>=3000)
         throw new Error('NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE');
       // Fast readiness polls never leave registryMessage's visibility timer
       // pending long enough to fire. Recover a stalled initial form using the
