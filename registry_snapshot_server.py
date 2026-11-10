@@ -12251,6 +12251,13 @@ def sc_detail_filing_ein(detail_html: str, deadline: float, *, fetch_bytes=None)
     return ""
 
 
+def sc_reviewed_parenthetical_alias(original: str, candidate: str, ein: str) -> bool:
+    suffix = re.fullmatch(r"(.+?)\s*\(([A-Z]{2,12})\)\s*", candidate)
+    return bool(suffix and normalized_match_name(suffix[1]) == normalized_match_name(original)
+                and suffix[2].lower() not in {"alumni", "auxiliary", "chapter", "affiliate", "foundation"}
+                and is_reviewed_alias(ein, suffix[2]))
+
+
 def sc_related_entity_requires_ein(original: str, candidate: str, ein: str = "") -> bool:
     markers = {"alumni", "auxiliary", "chapter", "affiliate"}
     # Retrieval reductions are not additional reviewed identities. Preserve full
@@ -12259,12 +12266,8 @@ def sc_related_entity_requires_ein(original: str, candidate: str, ein: str = "")
     reviewed = known_names_for_ein(ein)
     explicit = [original, *reviewed]
     targets = explicit + [alias for name in explicit for alias in explicit_name_alias_segments(name)]
-    suffix = re.fullmatch(r"(.+?)\s*\(([^()]+)\)\s*", candidate)
-    if suffix and normalized_match_name(suffix[1]) == normalized_match_name(original):
-        alias_key = complete_name_identity_key(suffix[2])
-        if alias_key and not (set(alias_key.split()) & markers) and any(
-                alias_key == complete_name_identity_key(alias) for alias in reviewed):
-            return False
+    if sc_reviewed_parenthetical_alias(original, candidate, ein):
+        return False
     return bool((set(normalized_match_name(candidate).split()) & markers)
                 - set(normalized_match_name(original).split())) or (
         score_candidate(original, ein, {"name": candidate})["decision"] != "accepted"
@@ -12511,7 +12514,7 @@ def sc_official_detail_lookup(org) -> object | None:
                     candidate_name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("name")))).strip()
                     if not candidate_id or not candidate_name:
                         continue
-                    safe_candidate_name = (
+                    safe_candidate_name = sc_reviewed_parenthetical_alias(original_name, candidate_name, org.ein) or (
                         registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", ""))
                         and not distinctive_entity_extension_mismatch_against_targets(original_name, candidate_name, targets)
                     )
@@ -12661,6 +12664,9 @@ def sc_official_detail_lookup(org) -> object | None:
                         result.identity_anchor = "EIN"
                         result.reason_code = "MATCH_SC_FILING_EIN"
                         result.source_note += " The state-filed Form 990 confirms the requested EIN."
+                    elif sc_reviewed_parenthetical_alias(original_name, registry_name, org.ein):
+                        result.reason_code = result.identity_anchor = "MATCH_SC_REVIEWED_PARENTHETICAL_ALIAS"
+                        result.source_note += " The selected detail displays the complete legal name and its reviewed abbreviation."
                     return result
             complete_paged_query_observed = complete_paged_query_observed or paged
         except Exception:
@@ -25578,6 +25584,9 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
         )
         if state in {"WA", "SC"} and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
             decision = {"decision": "accepted", "reason": "MATCH_EIN_EXACT", "score": max(100, decision["score"])}
+        if (state == "SC" and getattr(result, "reason_code", "") == "MATCH_SC_REVIEWED_PARENTHETICAL_ALIAS"
+                and sc_reviewed_parenthetical_alias(org.organization_name, matched_name, org.ein)):
+            decision = {"decision": "accepted", "reason": result.reason_code, "score": 100}
         if mn_confirmed_alias_evidence(result):
             decision = {"decision": "accepted", "reason": "MATCH_STATE_CONFIRMED_ALTERNATE_NAME", "score": 80}
         if state == "DC":

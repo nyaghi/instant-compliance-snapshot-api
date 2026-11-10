@@ -94,5 +94,44 @@ class OvernightRegistryRepairs(unittest.TestCase):
         self.assertEqual(result.matched_registry_identifier, "P4209")
 
 
+    def test_sc_reviewed_parenthetical_alias_reaches_bound_detail(self):
+        from time import perf_counter
+        from unittest.mock import Mock, patch
+
+        name = "Example Children's Relief Endeavor"
+        ein = "012345678"
+        source_name = name + " (ECRE)"
+        session = Mock()
+        session.get.return_value.text = "<form></form>"
+        responses = [
+            f'<a href="javascript:CharityInfo(18118)">{source_name}</a>',
+            f'<span id="MainContent_lbl_CharityName">{source_name}</span>'
+            '<span id="MainContent_lblCharityID">P18118</span> Status Registered Due Date 5/15/2099'
+        ]
+        session.post.side_effect = [Mock(text=body) for body in responses]
+        org = c.checker.Organization(name, ein)
+        context = c.REVIEWED_NAME_CONTEXT.set({ein: ("ECRE", "FOUNDATION", "CHAPTER")})
+        try:
+            for rejected in ("ECRE", name + " (FOUNDATION)", name + " (CHAPTER)",
+                             name + " (OTHER)", "Different Organization (ECRE)"):
+                with self.subTest(rejected=rejected):
+                    self.assertFalse(c.sc_reviewed_parenthetical_alias(name, rejected, ein))
+            with (patch.object(c, "curl_requests", Mock(Session=Mock(return_value=session))),
+                  patch.object(c, "build_search_queries", return_value=[name]),
+                  patch.object(c, "sc_detail_filing_ein") as filing):
+                result = c.sc_official_detail_lookup(org)
+                self.assertEqual(session.post.call_count, 2)
+                filing.assert_not_called()
+            self.assertEqual(result.matched_registry_identifier, "P18118")
+            self.assertEqual(result.identity_anchor, "MATCH_SC_REVIEWED_PARENTHETICAL_ALIAS")
+            payload = c.response_data_for_lookup(result, "", org, name, ein, "SC", perf_counter())
+            self.assertTrue(payload["success"])
+            self.assertEqual(payload["status"], "Current")
+            self.assertEqual(payload["matched_registry_name"], source_name)
+            self.assertEqual(payload["matched_registry_identifier"], "P18118")
+        finally:
+            c.REVIEWED_NAME_CONTEXT.reset(context)
+
+
 if __name__ == "__main__":
     unittest.main()
