@@ -1959,6 +1959,7 @@ def known_names_for_ein(ein: str) -> list[str]:
 # explicitly submitted after review enter a lookup; cached suggestions never do.
 REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
 USER_IDENTITY_CONTEXT = ContextVar("user_identity_review", default={})
+AL_FOREIGN_EIN_CONTEXT = ContextVar("al_connector_foreign_ein", default=None)
 IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
 IDENTITY_CACHE_LOCK = threading.Lock()
 IRS_HISTORY_HEADER_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
@@ -9305,6 +9306,8 @@ def final_four_connector_advance(record):
             if item["query"] == query: return item["evidence"]
         raise NYConnectorQueryNeeded(query)
     org = checker.Organization(record["organization_name"], record["ein"])
+    al_identity_context = AL_FOREIGN_EIN_CONTEXT.set(
+        record.setdefault("al_foreign_ein_checks", {}) if record["state"] == "AL" else None)
     try:
         result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ())) if record['state'] == 'MS' else
                   nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
@@ -9331,6 +9334,8 @@ def final_four_connector_advance(record):
         diagnostic = str(exc) if str(exc) in safe_errors or public_validation_reason(record["state"], str(exc)) else type(exc).__name__
         return {"phase": "complete", "result": final_four_connector_failure(
             record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "", diagnostic)}
+    finally:
+        AL_FOREIGN_EIN_CONTEXT.reset(al_identity_context)
     if time.time() >= record["expires"]:
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
     if record.get("nc_search_recovery"):
@@ -10224,8 +10229,47 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
             "registry_name": row["name"], "records": [{k:r.get(k, "") for k in
                 ("name", "fein", "principaladdress", "principalcity", "principalstate", "principalzipcode", "registrationapproveddate")} for r in matching]}
     except Exception as exc:
-        row["foreign_ein_check"] = {"outcome": "unavailable", "source": "CO", "error_type": type(exc).__name__}
+        row["foreign_ein_check"] = {"outcome": "unavailable", "source": "CO",
+                                    "error_type": type(exc).__name__, **identity_failure_evidence(exc)}
         return {}
+
+
+def al_connector_foreign_ein(org, row, deadline):
+    """Reuse the Colorado decision for the same Alabama credential in this check."""
+    checks = AL_FOREIGN_EIN_CONTEXT.get()
+    if checks is None:
+        return licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+
+    # These are the inputs to the exact source query and its evidence guards.
+    # Bind to the credential as well, so another row cannot inherit the result.
+    identity = [canonical_ein_digits(org.ein), row.get("identifier"), row["name"],
+                registry_street_key(row.get("street")), str(row.get("postal_code") or "")[:5],
+                row.get("region", "").upper()]
+    key = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
+    if key not in checks:
+        row.pop("foreign_ein_check", None)
+        proof = licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+        failure = row.get("foreign_ein_check", {})
+        retryable = (failure.get("failure_kind") in {"timeout", "connection_error"}
+                     or failure.get("http_status") in {408, 500, 502, 503, 504})
+        if retryable and deadline - time.monotonic() >= 1:
+            row.pop("foreign_ein_check", None)
+            proof = licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+            failure = row.get("foreign_ein_check", {})
+        if proof.get("records"):
+            # The matcher already checked every corroborating row for EIN
+            # agreement. Keep one source row with the proof in the signed token.
+            proof = {**proof, "records": proof["records"][:1]}
+        entry = {"proof": proof, "failure": failure}
+        if len(checks) < 12 and len(json.dumps(entry)) <= 2048:
+            checks[key] = entry
+    else:
+        entry = checks[key]
+    if entry["failure"]:
+        row["foreign_ein_check"] = entry["failure"]
+    else:
+        row.pop("foreign_ein_check", None)
+    return entry["proof"]
 
 
 def il_missing_fein_identity(org, row, deadline):
@@ -10485,7 +10529,9 @@ def licensed_charity_identity(org, row, state, deadline):
                             "reason": "ALIAS_IDENTITY_UNCONFIRMED"}
             return "possible"
     if decision.get("reason") in {"REVIEW_SEPARATOR_ENTITY_SCOPE", "REVIEW_INSTITUTIONAL_ENTITY"}:
-        foreign = address if address.get("decision") == "different_ein" else licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+        foreign = address if address.get("decision") == "different_ein" else (
+            al_connector_foreign_ein(org, row, deadline) if state == "AL" else
+            licensed_charity_foreign_ein(org, row, deadline, exact_name=True))
         if foreign:
             row["address_evidence"] = foreign
             row["match"] = {"decision": "rejected", "score": 0, "reason": "DIFFERENT_EIN_CORROBORATED"}
@@ -28815,6 +28861,9 @@ NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
 def ny_connector_pack(record):
     # Public search evidence and check binding only; no passcode or state credential.
     body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 320000 and record.pop("al_foreign_ein_checks", None):
+        # Preserve the completed searches before any optional identity memo.
+        body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     if len(body) > 320000:
         from deployment.history_returned_rows import drop_returned_details
         if drop_returned_details(record):

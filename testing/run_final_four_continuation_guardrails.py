@@ -3,7 +3,9 @@ import copy
 import json
 import time
 import unittest
+from datetime import date
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import registry_snapshot_server as cc
 from testing import run_final_four_source_guardrails as source_controls
@@ -46,6 +48,55 @@ class ContinuationControls(unittest.TestCase):
                 code, response = self.advance(response)
             self.assertEqual(response.get('phase'), 'complete', (state, response))
             self.assertIn(response['result']['status'], ['Current', 'Upcoming Filing'], (state, response))
+
+    def test_al_reuses_only_this_lookup_s_corroboration_across_signed_searches(self):
+        name = "The Children's Hospital of Philadelphia"
+        foundation = name + " Foundation"
+        self.orgs['AL'] = cc.checker.Organization(name, '23-1352166')
+        terms = [name, 'The Childrens Hospital Of Philadelphia', 'Children s Hospital of Philadelphia',
+                 'The Children Hospital Of Philadelphia', 'Childrens Hospital Of Philadelphia']
+        candidate = [foundation, 'AL08-297', 'Active', 'Charitable Organization', '06/18/2008',
+                     '03/28/2027', '3401 Civic Center Blvd.', 'Philadelphia', 'PA', '19104', '']
+        colorado = json.dumps([{'name': foundation.upper(), 'fein': '23-2237932',
+                                'principaladdress': '3401 CIVIC CENTER BOULEVARD',
+                                'principalstate': 'PA', 'principalzipcode': '19104'}]).encode()
+        timeout = TimeoutError('fixture upstream timeout')
+        rate_limit = HTTPError('https://data.colorado.gov/', 429, 'fixture rate limit', {}, None)
+        for label, replies, calls, excluded in (
+            ('success followed by a potential timeout', [colorado, timeout], 1, True),
+            ('transient recovery', [timeout, colorado], 2, True),
+            ('both attempts fail', [timeout, timeout], 2, False),
+            ('source rate limit', [rate_limit], 1, False),
+            ('completed source has no corroboration', [b'[]'], 1, False),
+        ):
+            with (
+                self.subTest(label=label),
+                patch.object(cc, 'date', date),
+                patch.object(cc, 'licensed_charity_names', return_value=(terms[:1], terms[1:])),
+                patch.object(cc, 'reconciled_registry_address', return_value={'decision': 'unavailable'}),
+                patch.object(cc, 'identity_fetch', side_effect=replies) as fetch,
+            ):
+                code, response = self.start('AL')
+                observed = []
+                while response['phase'] == 'search':
+                    self.assertEqual(code, 200)
+                    query = response['query']
+                    observed.append(query['name'])
+                    self.assertLessEqual(len(observed), len(terms))
+                    rows = [candidate] if query['name'] == name else []
+                    code, response = self.advance(response, {
+                        'state': 'AL', 'query': query, 'complete': True,
+                        'verification_pending': False, 'headers': AL_HEADERS,
+                        'rows': rows, 'total': len(rows),
+                    })
+                self.assertEqual(observed, terms)
+                self.assertEqual(fetch.call_count, calls)
+                result = response['result']
+                if excluded:
+                    self.assertEqual(result['status'], 'Not Registered')
+                    self.assertIn('different EINs', result['source_note'])
+                else:
+                    self.assertEqual(result['identity_review']['candidates'][0]['identifier'], 'AL08-297')
 
     def test_nc_consultant_card_continues_the_signed_search_without_a_false_registration(self):
         from testing.test_discovery_cap_nc_scope import CONSULTANT
