@@ -75,15 +75,17 @@ class Gate38EntityScope(unittest.TestCase):
                 self.ct_row(FOUNDATION), [FOUNDATION], url)
         self.assertTrue(result.success)
 
-    def test_ky_candidate_is_exclusive_and_confirmed_parent_still_wins(self):
+    def test_ky_separate_foundation_does_not_establish_parent_registration(self):
         candidate = ("18796", FOUNDATION, "", "")
         parent = ("18801", "Geological Society of America, Inc.", "", "")
         org = c.checker.Organization(PARENT, EIN)
         with patch.object(c, "load_ky_snapshot_records", return_value=[candidate]):
             result = c.search_ky_strict_snapshot(org)
-            self.assertFalse(result.success)
-            self.assertFalse(result._cc_identity_review["search_complete"])
-            self.assertEqual(result._cc_identity_review["records"][0]["identifier"], "18796")
+            self.assertTrue(result.success)
+            self.assertEqual(c.public_status(result), "Not Registered")
+            self.assertEqual(result.status_reason, "KY_NO_MATCH_SEPARATE_FOUNDATION")
+            self.assertIn("18796", result.source_note)
+            self.assertFalse(getattr(result, "_cc_identity_review", None))
             confirmed = c.search_ky_strict_snapshot(c.checker.Organization(FOUNDATION, FOUNDATION_EIN))
             self.assertEqual(confirmed.matched_registry_identifier, "18796")
         with patch.object(c, "load_ky_snapshot_records", return_value=[candidate, parent]):

@@ -9189,8 +9189,16 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "The browser connector could not preserve this registry's search sequence." if reason == "NY_CONNECTOR_INVALID_SEQUENCE" else
            "The trial browser connector is unavailable or needs an update." if reason in {"NY_CONNECTOR_UNAVAILABLE", "NY_CONNECTOR_UPDATE_REQUIRED"} else
            "The registry search or selected record did not return complete, confirmed information.")
+    nv_startup_failure = (state == "NV" and reason == "NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE"
+                          and not record.get("completed")
+                          and ((record.get("pending") or {}).get("query") or {}).get("operation") == "search")
     nm_http_error = state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
-    if nm_http_error:
+    if nv_startup_failure:
+        result.status = "Site Not Reachable"
+        result.success = False
+        result.source_note = ("Nevada's portal could not load its required configuration, so the search form "
+                              "never opened. CharityClarity reports Site Not Reachable.")
+    elif nm_http_error:
         result.status = 'Site Not Reachable'
         result.success = False
         result.source_note = ("New Mexico's registry returned an HTTP server error on its official lookup page. "
@@ -10781,6 +10789,10 @@ def dc_license_query_patterns(names):
             if not any(other != plan and covered_by(other, plan) for other in plans)]
 
 
+class DcLicenseSourceUnavailable(Exception):
+    """The DC public license feed failed before its first response."""
+
+
 def dc_charity_records(org, deadline, query_patterns=None):
     required, generated = licensed_charity_names(org)
     patterns = dc_license_query_patterns(required + generated) if query_patterns is None else query_patterns
@@ -10800,8 +10812,17 @@ def dc_charity_records(org, deadline, query_patterns=None):
     try:
         offset, raw_rows, seen = 0, [], set()
         while True:
-            data = registry_json_request(DC_LICENSE_API, deadline, form=True, payload={"where": where, "outFields": fields,
-                "returnGeometry": "false", "f": "json", "orderByFields": "OBJECTID", "resultOffset": offset, "resultRecordCount": 500})
+            try:
+                data = registry_json_request(DC_LICENSE_API, deadline, form=True, payload={"where": where, "outFields": fields,
+                    "returnGeometry": "false", "f": "json", "orderByFields": "OBJECTID", "resultOffset": offset, "resultRecordCount": 500})
+            except (TimeoutError, urllib.error.URLError) as exc:
+                if isinstance(exc, urllib.error.HTTPError):
+                    unreachable = exc.code in {500, 502, 503, 504}
+                else:
+                    unreachable = isinstance(exc, TimeoutError) or isinstance(exc.reason, (TimeoutError, ConnectionError))
+                if offset == 0 and unreachable:
+                    raise DcLicenseSourceUnavailable(str(exc)) from exc
+                raise
             if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("features"), list):
                 raise ValueError("DC returned an incomplete or rejected query")
             batch = [r.get("attributes") for r in data["features"]]
@@ -10866,6 +10887,7 @@ def search_dc(org):
     # Keep both existing recoverable read windows plus their half-second pause.
     # This allowance is shared across the full lookup, never reset per page.
     deadline = time.monotonic() + 35.5
+    primary_completed = False
     try:
         # Complete primary-name spelling first. Never collapse it into a
         # generated one-word predicate before the first source request.
@@ -10874,6 +10896,7 @@ def search_dc(org):
         required, generated = licensed_charity_names(org)
         fallback = dc_license_query_patterns(required + generated)
         rows, freshness = dc_charity_records(org, deadline, patterns)
+        primary_completed = True
         result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         selected = getattr(result, "_cc_license_record", {})
         if patterns != fallback and not (result.success and not getattr(result, "_cc_identity_review", None)
@@ -10888,7 +10911,13 @@ def search_dc(org):
         except Exception:pass  # Evidence failure must never replace a completed status.
         return result
     except Exception as exc:
-        return licensed_charity_failure(org, "DC", DC_LICENSE_API, exc)
+        result = licensed_charity_failure(org, "DC", DC_LICENSE_API, exc)
+        if isinstance(exc, DcLicenseSourceUnavailable) and not primary_completed:
+            result.status = "Site Not Reachable"
+            result.reason_code = "DC_LICENSE_SOURCE_UNREACHABLE"
+            result.source_note = ("D.C.'s public license feed was unavailable before any search results were returned. "
+                                  "CharityClarity reports Site Not Reachable.")
+        return result
 
 
 def ri_charity_search(query, deadline, headers):
@@ -30877,13 +30906,13 @@ def search_ky_strict_snapshot(org):
                 }
             elif foundation_rows:
                 related_id, related_name = foundation_rows[0]
-                result.status = "Unable to Confirm"
-                result.success = False
-                result.status_reason = "KY_RELATED_FOUNDATION_FOUND"
-                result.raw_status_text = "Related foundation found"
+                result.status_reason = "KY_NO_MATCH_SEPARATE_FOUNDATION"
+                result.raw_status_text = "No safely matching organization row; separate foundation listed"
                 result.source_url = downloadable_data_info("KY").get("source_url", "")
-                result.source_note = (f"Kentucky lists {related_name} (record {related_id}) as a related entity. "
-                                      "That filing does not establish the requested organization's registration.")
+                result.source_note = (
+                    "Kentucky's published charity list did not contain a matching registration for the "
+                    f"requested organization. It lists the separate {related_name} (record {related_id})."
+                )
             return result
         if any(index > 0 for _, index in tied_records) and len({identifier for identifier, _ in tied_records}) > 1:
             result.status = "Needs Review"
@@ -31541,7 +31570,9 @@ def search_snapshot_or_embedded_state(org, state: str):
             return result
         if state in {"KS"} and (getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", "")):
             return result
-        best_result = result
+        if (state != "KY" or getattr(best_result, "status_reason", "") != "KY_NO_MATCH_SEPARATE_FOUNDATION"
+                or getattr(result, "status_reason", "") == "KY_NO_MATCH_SEPARATE_FOUNDATION"):
+            best_result = result
     final = best_result or run_variant(original_name)
     if state == "KS" and public_status(final) == "Not Registered" and final.success and downloadable_data_info("KS").get("usable"):
         module = load_ks_weekly_checker()

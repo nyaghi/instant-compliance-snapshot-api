@@ -107,6 +107,12 @@
       "world": "MAIN"
     },
     {
+      "matches": ["https://orion.nv.gov/portal/public/*"],
+      "js": ["registry-nv-startup.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
       "matches": [
         "https://secure.nmdoj.gov/CharitySearch/*",
         "https://ago.igovsolution.net/online/Lookups/Business.aspx*",

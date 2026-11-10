@@ -784,6 +784,11 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
       if(job.registryState==='NM' && value?.source_failure==='REGISTRY_NM_SOURCE_ERROR')
         throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
       if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness={...value.nv_readiness,page_visibility:value.page_visibility||'unknown'};
+      if (P.TRIAL_ORIGIN && job.registryState==='NV' && oldDocument===null && !nvRouteOnly
+          && !job.finalFourSearchComplete && value?.nv_startup_unreachable===true
+          && value.nv_readiness?.document_loaded===true && value.nv_readiness.inputs_present===false
+          && new URL(value.url).href===registryStart('NV') && Date.now()-started>=3000)
+        throw new Error('NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE');
       // Fast readiness polls never leave registryMessage's visibility timer
       // pending long enough to fire. Recover a stalled initial form using the
       // same owned-tab lease as detail commands, without a request or reload.
@@ -843,7 +848,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
         throw new Error('NY_CONNECTOR_NC_SEARCH_NOT_STARTED');
     } catch(error) {
       if(error?.message==='NY_CONNECTOR_READINESS_DEADLINE') throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : 'NY_CONNECTOR_TAB_READY_TIMEOUT');
-      if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED','NY_CONNECTOR_NC_RATE_LIMITED'].includes(error?.message))throw error;
+      if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED','NY_CONNECTOR_NC_RATE_LIMITED','NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE'].includes(error?.message))throw error;
       if(job.registryState==='NM' && await registryNmHttpFailure(job,deadline))
         throw new Error('NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR');
       // The public challenge can precede content-script readiness. Its visible

@@ -2029,7 +2029,8 @@
     }
     if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
       ...((NV||NC) ? {page_visibility:document.visibilityState} : {}),
-      ...(NV ? {nv_readiness:nvReadiness()} : {}),
+      ...(NV ? {nv_readiness:nvReadiness(),
+        nv_startup_unreachable:document.documentElement.hasAttribute('data-cc-nv-config-unavailable')} : {}),
       ...(NC ? {...(ncPublishedProfileError()?{source_failure:'REGISTRY_NC_PROFILE_SOURCE_ERROR'}:{}),verification_pending:/^Just a moment/i.test(document.title||'')
         && /Performing security verification|verifies you are not a bot/i.test(text(document.body)),
         ...(m.query ? {nc_search_idle:ncIdleSearch(m.query),nc_readiness:ncReadiness(m.query)} : {})} : {}),

@@ -15,6 +15,8 @@
     return result.status === 'Site Not Reachable' && !result.identity_review?.candidates?.length
       && (result.state === 'OR' && ['OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'].includes(result.reason_code)
         || result.state === 'NM' && result.status_reason === 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
+        || result.state === 'NV' && result.status_reason === 'NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE'
+        || result.state === 'DC' && result.reason_code === 'DC_LICENSE_SOURCE_UNREACHABLE'
         || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH'
         || ['ND','CO'].includes(result.state) && result.reason_code === 'RUNNER_TIMEOUT');
   }
