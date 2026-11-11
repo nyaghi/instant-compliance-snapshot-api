@@ -2581,7 +2581,6 @@ def search_ca_master(page, org):
     registrations = getattr(result, "_cc_registration_records", None)
     from deployment.ca_accepted_renewal import reconcile
     reconcile(sys.modules[__name__],org,result,entity,registrations)
-    ca_apply_selected_reporting_status(org, result, entity, registrations)
     from deployment.ca_nonregistration import explicit_absence
     if (result.success is True and result.status.casefold() == checker.STATUS_NOT_REGISTERED.casefold()
             and isinstance(entity, dict)
@@ -29554,15 +29553,13 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     """Return registry-adverse statuses that should trump filing-year math."""
     state = (result.state or "").upper()
     text = combined_result_text(result, body)
-    raw_fields = " ".join([
-        result.raw_status_text or "",
-        result.source_note or "",
-    ])
+    raw_status = result.raw_status_text or ""
+    if state == "CA":
+        text = ca_without_reporting_status(text)
+        raw_status = ca_without_reporting_status(raw_status)
+    raw_fields = " ".join([raw_status, result.source_note or ""])
     fields = raw_fields
-    primary_status_fields = " ".join([
-        result.status or "",
-        result.raw_status_text or "",
-    ])
+    primary_status_fields = " ".join([result.status or "", raw_status])
     if (
         state == "NJ"
         and re.search(r"\b(active|current|compliant|good\s+standing)\b", primary_status_fields, re.I)
@@ -29697,39 +29694,15 @@ def explicit_no_registration_status(result, body: str) -> bool:
     ))
 
 
-def ca_apply_selected_reporting_status(org, result, entity, registrations):
-    """Use the exact selected charity's reporting field, never page history."""
-    ein = canonical_ein_digits(org.ein)
-    if (result.status not in {"Delinquent", checker.STATUS_DELINQUENT} or result.success is not True
-            or getattr(result, "_cc_ca_accepted_renewal", None)
-            or not isinstance(entity, dict) or not isinstance(registrations, list)
-            or len(ein) != 9 or canonical_ein_digits(str(entity.get("fein") or "")) != ein
-            or entity.get("entityStatus") != "Listed" or not result.matched_registry_identifier):
-        return
-    matches = [r for r in registrations if isinstance(r, dict)
-               and str(r.get("registrationNumber") or "") == str(result.matched_registry_identifier)]
-    if len(matches) != 1:
-        return
-    reg = matches[0]
-    expires = parsed_result_date(str(reg.get("currentExpirationDate") or ""))
-    if (reg.get("registrationType") != "Charitable Organization" or reg.get("registrationStatus") != "Registered"
-            or reg.get("complianceStatus") or not expires or expires >= date.today()):
-        return
-    reporting = reg.get("reportingStatus")
-    status = {"Current": "Current", "Due": "Upcoming Filing", "In Review": "Pending"}.get(reporting) if isinstance(reporting, str) else None
-    if not status:
-        return
-    result.status = status
-    result.status_reason = "CA_SELECTED_REGISTERED_REPORTING"
-    result.source_note = (f"California lists this charity registration as Registered and annual reporting as {reporting}. "
-                          "The displayed registration expiration is retained as published; it does not override these registry statuses.")
+def ca_without_reporting_status(text: str) -> str:
+    return re.sub(r"\bReporting\s+Status\s*:[^|\r\n]*", "", text, flags=re.I)
 
 
 def ca_explicit_primary_registry_status(result) -> str:
     """Return CA main Registry Status when it should trump page-history text."""
-    raw_status = re.sub(r"\s+", " ", getattr(result, "raw_status_text", "") or "").strip()
-    direct_status = re.sub(r"\s+", " ", getattr(result, "status", "") or "").strip()
-    primary = " ".join(part for part in [raw_status, direct_status] if part)
+    raw_status = ca_without_reporting_status(getattr(result, "raw_status_text", "") or "")
+    direct_status = getattr(result, "status", "") or ""
+    primary = " ".join([raw_status, direct_status]).strip()
     if not primary:
         return ""
     if re.search(r"\b(in\s+(?:process|progress)|pending)\b", primary, re.I):
@@ -29746,8 +29719,6 @@ def ca_explicit_primary_registry_status(result) -> str:
 def true_status_from_body(result, body: str) -> str:
     from deployment.ca_accepted_renewal import preserves
     if preserves(result):
-        return result.status
-    if (result.state == "CA" and getattr(result, "status_reason", "") == "CA_SELECTED_REGISTERED_REPORTING"):
         return result.status
     if (result.state == "MN" and getattr(result, "status_reason", "") == "MN_CONFIRMED_CHARITY_EXTENSION"):
         return result.status
@@ -29777,6 +29748,8 @@ def true_status_from_body(result, body: str) -> str:
     normalized = base_status.lower()
     state = (result.state or "").upper()
     combined = combined_result_text(result, body)
+    if state == "CA":
+        combined = ca_without_reporting_status(combined)
     combined_lower = combined.lower()
 
     if "site not reachable" in normalized or normalized in {"unable to verify", "unable to confirm", "needs review"}:
@@ -29965,6 +29938,8 @@ def true_status_from_body(result, body: str) -> str:
     if adverse_status:
         return adverse_status
     primary_registry_fields = " ".join([result.raw_status_text or "", result.source_note or ""])
+    if state == "CA":
+        primary_registry_fields = ca_without_reporting_status(primary_registry_fields)
     if re.search(r"\b(non\W*compliant|delinquent)\b", primary_registry_fields, re.I):
         return "Delinquent"
     if (
@@ -30192,9 +30167,7 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
-    if (result.state, getattr(result, "status_reason", "")) in {
-        ("CA", "CA_SELECTED_REGISTERED_REPORTING"), ("MN", "MN_CONFIRMED_CHARITY_EXTENSION"),
-    }:
+    if result.state == "MN" and getattr(result, "status_reason", "") == "MN_CONFIRMED_CHARITY_EXTENSION":
         return result.source_note
     if result.state == "WA" and getattr(result, "reason_code", "") == "WA_CORROBORATED_EIN_CONFLICT_REVIEW":
         difference = re.match(r"Washington EIN conflict: entered \d{9}; registry \d{9}\.", result.raw_status_text or "")

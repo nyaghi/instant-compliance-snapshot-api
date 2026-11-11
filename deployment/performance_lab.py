@@ -473,7 +473,8 @@ def alerts_navigation(data, anchor, *, aurora=False):
 
 
 def lab_asset(path):
-    path = unquote(urlparse(path).path)
+    entry = urlparse(path)
+    path = unquote(entry.path)
     if path.startswith('/assets/pdfjs/'):
         root=(ROOT/'web-staging/assets/pdfjs').resolve()
         file=(root/path.removeprefix('/assets/pdfjs/')).resolve()
@@ -518,6 +519,26 @@ def lab_asset(path):
             text = text.replace(origin, LAB_ORIGIN)
         if file.name == 'index.html':
             text=alerts_navigation(text,'<!-- Aurora product navigation -->',aurora=True)
+            if (os.environ.get('CE_PERMANENT_STAGING') == '1' and entry.path == '/'
+                    and dict(parse_qsl(entry.query, keep_blank_values=True)).get('aurora_connector_test') == 'background'):
+                # The installed connector still supplies the optional duo layout.
+                # Drop its presentation stylesheet while retaining collector routing.
+                text = text.replace('</head>', """<script id="cc-quiet-aurora-layout">
+(() => {
+  const removeCollectorLayout = () => {
+    const layout = document.getElementById('cc-two-window-trial-style');
+    if (!layout) return false;
+    layout.remove();
+    return true;
+  };
+  if (removeCollectorLayout()) return;
+  const observer = new MutationObserver(() => {
+    if (removeCollectorLayout()) observer.disconnect();
+  });
+  observer.observe(document.documentElement, {childList: true, subtree: true});
+  window.addEventListener('load', () => observer.disconnect(), {once: true});
+})();
+</script></head>""", 1)
             title = 'CharityClarity Staging — ' if os.environ.get('CE_PERMANENT_STAGING') == '1' else 'Performance Lab — '
             text = text.replace('<title>', '<title>'+title, 1)
             text = text.replace('<body', '<body data-performance-lab="true"', 1)

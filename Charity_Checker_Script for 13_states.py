@@ -806,7 +806,7 @@ def ca_evoke_status_from_record(entity: dict, registrations: list[dict]) -> tupl
     registration_type = str(reg.get("registrationType") or "")
     expiration_date = parse_date_value(str(reg.get("currentExpirationDate") or ""))
     renewal_evaluation_date = parse_date_value(str(reg.get("renewalEvaluationDate") or ""))
-    combined = " | ".join(part for part in [entity_status, registration_type, registration_status, reporting_status] if part)
+    combined = " | ".join(part for part in [entity_status, registration_type, registration_status] if part)
 
     if re.search(r"\b(cease\s+and\s+desist|suspended|enforcement)\b", combined, re.I):
         status = "Suspended"

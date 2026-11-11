@@ -48,28 +48,24 @@ class Gate40Stability(TestCase):
             self.assertNotEqual(affiliate.matched_registry_identifier,'4404')
         self.assertFalse(m.wv_joined_hyphen_variant('National Relief Society - Local Chapter'))
 
-    def test_ca_selected_reporting_precedes_only_stale_date(self):
-        org=SimpleNamespace(ein='123456789')
-        entity={'fein':org.ein,'entityStatus':'Listed'}
-        registration={'registrationNumber':'4404','registrationType':'Charitable Organization',
-                      'registrationStatus':'Registered','currentExpirationDate':'2025-01-01'}
-        def check(reporting, extra=None, standing='Delinquent', **overrides):
-            r=SimpleNamespace(state='CA',status=standing,success=True,matched_registry_identifier='4404')
-            m.ca_apply_selected_reporting_status(org,r,entity,[{**registration,'reportingStatus':reporting,**overrides}] if extra is None else extra)
-            return r
-        for reported, expected in [('Current','Current'),('Due','Upcoming Filing'),('In Review','Pending')]:
-            with self.subTest(reported=reported):
-                r=check(reported)
-                self.assertEqual(m.true_status_from_body(r,''),expected)
-                self.assertIn('reporting as '+reported,m.comments_for_result_base(r,'',expected))
-        for controls in [
-                check('Current',registrationStatus='Delinquent'),
-                check('Current',complianceStatus=['Cease and Desist']),
-                check('Current',registrationNumber='9999'),
-                check('Past Due'),
-                check('Current',extra=[{**registration,'reportingStatus':'Current'}]*2)]:
-            self.assertEqual(controls.status,'Delinquent')
-        self.assertEqual(check('Current',standing='Exempt').status,'Exempt')
+    def test_ca_reporting_status_does_not_determine_compliance(self):
+        entity = {'entityStatus': 'Listed'}
+        registration = {'registrationNumber': '4404', 'registrationType': 'Charitable Organization',
+                        'registrationStatus': 'Registered'}
+        for reporting in ('Current', 'Due', 'In Review', 'Pending', 'Past Due'):
+            for expiry, expected in (('2025-01-01', 'Delinquent'), ('2099-01-01', 'Current')):
+                with self.subTest(reporting=reporting, expiry=expiry):
+                    source = {**registration, 'reportingStatus': reporting, 'currentExpirationDate': expiry}
+                    status, raw, *_ = m.checker.ca_evoke_status_from_record(entity, [source])
+                    result = m.checker.StateResult('Example Charity', '123456789', 'CA', status, '')
+                    result.raw_status_text = raw
+                    self.assertIn(f'Reporting Status: {reporting}', raw)
+                    self.assertEqual(m.true_status_from_body(result, ''), expected)
+        source = {**registration, 'registrationStatus': 'Pending', 'reportingStatus': 'In Review'}
+        status, raw, *_ = m.checker.ca_evoke_status_from_record(entity, [source])
+        result = m.checker.StateResult('Example Charity', '123456789', 'CA', status, '')
+        result.raw_status_text = raw
+        self.assertEqual(m.ca_explicit_primary_registry_status(result), 'Pending')
 
     def test_mn_active_charity_granted_uses_published_extension_only(self):
         detail='Organization Type\tCHARITY\nStatus\tActive\nExtension\tGranted\nFinancial Information'
