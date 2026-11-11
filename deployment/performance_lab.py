@@ -439,26 +439,20 @@ def shared_readiness_asset(text):
 
 
 def staging_collector_entry(path):
-    """Use quiet collectors by default at the staging Aurora entry points."""
+    """Restore the existing interactive registry rail on normal staging entry."""
     entry = urlparse(path)
     if entry.netloc or entry.scheme or entry.path not in {
             '/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/',
             '/registry-snapshot', '/registry-snapshot/'}:
         return None
-    params = parse_qsl(entry.query, keep_blank_values=True)
-    layouts = [value for key, value in params if key == 'collector_layout']
-    if layouts and layouts != ['duo']:
+    layouts = [value for key, value in parse_qsl(entry.query, keep_blank_values=True)
+               if key == 'collector_layout']
+    if layouts:
+        if entry.path != '/' and layouts == ['duo']:
+            return urlunparse(('', '', '/', '', entry.query, ''))
         return None
-
-    query = [entry.query] if entry.query else []
-    if not layouts:
-        query.append('collector_layout=duo')
-    if not any(key == 'aurora_connector_test' for key, _ in params):
-        query.append('aurora_connector_test=background')
-    target_query = '&'.join(query)
-    if entry.path == '/' and target_query == entry.query:
-        return None
-    return urlunparse(('', '', '/', '', target_query, ''))
+    query = entry.query + '&collector_layout=duo' if entry.query else 'collector_layout=duo'
+    return urlunparse(('', '', '/', '', query, ''))
 
 
 def alerts_navigation(data, anchor, *, aurora=False):
