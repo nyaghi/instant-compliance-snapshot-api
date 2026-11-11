@@ -81,6 +81,10 @@ def capture_dc(master,org,result,rows,deadline):
     targets=selected_records(result,rows)
     negative=(getattr(result,'success',False) is True and getattr(result,'status','')=='Not Registered')
     hint=getattr(run,'dc_completed_query',None)
+    # The ArcGIS empty form does not render an organization query in its
+    # result body. Use the recorded query history for a completed zero result.
+    if negative and isinstance(hint, dict) and hint.get('row_count') == 0:
+        return None
     if not targets and not (negative and negative_url(hint)):return trace_return('deployment/dc_native_evidence.py:capture_dc:83:61:return',None)
     if len(targets)==1 and (getattr(result,'_cc_license_record',None) is targets[0]
             or targets[0].get('_identity_outcome') in {'possible','conflict'}):

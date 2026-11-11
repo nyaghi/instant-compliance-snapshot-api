@@ -2385,6 +2385,41 @@ def wv_pending_navigation_stop(observation, fact, old_stop, deadline, now):
  return proposed
 
 
+def wv_current_detail_binding(text, identifier, name, expires, status):
+ norm=lambda value: re.sub(r'[^a-z0-9]', '', str(value).casefold())
+ return (bool(re.fullmatch(r'\d{1,20}', str(identifier))) and norm(name) in norm(text)
+     and bool(re.search(r'\bID:\s*'+re.escape(str(identifier))+r'\s+Initial Registration Date:', text))
+     and bool(re.search(r'Expiration Date:\s*'+re.escape(expires.strip())+r'\b', text))
+     and bool(re.search(r'Status:\s*'+re.escape(status.strip())+r'\b', text, re.I))
+     and not re.search(r'verify you are human|user validation required|access denied|just a moment', text, re.I))
+
+
+def capture_current_wv_detail(result, page, identifier, name, expires, status, local_deadline):
+ from deployment.state_snapshots import CURRENT, DEADLINE
+ run=CURRENT.get()
+ if (not run or run.state!='WV' or not expires or not status
+     or page.url!='https://erls.wvsos.gov/OnlineCharitiesSearch/CharitiesInformation'):
+  return
+ stop=min(DEADLINE.get()-1, time.monotonic()+max(0,local_deadline-time.perf_counter()), time.monotonic()+3)
+ if stop-time.monotonic()<1 or any(d[0]==page.url and d[2]=='image' and wv_current_detail_binding(d[3],identifier,name,expires,status) for d in run.documents):
+  return
+ fact={'adapter':'WV-current-selected-detail','phase':'capture','outcome':'not_started'}
+ run.visual_adapter_facts.append(fact)
+ try:
+  before=page.inner_text('body',timeout=350)
+  if not wv_current_detail_binding(before,identifier,name,expires,status):
+   fact['outcome']='identity_status_date_not_bound';return
+  raw=page.screenshot(type='png',full_page=True,timeout=max(1,int((stop-time.monotonic()-.5)*1000)))
+  after=page.inner_text('body',timeout=350)
+  if after!=before or time.monotonic()>=stop or page.url!='https://erls.wvsos.gov/OnlineCharitiesSearch/CharitiesInformation':
+   fact['outcome']='detail_changed';return
+  n=len(run.documents)
+  run.document(page.url,raw,'image',after,'Original West Virginia detail for the exact selected registration.')
+  fact['outcome']='captured' if len(run.documents)>n else 'archive_input_rejected'
+ except Exception as exc:
+  fact['outcome']='capture_unavailable';fact['error_type']=type(exc).__name__
+
+
 def capture_selected_wv_source(master,result,run,deadline):
  """Use the visible WV ID search and actual organization-ID detail link."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1724:5:get',result.get,locals(), 'state')!='WV' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1724:54:get',result.get,locals(), 'ein','')))!=run.ein

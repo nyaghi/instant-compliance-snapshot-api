@@ -6835,6 +6835,9 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         if state == "GA":
             from deployment.gate28_repairs import ga_article_queries
             names = ga_article_queries(sys.modules[__name__], required, generated)
+            if trial_identity() and required:
+                from deployment.gate41_repairs import ga_possessive_variant, replace_low_value_slot
+                names = replace_low_value_slot(names, required, required[0], ga_possessive_variant(required[0]))
             # GA distinguishes punctuation in literal prefix retrieval.
             # Keep a leading-article spelling for punctuated initial names.
             for name in list(required):
@@ -6891,6 +6894,8 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                 # or turn that ambiguity into a completed negative search.
                 if state == "GA" and score_candidate(org.organization_name, "", {"name": row["name"]})["decision"] == "possible":
                     row = dict(row, _review_name_only=True)
+                elif state == "GA" and trial_identity() and not row.get("ein") and ga_possessive_candidate(org, row["name"]):
+                    row = dict(row, _ga_possessive_candidate=True)
                 elif state == "GA" and not row.get("ein") and any(
                         single_token_typo_review_candidate(name, row["name"]) for name in required):
                     row = dict(row, _review_minor_typo=True)
@@ -8666,15 +8671,13 @@ def nm_browser_lookup(org, evidence):
         rows = [(int(year) if year else 0, status, when) for year, status, when in detail['history_rows']
                 if year or status == 'Inactive Registration']
         submitted = module.nm_latest_submitted(rows)
-        periods = {p['period_end'] for p in detail['financial_periods']
-                   if submitted and p['tax_year'] == submitted[0]}
-        if len(periods) > 1:
-            raise ValueError('Conflicting New Mexico fiscal periods')
+        from deployment.gate41_repairs import nm_submitted_period
+        filed_period = nm_submitted_period(rows, submitted, detail['financial_periods'], module.parse_date)
         source = f'https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(ein)}'
         result = module.SearchResult(org.organization_name, org.ein, 'NM', module.STATUS_UNKNOWN, '', source, '')
         result.matched_registry_name = selected['name']
         result.matched_registry_identifier = format_ein(ein)
-        result = nm_apply_status_history_master(module, result, rows, fye_text=next(iter(periods), ''))
+        result = nm_apply_status_history_master(module, result, rows, fye_text=filed_period)
         result.source_note = ('The public browser search and detail heading both match the requested EIN. '
                               + getattr(result, 'source_note', ''))
         copied = copy_external_result(org, 'NM', result)
@@ -8777,7 +8780,7 @@ def ms_duplicate_exempt_detail_fallback(record, payload):
     return data
 
 
-def ms_browser_lookup(org, evidence, alternate_names=()):
+def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery=''):
     """Use the master name plan, identity guard and status interpreter on public browser evidence."""
     module = state_batch_modules(['MS'])[load_state_batch_bundle().STATE_TO_MODULE['MS']]
     # The signed request supplies reviewed names only in Standard. Sales must
@@ -8803,6 +8806,8 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
     attempted = []
     possible = []
     review_details = {}
+    if ms_recovery:
+        planned = [ms_recovery]
     for name in planned:
         query = {'state': 'MS', 'operation': 'search', 'name': name}
         source_rows = ms_browser_clean_evidence(evidence(query), query)['rows']
@@ -9308,7 +9313,7 @@ def final_four_connector_advance(record):
     al_identity_context = AL_FOREIGN_EIN_CONTEXT.set(
         record.setdefault("al_foreign_ein_checks", {}) if record["state"] == "AL" else None)
     try:
-        result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ())) if record['state'] == 'MS' else
+        result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ()), ms_recovery=record.get('ms_search_recovery', '')) if record['state'] == 'MS' else
                   nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
                   final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining,
                       nc_specific_names=bool(record.get("nc_specific_name_recovery"))))
@@ -9323,7 +9328,8 @@ def final_four_connector_advance(record):
         safe_errors = {
             'Incomplete New Mexico evidence', 'New Mexico evidence exceeded its bound',
             'Unexpected New Mexico search fields', 'Incomplete New Mexico result set',
-            'Invalid New Mexico identity row', 'Mississippi browser evidence is incomplete',
+            'Invalid New Mexico identity row', 'Conflicting New Mexico fiscal periods',
+            'Mississippi browser evidence is incomplete',
             'Mississippi search is incomplete', 'Mississippi search row is incomplete',
             'Mississippi detail is incomplete or mismatched',
             'Mississippi detail identity or status changed',
@@ -9337,6 +9343,8 @@ def final_four_connector_advance(record):
         AL_FOREIGN_EIN_CONTEXT.reset(al_identity_context)
     if time.time() >= record["expires"]:
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
+    if record.get("ms_search_recovery") and public_status(result) == "Not Registered":
+        return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
     if record.get("nc_search_recovery"):
         result.source_note = result.source_note.rstrip() + " One stalled North Carolina search completed after a fresh-page retry within the original lookup time limit."
     if record.get("nc_specific_name_recovery"):
@@ -9571,7 +9579,12 @@ def final_four_connector_request(payload, origin):
             if ms_fallback is not None:
                 from deployment.state_snapshots import attach_links
                 return 200, {"phase": "complete", "result": attach_links(ms_fallback, record.get("source_snapshots", []))}
-            if nc_specific_name_recovery(record, payload, now):
+            from deployment.gate41_repairs import ms_recovery_name
+            recovery = ms_recovery_name(record, payload, now) if trial_identity() else ''
+            if recovery:
+                record["ms_search_recovery"] = recovery
+                record["pending"] = None
+            elif nc_specific_name_recovery(record, payload, now):
                 record["pending"] = None
                 specific_nc_fresh_transport = True
             else:
@@ -10316,6 +10329,12 @@ def ga_numbered_terminal_name_variant(row, full_name):
             and normalized_match_name(full_name).split() == [*words[:-1], words[-1] + "ness"])
 
 
+def ga_possessive_candidate(org, displayed):
+    from deployment.gate41_repairs import ga_possessive_variant, legal_core
+    spelling = ga_possessive_variant(org.organization_name)
+    return bool(spelling and canonical_name_punctuation(legal_core(displayed)).casefold() == spelling.casefold())
+
+
 def licensed_charity_identity(org, row, state, deadline):
     """Shared master name/EIN and cross-state office checks; never address-only."""
     names = [row["name"], *row.get("aliases", [])]
@@ -10416,6 +10435,19 @@ def licensed_charity_identity(org, row, state, deadline):
                 row["address_evidence"] = {"decision": "unavailable", "basis":
                     "The DC label begins with the complete organization name but includes additional text. Identity requires confirmation."}
                 return "possible"
+    if (state == "GA" and trial_identity() and not row.get("ein")
+            and (row.get("_ga_possessive_candidate") or ga_possessive_candidate(org, row["name"]))):
+        proof = row.get("_ga_possessive_proof")
+        if proof is None:
+            proof = (licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+                     or licensed_charity_street_evidence(org, row, deadline) or {})
+            row["_ga_possessive_proof"] = proof
+        outcome = {"different_ein": "rejected", "corroborated": "accepted"}.get(proof.get("decision"), "possible")
+        row["address_evidence"] = proof or {"decision": "unavailable", "basis":
+            "The Georgia credential adds a possessive to the full name. Confirm the identity if the registry supplies no corroborating office or EIN."}
+        row["match"] = {"decision": outcome, "score": {"rejected": 0, "accepted": 95, "possible": 55}[outcome],
+                        "reason": "GA_POSSESSIVE_FULL_NAME"}
+        return outcome
     if (state in {"GA", "NC"} and decision["decision"] == "rejected" and row.get("_review_minor_typo") and not row.get("ein")
             and (state == "GA" or trial_identity() and any(single_token_typo_review_candidate(target, matched_name)
                  for target in [org.organization_name, *known_names_for_ein(org.ein)]))):
@@ -15240,6 +15272,67 @@ def search_bundled_extension_state(page, org, state: str):
             requested_digits = re.sub(r"\D", "", org.ein or "")
             return bool(len(registry_digits) == len(requested_digits) == 9 and registry_digits != requested_digits)
 
+        or_conflict_checked = False
+        def or_conflicting_ein_result(result, registry_name):
+            nonlocal or_conflict_checked
+            if or_conflict_checked or not trial_identity():
+                return None
+            from deployment.gate41_repairs import plain_key, or_filing_link, or_filing_identity, fetch_or_filing
+            body = registry_page_body(page)
+            source = str(getattr(result, 'source_url', '') or '')
+            parsed = urlsplit(source)
+            expected = canonical_ein_digits(org.ein)
+            shown = checker.extract_labeled_value_from_text(body, ['Federal EIN', 'EIN'])
+            actual = canonical_ein_digits(shown)
+            identifier = re.search(r'\bRegistration\s*:\s*#?\s*(\d+)\b', body, re.I)
+            if (parsed.scheme != 'https' or parsed.netloc != 'justice.oregon.gov'
+                    or parsed.path != '/Charities/Charity/details' or parsed.fragment
+                    or not re.fullmatch(r'charityID=\d{1,15}', parsed.query)
+                    or not registry_name or plain_key(registry_name) != plain_key(org.organization_name)
+                    or not identifier or len(actual) != 9 or actual == expected
+                    or not re.search(r'\bStatus:\s*Registered\b', body, re.I)):
+                return None
+            or_conflict_checked = True
+            from deployment.state_snapshots import CURRENT, DEADLINE
+            run = CURRENT.get()
+            stop = min(DEADLINE.get()-1, time.monotonic()+7.0)
+            report = re.findall(r'\bFiscal Year Beginning\s+(\d{1,2}/\d{1,2}/\d{4})\s+and Ending\s+(\d{1,2}/\d{1,2}/\d{4})', body, re.I)
+            try:
+                ends = [parse_ce_date(end) for _, end in report]
+                latest = max(end for end in ends if end and end <= date.today())
+                links = page.locator('a').filter(has_text=re.compile(r'^'+str(latest.year)+r' Charity Report$'))
+                if links.count() == 1 and time.monotonic() < stop:
+                    url = or_filing_link(links.first.get_attribute('href', timeout=700) or '')
+                    period = f'{latest.month}/{latest.day}/{latest.year}'
+                    raw = fetch_or_filing(url, stop)
+                    excerpt = or_filing_identity(raw, registry_name, identifier[1], expected, period) if raw else None
+                    if excerpt and time.monotonic() < stop:
+                        if run is not None:
+                            run.document(url, excerpt, 'source_pdf', body,
+                                'Original Oregon filing excerpt: state filing cover and federal filer identity. The registry header shows a different EIN.')
+                        due = or_next_due_from_period_end(latest)
+                        result.status = status_from_calendar_date(due)
+                        result.raw_status_text = f'Status: Registered | Fiscal Period End: {period} | Next Due: {format_date(due)}'
+                        result.status_reason = 'OR_ATTACHED_FILING_EIN_CONFIRMED'
+                        result.matched_registry_name = registry_name
+                        result.matched_registry_identifier = identifier[1]
+                        result.last_year_on_record = latest.year
+                        result.computed_due_date = format_date(due)
+                        result.source_note = (f'Oregon displays EIN {format_ein(actual)} in the registry header, but the filing linked to registration '
+                            f'{identifier[1]} identifies {registry_name} as EIN {format_ein(expected)}. The filing confirms the organization and fiscal period.')
+                        result.success = True
+                        return result
+            except Exception:
+                pass  # Unreadable filing cannot clear a source EIN conflict.
+            result.status = 'Needs Review'
+            result.status_reason = 'OR_HEADER_EIN_CONFLICT'
+            result.source_note = (f'Oregon returned an exact name but displays EIN {format_ein(actual)} instead of {format_ein(expected)}. '
+                                  'The attached filing could not independently resolve the discrepancy.')
+            result.matched_registry_name = registry_name
+            result.matched_registry_identifier = identifier[1]
+            result.success = False
+            return result
+
         def or_invalid_ein_result(result, registry_name):
             body = registry_page_body(page)
             value = checker.extract_labeled_value_from_text(body, ["Federal EIN", "EIN"])
@@ -15378,6 +15471,9 @@ def search_bundled_extension_state(page, org, state: str):
                 if malformed is not None:
                     return malformed
                 if or_detail_ein_mismatches(registry_name):
+                    recovered = or_conflicting_ein_result(result, registry_name)
+                    if recovered is not None:
+                        return recovered
                     best_result = checker.StateResult(
                         org.organization_name,
                         org.ein,
@@ -15421,6 +15517,9 @@ def search_bundled_extension_state(page, org, state: str):
                 if malformed is not None:
                     return malformed
                 if or_detail_ein_mismatches(result.matched_registry_name or best_candidate_name):
+                    recovered = or_conflicting_ein_result(result, result.matched_registry_name or best_candidate_name)
+                    if recovered is not None:
+                        return recovered
                     best_result = checker.StateResult(
                         org.organization_name,
                         org.ein,
@@ -17457,7 +17556,11 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
             ct_shortened_institutional_queries(org.organization_name, org.ein)})]
     scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
     name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
-    if name_score < 0:
+    from deployment.gate41_repairs import ct_service_variant, plain_key
+    variant = ct_service_variant(org.organization_name) if trial_identity() else ''
+    variant_match = bool(variant and plain_key(row_name) == plain_key(variant)
+                         and not any(plain_key(name) == plain_key(row_name) for name in reviewed_identity_names))
+    if name_score < 0 and not variant_match:
         return None, name_score
     pairs: dict[str, str] = {}
     for label_html, value_html in re.findall(r"<b[^>]*>(.*?)</b>\s*<p[^>]*>(.*?)</p>", row_html, re.I | re.S):
@@ -17517,6 +17620,50 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     if re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", combined, re.I):
         score -= 100
     result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
+    if variant_match:
+        ident = result.matched_registry_identifier
+        eins = {canonical_ein_digits(value) for value in re.findall(
+            r"(?:Federal\s+(?:Tax\s+ID|EIN)|FEIN|EIN)\s*[:#]\s*(\d{2}-?\d{7})", combined, re.I)}
+        if not ident or (eins and eins != {canonical_ein_digits(org.ein)}):
+            return None, -10000
+        address = re.search(r"\bAddress\s+(\d[^\r\n;]{4,155}?),?\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b", detail_text)
+        proof = {}
+        if not eins and address and deadline is not None:
+            # The CT view flattens street and city into one field. Compare
+            # the entire street + city rather than guessing its split point.
+            address_key = registry_street_key(address[1])
+            expected_ein = canonical_ein_digits(org.ein)
+            stop = time.monotonic() + max(0, deadline-time.perf_counter()-1)
+            for source in ("CA", "CO"):
+                if time.monotonic() >= stop: break
+                try:
+                    records = identity_source_result(source, expected_ein,
+                        min(stop,time.monotonic()+3)).get("organization_records", [])
+                    proof = next((item for item in records if item.get("address_role") == "organization"
+                        and canonical_ein_digits(item.get("ein", "")) == expected_ein
+                        and item.get("state") == address[2]
+                        and str(item.get("postal_code", ""))[:5] == address[3]
+                        and item.get("street") and item.get("city")
+                        and registry_street_key(f"{item['street']} {item['city']}") == address_key
+                        and any(normalized_match_name(value) == normalized_match_name(org.organization_name) for value in item.get("names", []))), {})
+                except Exception:
+                    continue
+                if proof:
+                    proof = {"decision": "corroborated"}
+                    break
+        if eins or proof.get("decision") == "corroborated":
+            result.selection_rank = (95, 0, score)
+            result.source_note = "Connecticut's full name differs only by Service/Services. The credential was corroborated by the requested EIN or its full organization office address."
+        else:
+            row = {"name": row_name, "identifier": ident, "ein": "", "url": url,
+                   "raw_status": result.raw_status_text, "status": result.status,
+                   "expiration": exp_date, "license_category": "PUBLIC CHARITY", "_identity_outcome": "possible"}
+            result._cc_identity_review = {"records": [row], "search_complete": False, "freshness": ""}
+            result.selection_rank = (-1, 0, 0)
+            result.status = "Needs Review"
+            result.success = False
+            result.source_note = "Connecticut lists a full Service/Services name variant. Confirm the selected credential's identity."
+        return result, score
     reviewed = ct_shortened_identity_review(org, result, detail_text)
     return reviewed, score if reviewed else -10000
 
@@ -17830,6 +17977,10 @@ def search_ct_direct(org):
     variants = list(dict.fromkeys([*primary_forms, *variants]))
     if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
         variants = focused_generated_name_queries([original_name, *known_names_for_ein(org.ein)], variants)
+    if trial_identity():
+        from deployment.gate41_repairs import ct_service_variant, replace_low_value_slot
+        variants = replace_low_value_slot(variants, [*primary_forms, original_name, *known_names_for_ein(org.ein)],
+                                          original_name, ct_service_variant(original_name))
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -30265,7 +30416,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     "a registration expiration date or a specific suspended, revoked, or delinquent status. "
                     "Confirm registration details directly with Virginia.")
 
-    if state == "OR" and reason in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_PERIOD_UNCONFIRMED", "OR_LIVE_EXPLICIT_STATUS", "OR_OVERDUE_UNDER_BOTH_CONFIRMED_PERIODS", "OR_STATUS_FROM_COMPLETED_LIVE_REPORT"}:
+    if state == "OR" and reason in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_PERIOD_UNCONFIRMED", "OR_LIVE_EXPLICIT_STATUS", "OR_OVERDUE_UNDER_BOTH_CONFIRMED_PERIODS", "OR_STATUS_FROM_COMPLETED_LIVE_REPORT", "OR_ATTACHED_FILING_EIN_CONFIRMED", "OR_HEADER_EIN_CONFLICT"}:
         return note
 
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
@@ -35947,6 +36098,9 @@ def search_wv_precise(page, org, *, public_lookup=None):
         ]
         result.identity_confidence = "safe_registry_name_match"
         result.success = True
+        if public_lookup is None and page is not None and trial_identity():
+            from deployment.source_visual_adapters import capture_current_wv_detail
+            capture_current_wv_detail(result, page, registry_id, matched_name, expiration_text, status_text, deadline)
         return result
     except Exception as exc:
         result.status = "Unable to Verify"

@@ -55,7 +55,16 @@
         const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none';
         const profession=document.getElementById('ctl00_cphMainContent_lblSearchParam1');
         const name=document.getElementById('ctl00_cphMainContent_lblSearchParam2');
-        return {url:location.href,ready:document.readyState,viewport_width:innerWidth,text:document.body?document.body.innerText:'',source_fields:table?{
+        const anchors=${JSON.stringify(d.operation==='detail'?[d.name,d.identifier,d.raw_status.split(';')[0],
+          ...[...d.raw_status.matchAll(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g)].map(m=>m[0])]:[])};
+        const norm=s=>String(s).toLowerCase().replace(/[^a-z0-9]/g,'');
+        const cells=Array.from(document.querySelectorAll('td,th,strong,label,span')).filter(e=>{
+          if(e.children.length||!visible(e))return false;
+          const b=e.getBoundingClientRect();
+          return b.width>0&&b.height>0&&b.left>=0&&b.top>=0&&b.right<=innerWidth&&b.bottom<=innerHeight;
+        }).map(e=>norm(e.innerText));
+        const viewport_bound=anchors.length>0&&anchors.every(a=>norm(a)&&cells.some(c=>c.includes(norm(a))));
+        return {url:location.href,ready:document.readyState,viewport_width:innerWidth,viewport_bound,text:document.body?document.body.innerText:'',source_fields:table?{
           profession:profession?.innerText?.replace(/^Profession\\s*:\\s*/, '').trim(),name:name?.innerText?.replace(/^Firm Name\\s*:\\s*/, '').trim(),
           visible:visible(table)&&visible(profession)&&visible(name),rows:Array.from(table.rows).map(r=>Array.from(r.cells).map(c=>c.innerText.trim()))}:null};
       })())`,returnByValue:true},initial?'initial_metadata':'Runtime.evaluate');
@@ -70,11 +79,17 @@
       try {rail=await CCSourceRail.acquire(sender,'WI',d.deadline_schema===1?d.expires_at*1000-20000:start+58000,d.run_id,signal);check();}
       finally {steps.push({phase:'queue',seconds:(Date.now()-queued)/1000});}
       end=Math.min(d.deadline_schema===1?d.expires_at*1000:start+75000,Date.now()+20000);if(rail)rail.job.activeExpiresAt=end;
+      if(auroraBackgroundTrial(sender)){
+      tab=await limit(chrome.tabs.create({windowId:sender.tab.windowId,url:d.url,active:false}),
+        'create',v=>chrome.tabs.remove(v.id).catch(()=>{}));
+      if(!Number.isInteger(tab?.id))throw Error('owned_tab_unavailable');
+    }else{
       window=await limit(CCSourceRail.create(rail,{url:d.url,...(rail?.options||{type:'popup',focused:false,width:1000,height:800})}),
         'create',v=>chrome.windows.remove(v.id).catch(()=>{}));
       if(rail)rail.windowId=window.id;
       tab=window?.tabs?.[0];
       if(!Number.isInteger(window?.id)||!Number.isInteger(tab?.id))throw Error('owned_window_unavailable');
+    }
       await limit(chrome.debugger.attach({tabId:tab.id},'1.3'),'attach',()=>chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));attached=true;
       await command('Page.enable');
       let m=null;
@@ -91,6 +106,18 @@
       if(!bound(d,m))throw Error('selected_detail_unavailable');
       await new Promise(resolve=>setTimeout(resolve,150));
       const before=await metadata();if(JSON.stringify(before)!==JSON.stringify(m))throw Error('source_changed');
+      // The positive record is already bound to this page. Prefer the
+      // painted viewport only when name, ID, status and dates fit inside it.
+      let shot=null;
+      if(d.operation==='detail'&&before.viewport_bound&&end-Date.now()>5000) {
+        try {
+          shot=await command('Page.captureScreenshot',{format:'jpeg',quality:80,
+            captureBeyondViewport:false,fromSurface:true},'viewport_capture');
+        } catch(error) {
+          if(!/^timeout:viewport_capture$/.test(String(error.message)))throw error;
+        }
+      }
+      if(!shot?.data) {
       const layout=await command('Page.getLayoutMetrics');const measured=layout.cssContentSize||layout.contentSize;
       // A full-height screenshot can remove the scrollbar and reflow the page.
       // Preserve the original viewport width instead of cropping at the old
@@ -98,7 +125,8 @@
       if(!Number.isFinite(before.viewport_width)||before.viewport_width<1)throw Error('source_size_rejected');
       const rect=measured?{...measured,width:Math.max(measured.width,before.viewport_width)}:null;
       if(!rect||rect.width<1||rect.height<1||rect.width*rect.height>20000000)throw Error('source_size_rejected');
-      const shot=await command('Page.captureScreenshot',{format:'jpeg',quality:80,captureBeyondViewport:true,fromSurface:true,clip:{x:0,y:0,width:rect.width,height:rect.height,scale:1}});
+      shot=await command('Page.captureScreenshot',{format:'jpeg',quality:80,captureBeyondViewport:true,fromSurface:true,clip:{x:0,y:0,width:rect.width,height:rect.height,scale:1}});
+      }
       const after=await metadata();check();if(JSON.stringify(before)!==JSON.stringify(after)||!bound(d,after)||Date.now()>=end)throw Error('source_changed');
       return {ok:true,request:d,url:d.url,public_text:after.text,source_fields:after.source_fields,navigation_started_at:start/1000,image:shot.data,captured_at:Date.now()/1000,timing:{seconds:(Date.now()-start)/1000,queue_seconds:steps.find(s=>s.phase==='queue')?.seconds||0,active_seconds:(Date.now()-start)/1000-(steps.find(s=>s.phase==='queue')?.seconds||0),steps}};
     } catch(error) {return {ok:false,reason:String(error.message||'capture_failed').slice(0,150),timing:{seconds:(Date.now()-start)/1000,queue_seconds:steps.find(s=>s.phase==='queue')?.seconds||0,active_seconds:(Date.now()-start)/1000-(steps.find(s=>s.phase==='queue')?.seconds||0),steps,...(error.sourceRailObservation?{placement:error.sourceRailObservation}:{})}};}
@@ -106,7 +134,7 @@
       closed=true;signal?.removeEventListener("abort",onCancel);
       const cleanup=[];
       if(attached&&tab)cleanup.push(chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));
-      if(window)cleanup.push(chrome.windows.remove(window.id).catch(()=>{}));
+      if(window)cleanup.push(chrome.windows.remove(window.id).catch(()=>{}));else if(tab)cleanup.push(chrome.tabs.remove(tab.id).catch(()=>{}));
       let timer;
       await Promise.race([Promise.allSettled(cleanup),new Promise(resolve=>{timer=setTimeout(resolve,500);})]);
       clearTimeout(timer);if(rail)await CCSourceRail.release(rail);busy.delete(owner);

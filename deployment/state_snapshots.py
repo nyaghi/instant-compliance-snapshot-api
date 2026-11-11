@@ -1034,6 +1034,11 @@ def ga_completed_results_snapshot(record,query,evidence,url,text):
     Returned unrelated rows do not turn it into an empty search or a positive
     registration. The signed query/cleaner boundary remains authoritative.
     """
+    # No visible query echo in GA's generic result grid: use search history.
+    # A result row containing a substring is not a query echo.
+    if not isinstance(text, str) or not re.search(r'(?im)^\s*(?:Business/Company Name|Search Term)\s*:\s*'
+                     + re.escape(str(query.get('orgName', ''))) + r'\s*$', text or ''):
+        return False
     if ga_completed_empty_grid_snapshot(record,query,evidence,url,text):return True
     source=urlsplit(url)
     if (record.get('state')!='GA' or query.get('state')!='GA' or 'identifier' in query
@@ -1241,7 +1246,7 @@ def _connector_archive(record,payload,query,evidence):
                 and evidence.get('total')==0 and evidence.get('rows')==[]
                 and re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I)
                 or not rows and il_completed_empty_snapshot(record,query,evidence,url,text)
-                or not rows and ga_completed_empty_grid_snapshot(record,query,evidence,url,text)
+                or not rows and ga_completed_results_snapshot(record,query,evidence,url,text)
                 or not rows and nc_completed_empty_snapshot(record,query,evidence,url,text)):
             rows=[('@completed-search',record['organization_name'])]
         elif nc_completed_results_snapshot(record,query,evidence,url,text):
