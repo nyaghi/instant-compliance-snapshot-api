@@ -41,21 +41,21 @@
     },
     "NH": {
       "state": "NH",
-      "status": "unchanged",
-      "record_count": 14092,
-      "updated_label": "October 31, 2026",
-      "checksum": "0f5bd096ffb5c4de07a6fdb87b67ee2d3ecae586b0022d76bba96f7f1c03d2ed",
+      "status": "changed",
+      "record_count": 14111,
+      "updated_label": "November 09, 2026",
+      "checksum": "08e20e6da536d6bc46c1250ce56c0f3bde48b8804dc9d8bd25ca4e6ac7a884cf",
       "source_url": "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
-      "source_date": "October 31, 2026",
-      "downloaded_at": "2026-11-03T13:06:59.217301+00:00",
+      "source_date": "November 09, 2026",
+      "downloaded_at": "2026-11-11T14:33:41.043918+00:00",
       "assets": [
         {
           "path": "registered-charities.pdf",
-          "sha256": "0f5bd096ffb5c4de07a6fdb87b67ee2d3ecae586b0022d76bba96f7f1c03d2ed"
+          "sha256": "08e20e6da536d6bc46c1250ce56c0f3bde48b8804dc9d8bd25ca4e6ac7a884cf"
         },
         {
           "path": "downloadable-data/NH-records.json",
-          "sha256": "268e8c719e5dead1b0fc8b149d1b1a2ec213c8cb0bef7b19844fa32a52028159"
+          "sha256": "df8ee7f59d7f79735db83acdf2257777f4725b81d89871640d9ae466fd29dce7"
         }
       ]
     },
@@ -96,18 +96,7 @@
     }
   },
   "last_run": {
-    "at": "2026-11-10T12:29:33.992683+00:00",
-    "refreshed_states": [
-      "KS",
-      "KY",
-      "LA",
-      "OR"
-    ],
-    "errors": [
-      {
-        "state": "NH",
-        "error": "Official PDF dated November 9, 2026, page 440, registration 2652 has a blank charity name. Retained the previously verified source and its original timestamp."
-      }
-    ]
+    "at": "2026-11-11T14:33:47.963701+00:00",
+    "errors": []
   }
 }

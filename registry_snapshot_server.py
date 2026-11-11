@@ -31294,11 +31294,22 @@ def nh_should_try_xlsx_before_pdf() -> bool:
     return False
 
 
-def nh_record_from_cells(cells: list[str]) -> dict:
+# The official November 9, 2026 PDF contains one nameless registration.
+# Its October 31 entry names New England Circle, Inc., but the November 9
+# file cannot verify that identity. Bind the exception to the original bytes.
+NH_NAMELESS_ROW_PDF_SHA256 = "08e20e6da536d6bc46c1250ce56c0f3bde48b8804dc9d8bd25ca4e6ac7a884cf"
+
+
+def nh_record_from_cells(cells: list[str], *, source_digest: str = "") -> dict:
     if len(cells) != 4:
         raise ValueError("NH registration row has an unexpected number of fields")
     registry_id, registry_name, status_code, due_raw = [re.sub(r"\s+", " ", str(value or "")).strip() for value in cells]
-    if (registry_id and not re.fullmatch(r"\d{1,6}", registry_id)) or not registry_name or "(cid:" in registry_name:
+    known_nameless_row = (
+        source_digest == NH_NAMELESS_ROW_PDF_SHA256
+        and (registry_id, registry_name, status_code, due_raw) == ("2652", "", "G", "11/15/2026")
+    )
+    if ((registry_id and not re.fullmatch(r"\d{1,6}", registry_id))
+            or (not registry_name and not known_nameless_row) or "(cid:" in registry_name):
         raise ValueError(f"NH registration identity could not be read: {registry_id!r}")
     due_date = parse_due_date(due_raw)
     if due_raw and not due_date:
@@ -31307,6 +31318,7 @@ def nh_record_from_cells(cells: list[str]) -> dict:
         "registry_id": registry_id, "registry_name": registry_name,
         "body": registry_name, "registry_words": set(normalized_match_name(registry_name).split()),
         "status_code": status_code.upper(), "due_raw": due_raw, "due_date": due_date,
+        **({"prior_registry_name": "New England Circle, Inc."} if known_nameless_row else {}),
     }
 
 
@@ -31318,6 +31330,7 @@ def nh_parse_pdf_table_records(pdf_bytes: bytes) -> tuple[list[dict], str]:
 
     records = []
     updated_label = ""
+    source_digest = hashlib.sha256(pdf_bytes).hexdigest()
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
             try:
@@ -31358,7 +31371,8 @@ def nh_parse_pdf_table_records(pdf_bytes: bytes) -> tuple[list[dict], str]:
                     # populated row must still parse and reconcile its source ID.
                     if not any(str(value or "").strip() for value in row):
                         continue
-                    page_records.append(nh_record_from_cells([row[i] for i in (0, 1, 6, 7)]))
+                    page_records.append(nh_record_from_cells(
+                        [row[i] for i in (0, 1, 6, 7)], source_digest=source_digest))
                 if not page_records or Counter(source_ids) != Counter(row["registry_id"] for row in page_records if row["registry_id"]):
                     raise ValueError(f"NH registration-column reconciliation failed on page {page.page_number}")
                 records.extend(page_records)
@@ -31376,7 +31390,7 @@ def nh_records_from_snapshot_bytes(snapshot_bytes: bytes, pdf_digest: str) -> tu
     payload = json.loads(snapshot_bytes)
     if payload.get("source_sha256") != pdf_digest:
         raise ValueError("NH parsed records do not match the verified source PDF")
-    records = [nh_record_from_cells(row) for row in payload["records"]]
+    records = [nh_record_from_cells(row, source_digest=pdf_digest) for row in payload["records"]]
     if payload.get("source_record_count") != len(records) or not payload.get("updated_label"):
         raise ValueError("NH parsed record reconciliation is missing or incomplete")
     return records, f"{payload['updated_label']} from bundled NH PDF"
@@ -31542,6 +31556,18 @@ def search_nh_live_pdf(org):
             record_name=lambda r:r['Name'], name_score=target_name_score):
         best = find_best_nh_record(records)
         if not best:
+            target_keys = {compact_normalized_name_key(target) for target in targets}
+            for record in records:
+                prior_name = record.get("prior_registry_name")
+                if prior_name and compact_normalized_name_key(prior_name) in target_keys:
+                    result.status = "Needs Review"
+                    result.status_reason = "NH_SOURCE_ROW_MISSING_NAME"
+                    result.raw_status_text = f"Registration {record['registry_id']} has no charity name in the current PDF."
+                    result.source_note = (
+                        "The prior New Hampshire PDF listed this name at that registration number. "
+                        "The current PDF leaves the charity name blank, so registration could not be confirmed."
+                    )
+                    break
             return result
 
         record, registry_name = best

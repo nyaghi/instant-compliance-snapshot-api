@@ -293,6 +293,10 @@ def main() -> int:
                     row_asset = next(a for a in entry['assets'] if a['path'].endswith('.json'))
                     rows = json.loads((BASE_DIR / row_asset['path']).read_text())
                     rows = rows.get('records', []) if isinstance(rows, dict) else rows
+                    if state == 'NH':
+                        # The lookup retains the reviewed nameless row for reconciliation.
+                        # A page without an organization name cannot be its match evidence.
+                        rows = [row for row in rows if row[1]]
                     index_path = BASE_DIR / 'deployment/source-page-indexes.json'
                     indexes = json.loads(index_path.read_text()) if index_path.exists() else {}
                     indexes[state] = build_page_index(state, (BASE_DIR / pdf_asset['path']).read_bytes(), rows, pdf_asset['path'])

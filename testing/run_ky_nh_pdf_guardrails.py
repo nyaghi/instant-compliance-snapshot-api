@@ -43,6 +43,22 @@ class PdfGuardrails(unittest.TestCase):
             rows=self.rows();rows[1][index]=value
             with self.subTest(index=index),self.assertRaises(ValueError):c.nh_parse_pdf_table_records(pdf_bytes(rows))
 
+    def test_nh_documented_nameless_row_is_review_only(self):
+        nameless = ['2652', '', 'G', '11/15/2026']
+        with self.assertRaisesRegex(ValueError, 'identity'):
+            c.nh_record_from_cells(nameless, source_digest='different PDF')
+        with self.assertRaisesRegex(ValueError, 'identity'):
+            c.nh_record_from_cells(['2653', *nameless[1:]], source_digest=c.NH_NAMELESS_ROW_PDF_SHA256)
+        record = c.nh_record_from_cells(nameless, source_digest=c.NH_NAMELESS_ROW_PDF_SHA256)
+        self.assertEqual(record['registry_name'], '')
+        with patch.object(c, 'nh_live_pdf_records', return_value=([record], 'November 9, 2026')):
+            result = c.search_nh_live_pdf(c.checker.Organization('New England Circle Inc', '123456789'))
+            unrelated = c.search_nh_live_pdf(c.checker.Organization('Example Animal Rescue', '234567890'))
+        self.assertEqual(result.status, 'Needs Review')
+        self.assertEqual(result.status_reason, 'NH_SOURCE_ROW_MISSING_NAME')
+        self.assertFalse(result.matched_registry_identifier)
+        self.assertEqual(unrelated.status, c.checker.STATUS_NOT_REGISTERED)
+
     def test_changed_column_headers_are_rejected(self):
         with self.assertRaises(ValueError):c.nh_parse_pdf_table_records(pdf_bytes(self.rows(),HEADER[:-1]+['Different Date']))
 
