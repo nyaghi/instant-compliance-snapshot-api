@@ -43,12 +43,17 @@
       const completedNegative=r.success===true&&(r.status==='Not Registered'||r.state==='IL'&&r.status==='Not Registered / Non-Compliant');
       const validHistory=history&&(!r.evidence_bundle_url||r.evidence_bundle_url===`/state-evidence/${history[1]}/evidence.zip`);
       const incompleteArkansas=r.state==='AR'&&r.success===false&&r.status_reason==='AR_REQUIRED_SEARCH_INCOMPLETE';
-      const path=r.evidence_url||(validHistory&&(completedNegative||incompleteArkansas||r.identity_review_evidence_final===true)?history[0]:'');
+      const historyOnly = window.CCIdentityReview?.usesSearchHistoryOnly?.(r)
+        ?? (completedNegative && r.state !== 'CA');
+      const historyPath = validHistory && (historyOnly || completedNegative || incompleteArkansas
+        || r.identity_review_evidence_final === true) ? history[0] : '';
+      const path = historyOnly ? historyPath : r.evidence_url || historyPath;
       const evidenceType=path?(path===history?.[0]?(incompleteArkansas?'Search attempts':'Search history'):'State snapshot'):'';
       const pendingSnapshot = r.state === 'GA' && r.identity_review?.candidates?.some(candidate =>
         !candidate.decision && candidate.identifier === r.matched_registry_identifier
         && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(candidate.evidence_url || ''));
-      const evidenceLabel = pendingSnapshot ? 'Snapshot available after match confirmation' : 'Snapshot unavailable';
+      const evidenceLabel = historyOnly ? 'Names searched unavailable'
+        : pendingSnapshot ? 'Snapshot available after match confirmation' : 'Snapshot unavailable';
       return [r.state,label(r),path?new URL(path,location.origin).href:evidenceLabel,r.source_url||'',r.registration_date_source_label||'',r.registration_date_note||'',r.renewal_filing_label||r.renewal_date_source_label||'',r.renewal_filing_note||r.renewal_date_note||'',evidenceType];
     });
     const files={

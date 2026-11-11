@@ -23,6 +23,14 @@
   function add(parent, tag, value, classes = '') {
     const el = document.createElement(tag); el.textContent = value; el.className = classes; parent.appendChild(el); return el;
   }
+  function usesSearchHistoryOnly(result) {
+    const completedNegative = result.success === true && (result.status === 'Not Registered'
+      || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant');
+    const candidates = result.identity_review?.candidates;
+    const allRejected = candidates?.length > 0 && candidates.every(candidate => candidate.decision === 'reject');
+    return completedNegative && !selectedCANonregistration(result)
+      || result.identity_review_evidence_final === true && allRejected;
+  }
   function renderEvidence(parent, result) {
     const source = /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(result.evidence_url || '');
     const bundle = /^\/state-evidence\/([a-f0-9]{64})\/evidence\.zip$/.exec(result.evidence_bundle_url || '');
@@ -36,11 +44,7 @@
       log.href = '/evidence-preview.html?document=' + encodeURIComponent(result.search_history_url); log.target = '_blank'; log.rel = 'noopener noreferrer';
     }
     // A completed absence is documented by actual queries, not an empty image.
-    const negative = !selectedCANonregistration(result) && result.success === true && (result.status === 'Not Registered'
-      || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant');
-    const allRejected = result.identity_review?.candidates?.length
-      && result.identity_review.candidates.every(candidate => candidate.decision === 'reject');
-    if (negative || result.identity_review_evidence_final === true && allRejected) {
+    if (usesSearchHistoryOnly(result)) {
       if (!validHistory) add(parent,'p','Names searched unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
       return;
     }
@@ -142,5 +146,5 @@
     if (inconclusive && result.identity_review?.candidates?.some(candidate => !candidate.decision)) return 'Confirm match';
     return inconclusive ? 'Review required' : result.status || 'Unknown';
   }
-  window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel});
+  window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel, usesSearchHistoryOnly});
 })();
