@@ -273,6 +273,41 @@ def final_four_asset(name, text):
       const dispatchOrder=tnFirst?[...external.filter(state=>state==='TN'),...external.filter(state=>state!=='TN')]:external;
       trace("browser collectors dispatched",{states:[...dispatchOrder],collector_order:tnFirst?'tn-first':'default'});''')
         replace('connector=Promise.all(external.map(async state=>{', 'connector=Promise.all(dispatchOrder.map(async state=>{')
+        replace('    let connector=Promise.resolve(),connectorStarted=false;', '''    const quietTennessee = mode==='standard' && location.pathname==='/' &&
+      new URLSearchParams(location.search).get('aurora_connector_test')==='background';
+    const tennesseeRetryDeadline = quietTennessee ? performance.now()+120000 : 0;
+    let connector=Promise.resolve(),connectorStarted=false;''')
+        replace('          let result=await externalLookup(state,names,signal);', '''          let result=await externalLookup(state,names,signal);
+          const diagnostic=result?.lab_diagnostic;
+          if(quietTennessee && state==='TN' && result?.state==='TN' && result.success===false &&
+              ['NY_CONNECTOR_TN_VERIFICATION_PENDING','NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'].includes(diagnostic?.code) &&
+              diagnostic.completed_count===0 && diagnostic.pending_operation==='search' &&
+              tennesseeRetryDeadline-performance.now()>=63000 && !signal?.aborted) {
+            // The first search never completed. Retry the normal source check
+            // in the same quiet mode, with the same names and a bounded clock.
+            await new Promise(resolve=>{
+              const finish=()=>{
+                clearTimeout(timer);
+                signal?.removeEventListener('abort',finish);
+                resolve();
+              };
+              const timer=setTimeout(finish,3000);
+              signal?.addEventListener('abort',finish,{once:true});
+            });
+            signal?.throwIfAborted();
+            if(tennesseeRetryDeadline-performance.now()>=60000) {
+              trace("quiet Tennessee retry started",{state,reason:diagnostic.code});
+              const timeout=AbortSignal.timeout(60000);
+              const retrySignal=signal?AbortSignal.any([signal,timeout]):timeout;
+              try {
+                const retry=await externalLookup(state,names,retrySignal);
+                if(retry?.state===state && !retrySignal.aborted)result=retry;
+              } catch(error) {
+                if(error?.stopCleanupFailed)throw error;
+                signal?.throwIfAborted();
+              }
+            }
+          }''')
         replace('        token=accepted.token;', '        token=accepted.token;trace("backend workflow accepted",{progressive_external_release:accepted.progressive_external_release===true});')
         replace("            try{await call('release-external');released=true;}catch{signal?.throwIfAborted();}", "            try{await call('release-external');released=true;trace('external collectors released');}catch{signal?.throwIfAborted();}")
         replace('      return states.map(state=>results.get(state));', '      trace("workflow finished",{result_count:results.size});\n      return states.map(state=>results.get(state));', 2)

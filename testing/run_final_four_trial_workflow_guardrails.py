@@ -19,6 +19,71 @@ TRIAL = {'origin': 'https://fixture-final-four.onrender.com'}
 
 
 class TrialWorkflowControls(unittest.TestCase):
+    def test_quiet_tennessee_retries_only_an_unfinished_first_search(self):
+        with patch.object(lab,'trial_identity',return_value=TRIAL), patch.object(lab,'LAB_ORIGIN',TRIAL['origin']):
+            source=lab.lab_asset('/optimized-workflows.js')[0].decode('utf-8')
+        program=r'''
+const vm=require('node:vm'),assert=require('node:assert/strict'),crypto=require('node:crypto');
+const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+const pending={state:'TN',success:false,status:'Unable to Confirm',
+ lab_diagnostic:{code:'NY_CONNECTOR_TN_VERIFICATION_PENDING',completed_count:0,pending_operation:'search'}};
+const snapshot={state:'TN',success:true,status:'Upcoming Filing',evidence_url:'/state-snapshots/tn.pdf'};
+async function run({first=pending,second=snapshot,quiet=true,mode='standard',elapsed=45000,stop=false,states=['TN']}={}) {
+ const window={},calls=[],delays=[],published=[],controller=new AbortController();
+ let now=0;
+ const location={origin:'https://fixture-final-four.onrender.com',pathname:'/',
+  search:quiet?'?collector_layout=duo&aurora_connector_test=background':'?collector_layout=duo'};
+ vm.runInNewContext(source,{window,location,URLSearchParams,crypto,AbortSignal,performance:{now:()=>now},
+  setTimeout:(callback,ms)=>setImmediate(()=>{delays.push(ms);now+=ms; if(stop)controller.abort();else callback();}),
+  clearTimeout:clearImmediate,fetch:()=>{throw Error('Connector-only run must not start a worker workflow');}});
+ const result=await window.CCOptimized.run({apiBase:location.origin,name:'Example Charity',ein:'123456789',
+  states,mode,aliases:['Reviewed name'],credentials:{},signal:controller.signal,onResult:r=>published.push(r),
+  externalLookup:async(state,names,signal)=>{
+   calls.push({state,names,signal});
+   if(state!=='TN')return {...snapshot,state};
+   if(calls.filter(x=>x.state==='TN').length===1){now+=elapsed;return first;}
+   if(second instanceof Error)throw second;
+   return second;
+  }});
+ return {result,calls,delays,published,trace:window.__CCLabStateTrace};
+}
+(async()=>{
+ const recovered=await run();
+ assert.equal(recovered.calls.length,2);
+ assert.deepEqual(recovered.calls[0].names,recovered.calls[1].names);
+ assert.deepEqual(recovered.delays,[3000]);
+ assert.deepEqual(recovered.published,[snapshot]);
+ assert.equal(recovered.result[0].evidence_url,snapshot.evidence_url);
+ assert.equal(recovered.trace.filter(e=>e.stage==='quiet Tennessee retry started').length,1);
+ const parallel=await run({states:['TN','GA']});
+ assert.deepEqual(parallel.published.map(r=>r.state),['GA','TN']);
+ const formPending=await run({first:{...pending,lab_diagnostic:{...pending.lab_diagnostic,
+  code:'NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'}}});
+ assert.equal(formPending.calls.length,2);
+ for(const opts of [
+  {first:snapshot}, {quiet:false}, {mode:'sales'}, {elapsed:58000},
+  {first:{...pending,lab_diagnostic:{...pending.lab_diagnostic,completed_count:1}}},
+  {first:{...pending,lab_diagnostic:{...pending.lab_diagnostic,pending_operation:'detail'}}},
+  {first:{...pending,lab_diagnostic:{...pending.lab_diagnostic,code:'NY_CONNECTOR_TAB_READY_TIMEOUT'}}},
+  {states:['GA']}
+ ]) {
+  const out=await run(opts);
+  assert.equal(out.calls.length,1,JSON.stringify(opts));
+  assert.deepEqual(out.delays,[]);
+ }
+ const again=await run({second:pending});
+ assert.equal(again.calls.length,2);
+ assert.deepEqual(again.published,[pending]);
+ const unavailable=await run({second:Error('connector disconnected')});
+ assert.deepEqual(unavailable.published,[pending]);
+ const stopped=await run({stop:true});
+ assert.equal(stopped.calls.length,1);
+ assert.deepEqual(stopped.published,[]);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+'''
+        result=subprocess.run([str(NODE),'-e',program],input=json.dumps(source),capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+
     def test_real_ui_failure_preserves_aliases_for_retry(self):
         with patch.object(lab,'trial_identity',return_value=TRIAL):
             source=lab.final_four_asset('index.html',(ROOT/'web-staging/index.html').read_text(encoding='utf-8'))
