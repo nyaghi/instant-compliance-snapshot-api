@@ -850,6 +850,9 @@ class CaptureRun:
             if self.state=='PA' and not negative:
                 from deployment.pa_detail_evidence import select as select_pa_detail
                 ordered=select_pa_detail(self,ordered)
+            if self.state=='OR' and not negative and getattr(self, 'or_confirmed_filing_url', ''):
+                # The header image alone would show the conflicting EIN without the filing proof.
+                ordered=[d for d in ordered if d[2]=='source_pdf' and d[0]==self.or_confirmed_filing_url]
             for url,raw,kind,public_text,stamp,source_note in ordered:
                 text=public_text
                 matched=(self.ein in digits(text) or bool(name and (source_name_present(name,text,self.state) if kind=='source_pdf' else key(name) in key(text))))

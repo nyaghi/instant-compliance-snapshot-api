@@ -15280,7 +15280,7 @@ def search_bundled_extension_state(page, org, state: str):
             from deployment.gate41_repairs import plain_key, or_filing_link, or_filing_identity, fetch_or_filing
             body = registry_page_body(page)
             source = str(getattr(result, 'source_url', '') or '')
-            parsed = urlsplit(source)
+            parsed = urllib.parse.urlsplit(source)
             expected = canonical_ein_digits(org.ein)
             shown = checker.extract_labeled_value_from_text(body, ['Federal EIN', 'EIN'])
             actual = canonical_ein_digits(shown)
@@ -15310,6 +15310,7 @@ def search_bundled_extension_state(page, org, state: str):
                         if run is not None:
                             run.document(url, excerpt, 'source_pdf', body,
                                 'Original Oregon filing excerpt: state filing cover and federal filer identity. The registry header shows a different EIN.')
+                            run.or_confirmed_filing_url = url
                         due = or_next_due_from_period_end(latest)
                         result.status = status_from_calendar_date(due)
                         result.raw_status_text = f'Status: Registered | Fiscal Period End: {period} | Next Due: {format_date(due)}'
