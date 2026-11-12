@@ -746,12 +746,19 @@ async function registryNmHttpFailure(job, deadline) {
     timer=setTimeout(()=>{cancelled=true;resolve(false);},Math.min(2500,Math.max(1,deadline-Date.now())));
   })]);}finally{clearTimeout(timer);}
 }
-async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null, nvRouteOnly = false) {
+async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null, nvRouteOnly = false, nvStartup = false) {
   if (nvRouteOnly && (job.registryState!=='NV' || oldDocument!==null
       || path!==new URL(registryStart('NV')).pathname)) throw registrySequenceError(job,null,'readiness-route-contract');
   const started = Date.now();
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
   let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false, resubmissionAcknowledged=false;
+  let nvFormStalled=false;
+  const readinessFailure=()=>{
+    if(verificationPending)return `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING`;
+    if(nvStartup && nvFormStalled && !job.closed && deadline<job.activeExpiresAt)
+      return 'NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT';
+    return 'NY_CONNECTOR_TAB_READY_TIMEOUT';
+  };
   let nvInitialVisible=await wfAwait(job,"registry-worker.js:registryReady:618:23:await",()=>(registryNevadaVisibleSnapshot(job))), nvVisibilityRechecked=false, ncVisibilityRechecked=false;
   try { while (!job.closed && Date.now()<deadline) {
     try {
@@ -800,6 +807,12 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
           && [registryStart('NV'), registryOrigin('NV')+'/portal/public/#/'].includes(value.url)
           && Date.now()-started>=3000)
         throw new Error('NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE');
+      if(nvStartup) {
+        const form=value?.nv_readiness;
+        nvFormStalled=value?.ready!==true && value?.verification_pending!==true
+          && value?.url===registryStart('NV') && form?.document_loaded===true && form?.search_route===true
+          && (form.loader_clear===false || form.inputs_present===false);
+      }
       // Fast readiness polls never leave registryMessage's visibility timer
       // pending long enough to fire. Recover a stalled initial form using the
       // same owned-tab lease as detail commands, without a request or reload.
@@ -858,7 +871,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
           && value.documentId===oldDocument && new URL(value.url).pathname==='/online_services/search/by_title/search_charities')
         throw new Error('NY_CONNECTOR_NC_SEARCH_NOT_STARTED');
     } catch(error) {
-      if(error?.message==='NY_CONNECTOR_READINESS_DEADLINE') throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : 'NY_CONNECTOR_TAB_READY_TIMEOUT');
+      if(error?.message==='NY_CONNECTOR_READINESS_DEADLINE') throw new Error(readinessFailure());
       if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED','NY_CONNECTOR_NC_RATE_LIMITED','NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE'].includes(error?.message))throw error;
       if(job.registryState==='NM' && await registryNmHttpFailure(job,deadline))
         throw new Error('NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR');
@@ -879,7 +892,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
     }
     await wfAwait(job,"registry-worker.js:registryReady:731:4:await",()=>(nap(200)));
   }
-  throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : "NY_CONNECTOR_TAB_READY_TIMEOUT");
+  throw new Error(readinessFailure());
   } finally {
     if(job.registryState==='TN')job.tnVerificationExpiresAt=0;
     if (previousVisible) try {
@@ -966,7 +979,9 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
   if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV')
       || !(job.nvReturnRecoveryUsed || job.nvReservationDetail || job.nvModeRecoveryUsed))) throw registrySequenceError(job,null,'navigation-recovery-contract');
     const navigationStarted=Date.now();
-    const deadline=Math.min(job.activeExpiresAt,Date.now()+Math.max(1,Math.min(45000,budgetMs)));
+    const nvStartup=Boolean(P.TRIAL_ORIGIN && job.registryState==='NV' && job.tab===null
+      && !freshNvRecovery && !job.finalFourSearchComplete && url===registryStart('NV'));
+    const deadline=Math.min(job.activeExpiresAt,Date.now()+Math.max(1,Math.min(nvStartup?30000:45000,budgetMs)));
     let previous;
   if (job.tab !== null) {
     try { previous=(await wfAwait(job,"registry-worker.js:registryNavigate:819:20:await",()=>(registryMessage(job,{action:"registry-ready"})))).documentId; } catch {}
@@ -1013,7 +1028,7 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
     if(P.TRIAL_ORIGIN && job.registryState==='MS')
       diagnostic('ms-tab-created',job,`ms=${Date.now()-navigationStarted}`);
   }
-    const ready=await wfAwait(job,"registry-worker.js:registryNavigate:863:16:await",()=>(registryReady(job,previous,new URL(url).pathname,freshNvRecovery?Math.max(1,deadline-Date.now()):budgetMs)));
+    const ready=await wfAwait(job,"registry-worker.js:registryNavigate:863:16:await",()=>(registryReady(job,previous,new URL(url).pathname,(freshNvRecovery||nvStartup)?Math.max(1,deadline-Date.now()):budgetMs,null,false,nvStartup)));
     if(P.TRIAL_ORIGIN && job.registryState==='MS')
       diagnostic('ms-page-ready',job,`ms=${Date.now()-navigationStarted} tab=${job.tab}`);
     return wfReturn(job,"registry-worker.js:registryNavigate:866:4:return",(ready));

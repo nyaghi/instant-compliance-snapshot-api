@@ -9329,15 +9329,22 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "The browser connector could not preserve this registry's search sequence." if reason == "NY_CONNECTOR_INVALID_SEQUENCE" else
            "The trial browser connector is unavailable or needs an update." if reason in {"NY_CONNECTOR_UNAVAILABLE", "NY_CONNECTOR_UPDATE_REQUIRED"} else
            "The registry search or selected record did not return complete, confirmed information.")
-    nv_startup_failure = (state == "NV" and reason == "NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE"
+    nv_startup_failure = (state == "NV" and reason in {
+                              "NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE",
+                              "NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT"}
                           and not record.get("completed")
                           and ((record.get("pending") or {}).get("query") or {}).get("operation") == "search")
     nm_http_error = state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
     if nv_startup_failure:
         result.status = "Site Not Reachable"
         result.success = False
-        result.source_note = ("Nevada's portal could not load its required configuration, so the search form "
-                              "never opened. CharityClarity reports Site Not Reachable.")
+        if reason == "NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT":
+            result.source_note = ("Nevada's public search form did not become usable within its startup time limit. "
+                                  "CharityClarity stopped before submitting a search. "
+                                  "No registration status was established.")
+        else:
+            result.source_note = ("Nevada's portal could not load its required configuration, so the search form "
+                                  "never opened. CharityClarity reports Site Not Reachable.")
     elif nm_http_error:
         result.status = 'Site Not Reachable'
         result.success = False
