@@ -51,7 +51,14 @@ def complete_receipt(record,pending,evidence,now):
     if record['state']=='NV' and operation=='search':
         mode=evidence.get('search_mode')
         broad=evidence.get('broad_total')
-        if mode not in {'STARTS_WITH','EXACT_MATCH'}:raise ValueError('NV observed filter not recorded')
+        if mode not in {'STARTS_WITH','EXACT_MATCH','CONTAINS'}:raise ValueError('NV observed filter not recorded')
+        if mode=='CONTAINS':
+            if query.get('search_mode')!='CONTAINS' or total!=0 or broad is not None and (type(broad) is not int or not 0<broad<=10000):
+                raise ValueError('NV Contains count not recorded')
+            if broad is not None:
+                receipt.update(returned_rows=None,outcome='Search returned rows; original name searches continued')
+            elif evidence.get('probe_unavailable') is True:
+                receipt.update(returned_rows=None,outcome='Contains completion unconfirmed; original name searches continued')
         if mode=='EXACT_MATCH' and (query.get('exact_above')!=20 or type(broad) is not int or not 20<broad<=10000):raise ValueError('NV narrowing not recorded')
         if mode=='STARTS_WITH' and broad is not None:raise ValueError('NV contradictory filters')
         receipt['observed_search_mode']=mode
@@ -153,7 +160,11 @@ def manifest(record,result,snapshot,now):
             if count is not None or receipt.get('outcome')!='Transport response received; source validation not recorded' or type(receipt.get('http_status')) is not int or not 200<=receipt['http_status']<400:raise ValueError('Invalid transport observation')
         if state=='NV' and receipt['operation']=='search':
             mode=receipt.get('observed_search_mode');broad=receipt.get('broad_result_count')
-            if mode not in {'STARTS_WITH','EXACT_MATCH'}:raise ValueError('NV filter receipt missing')
+            if mode not in {'STARTS_WITH','EXACT_MATCH','CONTAINS'}:raise ValueError('NV filter receipt missing')
+            if mode=='CONTAINS' and (query.get('search_mode')!='CONTAINS'
+                    or (broad is None and count!=0 and (count is not None or receipt.get('outcome')!='Contains completion unconfirmed; original name searches continued'))
+                    or (broad is not None and (type(broad) is not int or not 0<broad<=10000 or count is not None))):
+                raise ValueError('NV Contains receipt changed')
             if mode=='EXACT_MATCH' and (query.get('exact_above')!=20 or type(broad) is not int or not 20<broad<=10000):raise ValueError('NV filter receipt changed')
             if mode=='STARTS_WITH' and broad is not None:raise ValueError('NV filter receipt contradicted')
         validate_returned_details(receipt)
@@ -236,6 +247,9 @@ def query_label(q,receipt=None):
         prefix='Official dataset lookup: ' if q.get('source_kind')=='official_dataset' else ''
         if q['state']=='NV':
             mode=(receipt or {}).get('observed_search_mode')
+            if mode=='CONTAINS':
+                broad=receipt.get('broad_result_count')
+                return prefix+'Name: '+name+' | Contains'+(f' returned {broad} rows' if broad else '')
             if mode=='STARTS_WITH':return prefix+'Name: '+name+' | Starting With'
             if mode=='EXACT_MATCH':return prefix+'Name: '+name+' | Starting With returned '+str(receipt['broad_result_count'])+' rows, then Exact Match'
         return prefix+('Name: '+name+' | '+q.get('filter_label', 'No filter available (name-matching mode)' if q['state']=='AL' else 'Search method not captured'))

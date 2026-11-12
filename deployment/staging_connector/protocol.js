@@ -41,10 +41,12 @@
           && keys === "name,operation,search_mode,state"
           && ["ALL_WORDS", "EXACT_MATCH"].includes(value.search_mode);
         const narrowed = !!TRIAL_ORIGIN && value.state === "NV" && keys === "exact_above,name,operation,state" && value.exact_above === 20;
+        const nvContains = !!TRIAL_ORIGIN && value.state === "NV"
+          && keys === "name,operation,search_mode,state" && value.search_mode === "CONTAINS";
         const verification = !!TRIAL_ORIGIN && value.state === "AL" && keys === "name,operation,state,verification"
           && value.verification && Object.keys(value.verification).sort().join(',') === 'code,id'
           && /^[A-Z0-9]{5,6}$/.test(value.verification.code) && validId(value.verification.id);
-        return (ordinary || ncMode || verification || narrowed) && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 500;
+        return (ordinary || ncMode || verification || narrowed || nvContains) && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 500;
       }
       if (value.state === "AL") return false;
       if (value.state === "NC") return value.operation === "detail" && keys === "identifier,operation,state,url"

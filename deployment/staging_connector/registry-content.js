@@ -315,8 +315,10 @@
       throw new Error('REGISTRY_NV_COLUMNS_CHANGED');
     return headers;
   }
+  const nvSearchModes = {STARTS_WITH:'Starts With', EXACT_MATCH:'Exact Match', CONTAINS:'Contains'};
   function nvSearchModeSelected(mode) {
-    const label = mode === 'EXACT_MATCH' ? 'Exact Match' : 'Starts With';
+    const label = nvSearchModes[mode];
+    if (!label) return false;
     return [...document.querySelectorAll('[role="combobox"]')].some(el => {
       if (text(el).startsWith(label)) return true;
       // ORION can restore the selected public choice using its enum label.
@@ -330,13 +332,13 @@
   }
   const nvStartsWithSelected = () => nvSearchModeSelected('STARTS_WITH');
   async function nvSelectSearchMode(mode, deadline) {
-    if (!['STARTS_WITH','EXACT_MATCH'].includes(mode)) throw new Error('REGISTRY_COMMAND_INVALID');
+    if (!Object.hasOwn(nvSearchModes, mode)) throw new Error('REGISTRY_COMMAND_INVALID');
     if (nvSearchModeSelected(mode)) return;
     const combos=[...document.querySelectorAll('[role="combobox"]')].filter(el=>el.querySelector('select[name="data[searchType]"]'));
     if (combos.length!==1) throw new Error('REGISTRY_NV_FORM_CHANGED');
     const combo=combos[0];
     const option=await wfcAwait("content:nvSelectSearchMode:327:17",()=>(wait(()=>{
-      const label=mode==='EXACT_MATCH'?'Exact Match':'Starts With';
+      const label=nvSearchModes[mode];
       const options=[...combo.querySelectorAll('[role="option"]')].filter(el=>el.getAttribute('data-value')===mode
         && (el.textContent||'').replace(/\s+/g,' ').trim()===label && el.getAttribute('aria-disabled')!=='true');
       return options.length===1&&options[0];
@@ -570,8 +572,10 @@
     return {ok:true};
   }
   async function nvSearch(query, deadline) {
+    const keys=Object.keys(query || {}).sort().join(',');
+    const contains=keys==='name,operation,search_mode,state' && query.search_mode==='CONTAINS';
     if (query?.state !== 'NV' || query.operation !== 'search' || typeof query.name !== 'string' || !query.name.trim() || query.name.length > 500
-        || !(['name,operation,state','exact_above,name,operation,state'].includes(Object.keys(query).sort().join(',')))
+        || !contains && !['name,operation,state','exact_above,name,operation,state'].includes(keys)
         || Object.hasOwn(query,'exact_above')&&query.exact_above!==20) throw new Error("REGISTRY_COMMAND_INVALID");
     nvTrace('search-started',{name:query.name});
     const business = [...document.querySelectorAll('[role="tab"]')].find(el => text(el) === 'Business');
@@ -581,9 +585,20 @@
     // Refuse unrecognized filters instead of guessing a potentially narrower query.
     const field = suffix => document.querySelector(`input[id$="-${suffix}"]`);
     const name = field('entityName'), number = field('entityNumber'), id = field('nvBusinessId');
-    if (!name || !number || !id || !(nvStartsWithSelected()||nvSearchModeSelected('EXACT_MATCH')))
+    if (!name || !number || !id || !Object.keys(nvSearchModes).some(nvSearchModeSelected))
       throw new Error("REGISTRY_NV_FORM_CHANGED");
-    await wfcAwait("content:nvSearch:556:4",()=>(nvSelectSearchMode('STARTS_WITH',deadline)));
+    let searchMode=contains?'CONTAINS':'STARTS_WITH', broadTotal=null;
+    const probeReply = (count, unavailable=false) => ({
+      query,state:'NV',complete:true,verification_pending:false,total:0,rows:[],
+      search_mode:'CONTAINS',broad_total:count||null,...(unavailable?{probe_unavailable:true}:{})
+    });
+    if (contains) deadline=Math.min(deadline, Date.now()+10000);
+    try {
+      await wfcAwait("content:nvSearch:556:4",()=>(nvSelectSearchMode(searchMode,deadline)));
+    } catch (error) {
+      if (contains) return probeReply(0,true);
+      throw error;
+    }
     // Form.io redraws Search when filter inputs change. Resolve the current
     // button after that render settles, rather than clicking the old node in
     // the same turn as input/change. Unrelated mask/chat animations must not
@@ -610,13 +625,20 @@
       throw error;
     });
     nvObserved.clear(); nvLastSearch = null;
-    let searchMode='STARTS_WITH', broadTotal=null;
     // The initial blank grid and old rows remain visible while ORION searches.
     // A completed loading cycle is mandatory, including for an empty response.
     const submit = async () => {
       const search=await wfcAwait("content:nvSearch:587:19",()=>(bindSearch()));
       nvTrace('search-submitted',{name:query.name,search_mode:searchMode});
-      return nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {
+      const readGrid = () => {
+        if (contains && (field('entityName')?.value !== query.name
+            || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== ''
+            || !nvSearchModeSelected(searchMode))) {
+          throw new Error('REGISTRY_NV_FORM_CHANGED');
+        }
+        return nvPage('Search Results', nvSearchHeaders);
+      };
+      return nvChanged(() => search.click(), readGrid, deadline, {
       requireLoading:true, pendingGraceMs:25000, validateSearch:()=>{
         if(field('entityName')?.value!==query.name)return;
         const rejected=[...document.querySelectorAll('div,span,p')].some(el=>
@@ -634,7 +656,15 @@
       }
       });
     };
-    let first=await wfcAwait("content:nvSearch:601:14",()=>(submit()));
+    let first;
+    try {
+      first=await wfcAwait("content:nvSearch:601:14",()=>(submit()));
+    } catch (error) {
+      if (contains) return probeReply(0,true);
+      throw error;
+    }
+    // A positive count triggers the original plan without paging.
+    if (contains) return probeReply(first.total);
     if (query.exact_above===20 && first.total>query.exact_above) {
       broadTotal=first.total;searchMode='EXACT_MATCH';
       nvTrace('search-narrowed',{name:query.name,broad_total:broadTotal,search_mode:searchMode});
@@ -1652,7 +1682,7 @@
       business_selected:tab?.getAttribute('aria-selected')==='true',
       loader_clear:![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible),
       inputs_present:['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`)),
-      search_mode_selected:nvStartsWithSelected()||nvSearchModeSelected('EXACT_MATCH'),
+      search_mode_selected:Object.keys(nvSearchModes).some(nvSearchModeSelected),
       search_enabled:[...document.querySelectorAll('button')].some(el=>text(el)==='Search'&&visible(el)&&!el.disabled)
     };
   }

@@ -7851,7 +7851,15 @@ def final_four_search_evidence(payload, state, query):
         return al_charity_search_evidence(payload)
     if state not in {"NC", "NV", "TN"}:
         raise ValueError("Unsupported final-four source")
-    if state == "NV" and ("search_mode" in payload or "broad_total" in payload):
+    if state == "NV" and query.get("search_mode") == "CONTAINS":
+        broad = payload.get("broad_total")
+        if (payload.get("search_mode") != "CONTAINS" or "broad_total" not in payload
+                or payload["total"] != 0
+                or ("probe_unavailable" in payload and
+                    (payload["probe_unavailable"] is not True or broad is not None))
+                or broad is not None and (type(broad) is not int or not 0 < broad <= 10000)):
+            raise ValueError("Nevada Contains response differs from the requested public filter")
+    elif state == "NV" and ("search_mode" in payload or "broad_total" in payload):
         mode, broad = payload.get("search_mode"), payload.get("broad_total")
         if (query.get("exact_above") != 20 or mode not in {"STARTS_WITH", "EXACT_MATCH"}
                 or (mode == "STARTS_WITH" and broad is not None)
@@ -8086,7 +8094,27 @@ def nv_order_covering_searches(required, generated):
     return ordered, promoted
 
 
-def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specific_names=False):
+def nv_empty_contains_probe(required, generated):
+    """Choose a literal phrase that covers three otherwise distinct prefixes."""
+    if not required[0].isascii():
+        return ""
+    prefixes = []
+    for name in [*required, *generated]:
+        if not any(nv_literal_prefix_covers(prior, name) for prior in prefixes):
+            prefixes.append(name)
+    candidates = []
+    for phrase in re.findall(r"(?=\b([A-Za-z]{3,} [A-Za-z]{3,})\b)", required[0]):
+        if (set(phrase.lower().split()) & {"the", "and", "for", "inc", "usa", "corp"}
+                or not any(len(word) >= 5 for word in distinctive_match_tokens(phrase))):
+            continue
+        covered = [name for name in prefixes if name.isascii() and phrase.lower() in name.lower()]
+        if len(covered) >= 3 and any(not nv_literal_prefix_covers(phrase, name) for name in covered):
+            candidates.append((len(covered), len(phrase), phrase))
+    return max(candidates, default=(0, 0, ""))[2]
+
+
+def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specific_names=False,
+                              nv_contains=False):
     """Master-owned name plan and identity selection for the four new sources.
 
     The evidence callback collects public UI fields only. It cannot choose a
@@ -8228,7 +8256,12 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         generated = sorted(generated, key=len)
         if trial_identity():
             required, nv_promoted = nv_order_covering_searches(required, generated)
+    nv_empty_phrase = ""
     for index, name in enumerate(required + generated):
+        if nv_empty_phrase and name.isascii() and nv_empty_phrase.lower() in name.lower():
+            if index < len(required) and name not in nv_promoted:
+                covered_reviewed_names.append({"name": name, "completed_contains": nv_empty_phrase})
+            continue
         nv_covering_probe = index < len(required) and name in nv_promoted
         if state == "NV":
             if name in nv_submitted_names:
@@ -8328,6 +8361,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         rows = final_four_search_evidence(payload, state, query)
         if state == "NV":
             nv_submitted_names.add(name)
+            if index == 0 and nv_contains and trial_identity() and not rows and payload.get("search_mode") == "STARTS_WITH":
+                phrase = nv_empty_contains_probe(required, generated)
+                if phrase:
+                    probe = {"state": "NV", "operation": "search", "name": phrase, "search_mode": "CONTAINS"}
+                    observation = collect(probe)
+                    final_four_search_evidence(observation, "NV", probe)
+                    if observation["broad_total"] is None and not observation.get("probe_unavailable"):
+                        nv_empty_phrase = phrase
         if state == "TN":
             # TNCaB source order is unrelated to identity confidence. Read the
             # exact legal/EIN match before plausible affiliates; do not skip
@@ -9056,7 +9097,10 @@ def final_four_clean_evidence(payload, query):
         raise ValueError("Registry evidence exceeded its message bound")
     if query.get("operation") == "search":
         allowed_search = {"state", "query", "complete", "verification_pending", "total", "rows", "headers"}
-        if state == "NV": allowed_search.update({"search_mode", "broad_total"})
+        if state == "NV":
+            allowed_search.update({"search_mode", "broad_total"})
+            if query.get("search_mode") == "CONTAINS":
+                allowed_search.add("probe_unavailable")
         if state == "NC": allowed_search.add("search_mode")
         if set(payload) - allowed_search:
             raise ValueError("Unexpected search evidence fields")
@@ -9410,7 +9454,8 @@ def final_four_connector_advance(record):
                             ms_skip_probe=record.get('ms_skip_probe', False)) if record['state'] == 'MS' else
                   nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
                   final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining,
-                      nc_specific_names=bool(record.get("nc_specific_name_recovery"))))
+                      nc_specific_names=bool(record.get("nc_specific_name_recovery")),
+                      nv_contains=record.get("nv_contains") is True))
     except NYConnectorQueryNeeded as pending:
         required, generated = licensed_charity_names(org)
         if len(record["completed"]) >= len(required) + len(generated) + 100:
@@ -9607,6 +9652,9 @@ def final_four_connector_request(payload, origin):
                   "issued": now, "expires": now + (cutoff if mode == "sales" else NY_CONNECTOR_TTL_SECONDS),
                   "version": APP_VERSION, "completed": [], "pending": None,
                   "alternate_names": alternate_names, "protocol": "final-four-public-v1"}
+        if (state == "NV" and mode == "standard" and trial_identity()
+                and payload.get("evidence_protocol") == "nv-contains-empty-v1"):
+            record["nv_contains"] = True
         if state == "AL" and payload.get("evidence_protocol") == "al-final-empty-v1":
             record["al_evidence_protocol"] = "al-final-empty-v1"
         if payload.get("identity_review_token"):

@@ -13,6 +13,22 @@ test('Nevada detail and transitional routes are not ready public search forms',(
   assert.equal(h.api.registryDocumentReady(),false,hash);
  }
 });
+test('NV Contains requires a completed grid and records a positive count without claiming coverage',async()=>{
+ const query={state:'NV',operation:'search',name:'Casey Foundation',search_mode:'CONTAINS'};
+ for(const rows of [[],observed]) {
+  const h=fixture({rows});
+  const result=await h.drive(h.api.nvSearch(query,h.time+45000));
+  assert.equal(result.complete,true);
+  assert.equal(result.search_mode,'CONTAINS');
+  assert.equal(result.broad_total,rows.length||null);
+  assert.equal(result.total,0);
+  assert.equal(h.pagingClicks,0);
+  const ordinary=await h.drive(h.api.nvSearch({state:'NV',operation:'search',name:'Annie E. Casey Foundation'},h.time+45000));
+  assert.equal(ordinary.total,rows.length);
+  assert.equal(h.mode,'STARTS_WITH');
+ }
+});
+
 const headers=['Entity Name','NV Business Id #','Entity No.','Entity Type','Registered Agent Name','Formation Date','Status'];
 const observed=[
  ['MAKE-A-WISH FOUNDATION OF AMERICA','NV19931054903','C6989-1993','Foreign Non-Profit Corporation (80)','C T CORPORATION SYSTEM**','06/16/1993 12:00 AM','Permanently Revoked'],
@@ -95,10 +111,11 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  }};
  const staleButton={...searchButton,click:()=>staleClicks++};
  const textEl=innerText=>({innerText});
- const searchCombo={get innerText(){return searchMode==='EXACT_MATCH'?'Exact Match':'Starts With';},
+ const labels={STARTS_WITH:'Starts With',EXACT_MATCH:'Exact Match',CONTAINS:'Contains'};
+ const searchCombo={get innerText(){return labels[searchMode];},
   querySelector:q=>q==='select[name="data[searchType]"]'?{}:null,
-  click:()=>{modeMenu=true;mutate();},querySelectorAll:q=>q==='[role="option"]'?['STARTS_WITH','EXACT_MATCH'].map(mode=>({
-    textContent:mode==='EXACT_MATCH'?'Exact Match':'Starts With',
+  click:()=>{modeMenu=true;mutate();},querySelectorAll:q=>q==='[role="option"]'?Object.keys(labels).map(mode=>({
+    textContent:labels[mode],
     getAttribute:k=>k==='data-value'?mode:null,getClientRects:()=>modeMenu?[{}]:[],click:()=>{modeMenu=!modeMenu;mutate();},
     dispatchEvent:event=>{
       if(event.type!=='mousedown'||!event.bubbles||event.button!==0)return;
@@ -167,6 +184,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   if(q==='button')return detail?(reservation?[{...backButton,innerText:'Back'}]:[backButton,returnSearchButton]):[buttonCurrent?searchButton:staleButton];
   if(q==='.app-loader-pane .circle-loader')return loading?[{getClientRects:()=>[{}]}]:[];
   if(q==='[role="form"]')return detail?[form]:[];
+  if(q==='div,span,p')return [];
   throw Error('Unexpected document selector '+q);
  },querySelector:q=>!detail&&q.startsWith('input[id$=')?inputs[q.match(/-([A-Za-z]+)"/)[1]]:null};
  const win={};win.top=win;
