@@ -114,11 +114,11 @@ class Gate4243Tests(TestCase):
         ein = "521951681"
         account = "027225"
         url = "https://masscharities.my.site.com/FilingSearch/s/"
-        text = f"{name}\nAG Account Number: {account}\nEIN: 52-1951681\nNot Doing Business in Mass"
+        text = f"{name}\nAG Account Number: {account}\nEIN: 52-1951681"
         document = (url, b"retained-image", "image", text, 0, "")
-        record = {"name": name, "ein": ein, "ago_account": account}
+        record = {"name": name, "ein": ein, "ago_account": account, "registry_status": "Not Doing Business in Mass"}
         run = SimpleNamespace(state="MA", ein=ein, documents=[document], ma_view_more_bindings={
-            hashlib.sha256(document[1]).hexdigest(): {"record": record, "url": url}})
+            hashlib.sha256(document[1]).hexdigest(): {"record": record, "url": url, "role": "main"}})
         row = dict(state="MA", ein=ein, matched_registry_name=name, matched_registry_identifier=account,
                    success=True, status="Unable to Confirm", status_reason="MA_FORM_PC_DETAIL_UNCONFIRMED",
                    ma_filing_evidence={"registry_status": "Not Doing Business in Mass", "ago_account": account})
@@ -127,7 +127,7 @@ class Gate4243Tests(TestCase):
             self.assertTrue(preserves_activity_identity(SimpleNamespace(**row)))
             self.assertEqual(select(run, [document], row), [document])
             for text_change in (text.replace(account, "027226"), text.replace("52-1951681", "52-1951682"),
-                                text.replace("Not Doing Business in Mass", "Registered")):
+                                text.replace(name, "Other Foundation")):
                 run.documents = [(*document[:3], text_change, *document[4:])]
                 self.assertFalse(preserves_activity_identity(SimpleNamespace(**row)))
                 self.assertEqual(select(run, run.documents, row), [])
@@ -146,3 +146,58 @@ class Gate4243Tests(TestCase):
         self.assertFalse(matches({**binding, "name": "91-2155318"}))
         self.assertFalse(matches({**binding, "name": "Allen Institute Foundation"}))
         self.assertTrue(matches({**binding, "name": "Allen Institute", "name_is_ein": False}))
+
+    def test_alabama_unnumbered_original_only_for_exact_private_foundation_scope(self):
+        from unittest.mock import patch
+        from deployment.state_snapshots import al_scope_rows, attach_al_scope_original
+        name = "Annie E. Casey Foundation"
+        ein = "521951681"
+        url = "https://ago.igovsolution.net/online/Lookups/Business.aspx"
+        query = dict(state="AL", operation="search", name=name)
+        record = dict(state="AL", ein=ein, organization_name=name)
+        row = [name, "", "Active", "Private Foundation", "", "", "", "", "", "", ""]
+        evidence = dict(query=query, complete=True, verification_pending=False, total=1, rows=[row],
+                        headers=["Name", "License/Registration#", "Status", "Registration Type",
+                                 "Issued Date", "Expiration Date", "Address", "City", "State", "Zip", "Print"])
+        visible = f"Business Lookup Search Records: 1 to 1 of 1 {name} Active Private Foundation"
+        match, = al_scope_rows(record, query, evidence, url, visible)
+        self.assertFalse(al_scope_rows(record, query, evidence, url, visible.replace("Active", "Inactive")))
+        self.assertFalse(al_scope_rows(record, query, {**evidence, "total": 2}, url, visible))
+        self.assertFalse(al_scope_rows({**record, "organization_name": "Other Foundation"}, query, evidence, url, visible))
+        ref = dict(state="AL", ein=ein, identifier=match[0], record_name=match[1],
+                   operation="search", url="/state-snapshots/" + "a"*64 + ".pdf", captured_at=100)
+        final = dict(state="AL", ein=ein, status="Needs Review", success=False)
+        record.update(_al_scope_row=match, source_snapshots=[ref])
+        with patch('deployment.state_snapshots.retain_references', return_value=[]):
+            result = attach_al_scope_original(record, final)
+            self.assertEqual(result['evidence_url'], ref['url'])
+            self.assertFalse(result['success'])
+            self.assertEqual(result['status'], 'Needs Review')
+            self.assertEqual(attach_al_scope_original(record, {**final, 'status': 'Exempt'}).get('evidence_url'), None)
+
+    def test_pennsylvania_first_timeout_preserves_usable_retry_in_original_budget(self):
+        import json
+        from unittest.mock import patch
+        from deployment.state_snapshots import DEADLINE
+        org = master.checker.Organization('Ford Foundation', '131684331')
+        result = master.checker.StateResult(org.organization_name, org.ein, 'PA', 'Not Registered', '')
+        result.success = True
+        clock, requests = [0.0], []
+        def fetch(url, deadline, **kwargs):
+            requests.append((json.loads(kwargs['data'])['EntityName'], deadline, kwargs['request_timeout']))
+            if len(requests) == 1:
+                clock[0] += kwargs['request_timeout']
+                raise TimeoutError('source response did not arrive')
+            clock[0] += 5
+            return b'{"Table":[],"Table1":[{"RESULTCOUNT":0}]}'
+        deadline = DEADLINE.set(90)
+        mode = master.LAB_LOOKUP_MODE_CONTEXT.set('standard')
+        try:
+            with patch.object(master, 'trial_identity', return_value=True), patch.object(master.time, 'monotonic', side_effect=lambda:clock[0]), patch.object(master.checker, 'search_pa', return_value=result), patch.object(master, 'pa_name_search_plan', return_value=['Ford Foundation']), patch.object(master, 'identity_fetch', side_effect=fetch):
+                result = master.search_pa_with_name_fallback_core(None, org, lambda row:row)
+            self.assertEqual(requests, [('Ford Foundation',15.0,7.0), ('Ford Foundation',15.0,8.0)])
+            self.assertTrue(result._pa_api_attempts[0]['complete'])
+            self.assertEqual(clock[0], 12)
+        finally:
+            master.LAB_LOOKUP_MODE_CONTEXT.reset(mode)
+            DEADLINE.reset(deadline)

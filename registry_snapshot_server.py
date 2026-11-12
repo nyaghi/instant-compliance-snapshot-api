@@ -8358,7 +8358,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             if state == "AL" and row.get("registration_identifier_missing"):
                 unreviewed_scope = True
                 scope_reviews.append({"name": row["name"], "identifier": "No public registration number",
-                                      "category": row["license_category"], "source_url": row["url"]})
+                                      "category": row["license_category"], "source_url": row["url"],
+                                      "_source_row": row["identifier"]})
                 seen.add(row["identifier"])
                 continue
             if state == "AL":
@@ -8564,7 +8565,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         # Preserve the actual unresolved source candidates, including when a
         # different, fully parsed record was also found. This is diagnostic
         # evidence only; it must not relax the existing selection rules.
-        result.queries_attempted = [{"completed": True, "scope_review": row} for row in scope_reviews[:20]]
+        result.queries_attempted = [{"completed": True, "scope_review": {
+            field: value for field, value in row.items() if field != "_source_row"}}
+            for row in scope_reviews[:20]]
+        if state == "AL" and len(scope_reviews) == 1 and scope_reviews[0]["category"] == "Private Foundation":
+            result._al_scope_row = (scope_reviews[0]["_source_row"], scope_reviews[0]["name"])
         labels = [f"{row['name']} ({row['identifier']}; {row['category']})" for row in scope_reviews[:3]]
         if labels:
             result.source_note += " Review candidates: " + "; ".join(labels) + "."
@@ -9357,8 +9362,10 @@ def final_four_connector_advance(record):
             item for item in getattr(result, "queries_attempted", [])
             if item.get("query", {}).get("operation") != "search"]
     started = time.perf_counter() - max(0, time.time() - record["issued"])
-    return {"phase": "complete", "result": preserve_nc_identity_retry(
-        response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started), record)}
+    data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started)
+    if getattr(result, "_al_scope_row", None) and data["status"] == "Needs Review":
+        record["_al_scope_row"] = result._al_scope_row
+    return {"phase": "complete", "result": preserve_nc_identity_retry(data, record)}
 
 
 _AL_VERIFICATION_OCR = None
@@ -9697,6 +9704,9 @@ def final_four_connector_request(payload, origin):
         response['result'] = attach_search_history(record,response['result'])
         from deployment.identity_evidence import bind as bind_review_evidence
         response['result'] = bind_review_evidence(sys.modules[__name__],response['result'])
+        if record.get('_al_scope_row'):
+            from deployment.state_snapshots import attach_al_scope_original
+            response['result'] = attach_al_scope_original(record, response['result'])
     from deployment.al_final_empty import prepare
     response = prepare(sys.modules[__name__],record,response)
     return 200, response
@@ -27983,9 +27993,16 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
             # Bind parsing to this request instead of a temporarily empty Angular table.
             for transport_attempt in range(2):
                 try:
+                    remaining = max(0.1, deadline-time.monotonic())
+                    request_limit = 12.0
+                    if (not transport_attempt and len(attempts) == 1 and remaining >= 12
+                            and trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard"):
+                        # Preserve half the existing allowance for the same public request
+                        # if the first connection stalls before returning a response.
+                        request_limit = 7.0
                     body = identity_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
                         headers={"Content-Type": "application/json", "Accept": "application/json"},
-                        data=json.dumps(payload).encode(), request_timeout=min(12.0, max(0.1, deadline-time.monotonic())))
+                        data=json.dumps(payload).encode(), request_timeout=min(request_limit, remaining))
                     break
                 except (urllib.error.URLError, OSError) as exc:
                     # In the disposable trial, recover this exact read-only

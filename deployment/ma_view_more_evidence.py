@@ -99,7 +99,7 @@ def capture(run, page, record):
 
 
 def activity_documents(run, documents, ein, name, account):
-    """Only an existing, same-record image that visibly shows the activity label."""
+    """Return the original exact-account pages when the filing period is unresolved."""
     if run is None or run.state != 'MA' or run.ein != ein:
         return []
     from deployment.state_snapshots import key
@@ -110,7 +110,7 @@ def activity_documents(run, documents, ein, name, account):
         record = binding.get('record', {})
         if (kind == 'image' and binding.get('url') == url
                 and record.get('ago_account') == account and key(record.get('name', '')) == key(name)
-                and re.search(r'\bNot Doing Business in Mass\b', text, re.I)
+                and str(record.get('registry_status', '')).strip().casefold() == 'not doing business in mass'
                 and bound(text, record, run)):
             originals.append(document)
     return originals
@@ -143,9 +143,10 @@ def select(run, ordered, row):
         if (row.get('status') == 'Unable to Confirm'
                 and str(evidence.get('registry_status', '')).strip().casefold() == 'not doing business in mass'
                 and evidence.get('ago_account') == row.get('matched_registry_identifier')):
-            return activity_documents(run, ordered, run.ein, row.get('matched_registry_name'),
-                                      row.get('matched_registry_identifier'))
-        return []
+            ordered = activity_documents(run, ordered, run.ein, row.get('matched_registry_name'),
+                                         row.get('matched_registry_identifier'))
+        else:
+            return []
     selected = {}
     for document in ordered:
         binding = getattr(run, 'ma_view_more_bindings', {}).get(hashlib.sha256(document[1]).hexdigest(), {})

@@ -217,7 +217,18 @@ const CCDCSource=(()=>{
    if(!rect||rect.width<1||rect.height<1||rect.width*rect.height>20000000)throw Error('source_size_rejected');
    // Capture the complete fitted viewport. CSS-sized clip rectangles are not
    // screenshot pixel dimensions when the browser's page zoom is not 100%.
-   const shot=await command('Page.captureScreenshot',{format:'jpeg',quality:80,captureBeyondViewport:false,fromSurface:true},3000);
+   const options={format:'jpeg',quality:80,captureBeyondViewport:false,fromSurface:true};
+   let shot=await command('Page.captureScreenshot',options,3000);
+   if(!shot?.data && Date.now()+5000<end){
+    // Only recover a completed empty command. A pending or timed-out CDP
+    // operation owns this page until cleanup and is never retried in parallel.
+    const fresh=await observe('metadata');
+    if(fresh?.url!==meta.url||!fresh.capture_fit?.ok||!atStart(fresh)
+        ||JSON.stringify(before)!==JSON.stringify(fields(fresh.url,fresh.text,d)))
+      throw Error('selected_detail_changed_before_capture_retry');
+    shot=await command('Page.captureScreenshot',options,3000,'Page.captureScreenshot:empty-retry');
+   }
+   if(!shot?.data)throw Error('source_empty_capture');
    const after=await observe('metadata',true),afterFields=after&&fields(after.url,after.text,d);
    const finished=Date.now();
    check();

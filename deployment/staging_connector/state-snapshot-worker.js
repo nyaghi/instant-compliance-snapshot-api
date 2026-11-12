@@ -687,13 +687,22 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
         }
 
         if(ilPaintActive&&attached){await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:388:36:await",()=>(sampled('IL-paint-restored',()=>chrome.debugger.sendCommand({tabId},'Emulation.setFocusEmulationEnabled',{enabled:false}))));ilPaintActive=false;if(cancelled||!alive())return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:388:208:return",(null));}
-        observed.phase='capture';const image=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:389:45:await",()=>(sampled('capture:'+images.length,()=>chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',
-
-          {format:'jpeg',quality:75,captureBeyondViewport:!modal&&!gaFullViewport,fromSurface:true,
-
-            clip:(modal||(gaRequiredDetail||nmRequiredDetail||nyRequiredDetail||ncSelectedDetail)&&gaFullViewport)?{x:viewport.pageX||0,y:viewport.pageY||0,width:viewport.clientWidth,height:viewport.clientHeight,scale:1}:
-
-              {x:0,y:0,width:size.width,height:size.height,scale:1}}))));
+        observed.phase='capture';
+        const screenshotOptions={format:'jpeg',quality:75,captureBeyondViewport:!modal&&!gaFullViewport,fromSurface:true,
+          clip:(modal||(gaRequiredDetail||nmRequiredDetail||nyRequiredDetail||ncSelectedDetail)&&gaFullViewport)
+            ?{x:viewport.pageX||0,y:viewport.pageY||0,width:viewport.clientWidth,height:viewport.clientHeight,scale:1}
+            :{x:0,y:0,width:size.width,height:size.height,scale:1}};
+        const captureImage=options=>wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:389:45:await",
+          ()=>sampled('capture:'+images.length,()=>chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',options)));
+        let image;
+        if(nyRequiredDetail&&gaFullViewport) {
+          // The selected source already fits its owned viewport. Request
+          // viewport pixels directly and retain every existing post-check.
+          const {clip,...viewportOptions}=screenshotOptions;
+          image=await captureImage(viewportOptions);
+          if(!image?.data&&!cancelled&&alive()&&Date.now()+3000<started+captureBudgetMs)
+            image=await captureImage(screenshotOptions);
+        } else image=await captureImage(screenshotOptions);
 
         if(state==='NM')wfEvent(job,'NM image validation','started',{image_characters:typeof image?.data==='string'?image.data.length:null});
         if(typeof image?.data!=='string'||image.data.length>4000000||!/^[A-Za-z0-9+/]+={0,2}$/.test(image.data))return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:397:112:return",(null));

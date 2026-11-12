@@ -90,7 +90,7 @@ function collectNyDiagnostics(job, response) {
   if(P.TRIAL_ORIGIN && job.registryState === "NY")
     job.nyDiagnostics=P.nyDiagnostics([...(job.nyDiagnostics||[]),...P.nyDiagnostics(response?.ny_diagnostics)]);
 }
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : withoutSourcePixels(j.lastResponse), snapshotCaptures: j.snapshotCaptures || 0, ...(P.TRIAL_ORIGIN?{ilSnapshotSpentMs:j.ilSnapshotSpentMs,tnSnapshotSpentMs:j.tnSnapshotSpentMs,nmSnapshotSpentMs:j.nmSnapshotSpentMs,ncSnapshotSpentMs:j.ncSnapshotSpentMs,nySnapshotSpentMs:j.nySnapshotSpentMs,msSnapshotSpentMs:j.msSnapshotSpentMs,gaDetailSnapshotSpentByRecord:j.gaDetailSnapshotSpentByRecord,requiredCaptureSpentByState:j.requiredCaptureSpentByState}:{}), ...(P.TRIAL_ORIGIN&&j.registryState==='AL'?{alEmptySnapshotSaved:j.alEmptySnapshotSaved===true}:{}), queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "AL" ? {alFinalEmptyProtocol:j.alFinalEmptyProtocol,alFinalEmptyUsed:j.alFinalEmptyUsed,alSnapshotSpentMs:j.alSnapshotSpentMs,snapshotCaptures:j.snapshotCaptures}:{}), ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true,tnRetryAttempt:j.tnRetryAttempt===true,tnSearchCompleted:j.tnSearchCompleted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : withoutSourcePixels(j.lastResponse), snapshotCaptures: j.snapshotCaptures || 0, ...(P.TRIAL_ORIGIN?{ilSnapshotSpentMs:j.ilSnapshotSpentMs,tnSnapshotSpentMs:j.tnSnapshotSpentMs,nmSnapshotSpentMs:j.nmSnapshotSpentMs,ncSnapshotSpentMs:j.ncSnapshotSpentMs,nySnapshotSpentMs:j.nySnapshotSpentMs,msSnapshotSpentMs:j.msSnapshotSpentMs,gaDetailSnapshotSpentByRecord:j.gaDetailSnapshotSpentByRecord,requiredCaptureSpentByState:j.requiredCaptureSpentByState}:{}), ...(P.TRIAL_ORIGIN&&j.registryState==='AL'?{alEmptySnapshotSaved:j.alEmptySnapshotSaved===true}:{}), queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "AL" ? {alFinalEmptyProtocol:j.alFinalEmptyProtocol,alFinalEmptyUsed:j.alFinalEmptyUsed,alSnapshotSpentMs:j.alSnapshotSpentMs,snapshotCaptures:j.snapshotCaptures}:{}), ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 /* Capture the last completed empty AL page in place; no search or verification. */
 async function performAlFinalEmpty(job,query,id) {
   const admitted=P.TRIAL_ORIGIN&&job.registryState==='AL'&&job.alFinalEmptyProtocol===true
@@ -266,6 +266,30 @@ function notifyQueue() {
     if (job.acquireId) post(job, { id: job.acquireId, progress: true, position: index + 1 });
   });
 }
+const tnRetryGrants = new Map();
+const tnOwner = job => job.sender.documentId ? job.sender.tab.id+':'+job.sender.documentId : '';
+const sameBrowserDocument = (a,b) => tnOwner(a) && tnOwner(a) === tnOwner(b);
+
+function allowTnRetry(job, query, response) {
+  if (!P.TRIAL_ORIGIN || job.registryState !== 'TN' || query.operation !== 'search'
+      || job.tnSearchCompleted || job.tnRetryAttempt || response.ok !== false
+      || !['NY_CONNECTOR_TN_VERIFICATION_PENDING','NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'].includes(response.reason))
+    return;
+  const owner = tnOwner(job);
+  if (owner) {
+    for (const [key, expires] of tnRetryGrants) if (expires <= Date.now()) tnRetryGrants.delete(key);
+    tnRetryGrants.set(owner, Date.now() + 15000);
+  }
+}
+
+function takeTnRetry(job) {
+  const owner = tnOwner(job);
+  if (!owner || job.registryState !== 'TN' || !P.TRIAL_ORIGIN || !isDuoJob(job)) return false;
+  const expires = tnRetryGrants.get(owner);
+  tnRetryGrants.delete(owner);
+  return expires > Date.now();
+}
+
 function pump() {
   CCSourceRail.notify();
   if(!CCSourceRail.isReady())return;
@@ -284,7 +308,17 @@ function pump() {
     if(P.TRIAL_ORIGIN && queue.slice(0,i).some(j=>!j.closed&&j.registryState===job.registryState))continue;
     if(!job.port)continue;
     const start=P.TRIAL_ORIGIN?(laneStarts.get(job.registryState)||0):nextStart;
-    if(start<=Date.now()){index=i;break;}
+    if(start<=Date.now()){
+      if(index<0) {
+        index=i;
+        if(!P.TRIAL_ORIGIN || job.tnRetryAttempt)break;
+      } else if (!sameBrowserDocument(queue[index],job)) {
+        break;
+      } else if (job.tnRetryAttempt) {
+        index=i;break;
+      }
+      continue;
+    }
     earliest=Math.min(earliest,start);
     if(!P.TRIAL_ORIGIN)break;
   }
@@ -808,6 +842,9 @@ async function performSearch(job, query, id) {
   if(P.TRIAL_ORIGIN&&job.registryState==='NC'&&job.ncSubmissionObservations)response.nc_submission=job.ncSubmissionObservations;
   job.lastResponse = { id, ...response, ...(!response.ok && repair.nextAllowedAt > Date.now() ? { retryAt: repair.nextAllowedAt } : {}) };
   try { await wfAwait(job,"worker.js:performSearch:695:8:await",()=>(saveRuntime())); } catch { close(job, "NY_CONNECTOR_INTERRUPTED"); return wfReturn(job,"worker.js:performSearch:695:79:return",undefined); }
+  if (job.registryState === 'TN' && query.operation === 'search' && response.ok)
+    job.tnSearchCompleted = true;
+  allowTnRetry(job, query, response);
   post(job, job.lastResponse);
   if (!response.ok) close(job);
 }
@@ -926,6 +963,7 @@ chrome.runtime.onConnect.addListener(port => {
     } else {
       if (job) { port.postMessage({ action: "closed", reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); port.disconnect(); return null; }
       job = newJob(port.sender, id, prefix === "cc-ny-refresh-v1:", {registryState}); job.port = port;
+      job.tnRetryAttempt = takeTnRetry(job);
       arm(job); queue.push(job); await saveRuntime();
     }
     notifyQueue(); pump(); return job;

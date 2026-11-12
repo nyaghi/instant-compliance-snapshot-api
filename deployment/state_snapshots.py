@@ -1129,6 +1129,54 @@ def nc_completed_results_snapshot(record,query,evidence,url,text):
         and key(row.get('name') or row.get('CSL Legal Name') or row.get('Organization Name')) in key(text)
         for row in evidence['rows'])
 
+def al_scope_rows(record, query, evidence, url, text):
+    """Bind an unnumbered private foundation to its actual visible search row."""
+    headers = ['Name', 'License/Registration#', 'Status', 'Registration Type',
+               'Issued Date', 'Expiration Date', 'Address', 'City', 'State', 'Zip', 'Print']
+    if (record.get('state') != 'AL' or query.get('state') != 'AL' or query.get('operation') != 'search'
+            or evidence.get('query') != query or evidence.get('complete') is not True
+            or evidence.get('verification_pending') is not False or evidence.get('headers') != headers
+            or url != 'https://ago.igovsolution.net/online/Lookups/Business.aspx'
+            or not isinstance(text, str) or re.search(r'verification failed|user validation required|access denied', text, re.I)):
+        return []
+    rows = evidence.get('rows', [])
+    count = evidence.get('total')
+    visible = ' '.join(text.split())
+    if (not isinstance(rows, list) or type(count) is not int or not 0 < count <= 50
+            or len(rows) != count or 'Business Lookup Search' not in visible
+            or not re.search(r'Records\s*:\s*1\s+to\s+' + str(count) + r'\s+of\s+' + str(count) + r'\b', visible)):
+        return []
+    names = {key(x) for x in [record.get('organization_name', ''), *record.get('alternate_names', [])] if x}
+    candidates = [
+        ('ALROW-' + hashlib.sha256(json.dumps(row, ensure_ascii=False).encode()).hexdigest(), row[0])
+        for row in rows if isinstance(row, list) and len(row) == len(headers)
+        and all(isinstance(cell, str) for cell in row)
+        and key(row[0]) in names and not row[1] and row[2] and row[3] == 'Private Foundation'
+        and ' '.join(' '.join(row[:4]).split()) in visible
+    ]
+    return candidates if len(candidates) == 1 else []
+
+
+def attach_al_scope_original(record, result):
+    """Publish candidate evidence without treating the row as an issued license."""
+    if (record.get('state') != 'AL' or result.get('state') != 'AL'
+            or result.get('status') != 'Needs Review' or result.get('success') is not False
+            or result.get('evidence_url') or digits(record.get('ein')) != digits(result.get('ein'))):
+        return result
+    ident, name = record['_al_scope_row']
+    matches = [ref for ref in record.get('source_snapshots', [])
+               if ref.get('state') == 'AL' and ref.get('operation') == 'search'
+               and digits(ref.get('ein')) == digits(result['ein'])
+               and ref.get('identifier') == ident and ref.get('record_name') == name]
+    if not matches or not re.fullmatch(r'ALROW-[a-f0-9]{64}', ident):
+        return result
+    ref = matches[-1]
+    if ref['url'] in retain_references([ref]):
+        return result
+    return {**result, 'evidence_url': ref['url'], 'evidence_captured_at': ref['captured_at'],
+            'evidence_capture': 'candidate_only'}
+
+
 def al_completed_results_snapshot(record,query,evidence,url,text):
     """Preserve an actual complete AL results grid for a settled negative.
 
@@ -1257,9 +1305,11 @@ def _connector_archive(record,payload,query,evidence):
                 return
             rows=[selected]
         if record['state']=='AL' and isinstance(evidence,dict):
+            scoped = al_scope_rows(record, query, evidence, url, text)
             headers=evidence.get('headers',[])
             for cells in evidence.get('rows',[]):
                 if isinstance(cells,list) and len(cells)==len(headers):walk(dict(zip(headers,cells)))
+            rows = scoped + rows
         if (not rows and isinstance(evidence,dict) and evidence.get('complete') is True
                 and evidence.get('total')==0 and evidence.get('rows')==[]
                 and re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I)
@@ -1292,7 +1342,8 @@ def _connector_archive(record,payload,query,evidence):
                 nm_detail=record['state']=='NM' and query.get('operation')=='detail'
                 bound_nm=nm_detail_snapshot_bound(record,query,evidence,url,text,ident) if nm_detail else False
                 if nm_detail and not bound_nm:continue
-                if ident and ident not in text and ident not in url and not bound_application and not bound_nm:continue
+                al_scope = record['state'] == 'AL' and (ident, name) in scoped
+                if ident and ident not in text and ident not in url and not bound_application and not bound_nm and not al_scope:continue
             images=incoming.get('images')
             multi_source=il_detail or (record['state'] in {'TN','NV'} and query.get('operation')=='detail') or (record['state']=='NV' and query.get('operation')=='search' and ident=='@completed-search')
             multiple=multi_source and isinstance(images,list) and 2<=len(images)<=(8 if record['state']=='NV' and query.get('operation')=='detail' else 3)
@@ -1313,6 +1364,8 @@ def _connector_archive(record,payload,query,evidence):
                 'operation':'detail' if ga_detail or il_detail or (record['state']=='NY' and query.get('orgID')) else query.get('operation','')})
         refs=record.get('source_snapshots',[])
         if record['state']=='TN':refs=sorted(refs,key=lambda r:r.get('operation')=='detail')
+        if record['state'] == 'AL':
+            refs = sorted(refs, key=lambda ref: str(ref.get('identifier', '')).startswith('ALROW-'))
         record['source_snapshots']=refs[-24:]
     except Exception:
         record['snapshot_capture_unavailable']=True

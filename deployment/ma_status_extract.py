@@ -8,7 +8,10 @@ def extract(run,row):
     from .state_snapshots import digits,key
     evidence=row.get('ma_filing_evidence') or {}
     status=evidence.get('registry_status','')
-    if not evidence.get('contrary_status') or not status:return None
+    activity_review = (row.get('status') == 'Unable to Confirm'
+                       and row.get('status_reason') == 'MA_FORM_PC_DETAIL_UNCONFIRMED'
+                       and status.strip().casefold() == 'not doing business in mass')
+    if not (evidence.get('contrary_status') or activity_review) or not status:return None
     for binding in getattr(run,'ma_view_more_bindings',{}).values():
         record=binding.get('record') or {}
         if (record.get('registry_status')==status and digits(record.get('ein'))==run.ein

@@ -294,7 +294,7 @@ def final_four_asset(name, text):
           if(quietTennessee && state==='TN' && result?.state==='TN' && result.success===false &&
               ['NY_CONNECTOR_TN_VERIFICATION_PENDING','NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'].includes(diagnostic?.code) &&
               diagnostic.completed_count===0 && diagnostic.pending_operation==='search' &&
-              tennesseeRetryDeadline-performance.now()>=63000 && !signal?.aborted) {
+              tennesseeRetryDeadline-performance.now()>=43000 && !signal?.aborted) {
             // The first search never completed. Retry the normal source check
             // in the same quiet mode, with the same names and a bounded clock.
             await new Promise(resolve=>{
@@ -307,9 +307,10 @@ def final_four_asset(name, text):
               signal?.addEventListener('abort',finish,{once:true});
             });
             signal?.throwIfAborted();
-            if(tennesseeRetryDeadline-performance.now()>=60000) {
-              trace("quiet Tennessee retry started",{state,reason:diagnostic.code});
-              const timeout=AbortSignal.timeout(60000);
+            const remaining=Math.floor(tennesseeRetryDeadline-performance.now());
+            if(remaining>=40000) {
+              trace("quiet Tennessee retry started",{state,reason:diagnostic.code,remaining_ms:remaining});
+              const timeout=AbortSignal.timeout(Math.min(60000,remaining));
               const retrySignal=signal?AbortSignal.any([signal,timeout]):timeout;
               try {
                 const retry=await externalLookup(state,names,retrySignal);
