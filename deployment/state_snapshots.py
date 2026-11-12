@@ -1168,9 +1168,14 @@ def al_scope_rows(record, query, evidence, url, text):
 
 
 def attach_al_scope_original(record, result):
-    """Publish candidate evidence without treating the row as an issued license."""
+    """Publish the exact private foundation row without inventing a license."""
+    confirmed = (result.get('status') == 'Current' and result.get('success') is True
+                 and result.get('status_reason') == 'AL_CONFIRMED_ACTIVE_PRIVATE_FOUNDATION'
+                 and not result.get('matched_registry_identifier')
+                 and result.get('matched_registry_name') == record['_al_scope_row'][1])
+    unresolved = result.get('status') == 'Unable to Confirm' and result.get('success') is False
     if (record.get('state') != 'AL' or result.get('state') != 'AL'
-            or result.get('status') != 'Unable to Confirm' or result.get('success') is not False
+            or not (confirmed or unresolved)
             or result.get('evidence_url') or digits(record.get('ein')) != digits(result.get('ein'))):
         return result
     ident, name = record['_al_scope_row']
@@ -1185,7 +1190,7 @@ def attach_al_scope_original(record, result):
     if ref['url'] in retain_references([ref]):
         return result
     return {**result, 'evidence_url': ref['url'], 'evidence_captured_at': ref['captured_at'],
-            'evidence_capture': 'candidate_only'}
+            'evidence_capture': 'saved' if confirmed else 'candidate_only'}
 
 
 def al_completed_results_snapshot(record,query,evidence,url,text):

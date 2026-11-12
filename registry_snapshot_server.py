@@ -8367,7 +8367,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 unreviewed_scope = True
                 scope_reviews.append({"name": row["name"], "identifier": "No public registration number",
                                       "category": row["license_category"], "source_url": row["url"],
-                                      "_source_row": row["identifier"]})
+                                      "_source_row": row["identifier"], "_record": row})
                 seen.add(row["identifier"])
                 continue
             if state == "AL":
@@ -8561,6 +8561,27 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 retained.append(candidate)
         scope_reviews = retained
         unreviewed_scope = bool(scope_reviews)
+    if state == "AL" and trial_identity() and not records and len(scope_reviews) == 1:
+        from deployment.state_snapshots import al_scope_name
+        candidate = scope_reviews[0]["_record"]
+        if (candidate["license_category"] == "Private Foundation"
+                and candidate["raw_status"] == "Active"
+                and not candidate.get("expiration") and not candidate.get("source_issued")
+                and len(distinctive_match_tokens(org.organization_name)) >= 2
+                and al_scope_name(candidate["name"]) == al_scope_name(org.organization_name)
+                and not user_rejected_credential(org.ein, state, candidate["identifier"])):
+            office = licensed_charity_street_evidence(org, candidate, min(deadline, time.monotonic() + 5))
+            if office.get("decision") == "corroborated":
+                result.status, result.success = "Current", True
+                result.status_reason = "AL_CONFIRMED_ACTIVE_PRIVATE_FOUNDATION"
+                result.matched_registry_name = candidate["name"]
+                result.raw_status_text = "Active | Private Foundation"
+                result.address_evidence = office
+                result.source_note = ("Alabama lists this matched private foundation as Active. The full name and "
+                    "street address agree with an organization record retrieved by the entered EIN. Current refers "
+                    "to the private foundation listing. The source shows no charitable solicitation license number.")
+                result._al_scope_row = (candidate["identifier"], candidate["name"])
+                unreviewed_scope = False
     if unreviewed_scope and (state == "AL" or result.status not in {"Current", "Upcoming Filing", "Exempt"}):
         result.status = "Needs Review" if state in {"AL", "NC"} else "Unable to Confirm"; result.success = False
         result.source_note = ("Alabama returned a potentially matching private foundation without a public registration number. Review its identity and registration scope; this does not establish current registration, delinquency or non-registration."
@@ -8574,7 +8595,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         # different, fully parsed record was also found. This is diagnostic
         # evidence only; it must not relax the existing selection rules.
         result.queries_attempted = [{"completed": True, "scope_review": {
-            field: value for field, value in row.items() if field != "_source_row"}}
+            field: value for field, value in row.items() if not field.startswith("_")}}
             for row in scope_reviews[:20]]
         if state == "AL" and len(scope_reviews) == 1 and scope_reviews[0]["category"] == "Private Foundation":
             result._al_scope_row = (scope_reviews[0]["_source_row"], scope_reviews[0]["name"])
@@ -8793,7 +8814,7 @@ def ms_duplicate_exempt_detail_fallback(record, payload):
     return data
 
 
-def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery=''):
+def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_skip_probe=False):
     """Use the master name plan, identity guard and status interpreter on public browser evidence."""
     module = state_batch_modules(['MS'])[load_state_batch_bundle().STATE_TO_MODULE['MS']]
     # The signed request supplies reviewed names only in Standard. Sales must
@@ -8816,11 +8837,15 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery=''):
                 seen_queries.add(key)
     if not planned:
         raise ValueError('No safe Mississippi name search')
+    from deployment.casey_state_repairs import ms_personal_foundation_probe
+    probe = ms_personal_foundation_probe(org.organization_name, reviewed) if trial_identity() and not ms_skip_probe else ""
     attempted = []
     possible = []
     review_details = {}
     if ms_recovery:
         planned = [ms_recovery]
+    elif probe:
+        planned.insert(0, probe)
     for name in planned:
         query = {'state': 'MS', 'operation': 'search', 'name': name}
         source_rows = ms_browser_clean_evidence(evidence(query), query)['rows']
@@ -8887,6 +8912,11 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery=''):
                                           'freshness': '', 'exclusive': True}
             return result
         if not accepted:
+            if (name == probe and not possible and 0 < len(source_rows) <= 50
+                    and any(probe.casefold() in row["name"].casefold() for row in source_rows)):
+                # Mississippi's single-word name lookup covers both ordinary
+                # and surname-first index order. All signed names contain it.
+                break
             continue
         selected = accepted[0]
         detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': selected['identifier']}
@@ -8933,6 +8963,8 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery=''):
     result.queries_attempted = attempted
     result.source_note = ('Mississippi returned one or more possible identities, but none was confirmed safely.'
                           if not result.success else
+                          'Mississippi completed a surname search covering all reviewed names without a qualifying registration record.'
+                          if attempted and attempted[-1]['query'].get('name') == probe else
                           'Mississippi completed all planned public name searches without a qualifying registration record.')
     if candidates:
         result._cc_identity_review = {'records': candidates, 'search_complete': len(possible) <= 10,
@@ -9329,7 +9361,8 @@ def final_four_connector_advance(record):
     al_identity_context = AL_FOREIGN_EIN_CONTEXT.set(
         record.setdefault("al_foreign_ein_checks", {}) if record["state"] == "AL" else None)
     try:
-        result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ()), ms_recovery=record.get('ms_search_recovery', '')) if record['state'] == 'MS' else
+        result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ()), ms_recovery=record.get('ms_search_recovery', ''),
+                            ms_skip_probe=record.get('ms_skip_probe', False)) if record['state'] == 'MS' else
                   nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
                   final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining,
                       nc_specific_names=bool(record.get("nc_specific_name_recovery"))))
@@ -9371,7 +9404,8 @@ def final_four_connector_advance(record):
             if item.get("query", {}).get("operation") != "search"]
     started = time.perf_counter() - max(0, time.time() - record["issued"])
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started)
-    if getattr(result, "_al_scope_row", None) and result.status == "Needs Review":
+    if getattr(result, "_al_scope_row", None) and (
+            result.status == "Needs Review" or result.status_reason == "AL_CONFIRMED_ACTIVE_PRIVATE_FOUNDATION"):
         record["_al_scope_row"] = result._al_scope_row
     return {"phase": "complete", "result": preserve_nc_identity_retry(data, record)}
 
@@ -9598,8 +9632,18 @@ def final_four_connector_request(payload, origin):
                 from deployment.state_snapshots import attach_links
                 return 200, {"phase": "complete", "result": attach_links(ms_fallback, record.get("source_snapshots", []))}
             from deployment.gate41_repairs import ms_recovery_name
+            from deployment.casey_state_repairs import ms_personal_foundation_probe
             recovery = ms_recovery_name(record, payload, now) if trial_identity() else ''
-            if recovery:
+            ms_probe_failed = (record["state"] == "MS" and trial_identity() and not record.get("completed")
+                and not record.get("ms_skip_probe") and pending and payload.get("query_id") == pending["query_id"]
+                and reason in {"NY_CONNECTOR_INCOMPLETE", "NY_CONNECTOR_TAB_READY_TIMEOUT"}
+                and record["expires"] - now >= 18 and pending["query"].get("operation") == "search"
+                and pending["query"].get("name") == ms_personal_foundation_probe(
+                    record["organization_name"], record.get("alternate_names", ())))
+            if ms_probe_failed:
+                record["ms_skip_probe"] = True
+                record["pending"] = None
+            elif recovery:
                 record["ms_search_recovery"] = recovery
                 record["pending"] = None
             elif nc_specific_name_recovery(record, payload, now):
@@ -21739,11 +21783,14 @@ def ma_completed_history_inference(completed: dict, account: str) -> dict:
             or annual.get("complete") is not True or registration.get("complete") is not True):
         return {}
     documents = annual.get("documents", []) + registration.get("documents", [])
-    nonannual = r"(?:Schedule-A2 Data|FY20\d{2}\s+PC\s*-\s*(?:Articles ORG/Bylaws|Registration Docs|IRS determination letter)\.[A-Za-z0-9]+)"
-    if all(re.fullmatch(nonannual, r["title"], re.I) for r in documents):
+    nonannual = r"(?:Schedule-A2 Data|FY20\d{2}\s+PC\s*-\s*(?:Articles ORG/Bylaws|Registration Docs|IRS determination letter|IRS 990(?:-EZ|-PF)?)\.[A-Za-z0-9]+)"
+    relevant = [row for row in documents if not re.fullmatch(nonannual, row["title"], re.I)]
+    if not relevant:
         return {"completed_history_inferred_delinquent": True, "ago_account": account,
                 "no_annual_report_confirmed": True}
-    years = [r["year"] for r in documents]
+    # Unknown types still participate in the age guard and can block an inference.
+    # A known IRS attachment cannot make a stale state Form PC look newer.
+    years = [r["year"] for r in relevant]
     if not years or not all(re.fullmatch(r"20\d{2}", y) for y in years):
         return {}
     latest = max(map(int, years))
@@ -21753,8 +21800,10 @@ def ma_completed_history_inference(completed: dict, account: str) -> dict:
     last_possible_due = options["extended_due"] or options["base_due"]
     if not last_possible_due or last_possible_due >= date.today():
         return {}
+    known_forms = all(re.fullmatch(r"(?:Form[\s-]*PC Data|FY20\d{2}\s+PC\s*-\s*Form\s+PC/Annual\s+RPT\.[A-Za-z0-9]+)",
+                                  row["title"], re.I) for row in relevant)
     return {"completed_history_inferred_delinquent": True, "ago_account": account,
-            "latest_public_document_year": latest}
+            "latest_public_document_year": latest, **({"latest_form_pc_year": latest} if known_forms else {})}
 
 
 def ma_capture_completed_response(response, org, evidence: dict) -> None:
@@ -22211,8 +22260,12 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
         result.fiscal_year_end = ""
         result.next_required_period = ""
         latest = result.ma_filing_evidence.get("latest_public_document_year")
-        finding = (f"The latest year shown in the completed Massachusetts public document history is {latest}, with no later filing listed. "
+        form_year = result.ma_filing_evidence.get("latest_form_pc_year")
+        finding = (f"The latest Form PC listed in the completed Massachusetts public filing history is FY{form_year}. "
+                   if form_year else f"The latest year shown in the completed Massachusetts public document history is {latest}, with no later filing listed. "
                    if latest else "The completed Massachusetts public document history contains only supplemental or registration documents, with no annual Form PC. ")
+        if form_year:
+            result.last_year_on_record = form_year
         result.raw_status_text = finding + "Delinquency inferred"
         result.source_note = (finding + "CharityClarity therefore infers Delinquent. This is not an explicit state determination; "
                               "a specific overdue deadline was not confirmed. Recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts.")
