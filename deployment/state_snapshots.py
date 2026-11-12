@@ -532,6 +532,16 @@ def ma_selected_originals(run, ordered, row):
     run.errors.append('MA_selected_form_pc_original_unavailable')
     return ordered
 
+def ak_selected_cycle_matches(binding, ein, name, status_text):
+    cycle = re.search(r'\bRegistration Cycle:\s*(20\d{2})\b', str(status_text or ''))
+    source_name = binding['name']
+    same_name = not name or key(name) == key(source_name)
+    repeated_ein = (binding.get('name_is_ein') is True
+                    and re.fullmatch(r'\d{2}-?\d{7}', source_name) and digits(source_name) == ein)
+    return bool(cycle and int(cycle[1]) == binding['year'] and binding['ein'] == ein
+                and (same_name or repeated_ein))
+
+
 def capture_ak_selected_before_recheck(page,year,ein,deadline):
     """Save the actual selected cycle without interrupting newer-cycle checks."""
     run=CURRENT.get()
@@ -556,7 +566,12 @@ def capture_ak_selected_before_recheck(page,year,ein,deadline):
         bindings=getattr(run,'ak_selected_cycle_images',None)
         if bindings is None:run.ak_selected_cycle_images={}
         for doc in run.documents[start:]:
-            if doc[2]=='image':run.ak_selected_cycle_images[hashlib.sha256(doc[1]).hexdigest()]=dict(year=year,ein=run.ein,name=row[2])
+            if doc[2]=='image':
+                name = row[2]
+                # Alaska sometimes prints the same EIN in both ID and Legal Name.
+                name_is_ein = bool(re.fullmatch(r'\d{2}-?\d{7}', name) and digits(name) == run.ein)
+                run.ak_selected_cycle_images[hashlib.sha256(doc[1]).hexdigest()] = dict(
+                    year=year, ein=run.ein, name=name, name_is_ein=name_is_ein)
     except Exception:
         del run.documents[start:]
         run.errors.append('AK_selected_cycle_capture_unavailable')
@@ -886,8 +901,8 @@ class CaptureRun:
                 if self.state=='AK' and not negative:
                     cycle_image=getattr(self,'ak_selected_cycle_images',{}).get(hashlib.sha256(raw).hexdigest())
                     if cycle_image:
-                        cycle=re.search(r'\bRegistration Cycle:\s*(20\d{2})\b',str(row.get('raw_status_text') or ''))
-                        matched=matched and bool(cycle and int(cycle.group(1))==cycle_image['year'] and cycle_image['ein']==self.ein and (not name or key(name)==key(cycle_image['name'])))
+                        matched=matched and ak_selected_cycle_matches(
+                            cycle_image, self.ein, name, row.get('raw_status_text'))
                 if negative:
                     matched=bool(re.search(r'no\s+(?:matching\s+)?(?:records?|results?)|0\s+results',text,re.I))
                     if self.state=='DC':matched=hashlib.sha256(raw).hexdigest() in getattr(self,'dc_validated_empty_images',set())

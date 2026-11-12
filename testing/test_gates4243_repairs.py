@@ -134,3 +134,15 @@ class Gate4243Tests(TestCase):
             self.assertEqual(select(run, [document], {**row, "status": "Delinquent"}), [])
         finally:
             CURRENT.reset(token)
+
+    def test_alaska_cycle_binding_allows_only_exact_repeated_ein(self):
+        from deployment.state_snapshots import ak_selected_cycle_matches
+        binding = dict(year=2024, ein="912155317", name="91-2155317", name_is_ein=True)
+        def matches(b=binding, ein="912155317", name="Allen Institute", year=2024):
+            return ak_selected_cycle_matches(b, ein, name, f"Registration Cycle: {year}")
+        self.assertTrue(matches())
+        self.assertFalse(matches(year=2025))
+        self.assertFalse(matches(ein="912155318"))
+        self.assertFalse(matches({**binding, "name": "91-2155318"}))
+        self.assertFalse(matches({**binding, "name": "Allen Institute Foundation"}))
+        self.assertTrue(matches({**binding, "name": "Allen Institute", "name_is_ein": False}))
