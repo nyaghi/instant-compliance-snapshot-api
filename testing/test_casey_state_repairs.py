@@ -54,6 +54,9 @@ class Focused(unittest.TestCase):
                 self.assertFalse(r['matched_registry_identifier'])
                 self.assertEqual(r['evidence_capture'], 'saved' if confirmed else 'candidate_only')
                 self.assertTrue(r['evidence_url'])
+                if confirmed:
+                    self.assertIn('Current refers to the private foundation listing', r['comments'])
+                    self.assertIn('no charitable solicitation license number', r['comments'])
 
     def test_ma_uses_annual_year_and_rejects_unknown_or_incomplete_history(self):
         class Nov2026(date):

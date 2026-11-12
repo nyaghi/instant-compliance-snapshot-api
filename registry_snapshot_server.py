@@ -30455,6 +30455,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return result.source_note
     if result.state in {"AL", "NC", "NV", "TN"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
         return result.source_note
+    if result.state == "AL" and getattr(result, "status_reason", "") == "AL_CONFIRMED_ACTIVE_PRIVATE_FOUNDATION":
+        return result.source_note
     if result.state == "NM" and getattr(result, "reason_code", "") == "NM_DETAIL_CONFIRMATION_INCOMPLETE":
         return result.source_note + " CharityClarity reports Unable to Confirm."
     if result.state == "NM" and getattr(result, "reason_code", "") == "NM_COMPLETED_EMPTY_FEIN_CONFIRMATION":
