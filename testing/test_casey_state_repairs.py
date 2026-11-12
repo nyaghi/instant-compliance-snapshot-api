@@ -82,7 +82,8 @@ class Focused(unittest.TestCase):
             result = a.checker.StateResult(NAME, EIN, "MA", "Current", "")
             evidence = a.ma_read_latest_form_pc(page, result, f"AG Account Number {account}", completed)
             a.annotate_ma_visible_form_pc_due(result, evidence)
-            self.assertEqual(result.status_reason, "MA_FORM_PC_ATTACHMENT_IDENTITY_CONFLICT")
+            self.assertEqual(result.status_reason, "MA_FORM_PC_DETAIL_UNCONFIRMED")
+            self.assertEqual(result.ma_filing_evidence["wrong_filing_year"], 2020)
             self.assertIn("different EIN", a.comments_for_result(result, "", "Unable to Confirm"))
         with patch.object(a, "ma_read_legacy_form_pc", side_effect=lambda *args, read_progress: (
                 read_progress.update(attempted=True, complete=False) or {})):

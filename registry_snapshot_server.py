@@ -22261,7 +22261,7 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
         return result
     if wrong_year := result.ma_filing_evidence.get("wrong_filing_year"):
         result.status = "Unable to Confirm"
-        result.status_reason = "MA_FORM_PC_ATTACHMENT_IDENTITY_CONFLICT"
+        result.status_reason = "MA_FORM_PC_DETAIL_UNCONFIRMED"
         result.raw_status_text = f"FY{wrong_year} Form PC attachment has a different EIN"
         result.computed_due_date = result.fiscal_year_end = result.next_required_period = ""
         result.source_note = (f"Massachusetts lists a FY{wrong_year} Form PC under this charity, but the attached "
@@ -30592,7 +30592,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 "Retry the state later; this result does not establish delinquency or non-registration.")
     if state == "MA" and reason in {"MA_CHARITY_SELECTION_UNCONFIRMED", "MA_FILING_LIST_UNCONFIRMED"}:
         return result.source_note
-    if state == "MA" and reason == "MA_FORM_PC_ATTACHMENT_IDENTITY_CONFLICT":
+    if (state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED"
+            and getattr(result, "ma_filing_evidence", {}).get("wrong_filing_year")):
         return note
     if state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED":
         context = getattr(result, "ma_filing_evidence", {}).get("registry_status", "")
