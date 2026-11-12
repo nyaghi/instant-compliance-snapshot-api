@@ -10,7 +10,7 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
         connector = Path(__file__).resolve().parents[1] / "deployment/staging_connector"
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
-            for fault in ("geometry", "identity", "none"):
+            for fault in ("geometry", "identity", "loader", "loader-identity", "none"):
                 with self.subTest(fault=fault):
                     page = await browser.new_page(viewport={"width": 1680, "height": 927})
                     await page.route("**/*", lambda route: route.fulfill(content_type="text/html", body=HTML))
@@ -28,7 +28,8 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
                           const reply=await new Promise(resolve=>localListener(m,{id:'local'},resolve));
                           if(m.action==='registry-snapshot-metadata'&&shots===1&&localFault!=='none'){
                             reply.source_view_shape=[...reply.source_view_shape];reply.source_view_shape[0]+=1;
-                            if(localFault==='identity')reply.source_binding+='changed';
+                            if(localFault.includes('identity'))reply.source_binding+='changed';
+                            if(localFault.startsWith('loader')&&!window.loaderSeen){reply.source_loading_visible=true;window.loaderSeen=true;}
                           }
                           return reply;
                         }},
@@ -52,8 +53,8 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
                     }""")
                     self.assertTrue(result["ready"])
                     self.assertEqual(result["first"], fault == "none", result)
-                    self.assertEqual(result["retry"], fault == "geometry", result)
-                    self.assertEqual(result["second"], fault == "geometry", result)
-                    self.assertEqual(result["shots"], 2 if fault == "geometry" else 1, result)
+                    self.assertEqual(result["retry"], fault in ("geometry", "loader"), result)
+                    self.assertEqual(result["second"], fault in ("geometry", "loader"), result)
+                    self.assertEqual(result["shots"], 2 if fault in ("geometry", "loader") else 1, result)
                     await page.close()
             await browser.close()

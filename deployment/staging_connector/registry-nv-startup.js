@@ -64,8 +64,8 @@
     const job=active;let bound=false;
     if(job&&Date.now()<job.expires&&!job.xhr&&requests.get(this))try{
       const body=JSON.parse(args[0]),p=body.parameters,g=body.gridInput?.params?.parameters;
-      bound=body.pageNo===1&&[p,g].every(v=>v&&v.entityName===job.name&&v.searchType===job.mode
-        &&v.entityNumber===''&&v.nvBusinessId===''&&v.tabRoute==='business.Miss');
+      bound=body.pageNo===1&&p?.tabRoute===g?.tabRoute&&[p,g].every(v=>v&&v.entityName===job.name&&v.searchType===job.mode
+        &&v.entityNumber===''&&v.nvBusinessId===''&&['business','business.Miss'].includes(v.tabRoute));
     }catch{}
     if(bound){
       job.xhr=this;emit(job,'started');

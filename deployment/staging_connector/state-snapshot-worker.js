@@ -323,7 +323,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         meta=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:235:13:await",()=>(sampled('NV-desktop-metadata',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}))));
         layout=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:236:15:await",()=>(sampled('NV-desktop-layout',()=>chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics'))));
         if(cancelled||!alive()||meta?.url!==tab.url||meta.document_id!==priorDocument
-          ||meta.source_binding!==priorBinding||meta.source_detail!==true||meta.source_loading_visible!==false)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:238:111:return",(null));
+          ||meta.source_binding!==priorBinding||meta.source_detail!==true)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:238:111:return",(null));
       }
 
       if(boundNvDetail) {
@@ -335,12 +335,12 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         observed.phase='NV-selected-detail-ready';
         while(!cancelled&&alive()&&Date.now()<started+captureBudgetMs-500) {
           const shape=Array.isArray(meta.source_view_shape)?JSON.stringify(meta.source_view_shape):null;
-          stable=shape&&shape===previous?stable+1:0;previous=shape;
+          stable=shape&&shape===previous&&meta.source_loading_visible===false?stable+1:0;previous=shape;
           if(stable>=2)break;
           await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:252:10:await",()=>(new Promise(resolve=>setTimeout(resolve,40))));
           meta=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:253:15:await",()=>(sampled('NV-detail-ready',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}))));
           if(meta?.url!==tab.url||meta.document_id!==documentId||meta.source_binding!==binding
-            ||meta.source_detail!==true||meta.source_loading_visible!==false)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:255:77:return",(null));
+            ||meta.source_detail!==true)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:255:77:return",(null));
         }
         if(stable<2||cancelled||!alive())return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:257:41:return",(null));
         layout=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:258:15:await",()=>(sampled('NV-ready-layout',()=>chrome.debugger.sendCommand({tabId},'Page.getLayoutMetrics'))));
@@ -755,6 +755,17 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       // message. Missing fresh metadata never authorizes publication.
 
       if(!afterMeta)afterMeta=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:432:30:await",()=>(sampled('post-metadata',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}))));
+
+      // ORION can repaint its loader after the original pixels were taken.
+      // Discard that image. Permit only the existing once-only same-record
+      // recapture, whose setup waits for clear paint within the shared budget.
+      if(boundNvDetail&&afterMeta?.source_loading_visible===true) {
+        if(!settleNevada&&!cancelled&&alive()&&after.url===tab.url&&afterMeta.url===meta.url
+            &&afterMeta.document_id===meta.document_id&&afterMeta.source_binding===meta.source_binding
+            &&afterMeta.source_detail===true)job.nvGeometryRetryCommand=commandId;
+        observed.phase='NV-loader-reappeared';
+        return null;
+      }
 
       // Reused geometry must still describe the same complete visible record
       // after the original pixels were captured. A changed view is not published.
