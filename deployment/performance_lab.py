@@ -282,8 +282,11 @@ def final_four_asset(name, text):
       onResult(result);''')
         replace('      connectorStarted=true;', '''      connectorStarted=true;
       const tnFirst=mode==='standard';
-      const dispatchOrder=tnFirst?[...external.filter(state=>state==='TN'),...external.filter(state=>state!=='TN')]:external;
-      trace("browser collectors dispatched",{states:[...dispatchOrder],collector_order:tnFirst?'tn-first':'default'});''')
+      const nvEarly=tnFirst && location.pathname==='/' &&
+        new URLSearchParams(location.search).get('aurora_connector_test')==='background';
+      const priority=nvEarly?['TN','NV']:tnFirst?['TN']:[];
+      const dispatchOrder=[...priority.filter(state=>external.includes(state)),...external.filter(state=>!priority.includes(state))];
+      trace("browser collectors dispatched",{states:[...dispatchOrder],collector_order:nvEarly?'tn-nv-first':tnFirst?'tn-first':'default'});''')
         replace('connector=Promise.all(external.map(async state=>{', 'connector=Promise.all(dispatchOrder.map(async state=>{')
         replace('    let connector=Promise.resolve(),connectorStarted=false;', '''    const quietTennessee = mode==='standard' && location.pathname==='/' &&
       new URLSearchParams(location.search).get('aurora_connector_test')==='background';

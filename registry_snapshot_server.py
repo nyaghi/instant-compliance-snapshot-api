@@ -17670,7 +17670,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     if variant_match:
         ident = result.matched_registry_identifier
         eins = {canonical_ein_digits(value) for value in re.findall(
-            r"(?:Federal\s+(?:Tax\s+ID|EIN)|FEIN|EIN)\s*[:#]\s*(\d{2}-?\d{7})", combined, re.I)}
+            r"\b(?:Federal\s+(?:Tax\s+ID|EIN)|FEIN|EIN)\s*[:#]\s*(\d{2}-?\d{7})\b", combined, re.I)}
         if not ident or (eins and eins != {canonical_ein_digits(org.ein)}):
             return None, -10000
         address = re.search(r"\bAddress\s+(\d[^\r\n;]{4,155}?),?\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b", detail_text)
@@ -18024,10 +18024,14 @@ def search_ct_direct(org):
     variants = list(dict.fromkeys([*primary_forms, *variants]))
     if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
         variants = focused_generated_name_queries([original_name, *known_names_for_ein(org.ein)], variants)
+    service_variant = ""
     if trial_identity():
-        from deployment.gate41_repairs import ct_service_variant, replace_low_value_slot
-        variants = replace_low_value_slot(variants, [*primary_forms, original_name, *known_names_for_ein(org.ein)],
-                                          original_name, ct_service_variant(original_name))
+        from deployment.gate41_repairs import ct_service_variant
+        service_variant = ct_service_variant(original_name)
+        if service_variant:
+            # Try both complete spellings before broad or unrelated aliases.
+            variants = [variants[0], service_variant, *(
+                name for name in variants[1:] if name.casefold() != service_variant.casefold())]
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -18046,11 +18050,19 @@ def search_ct_direct(org):
         attempted_variants += 1
         searched_variants.append(variant)
         try:
-            attempt_timeout = min(CT_DIRECT_TIMEOUT_SECONDS, max(4.0, remaining - 1.0))
+            # Give the first literal spelling a bounded share so its transport
+            # cannot consume the time needed for the other full spelling.
+            first_service_spelling = service_variant and attempted_variants == 1
+            query_deadline = min(deadline, time.perf_counter() + 8) if first_service_spelling else deadline
+            attempt_timeout = min(CT_DIRECT_TIMEOUT_SECONDS, max(4.0, query_deadline - time.perf_counter() - 1))
             if session is None or fields is None or headers is None:
                 session, fields, headers = ct_direct_prepare_session(attempt_timeout)
+            if first_service_spelling:
+                attempt_timeout = min(attempt_timeout, query_deadline - time.perf_counter() - 1)
+                if attempt_timeout < 2:
+                    raise TimeoutError("Connecticut search form used the available request budget.")
             body = ct_direct_post_query(session, fields, headers, variant, attempt_timeout)
-            body = ct_direct_complete_pages(session, fields, headers, variant, body, deadline)
+            body = ct_direct_complete_pages(session, fields, headers, variant, body, query_deadline)
         except CTIncompleteResults as exc:
             incomplete_results = True
             last_error = str(exc)

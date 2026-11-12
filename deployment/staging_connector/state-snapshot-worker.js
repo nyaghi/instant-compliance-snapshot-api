@@ -4,7 +4,7 @@
 
    No navigation, focus, verification, DOM/CSS rewriting or other-window capture. */
 
-async function captureStateSnapshot(job, query, commandId, prepared = null) {
+async function captureStateSnapshot(job, query, commandId, prepared = null, settleNevada = false) {
 
   const started=Date.now(), tabId=job.tab, generation=job.generation;
 
@@ -628,7 +628,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
       const captureViews=modal?[...meta.capture_views]:[null];
       // Reuse the just-established three-sample NV geometry
       // only when the entire selected record already fits in one unchanged view.
-      const nvReadySingleView=boundNvDetail&&meta.source_fields_visible===true
+      const nvReadySingleView=boundNvDetail&&!settleNevada&&meta.source_fields_visible===true
         &&captureViews.length===1&&captureViews[0]==='nv-0'
         &&Array.isArray(meta.source_view_shape)&&meta.source_view_shape.length>=8
         &&(meta.source_view_shape.length-4)%4===0&&meta.source_view_shape.every(Number.isFinite)
@@ -760,7 +760,17 @@ async function captureStateSnapshot(job, query, commandId, prepared = null) {
       // after the original pixels were captured. A changed view is not published.
       if(nvReadySingleView&&(afterMeta?.source_fields_visible!==true
           ||JSON.stringify(afterMeta.source_view_shape)!==JSON.stringify(meta.source_view_shape)
-          ||JSON.stringify(afterMeta.capture_views)!==JSON.stringify(meta.capture_views)))return null;
+          ||JSON.stringify(afterMeta.capture_views)!==JSON.stringify(meta.capture_views))) {
+        // A layout change invalidates these pixels. Retry only on the same
+        // owned document and record, through the ordinary settled view path.
+        if(!cancelled&&alive()&&after.url===tab.url&&afterMeta?.url===meta.url
+            &&afterMeta.document_id===meta.document_id&&afterMeta.source_binding===meta.source_binding
+            &&afterMeta.source_detail===true&&afterMeta.source_loading_visible===false) {
+          observed.phase='NV-layout-changed';
+          job.nvGeometryRetryCommand=commandId;
+        }
+        return null;
+      }
 
       if(ncSelectedDetail&&(afterMeta?.source_detail!==true||afterMeta.source_binding!==ncBinding
           ||afterMeta.document_id!==ncDocument||afterMeta.source_page_fits!==true))return null;

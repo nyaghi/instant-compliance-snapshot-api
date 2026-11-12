@@ -786,6 +786,17 @@ async function performSearch(job, query, id) {
     // A failed profile capture is not retried against the later filings page.
     const snapshotContext={tab:job.tab,generation:job.generation};
     let snapshot=useNc?preparedNc.snapshot:await wfAwait(job,"worker.js:performSearch:674:45:await",()=>(captureStateSnapshot(job,query,id,job.registryState==='AL'&&alCompletedSource&&Number.isInteger(response.evidence.total)&&response.evidence.total>0&&Array.isArray(response.evidence.rows)&&response.evidence.rows.length===response.evidence.total?{kind:'al-completed-record',command_id:id,query}:preparedNvMetadata)));
+    const retryNvGeometry=job.nvGeometryRetryCommand===id;
+    delete job.nvGeometryRetryCommand;
+    if(!snapshot&&retryNvGeometry&&preparedNvMetadata
+        &&job.registryState==='NV'&&query.operation==='detail'
+        &&!job.closed&&isActive(job)&&job.pending===id&&job.command?.id===id
+        &&P.sameQuery(job.command.query,query)&&owned.has(job.tab)
+        &&job.tab===snapshotContext.tab&&job.generation===snapshotContext.generation
+        &&!job.snapshotCleanupBusy&&!job.snapshotViewportBusy
+        &&job.requiredCaptureSpentByState?.NV<16000&&job.activeExpiresAt-Date.now()>4000) {
+      snapshot=await captureStateSnapshot(job,query,id,preparedNvMetadata,true);
+    }
     // One retry of the same original NY detail; its existing 12-second aggregate
     // capture allowance and every original binding/deadline check still apply.
     if(!snapshot&&P.TRIAL_ORIGIN&&job.registryState==='NY'&&Object.hasOwn(query,'orgID')
