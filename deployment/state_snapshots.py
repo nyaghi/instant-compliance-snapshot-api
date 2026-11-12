@@ -1170,7 +1170,7 @@ def al_scope_rows(record, query, evidence, url, text):
 def attach_al_scope_original(record, result):
     """Publish candidate evidence without treating the row as an issued license."""
     if (record.get('state') != 'AL' or result.get('state') != 'AL'
-            or result.get('status') != 'Needs Review' or result.get('success') is not False
+            or result.get('status') != 'Unable to Confirm' or result.get('success') is not False
             or result.get('evidence_url') or digits(record.get('ein')) != digits(result.get('ein'))):
         return result
     ident, name = record['_al_scope_row']

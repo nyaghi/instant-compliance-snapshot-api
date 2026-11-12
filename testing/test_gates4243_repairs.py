@@ -178,13 +178,13 @@ class Gate4243Tests(TestCase):
         self.assertFalse(al_scope_rows({**record, "organization_name": "Other Foundation"}, query, evidence, url, visible))
         ref = dict(state="AL", ein=ein, identifier=match[0], record_name=match[1],
                    operation="search", url="/state-snapshots/" + "a"*64 + ".pdf", captured_at=100)
-        final = dict(state="AL", ein=ein, status="Needs Review", success=False)
+        final = dict(state="AL", ein=ein, status="Unable to Confirm", success=False)
         record.update(_al_scope_row=match, source_snapshots=[ref])
         with patch('deployment.state_snapshots.retain_references', return_value=[]):
             result = attach_al_scope_original(record, final)
             self.assertEqual(result['evidence_url'], ref['url'])
             self.assertFalse(result['success'])
-            self.assertEqual(result['status'], 'Needs Review')
+            self.assertEqual(result['status'], 'Unable to Confirm')
             self.assertEqual(attach_al_scope_original(record, {**final, 'status': 'Exempt'}).get('evidence_url'), None)
 
     def test_nc_groups_only_reviewed_initial_punctuation_variants(self):

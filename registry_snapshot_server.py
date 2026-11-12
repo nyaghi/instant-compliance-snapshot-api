@@ -9371,7 +9371,7 @@ def final_four_connector_advance(record):
             if item.get("query", {}).get("operation") != "search"]
     started = time.perf_counter() - max(0, time.time() - record["issued"])
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started)
-    if getattr(result, "_al_scope_row", None) and data["status"] == "Needs Review":
+    if getattr(result, "_al_scope_row", None) and result.status == "Needs Review":
         record["_al_scope_row"] = result._al_scope_row
     return {"phase": "complete", "result": preserve_nc_identity_retry(data, record)}
 
