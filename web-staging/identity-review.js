@@ -77,6 +77,14 @@
     const link = add(parent, 'a', 'View State Snapshot (PDF)', 'mt-2 block text-xs underline whitespace-normal');
     link.href = '/evidence-preview.html?document=' + encodeURIComponent(result.evidence_url); link.target = '_blank'; link.rel = 'noopener noreferrer';
   }
+  function maActivityOnly(result) {
+    const source = result.ma_filing_evidence;
+    return result.state === 'MA' && result.status === 'Unable to Confirm'
+      && ['MA_FORM_PC_DETAIL_UNCONFIRMED', 'MA_FORM_PC_ATTACHMENT_IDENTITY_CONFLICT'].includes(result.status_reason)
+      && !result.identity_review?.candidates?.length && /^\d+$/.test(result.matched_registry_identifier || '')
+      && source?.ago_account === result.matched_registry_identifier
+      && source.registry_status?.trim().toLowerCase() === 'not doing business in mass';
+  }
   function render(parent, result, decide, retry) {
     const review = result.identity_review;
     const inconclusive = unresolvedStatuses.has(result.status);
@@ -85,7 +93,7 @@
     const message = add(box, 'p', '', 'text-sm text-slate-600'); message.setAttribute('role', 'status');
     const buttons = [];
     if (inconclusive && !review?.candidates?.length) {
-      add(box, 'p', boundedSourceFailure(result) ? 'Site Not Reachable' : 'Review required', 'font-semibold text-slate-900');
+      add(box, 'p', maActivityOnly(result) ? 'Filing status unconfirmed' : boundedSourceFailure(result) ? 'Site Not Reachable' : 'Review required', 'font-semibold text-slate-900');
       add(box, 'p', result.source_note || 'The state lookup did not provide enough confirmed information to establish a status. Review the explanation and available evidence, then retry this state or check its official lookup.', 'mt-1 text-xs text-slate-600');
       try {
         const url = new URL(result.source_url);
@@ -144,6 +152,7 @@
   function statusLabel(result) {
     if (result.status === 'Closed / Withdrawn / Canceled') return 'Closed / Withdrawn / Canceled / Inactive';
     if (boundedSourceFailure(result)) return result.status;
+    if (maActivityOnly(result)) return 'Not Doing Business in Massachusetts';
     const inconclusive = unresolvedStatuses.has(result.status);
     if (inconclusive && result.identity_review?.candidates?.some(candidate => !candidate.decision)) return 'Confirm match';
     return inconclusive ? 'Review required' : result.status || 'Unknown';
