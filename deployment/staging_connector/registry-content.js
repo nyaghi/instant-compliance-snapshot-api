@@ -433,7 +433,7 @@
       throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
     return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
   }
-  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200, pendingGraceMs=0, validateSearch=null}={}) {
+  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200, pendingGraceMs=0, validateSearch=null, searchResponse=false}={}) {
     let loadingSeen = false, lastParseError = '', retryTimer;
     const responseEnd = Math.min(deadline, Date.now()+35000+pendingGraceMs);
     const loading = () => [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
@@ -480,7 +480,8 @@
       }
     } catch (error) {
       if (error.message !== 'REGISTRY_RESPONSE_INCOMPLETE') throw error;
-      throw new Error(lastParseError || (requireLoading && !loadingSeen ? 'REGISTRY_NV_SEARCH_NOT_STARTED'
+      throw new Error(lastParseError || (searchResponse && loadingSeen ? 'REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT'
+        : requireLoading && !loadingSeen ? 'REGISTRY_NV_SEARCH_NOT_STARTED'
         : loading() ? 'REGISTRY_NV_RESPONSE_PENDING' : 'REGISTRY_NV_RESPONSE_INCOMPLETE'));
     } finally { clearTimeout(retryTimer); }
   }
@@ -639,7 +640,7 @@
         return nvPage('Search Results', nvSearchHeaders);
       };
       return nvChanged(() => search.click(), readGrid, deadline, {
-      requireLoading:true, pendingGraceMs:25000, validateSearch:()=>{
+      requireLoading:true, searchResponse:true, validateSearch:()=>{
         if(field('entityName')?.value!==query.name)return;
         const rejected=[...document.querySelectorAll('div,span,p')].some(el=>
           !el.childElementCount && visible(el)

@@ -9334,6 +9334,8 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
                               "NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT"}
                           and not record.get("completed")
                           and ((record.get("pending") or {}).get("query") or {}).get("operation") == "search")
+    nv_search_timeout = (state == "NV" and reason == "NY_CONNECTOR_REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT"
+                         and ((record.get("pending") or {}).get("query") or {}).get("operation") == "search")
     nm_http_error = state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
     if nv_startup_failure:
         result.status = "Site Not Reachable"
@@ -9345,6 +9347,12 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
         else:
             result.source_note = ("Nevada's portal could not load its required configuration, so the search form "
                                   "never opened. CharityClarity reports Site Not Reachable.")
+    elif nv_search_timeout:
+        result.status = "Site Not Reachable"
+        result.success = False
+        result.source_note = ("Nevada's registry search did not return a completed response within its time limit. "
+                              "CharityClarity stopped waiting. No registration status was established; "
+                              "retry when the registry responds normally.")
     elif nm_http_error:
         result.status = 'Site Not Reachable'
         result.success = False
