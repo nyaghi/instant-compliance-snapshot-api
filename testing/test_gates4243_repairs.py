@@ -97,3 +97,40 @@ class Gate4243Tests(TestCase):
         self.assertEqual(receipt['queries'][0]['reason'], failure)
         self.assertIsNone(receipt['queries'][0]['completed_at'])
         self.assertFalse(needs_search_history({**result, 'status_reason': 'VERIFICATION_REQUIRED'}))
+
+    def test_kentucky_reviewed_alias_survives_full_lookup(self):
+        org = master.checker.Organization("AARP", "95-1985500")
+        result = master.search_snapshot_or_embedded_state(org, "KY")
+        self.assertEqual(result.matched_registry_identifier, "3717")
+        self.assertEqual(result.matched_registry_name, "AARP Advocacy")
+        wrong = master.checker.Organization("AARP Foundation", "95-1985500")
+        self.assertNotEqual(master.search_snapshot_or_embedded_state(wrong, "KY").matched_registry_identifier, "3717")
+
+    def test_massachusetts_activity_evidence_stays_bound_and_unresolved(self):
+        import hashlib
+        from deployment.ma_view_more_evidence import preserves_activity_identity, select
+        from deployment.state_snapshots import CURRENT
+        name = "Annie E Casey Foundation Inc"
+        ein = "521951681"
+        account = "027225"
+        url = "https://masscharities.my.site.com/FilingSearch/s/"
+        text = f"{name}\nAG Account Number: {account}\nEIN: 52-1951681\nNot Doing Business in Mass"
+        document = (url, b"retained-image", "image", text, 0, "")
+        record = {"name": name, "ein": ein, "ago_account": account}
+        run = SimpleNamespace(state="MA", ein=ein, documents=[document], ma_view_more_bindings={
+            hashlib.sha256(document[1]).hexdigest(): {"record": record, "url": url}})
+        row = dict(state="MA", ein=ein, matched_registry_name=name, matched_registry_identifier=account,
+                   success=True, status="Unable to Confirm", status_reason="MA_FORM_PC_DETAIL_UNCONFIRMED",
+                   ma_filing_evidence={"registry_status": "Not Doing Business in Mass", "ago_account": account})
+        token = CURRENT.set(run)
+        try:
+            self.assertTrue(preserves_activity_identity(SimpleNamespace(**row)))
+            self.assertEqual(select(run, [document], row), [document])
+            for text_change in (text.replace(account, "027226"), text.replace("52-1951681", "52-1951682"),
+                                text.replace("Not Doing Business in Mass", "Registered")):
+                run.documents = [(*document[:3], text_change, *document[4:])]
+                self.assertFalse(preserves_activity_identity(SimpleNamespace(**row)))
+                self.assertEqual(select(run, run.documents, row), [])
+            self.assertEqual(select(run, [document], {**row, "status": "Delinquent"}), [])
+        finally:
+            CURRENT.reset(token)

@@ -17230,6 +17230,9 @@ def normalize_registry_match_fields(result, org) -> None:
     from deployment.ma_withheld_evidence import preserves_identity as preserves_ma_notice
     if preserves_ma_notice(result):
         return  # A source publication restriction does not erase its bound identity.
+    from deployment.ma_view_more_evidence import preserves_activity_identity
+    if preserves_activity_identity(result):
+        return  # Preserve the exact account and source image for an unresolved filing period.
     ct_bound = getattr(result, "_cc_ct_source_identity", None)
     if (result.state == "CT" and getattr(result, "success", False) is True
             and isinstance(ct_bound, tuple) and len(ct_bound) == 4
@@ -31899,7 +31902,11 @@ def search_snapshot_or_embedded_state(org, state: str):
                     accepted_row.get("identifier") == getattr(result, "matched_registry_identifier", "") and
                     (any(ky_one_letter_review_candidate(target, matched_name) for target in original_targets)
                      or ky_abbreviated_dba_review_candidate(org_with_name(org, original_name), matched_name)))
-                if matched_name and not user_confirmed_match and not ky_snapshot_registry_name_is_safe(matched_name, original_targets, original_name, getattr(org, "ein", "")):
+                from deployment.gates4243_repairs import ky_reviewed_alias
+                reviewed_alias = ky_reviewed_alias(org.ein, original_name,
+                    getattr(result, "matched_registry_identifier", ""), matched_name)
+                if (matched_name and not user_confirmed_match and not reviewed_alias
+                        and not ky_snapshot_registry_name_is_safe(matched_name, original_targets, original_name, org.ein)):
                     best_result = checker.StateResult(original_name, getattr(org, "ein", ""), state, checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
                     best_result.raw_status_text = "Kentucky registry row matched a generated variant but not the requested organization"
                     best_result.source_note = (

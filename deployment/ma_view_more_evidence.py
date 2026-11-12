@@ -98,12 +98,53 @@ def capture(run, page, record):
                 pass
 
 
+def activity_documents(run, documents, ein, name, account):
+    """Only an existing, same-record image that visibly shows the activity label."""
+    if run is None or run.state != 'MA' or run.ein != ein:
+        return []
+    from deployment.state_snapshots import key
+    originals = []
+    for document in documents:
+        url, raw, kind, text, *_ = document
+        binding = getattr(run, 'ma_view_more_bindings', {}).get(hashlib.sha256(raw).hexdigest(), {})
+        record = binding.get('record', {})
+        if (kind == 'image' and binding.get('url') == url
+                and record.get('ago_account') == account and key(record.get('name', '')) == key(name)
+                and re.search(r'\bNot Doing Business in Mass\b', text, re.I)
+                and bound(text, record, run)):
+            originals.append(document)
+    return originals
+
+
+def preserves_activity_identity(result):
+    """An unresolved filing period can retain identity only after bound capture."""
+    evidence = getattr(result, 'ma_filing_evidence', {})
+    name = getattr(result, 'matched_registry_name', '')
+    account = getattr(result, 'matched_registry_identifier', '')
+    if not (result.state == 'MA' and result.success is True and result.status == 'Unable to Confirm'
+            and getattr(result, 'status_reason', '') == 'MA_FORM_PC_DETAIL_UNCONFIRMED'
+            and str(evidence.get('registry_status', '')).strip().casefold() == 'not doing business in mass'
+            and name and re.fullmatch(r'\d{6}', account) and account == evidence.get('ago_account')):
+        return False
+    from deployment.state_snapshots import CURRENT, digits
+    run = CURRENT.get()
+    return bool(run and activity_documents(run, run.documents, digits(result.ein), name, account))
+
+
 def select(run, ordered, row):
     """Never substitute a filing attachment for the charity View more page."""
     from deployment.state_snapshots import MAX_BYTES, digits, key
     if run.state != 'MA':
         return ordered
     if row.get('success') is not True or digits(row.get('ein', '')) != run.ein:
+        return []
+    if row.get('status_reason') == 'MA_FORM_PC_DETAIL_UNCONFIRMED':
+        evidence = row.get('ma_filing_evidence', {})
+        if (row.get('status') == 'Unable to Confirm'
+                and str(evidence.get('registry_status', '')).strip().casefold() == 'not doing business in mass'
+                and evidence.get('ago_account') == row.get('matched_registry_identifier')):
+            return activity_documents(run, ordered, run.ein, row.get('matched_registry_name'),
+                                      row.get('matched_registry_identifier'))
         return []
     selected = {}
     for document in ordered:
