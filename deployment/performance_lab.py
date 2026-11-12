@@ -397,6 +397,17 @@ def final_four_asset(name, text):
         replace('progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.',
                 'progress => ["opening_page","waiting_for_form","preparing_query","query_sent"].includes(progress.ny_phase) ? trace("browser stage", state.query, {ny_phase:progress.ny_phase}) : Array.isArray(progress.ny_diagnostics) ? trace("browser stage", state.query, {ny_diagnostics:nyDiagnostics(progress.ny_diagnostics)}) : onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.')
         replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",query_id:state.query_id||null,workflow_observation:completed.workflow_observation||null,workflow_delivery:completed.workflow_delivery||null,...(registryState==="NY" ? {ny_diagnostics:nyDiagnostics(completed.ny_diagnostics)} : {}),...(["GA","MS","NC","TN","AL","IL","NM","NV","NY"].includes(registryState) && Array.isArray(completed.trial_diagnostics) ? {trial_diagnostics:completed.trial_diagnostics} : {}),...(["NY_CONNECTOR_VERIFICATION_REJECTED","NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(completed.ny_failure_cause) ? {ny_failure_cause:completed.ny_failure_cause,ny_reset_cooldown:completed.ny_reset_cooldown===true} : {}),...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {}),...(completed.nc_submission ? {nc_submission:completed.nc_submission} : {}),...(["visible","hidden"].includes(completed.page_visibility) ? {page_visibility:completed.page_visibility} : {}),...(registryState === "IL" && Array.isArray(completed.diagnostics) ? {il_dom:completed.diagnostics.slice(0,32).map(({phase,event,elapsed_ms,visibility})=>({phase,event,elapsed_ms,visibility}))} : {}),...(registryState === "NV" && completed.evidence?.filings ? {nv_filings:{complete:completed.evidence.filings.complete===true,total:completed.evidence.filings.total??null,failure_code:completed.evidence.filings.failure_code||""}} : {})});\n        state = completed.ok')
+        # Older loaded workers can still return a generic readiness timeout.
+        # Use their observed Nevada form state, never the timeout alone.
+        replace('        state = completed.ok', '''        const nvForm = completed.nv_readiness;
+        if (registryState === "NV" && state.query?.operation === "search" &&
+            completed.ok === false && completed.reason === "NY_CONNECTOR_TAB_READY_TIMEOUT" &&
+            nvForm?.document_loaded === true && nvForm.search_route === true &&
+            (nvForm.loader_clear === false || nvForm.inputs_present === false) &&
+            nvForm.handoff?.search_complete === false && nvForm.handoff.command_matches_reply === true) {
+          completed = {...completed, reason:"NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT"};
+        }
+        state = completed.ok''')
         # An explicit source rejection is not an idle browser form. The
         # installed collector already exports these bounded public timings.
         # Keep its normal same-page attempt, but do not amplify a 429 by
