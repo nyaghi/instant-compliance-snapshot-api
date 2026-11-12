@@ -21783,14 +21783,11 @@ def ma_completed_history_inference(completed: dict, account: str) -> dict:
             or annual.get("complete") is not True or registration.get("complete") is not True):
         return {}
     documents = annual.get("documents", []) + registration.get("documents", [])
-    nonannual = r"(?:Schedule-A2 Data|FY20\d{2}\s+PC\s*-\s*(?:Articles ORG/Bylaws|Registration Docs|IRS determination letter|IRS 990(?:-EZ|-PF)?)\.[A-Za-z0-9]+)"
-    relevant = [row for row in documents if not re.fullmatch(nonannual, row["title"], re.I)]
-    if not relevant:
+    nonannual = r"(?:Schedule-A2 Data|FY20\d{2}\s+PC\s*-\s*(?:Articles ORG/Bylaws|Registration Docs|IRS determination letter)\.[A-Za-z0-9]+)"
+    if all(re.fullmatch(nonannual, r["title"], re.I) for r in documents):
         return {"completed_history_inferred_delinquent": True, "ago_account": account,
                 "no_annual_report_confirmed": True}
-    # Unknown types still participate in the age guard and can block an inference.
-    # A known IRS attachment cannot make a stale state Form PC look newer.
-    years = [r["year"] for r in relevant]
+    years = [r["year"] for r in documents]
     if not years or not all(re.fullmatch(r"20\d{2}", y) for y in years):
         return {}
     latest = max(map(int, years))
@@ -21800,10 +21797,8 @@ def ma_completed_history_inference(completed: dict, account: str) -> dict:
     last_possible_due = options["extended_due"] or options["base_due"]
     if not last_possible_due or last_possible_due >= date.today():
         return {}
-    known_forms = all(re.fullmatch(r"(?:Form[\s-]*PC Data|FY20\d{2}\s+PC\s*-\s*Form\s+PC/Annual\s+RPT\.[A-Za-z0-9]+)",
-                                  row["title"], re.I) for row in relevant)
     return {"completed_history_inferred_delinquent": True, "ago_account": account,
-            "latest_public_document_year": latest, **({"latest_form_pc_year": latest} if known_forms else {})}
+            "latest_public_document_year": latest}
 
 
 def ma_capture_completed_response(response, org, evidence: dict) -> None:
@@ -22025,6 +22020,13 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
                 document_eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", text)}
                 read_progress["complete"] = document_eins == {record["ein"]}
                 read_progress["identity_conflict"] = bool(document_eins - {record["ein"]})
+                # A foreign EIN in the Form PC header is direct evidence of a
+                # mislinked filing. Do not mistake an arbitrary number for one.
+                labeled_eins = {re.sub(r"\D", "", value) for value in re.findall(
+                    r"\bFederal\s*(?:Tax\s+)?[Il1]\.?D\.?\s*(?:Number|#)?\s*:?\s*(\d{2}[- ]?\d{7})(?!\d)", text, re.I)}
+                if len(labeled_eins) == 1 and record["ein"] not in labeled_eins:
+                    read_progress["wrong_filing_year"] = latest
+                    return {}
             evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], registry_record=record,
                 document_url=row["url"], allow_older_period=allow_older_period)
             if not evidence:
@@ -22114,7 +22116,12 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
             # Complete EIN-bound public history independently establishes age
             # even if an old scan is unreadable. Incomplete histories, recent or
             # unknown years, and observed foreign EINs still prevent inference.
-            if not legacy and not progress.get("identity_conflict"):
+            if progress.get("wrong_filing_year"):
+                return {**context, "ago_account": account.group(1),
+                        "wrong_filing_year": progress["wrong_filing_year"]}
+            if (not legacy and not progress.get("identity_conflict")
+                    and not (context.get("registry_status", "").casefold() == "not doing business in mass"
+                             and progress.get("attempted") and not progress.get("complete"))):
                 legacy = ma_completed_history_inference(completed, account.group(1))
             return {**legacy, **context}
         latest_year = max(year for year, _ in candidates)
@@ -22252,6 +22259,15 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
             "Recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts."
         )
         return result
+    if wrong_year := result.ma_filing_evidence.get("wrong_filing_year"):
+        result.status = "Unable to Confirm"
+        result.status_reason = "MA_FORM_PC_ATTACHMENT_IDENTITY_CONFLICT"
+        result.raw_status_text = f"FY{wrong_year} Form PC attachment has a different EIN"
+        result.computed_due_date = result.fiscal_year_end = result.next_required_period = ""
+        result.source_note = (f"Massachusetts lists a FY{wrong_year} Form PC under this charity, but the attached "
+                              "filing shows a different EIN. CharityClarity excluded the attachment. "
+                              "Confirm the correct filing and current obligations with the Massachusetts registry.")
+        return result
     if result.ma_filing_evidence.get("completed_history_inferred_delinquent"):
         result.status = "Delinquent"
         result.status_reason = "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT"
@@ -22260,12 +22276,8 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
         result.fiscal_year_end = ""
         result.next_required_period = ""
         latest = result.ma_filing_evidence.get("latest_public_document_year")
-        form_year = result.ma_filing_evidence.get("latest_form_pc_year")
-        finding = (f"The latest Form PC listed in the completed Massachusetts public filing history is FY{form_year}. "
-                   if form_year else f"The latest year shown in the completed Massachusetts public document history is {latest}, with no later filing listed. "
+        finding = (f"The latest year shown in the completed Massachusetts public document history is {latest}, with no later filing listed. "
                    if latest else "The completed Massachusetts public document history contains only supplemental or registration documents, with no annual Form PC. ")
-        if form_year:
-            result.last_year_on_record = form_year
         result.raw_status_text = finding + "Delinquency inferred"
         result.source_note = (finding + "CharityClarity therefore infers Delinquent. This is not an explicit state determination; "
                               "a specific overdue deadline was not confirmed. Recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts.")
@@ -30580,6 +30592,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 "Retry the state later; this result does not establish delinquency or non-registration.")
     if state == "MA" and reason in {"MA_CHARITY_SELECTION_UNCONFIRMED", "MA_FILING_LIST_UNCONFIRMED"}:
         return result.source_note
+    if state == "MA" and reason == "MA_FORM_PC_ATTACHMENT_IDENTITY_CONFLICT":
+        return note
     if state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED":
         context = getattr(result, "ma_filing_evidence", {}).get("registry_status", "")
         return ((f"Massachusetts lists the charity status as {context}. " if context else "")

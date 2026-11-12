@@ -2,7 +2,7 @@ import json
 import time
 import unittest
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from PIL import Image, ImageDraw
 from deployment.casey_state_repairs import ms_personal_foundation_probe
 from deployment import state_snapshots as snapshots
@@ -58,24 +58,36 @@ class Focused(unittest.TestCase):
                     self.assertIn('Current refers to the private foundation listing', r['comments'])
                     self.assertIn('no charitable solicitation license number', r['comments'])
 
-    def test_ma_uses_annual_year_and_rejects_unknown_or_incomplete_history(self):
-        class Nov2026(date):
-            @classmethod
-            def today(cls):
-                return cls(2026, 11, 12)
-        e = {'record': {'ago_account': '027225', 'ein': EIN},
-             'filings': {'027225': a.ma_public_document_collection(
-                 [{'filingYear': '2020', 'nameforURL': 'FY2020 PC - Form PC/Annual RPT.tiff'}])},
-             'registration_documents': {'027225': a.ma_public_document_collection(
-                 [{'nameforURL': 'FY2021 PC - IRS 990.tif'}, {'nameforURL': 'FY2022 PC - Articles ORG/Bylaws.tif'}])}}
-        with patch.object(a, 'date', Nov2026):
-            r = a.ma_completed_history_inference(e, '027225')
-            self.assertEqual(r['latest_form_pc_year'], 2020)
-            e['registration_documents']['027225']['documents'].append({'year': '', 'title': 'Unknown'})
-            self.assertFalse(a.ma_completed_history_inference(e, '027225'))
-            e['registration_documents']['027225']['documents'].pop()
-            e['filings']['027225']['complete'] = False
-            self.assertFalse(a.ma_completed_history_inference(e, '027225'))
+    def test_ma_discloses_foreign_filing_and_does_not_infer_from_unreadable_activity_record(self):
+        state = "Not Doing Business in Mass"
+        account = "027225"
+        url = "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007joPsAAI"
+        completed = {"record": {"ago_account": account, "ein": EIN, "registry_status": state},
+                     "filings": {account: a.ma_public_document_collection(
+                        [{"filingYear": "2020", "nameforURL": "FY2020 PC - Form PC/Annual RPT.tiff", "url": url}])},
+                     "registration_documents": {account: a.ma_public_document_collection([])}}
+        page = Mock()
+        page.get_by_role.return_value.all_inner_texts.return_value = []
+        page.locator.return_value.inner_text.return_value = f"AG Account Number {account}"
+        page.context.request.get.return_value.ok = True
+        scan = io.BytesIO()
+        Image.new("RGB", (40, 40), "white").save(scan, format="TIFF")
+        page.context.request.get.return_value.body.return_value = scan.getvalue()
+        ocr = Mock(return_value=([[[[0, 0]] * 4, "FederallD #:04-3381819", .99]], None))
+        import sys
+        from types import SimpleNamespace
+        with (patch.dict(sys.modules, {"rapidocr_onnxruntime": SimpleNamespace(RapidOCR=lambda **kw: ocr)}),
+            patch.object(a, "_MA_LEGACY_OCR", ocr)
+        ):
+            result = a.checker.StateResult(NAME, EIN, "MA", "Current", "")
+            evidence = a.ma_read_latest_form_pc(page, result, f"AG Account Number {account}", completed)
+            a.annotate_ma_visible_form_pc_due(result, evidence)
+            self.assertEqual(result.status_reason, "MA_FORM_PC_ATTACHMENT_IDENTITY_CONFLICT")
+            self.assertIn("different EIN", a.comments_for_result(result, "", "Unable to Confirm"))
+        with patch.object(a, "ma_read_legacy_form_pc", side_effect=lambda *args, read_progress: (
+                read_progress.update(attempted=True, complete=False) or {})):
+            evidence = a.ma_read_latest_form_pc(page, result, f"AG Account Number {account}", completed)
+            self.assertEqual(evidence, {"registry_status": state, "ago_account": account})
 
     def test_ms_completed_search_rejects_unrelated_records(self):
         def evidence(query):
