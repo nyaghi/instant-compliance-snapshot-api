@@ -8059,6 +8059,33 @@ def prioritized_registry_candidates(name, ein, state, rows):
     return sorted(rows, key=priority, reverse=True)
 
 
+def nv_literal_prefix_covers(prefix, name):
+    """Use ORION's case-insensitive ASCII Starts With filter, retaining punctuation."""
+    if prefix.isascii() and name.isascii():
+        return name.lower().startswith(prefix.lower())
+    return name.startswith(prefix)
+
+
+def nv_order_covering_searches(required, generated):
+    """Move an existing distinctive prefix ahead of a longer reviewed spelling."""
+    ordered = [required[0]]
+    promoted = set()
+    for name in required[1:]:
+        if any(nv_literal_prefix_covers(previous, name) for previous in ordered):
+            ordered.append(name)
+            continue
+        prefix = next((probe for probe in generated
+                       if len(probe) < len(name)
+                       and not name[len(probe)].isalnum()
+                       and nv_literal_prefix_covers(probe, name)
+                       and len(distinctive_match_tokens(probe)) >= 2), None)
+        if prefix is not None and prefix not in promoted:
+            ordered.append(prefix)
+            promoted.add(prefix)
+        ordered.append(name)
+    return ordered, promoted
+
+
 def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specific_names=False):
     """Master-owned name plan and identity selection for the four new sources.
 
@@ -8186,20 +8213,30 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             raise TimeoutError(f"{state} response arrived after its lookup deadline")
         return result
     completed_searches = []
+    nv_completed_prefixes = []
+    nv_promoted = set()
+    nv_submitted_names = set()
     nc_completed_prefixes = []
     nc_completed_all_words = []
     narrowed_searches = []
     covered_reviewed_names = []
     if state == "NV":
-        # Try covering generated prefixes first. Only a completed Starts With
-        # query can cover a longer fallback; Exact Match cannot omit it.
-        # Keep the entered name first, then shorter reviewed aliases. A fully
-        # collected literal prefix also contains every row of its longer
-        # reviewed composite name; this does not relax matching or omit a
-        # punctuation/case variant. Exact/failed searches provide no coverage.
+        # Preserve the first entered-name search and the original set of
+        # candidate spellings. The source must confirm coverage before a
+        # longer query can be omitted.
         required = required[:1] + sorted(required[1:], key=len)
-        generated = sorted(generated, key=lambda name: len(name))
+        generated = sorted(generated, key=len)
+        if trial_identity():
+            required, nv_promoted = nv_order_covering_searches(required, generated)
     for index, name in enumerate(required + generated):
+        nv_covering_probe = index < len(required) and name in nv_promoted
+        if state == "NV":
+            if name in nv_submitted_names:
+                continue
+            # After a candidate is found, keep reviewed names ahead of any
+            # optional prefix. It remains available in the original fallback list.
+            if nv_covering_probe and (records or unreviewed_scope):
+                continue
         completed_all_words = (next((phrase for phrase in nc_completed_all_words
                                      if nc_all_words_covers(phrase, name)), None)
                                if state == "NC" else None)
@@ -8247,9 +8284,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 if index < len(required):
                     covered_reviewed_names.append({"name": name, "completed_starts_with": covering})
                 continue
-        # Preserve the existing generated-name coverage and NV behavior.
-        if (state == "NV" or state == "NC" and not trial_identity()) and (state == "NV" or index >= len(required)):
+        if state == "NV" or (state == "NC" and not trial_identity() and index >= len(required)):
             covering = next((prior for prior in completed_searches if name.startswith(prior)), None)
+            if state == "NV" and trial_identity() and covering is None:
+                covering = next((prior for prior in nv_completed_prefixes
+                                 if nv_literal_prefix_covers(prior, name)), None)
             if covering is not None:
                 if state == "NV" and index < len(required):
                     covered_reviewed_names.append({"name": name, "completed_starts_with": covering})
@@ -8287,6 +8326,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             if payload.get("search_mode") not in expected_modes:
                 raise ValueError("North Carolina covering evidence must use its requested public mode")
         rows = final_four_search_evidence(payload, state, query)
+        if state == "NV":
+            nv_submitted_names.add(name)
         if state == "TN":
             # TNCaB source order is unrelated to identity confidence. Read the
             # exact legal/EIN match before plausible affiliates; do not skip
@@ -8303,7 +8344,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         if payload.get("search_mode") == "EXACT_MATCH":
             narrowed_searches.append(name)
         else:
-            completed_searches.append(name)
+            if not nv_covering_probe or payload.get("search_mode") == "STARTS_WITH":
+                completed_searches.append(name)
+            if state == "NV" and payload.get("search_mode") == "STARTS_WITH":
+                nv_completed_prefixes.append(name)
             if state == "NC":
                 if payload.get("search_mode") == "STARTS_WITH":
                     nc_completed_prefixes.append(name)
@@ -8491,7 +8535,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         # their broader retrieval must not become a new early-exit shortcut.
         if state == "NC" and nc_retrieval_coverage:
             primary_positive = False
-        if (records and (index >= len(required) - 1 or (primary_positive and not unreviewed_scope))
+        if (records and not nv_covering_probe
+                and (index >= len(required) - 1 or (primary_positive and not unreviewed_scope))
                 and (state != "TN" or any(row.get("status") in {"Current", "Upcoming Filing", "Exempt"} for row in records))):
             # This is only an early-positive exit. With no positive TN record,
             # defer identity work to final selection after the same full plan.
