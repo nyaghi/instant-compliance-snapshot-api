@@ -98,15 +98,20 @@ def reportable_result(result):
             and 1<=len(result['status'])<=100 and type(result.get('success')) is bool)
 
 
+def incomplete_search_attempts(result):
+    reasons = {'AR': 'AR_REQUIRED_SEARCH_INCOMPLETE', 'NC': 'NY_CONNECTOR_NC_RATE_LIMITED'}
+    return (result.get('state') in reasons and result.get('status_reason') == reasons[result['state']]
+            and result.get('success') is False
+            and result.get('status') in {'Unable to Verify', 'Unable to Confirm', 'Needs Review'})
+
+
 def needs_search_history(result):
     """Retain completed negatives and narrowly defined incomplete search receipts."""
     return reportable_result(result) and (
         completed_negative_result(result)
         or (result.get('state') == 'CT' and result.get('rejected_search_history') is True
             and result.get('status') in {'Unable to Confirm', 'Site Not Reachable'})
-        or (result.get('state') == 'AR' and result.get('status_reason') == 'AR_REQUIRED_SEARCH_INCOMPLETE'
-            and result.get('success') is False
-            and result.get('status') in {'Unable to Verify', 'Unable to Confirm', 'Needs Review'})
+        or incomplete_search_attempts(result)
     )
 
 
@@ -176,7 +181,7 @@ def manifest(record,result,snapshot,now):
     return {'schema':SCHEMA,'organization_name':name,'ein':ein,'state':state,
             'run_id':record.setdefault('source_archive_run_id',secrets.token_hex(16)),'started_at':record['issued'],'completed_at':now,
             'result_at_completion':result['status'],'snapshot_url':snapshot.get('url',''),
-            **({'incomplete_search':True} if state=='AR' and result.get('status_reason')=='AR_REQUIRED_SEARCH_INCOMPLETE' else {}),
+            **({'incomplete_search':True} if incomplete_search_attempts(result) else {}),
             'snapshot_expected':not history_only_result(result),
             'reviewed_names':list(dict.fromkeys([name]+reviewed)),
             'queries':entries,'source_limitations':'When available, the state image contains original source pixels. This separate document is CharityClarity\'s search history, not a state-issued certificate. Recorded searches do not establish an identity match by themselves. Attempts without confirmed completion remain explicitly incomplete.'}

@@ -231,6 +231,18 @@ def recover(master, base, lookup):
     started = time.monotonic()
     proof = None
     related = None
+    related_started = None
+    related_finished = None
+
+    def add_timing(data):
+        if state == 'MI' and related_started is not None:
+            end = related_finished if related_finished is not None else time.monotonic()
+            data['group_lookup_timing'] = {
+                'requested_seconds': round(float(base.get('lookup_seconds') or 0), 3),
+                'related_seconds': round(end - related_started, 3),
+                'group_total_seconds': round(time.monotonic() - started, 3),
+            }
+        return data
 
     def incomplete(error_type=''):
         # Retain why the related lookup failed instead of presenting the
@@ -246,10 +258,10 @@ def recover(master, base, lookup):
                 "The related state record could not be confirmed in this lookup.")
         if reason:
             note += ' Related lookup: ' + reason[:1200]
-        return {**base, 'status': 'Unable to Confirm', 'success': False, 'group_identity': proof,
+        return add_timing({**base, 'status': 'Unable to Confirm', 'success': False, 'group_identity': proof,
                 'reason_code': 'GROUP_RECORD_LOOKUP_INCOMPLETE', 'status_reason': 'GROUP_RECORD_LOOKUP_INCOMPLETE',
                 'comments': note, 'source_note': note, 'group_lookup_diagnostics': diagnostic,
-                'lookup_seconds': round(float(base.get('lookup_seconds') or 0) + time.monotonic() - started, 2)}
+                'lookup_seconds': round(float(base.get('lookup_seconds') or 0) + time.monotonic() - started, 2)})
     try:
         proof = find_relationship(master, base['organization_name'], master.canonical_ein_digits(base['ein']),
                                   min(DEADLINE.get() - 4, started + 4))
@@ -260,7 +272,9 @@ def recover(master, base, lookup):
             with CaptureRun(base['organization_name'], proof['registry_ein'], state) as capture:
                 capture.semantic_history_scope = True
                 capture.known_names = [base['organization_name']]
+                related_started = time.monotonic()
                 related = lookup(base['organization_name'], proof['registry_ein'], state)
+                related_finished = time.monotonic()
                 # Keep all observed group queries even when its own lookup is
                 # conclusive; the member's identity decision is still pending.
                 had_review = bool(related.get('_worker_identity_review') or related.get('identity_review'))
@@ -274,7 +288,7 @@ def recover(master, base, lookup):
         data = completed_group_negative(base, related, proof) or convert(master, base, related, proof)
         if data:
             data['lookup_seconds'] = round(float(base.get('lookup_seconds') or 0) + time.monotonic() - started, 2)
-            return data
+            return add_timing(data)
         # The relationship is known but the related source was unavailable.
         # Do not leave a definitive no-registration claim behind.
         return incomplete()

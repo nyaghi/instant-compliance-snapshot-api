@@ -276,16 +276,19 @@ def remember_ca_exempt_entity(run,result):
  name=str(getattr(result,'matched_registry_name','') or '')
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
  if (not re.fullmatch(r'\d+',identifier) or str(entity.get('id'))!=identifier
-     or entity.get('entityStatus')!='Exempt' or re.sub(r'\D','',str(entity.get('fein') or ''))!=run.ein
+     or entity.get('entityStatus') not in {'Exempt', 'Exempt 990-PF'} or re.sub(r'\D','',str(entity.get('fein') or ''))!=run.ein
      or not name or norm(entity.get('entityName') or entity.get('legalName') or entity.get('name'))!=norm(name)):return
  run.remember_detail(identifier,name,'https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/'+identifier)
  if identifier in run.source_detail_hints:
   run.source_detail_hints[identifier]['exempt_entity_ein']=run.ein
+  run.source_detail_hints[identifier]['exempt_entity_status']=entity['entityStatus']
   run.source_detail_hints[identifier]['retired_registration_present']=bool(retired)
 
-def ca_exempt_entity_core(text,name,ein):
+def ca_exempt_entity_core(text,name,ein,expected_status='Exempt'):
+ if expected_status not in {'Exempt', 'Exempt 990-PF'}:return None
+ status_pattern=re.escape(expected_status)+r'(?![\w-]|\s+990)'
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
- heading=re.search(r'Entity Details:\s*(.*?)\s+Exempt\s+',text,re.S)
+ heading=re.search(r'Entity Details:\s*(.*?)\s+'+status_pattern+r'\s+',text,re.S)
  core=re.search(r'Entity Type\b[\s\S]*?Out of State\?\s*(?:Yes|No)\b',text)
  shown=re.search(r'Entity Name\s+(.*?)\s+DBA\b',text,re.S)
  fein=re.search(r'\bFEIN:\s*(\d{2}-?\d{7})(?!\d)',text)
@@ -293,7 +296,7 @@ def ca_exempt_entity_core(text,name,ein):
      or (not fein or re.sub(r'\D','',fein[1])!=ein if ein else
          bool(fein) or not re.search(r'\bFEIN:\s*Entity Detail\b',text))
      or not core
-     or not re.search(r'Entity Status\s+Exempt\b',core[0])
+     or not re.search(r'Entity Status\s+'+status_pattern,core[0])
      or re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I)):return None
  return heading[0]+'\nFEIN: '+(fein[1] if fein else '')+'\n'+core[0]
 
@@ -304,6 +307,7 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
      or hint.get('url')!=url
      or not (hint.get('exempt_entity_ein')==run.ein or hint.get('exempt_entity_review') is True)):return
  expected_ein='' if hint.get('exempt_entity_review') is True else run.ein
+ expected_status=hint.get('exempt_entity_status','Exempt')
  run.selected_visual_attempted=True
  fact={'adapter':'CA-exempt-entity-detail','phase':'admission','outcome':'not_started','total_ms':0}
  run.visual_adapter_facts.append(fact);start=time.perf_counter();held=False;browser=context=None
@@ -330,7 +334,7 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     core=None
     while time.monotonic()+1<stop:
      text=page.inner_text('body',timeout=timeout())
-     core=ca_exempt_entity_core(text,result['matched_registry_name'],expected_ein)
+     core=ca_exempt_entity_core(text,result['matched_registry_name'],expected_ein,expected_status)
      if core:break
      fact['waiting_for_field']='bound_entity_values'
      page.wait_for_timeout(min(100,timeout()))
@@ -346,7 +350,7 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     fact['phase']='capture';begin=time.perf_counter()
     raw=page.screenshot(type='jpeg',quality=80,clip={'x':0,'y':0,'width':1600,'height':height},timeout=max(1,min(5000,timeout())))
     run.capture_ms+=(time.perf_counter()-begin)*1000
-    if page.url!=url or ca_exempt_entity_core(page.inner_text('body',timeout=timeout()),result['matched_registry_name'],expected_ein)!=core:
+    if page.url!=url or ca_exempt_entity_core(page.inner_text('body',timeout=timeout()),result['matched_registry_name'],expected_ein,expected_status)!=core:
      fact['outcome']='source_changed_during_capture';return
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
     before=len(run.documents)

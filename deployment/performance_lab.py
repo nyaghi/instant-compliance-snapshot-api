@@ -263,7 +263,19 @@ def final_four_asset(name, text):
     trace("workflow started",{mode,states:[...states]});
     const results=new Map(), external=states.filter(s=>s==='IL'||s==='GA');''')
         replace('      results.set(result.state,result);onResult(result);', '''      results.set(result.state,result);
-      trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||"",evidence_link_present:!!result.evidence_url});
+      const recordAttempts = ['PA','DC','FL','MI'].includes(result.state);
+      const attempts = recordAttempts && Array.isArray(result.source_attempts)
+        ? result.source_attempts.filter(x=>x && typeof x==='object').slice(-12).map(x=>({
+          step:x.step || x.source, complete:x.complete, http_status:x.http_status,
+          failure_kind:x.failure_kind, row_count:x.row_count, attempt:x.attempt,
+          elapsed_seconds:x.elapsed_seconds ?? x.seconds, observed_phase:x.observed_phase,
+          started_seconds:x.started_seconds, response_seconds:x.response_seconds,
+          completed_seconds:x.completed_seconds,
+        })) : [];
+      trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||"",
+        reason_code:result.reason_code||"",evidence_link_present:!!result.evidence_url,
+        ...(attempts.length?{source_attempts:attempts}:{}),
+        ...(result.state==='MI' && result.group_lookup_timing?{group_lookup_timing:result.group_lookup_timing}:{})});
       const observed=window.__CCWorkflowObservations ||= {};
       if(result.workflow_observation)observed['server-'+result.state]=result.workflow_observation;
       if(result.archive_observation)observed['archive-'+result.state]=result.archive_observation;

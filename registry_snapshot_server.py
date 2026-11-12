@@ -9264,6 +9264,9 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
         data = attach_links(data, record.get("source_snapshots", []))
         data = attach_search_history(record, data)
         data = bind_review_evidence(sys.modules[__name__], data)
+    elif state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" and record.get("search_failed_receipts"):
+        from deployment.search_history import attach as attach_search_history
+        data = attach_search_history(record, data)
     return preserve_nc_identity_retry(data, record)
 
 
@@ -9719,6 +9722,9 @@ def registry_json_request(url, deadline, *, payload=None, form=False, headers=No
             if url == DC_LICENSE_API:
                 from deployment.dc_transport_diagnostics import failure
                 fact=failure(exc,time.monotonic()-attempt_started,deadline-time.monotonic(),attempt+1)
+                if isinstance(exc, urllib.error.HTTPError):
+                    fact['http_status'] = exc.code
+                exc._cc_dc_transport = fact
                 log_event('DC_TRANSPORT_FAILURE '+json.dumps(fact,separators=(',',':')))
                 log_event(f"DC public data attempt {attempt + 1}/{len(timeouts)} failed: {type(exc).__name__}; read limit {request_timeout:g}s; remaining {max(0, deadline - time.monotonic()):.1f}s")
             if (attempt == len(timeouts) - 1 or deadline - time.monotonic() < (10 if url == DC_LICENSE_API else 3)
@@ -10997,6 +11003,10 @@ def search_dc(org):
         if isinstance(exc, DcLicenseSourceUnavailable) and not primary_completed:
             result.status = "Site Not Reachable"
             result.reason_code = "DC_LICENSE_SOURCE_UNREACHABLE"
+            cause = exc.__cause__
+            transport = getattr(cause, "_cc_dc_transport", None)
+            if transport:
+                result.source_attempts = [transport]
             result.source_note = ("D.C.'s public license feed was unavailable before any search results were returned. "
                                   "CharityClarity reports Site Not Reachable.")
         return result
@@ -19870,7 +19880,10 @@ def search_oh_direct_details(org):
 def oh_result_from_detail_text(result, detail_text, detail_url, detail_id):
     month_names = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
     month_names.update({name.lower(): index for index, name in enumerate(calendar.month_abbr) if name})
-    site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
+    site_name = text_between_labels(detail_text, "Organization Name", [
+        "Description of Organization's Purpose", "Description of Organization’s Purpose",
+        "Organization Phone", "EIN", "Registration Status",
+    ])
     if urlparse(detail_url).path == "/Charities/FullyExemptOrganization":
         site_name = html.unescape(text_between_labels(detail_text, "Organization Name", ["Description of Organization's Purpose", "DBA Name(s)", "Employer Identification Number", "Organization Phone", "EIN", "Registration Status"]))
     registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
@@ -20880,6 +20893,9 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
             result.error = ""
             result.success = True
             return True
+        if ak_best_confirmed_year is None or row_year > ak_best_confirmed_year:
+            from deployment.state_snapshots import capture_ak_selected_before_recheck
+            capture_ak_selected_before_recheck(ak_page, row_year, org.ein, ak_deadline)
         remember_ak_confirmed_row(
             search_year,
             row_year,
@@ -24666,11 +24682,13 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
             if re.search(r"\b403\b|forbidden|access\s+is\s+denied", last_body or "", re.I):
                 result.raw_status_text = "Wisconsin registry returned 403 Forbidden"
                 result.status = "Site Not Reachable"
+                result.reason_code = "WI_SOURCE_UNREACHABLE"
                 result.source_note = "Wisconsin DFI blocked or denied the registry result page during lookup."
                 result.success = False
                 return result
             result.raw_status_text = "Wisconsin registry did not return a usable result page"
             result.status = "Site Not Reachable"
+            result.reason_code = "WI_SOURCE_UNREACHABLE"
             result.source_note = "Wisconsin DFI did not return a usable registry result page, so CharityClarity did not treat the transient response as a clean no-record finding."
             result.success = False
             return result
@@ -27749,8 +27767,8 @@ def search_pa_with_name_fallback(page, org):
             from deployment.pa_detail_evidence import capture as capture_pa_detail
             capture_pa_detail(page, org, result)
         result.source_attempts = [{key: row.get(key) for key in
-            ("step", "ein", "name", "http_status", "complete", "failure",
-             "started_seconds", "response_seconds", "completed_seconds", "row_count")}
+            ("step", "ein", "name", "http_status", "complete", "failure", "failure_kind",
+             "started_seconds", "response_seconds", "completed_seconds", "row_count", "seconds")}
             for row in observations + getattr(result, "_pa_api_attempts", [])]
         return result
     finally:
@@ -31110,6 +31128,7 @@ def search_ky_strict_snapshot(org):
     near_rows = []
     abbreviated_dba_rows = set()
     foundation_rows = []
+    from deployment.gates4243_repairs import ky_reviewed_alias
     from deployment.search_observation import dataset_scope as _history_dataset_scope
     _history_ky_records = load_ky_snapshot_records()
     with _history_dataset_scope(targets,
@@ -31138,7 +31157,8 @@ def search_ky_strict_snapshot(org):
                 near_rows.append((registry_id, registry_name, filed_year, record_text))
                 if abbreviated_dba_gap:
                     abbreviated_dba_rows.add(registry_id)
-            names = [registry_name] if user_confirmed_row else ky_registry_name_variants(registry_name)
+            reviewed_alias = ky_reviewed_alias(org.ein, original_name, registry_id, registry_name)
+            names = [registry_name] if user_confirmed_row or reviewed_alias else ky_registry_name_variants(registry_name)
             # Some legal-name cells contain an explicit DBA marker themselves.
             # Keep both stated identities; every segment still needs the guard below.
             names = list(dict.fromkeys([
@@ -31149,7 +31169,7 @@ def search_ky_strict_snapshot(org):
             ]))
             for name_index, candidate_name in enumerate(names):
                 registry_norm = normalized_match_name(candidate_name)
-                confirmed_candidate = user_confirmed_row and candidate_name == registry_name
+                confirmed_candidate = (user_confirmed_row or reviewed_alias) and candidate_name == registry_name
                 if one_letter_gap and not confirmed_candidate:
                     continue
                 if not confirmed_candidate and not ky_candidate_passes_fast_prefilter(registry_norm, target_first_words, target_norms):
@@ -31253,6 +31273,8 @@ def search_ky_strict_snapshot(org):
             "Kentucky downloadable public charity registration snapshot matched the organization name "
             + ("after the user confirmed this specific registry identity."
                if reviewed_row.get("identifier") == registry_id and reviewed_row.get("name") == registry_name
+               else "using the registry alias corroborated by the organization's same-year IRS filing."
+               if ky_reviewed_alias(org.ein, original_name, registry_id, registry_name)
                else "under strict master-code validation.")
         )
         if filed_year and re.fullmatch(r"20\d{2}", filed_year):
@@ -31663,6 +31685,9 @@ def search_nh_live_pdf(org):
                 continue
             score = target_name_score(registry_name, targets)
             safe_match = registry_name_is_safe_against_targets(registry_name, targets, original_name, org.ein)
+            if not safe_match:
+                from deployment.gates4243_repairs import nh_parenthetical_alias
+                safe_match = nh_parenthetical_alias(original_name, targets, registry_name)
             if score < 450 and not safe_match:
                 continue
             if not safe_match:
@@ -31958,8 +31983,19 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
         module = load_ks_weekly_checker()
         external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS", org.ein)
         original_name = getattr(org, "original_organization_name", org.organization_name)
+        from deployment.gates4243_repairs import ks_country_alias, ks_has_country_suffix
+        country_alias_selected = False
         if external_result.status == module.STATUS_NOT_REGISTERED:
             records, _, _ = module.load_live_records()
+            country_aliases = ([row for row in records if ks_country_alias(original_name, org.ein, row)]
+                               if ks_has_country_suffix(original_name) else [])
+            if len(country_aliases) == 1:
+                selected = country_aliases[0]
+                recovered = module.search_ks_snapshot(selected.name, ARTIFACTS_DIR / "KS", org.ein)
+                if getattr(recovered, "contact_number", "") == selected.contact_number:
+                    external_result = recovered
+                    country_alias_selected = True
+        if external_result.status == module.STATUS_NOT_REGISTERED:
             aliases = [row for row in records
                        if (explicit_acronym_alias_matches_registry(original_name, row.name)
                            or redundant_bracket_acronym_match(original_name, row.name))
@@ -32002,7 +32038,7 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
                     status=public_status(result), expiration=parse_due_date(getattr(external_result, "expiration_date", "")),
                     initial=None, _identity_outcome="possible")],
                     True, getattr(result, "source_url", ""), freshness=DOWNLOADABLE_DATA_COMMENT_FOOTERS["KS"])
-            if not registry_name_is_safe_against_targets(matched_name, targets, original_name, org.ein):
+            if not country_alias_selected and not registry_name_is_safe_against_targets(matched_name, targets, original_name, org.ein):
                 rejected = checker.StateResult(org.organization_name, org.ein, "KS", checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
                 rejected.raw_status_text = "Kansas registry row did not safely match the requested organization"
                 rejected.source_note = (

@@ -17,6 +17,7 @@
         || result.state === 'NM' && result.status_reason === 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
         || result.state === 'NV' && result.status_reason === 'NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE'
         || result.state === 'DC' && result.reason_code === 'DC_LICENSE_SOURCE_UNREACHABLE'
+        || result.state === 'WI' && ['WI_SOURCE_UNREACHABLE', 'WI_SOURCE_ALLOWANCE_EXHAUSTED'].includes(result.reason_code)
         || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH'
         || ['ND','CO'].includes(result.state) && result.reason_code === 'RUNNER_TIMEOUT');
   }
@@ -36,11 +37,12 @@
     const bundle = /^\/state-evidence\/([a-f0-9]{64})\/evidence\.zip$/.exec(result.evidence_bundle_url || '');
     const history = /^\/state-evidence\/([a-f0-9]{64})\/search-history\.pdf$/.exec(result.search_history_url || '');
     const validHistory = history && (!result.evidence_bundle_url || bundle && bundle[1] === history[1]);
-    const incompleteAR = result.state === 'AR' && result.success === false
-      && result.status_reason === 'AR_REQUIRED_SEARCH_INCOMPLETE';
-    if (validHistory && (incompleteAR || result.identity_review_evidence_final === true || result.success === true && (result.status === 'Not Registered' || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant'))) {
+    const incompleteAttempts = result.success === false && (
+      result.state === 'AR' && result.status_reason === 'AR_REQUIRED_SEARCH_INCOMPLETE'
+      || result.state === 'NC' && result.status_reason === 'NY_CONNECTOR_NC_RATE_LIMITED');
+    if (validHistory && (incompleteAttempts || result.identity_review_evidence_final === true || result.success === true && (result.status === 'Not Registered' || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant'))) {
       const namesOnly = result.state === 'CT' && result.rejected_search_history === true || result.success === true && (result.status === 'Not Registered' || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant');
-      const log = add(parent, 'a', incompleteAR ? 'View Search Attempts (PDF)' : namesOnly ? 'View Names Searched (PDF)' : 'View Search History (PDF)', 'mt-2 block text-xs underline whitespace-normal');
+      const log = add(parent, 'a', incompleteAttempts ? 'View Search Attempts (PDF)' : namesOnly ? 'View Names Searched (PDF)' : 'View Search History (PDF)', 'mt-2 block text-xs underline whitespace-normal');
       log.href = '/evidence-preview.html?document=' + encodeURIComponent(result.search_history_url); log.target = '_blank'; log.rel = 'noopener noreferrer';
     }
     // A completed absence is documented by actual queries, not an empty image.

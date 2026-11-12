@@ -42,13 +42,14 @@
       const history=/^\/state-evidence\/([a-f0-9]{64})\/search-history\.pdf$/.exec(r.search_history_url||'');
       const completedNegative=r.success===true&&(r.status==='Not Registered'||r.state==='IL'&&r.status==='Not Registered / Non-Compliant');
       const validHistory=history&&(!r.evidence_bundle_url||r.evidence_bundle_url===`/state-evidence/${history[1]}/evidence.zip`);
-      const incompleteArkansas=r.state==='AR'&&r.success===false&&r.status_reason==='AR_REQUIRED_SEARCH_INCOMPLETE';
+      const incompleteAttempts=r.success===false&&(r.state==='AR'&&r.status_reason==='AR_REQUIRED_SEARCH_INCOMPLETE'
+        ||r.state==='NC'&&r.status_reason==='NY_CONNECTOR_NC_RATE_LIMITED');
       const historyOnly = window.CCIdentityReview?.usesSearchHistoryOnly?.(r)
         ?? (completedNegative && r.state !== 'CA');
-      const historyPath = validHistory && (historyOnly || completedNegative || incompleteArkansas
+      const historyPath = validHistory && (historyOnly || completedNegative || incompleteAttempts
         || r.identity_review_evidence_final === true) ? history[0] : '';
       const path = historyOnly ? historyPath : r.evidence_url || historyPath;
-      const evidenceType=path?(path===history?.[0]?(incompleteArkansas?'Search attempts':'Search history'):'State snapshot'):'';
+      const evidenceType=path?(path===history?.[0]?(incompleteAttempts?'Search attempts':'Search history'):'State snapshot'):'';
       const pendingSnapshot = r.state === 'GA' && r.identity_review?.candidates?.some(candidate =>
         !candidate.decision && candidate.identifier === r.matched_registry_identifier
         && /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(candidate.evidence_url || ''));
@@ -67,7 +68,7 @@
     };
     // Staging diagnostics remain a separate non-display part of the ZIP. They
     // never become worksheet cells, formulas, macros or customer-facing text.
-    if(options.diagnostics)files['cc-diagnostics.json']=JSON.stringify(options.diagnostics);
+    if(options.diagnostics)files['cc-diagnostics.json']=JSON.stringify({...options.diagnostics,exporter_version:'29.2OX-history.2'});
     return zip(files);
   }
   function buildAlerts(rows) {
