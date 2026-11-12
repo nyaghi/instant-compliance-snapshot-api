@@ -9,11 +9,11 @@ class NevadaSearchTimeout(unittest.TestCase):
     def test_only_nv_search_timeouts_map_to_unreachable(self):
         for state in ['NV','NC','TN','NM','AL','MS']:
             for operation in ['search','detail']:
-                for reason in ['NY_CONNECTOR_REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT','NY_CONNECTOR_REGISTRY_NV_COLUMNS_CHANGED','NY_CONNECTOR_REGISTRY_NV_SEARCH_NOT_STARTED','NY_CONNECTOR_REGISTRY_NV_RESPONSE_INCOMPLETE']:
+                for reason in ['NY_CONNECTOR_REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT','NY_CONNECTOR_REGISTRY_NV_SEARCH_SOURCE_ERROR','NY_CONNECTOR_REGISTRY_NV_COLUMNS_CHANGED','NY_CONNECTOR_REGISTRY_NV_SEARCH_NOT_STARTED','NY_CONNECTOR_REGISTRY_NV_RESPONSE_INCOMPLETE']:
                     with self.subTest(state=state,operation=operation,reason=reason):
                         with patch.object(cc,'response_data_for_lookup',side_effect=lambda result,*args:dict(status=result.status,success=result.success)):
                             out=cc.final_four_connector_failure(self.record(state,operation),reason)
-                        expected=state=='NV' and operation=='search' and reason.endswith('SEARCH_RESPONSE_TIMEOUT')
+                        expected=state=='NV' and operation=='search' and reason.endswith(('SEARCH_RESPONSE_TIMEOUT','SEARCH_SOURCE_ERROR'))
                         self.assertEqual(out['status'],'Site Not Reachable' if expected else 'Unable to Confirm')
                         self.assertFalse(out['success'])
     def test_total_lookup_timeout_includes_later_search_and_detail(self):

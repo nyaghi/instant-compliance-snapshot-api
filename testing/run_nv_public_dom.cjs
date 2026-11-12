@@ -100,7 +100,9 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const mutate=(target=gridTarget,addedNodes=[],removedNodes=[])=>{for(const o of [...observers])o.fn([{type:'childList',target,addedNodes,removedNodes}]);};
  if(unrelatedMutations)for(let ms=50;ms<=4000;ms+=50)schedule(()=>mutate(root),ms);
  const render=()=>{rendered=rows.slice((page-1)*pageSize,page*pageSize);if(duplicate&&page===2)rendered=rows.slice(0,pageSize);if(pagingMissing&&page>1)rendered=rendered.slice(0,-pagingMissing);loading=false;mutate(gridTarget,[],[loader]);};
- const begin=()=>{if(!activity)return;loading=true;mutate(root,[loader]);schedule(render,responseDelay);};
+ let httpStatus=200,watch=null;const messageListeners=new Set();
+ const httpEvent=(phase,extra={})=>{if(watch)for(const fn of [...messageListeners])fn({source:win,origin:'https://orion.nv.gov',data:{...watch,direction:'response',phase,...extra}});};
+ const begin=()=>{if(!activity)return;httpEvent('started');loading=true;mutate(root,[loader]);schedule(()=>{httpEvent('finished',{http_status:httpStatus});render();},responseDelay);};
  let buttonCurrent=true,staleClicks=0;
  class Input {get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){if(replaceSearchOnInput){buttonCurrent=false;schedule(()=>{buttonCurrent=true;mutate();},100);}}}
  const inputs=Object.fromEntries(['entityName','entityNumber','nvBusinessId'].map(k=>[k,new Input()]));
@@ -187,7 +189,11 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   if(q==='div,span,p')return [];
   throw Error('Unexpected document selector '+q);
  },querySelector:q=>!detail&&q.startsWith('input[id$=')?inputs[q.match(/-([A-Za-z]+)"/)[1]]:null};
- const win={};win.top=win;
+ const win={addEventListener:(type,fn)=>messageListeners.add(fn),removeEventListener:(type,fn)=>messageListeners.delete(fn),postMessage:m=>{
+  if(m.channel!=='cc-nv-search-http-v1'||m.direction!=='request')return;
+  if(m.operation==='watch'){watch=m;schedule(()=>httpEvent('ready'),0);}
+  if(m.operation==='stop'&&watch?.id===m.id)watch=null;
+ }};win.top=win;
  const context={window:win,document:doc,location:{origin:'https://orion.nv.gov',hash:'screen=external-GenericFilingsSearch&tabRoute=business',href:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=d1b62c76-d5af-4ff3-b07d-038b7fa8d854'},
   Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
   MouseEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}},
@@ -206,6 +212,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  }
  return {context,drive,api:context.testNV,get opened(){return opened;},get detailClicks(){return detailClicks;},get clicks(){return searchClicks;},get returnResultsClicks(){return returnResultsClicks;},get returnSearchClicks(){return returnSearchClicks;},get modeClicks(){return modeClicks;},get modeMenuOpen(){return modeMenu;},get pagingClicks(){return pagingClicks;},get mode(){return searchMode;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
   search:(budget=45000)=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+budget)),
+  setHttpStatus:value=>{httpStatus=value;},
   detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,reservationFields,grid};
 }
 
@@ -481,7 +488,7 @@ test('Nevada never repeats Search after loading has started, even for a slow res
 
 test('Nevada no-activity retry does not extend the command budget or invent a negative',async()=>{
  const f=fixture({activity:false,rows:[]});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);
- assert.equal(f.clicks,2);assert.ok(f.time<=36200);
+ assert.equal(f.clicks,2);assert.ok(f.time<=46000);
 });
 
 test('Nevada refuses to retry a Search whose name was changed after submission',async()=>{
@@ -550,15 +557,32 @@ test('completed empty response is accepted only after observed loading cycle',as
 test('truncated pagination cannot become a partial positive or negative',async()=>{const f=fixture({truncate:true});await assert.rejects(f.search(),/PAGINATION_INCOMPLETE/);});
 test('pager changing before rows does not repeat the previous page',async()=>{const f=fixture({oldPageDelay:600});const r=await f.search();assert.equal(r.total,4);assert.ok(f.time>=1700);});
 test('repeated rows across pages cannot pass as complete results',async()=>{const f=fixture({duplicate:true});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE|RESULTS_INCOMPLETE/);});
-test('slow Nevada responses stop at 35 seconds with a distinct source-timeout reason',async()=>{
- for(const rows of [[],observed]) for(const responseDelay of [40000,54164,58109,70000]) {
+test('stalled Nevada responses stop at 75 seconds without restarting the request',async()=>{
+ for(const rows of [[],observed]) for(const responseDelay of [80000,120000]) {
   const f=fixture({rows,responseDelay});
   await assert.rejects(f.search(150000),/REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT/);
-  assert.equal(f.clicks,1);assert.ok(f.time<=36300);
+  assert.equal(f.clicks,1);assert.ok(f.time<=76300);
  }
 });
+
+test('Nevada HTTP failures cannot turn a rendered empty grid into Not Registered',async()=>{
+ for(const status of [0,403,429,500,503]){
+  const h=fixture({rows:[],responseDelay:2000});h.setHttpStatus(status);
+  await assert.rejects(h.search(150000),/REGISTRY_NV_SEARCH_SOURCE_ERROR/);
+  assert.equal(h.clicks,1);assert.ok(h.time<5000);
+ }
+});
+test('Nevada Contains errors terminate instead of starting the name fallback',async()=>{
+ const h=fixture({rows:[],responseDelay:2000});h.setHttpStatus(500);
+ await assert.rejects(h.drive(h.api.nvSearch({state:'NV',operation:'search',name:'Casey',search_mode:'CONTAINS'},h.time+150000)),/REGISTRY_NV_SEARCH_SOURCE_ERROR/);
+ assert.equal(h.clicks,1);
+});
+test('Nevada missing HTTP observer cannot certify an empty response',async()=>{
+ const h=fixture({rows:[]});delete h.context.window.postMessage;
+ await assert.rejects(h.search(),/REGISTRY_NV_HTTP_OBSERVER_UNAVAILABLE/);assert.equal(h.clicks,0);
+});
 test('healthy Nevada positive and zero responses retain their results below the limit',async()=>{
- for(const rows of [[],observed]) for(const responseDelay of [100,10000,30000]) {
+ for(const rows of [[],observed]) for(const responseDelay of [100,10000,30000,54000,65000]) {
   const f=fixture({rows,responseDelay}); const r=await f.search(150000);
   assert.equal(r.complete,true);assert.equal(r.total,rows.length);assert.equal(f.clicks,1);
  }

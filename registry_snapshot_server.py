@@ -9347,6 +9347,12 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
         else:
             result.source_note = ("Nevada's portal could not load its required configuration, so the search form "
                                   "never opened. CharityClarity reports Site Not Reachable.")
+    elif state == "NV" and reason == "NY_CONNECTOR_REGISTRY_NV_SEARCH_SOURCE_ERROR" and ((record.get("pending") or {}).get("query") or {}).get("operation") == "search":
+        result.status = "Site Not Reachable"
+        result.success = False
+        result.source_note = ("Nevada's public search returned an unsuccessful HTTP response. "
+                              "CharityClarity stopped without trying additional names. "
+                              "No registration status was established; retry when the registry responds normally.")
     elif nv_search_timeout or state == "NV" and reason == "NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT":
         result.status = "Site Not Reachable"
         result.success = False

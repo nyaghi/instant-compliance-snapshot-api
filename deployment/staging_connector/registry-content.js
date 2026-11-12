@@ -433,9 +433,10 @@
       throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
     return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
   }
-  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200, pendingGraceMs=0, validateSearch=null, searchResponse=false}={}) {
+  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200, pendingGraceMs=0, validateSearch=null, searchResponse=false, signal=null}={}) {
     let loadingSeen = false, lastParseError = '', retryTimer;
-    const responseEnd = Math.min(deadline, Date.now()+35000+pendingGraceMs);
+    const responseBudget=searchResponse?75000:35000;
+    const responseEnd = Math.min(deadline, Date.now()+responseBudget+pendingGraceMs);
     const loading = () => [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
     const start = () => {
       action();
@@ -468,7 +469,7 @@
       });
     };
     try {
-      try { return await wfcAwait("content:nvChanged:439:19",()=>(wait(ready,Math.max(1,Math.min(35000,deadline-Date.now())),{action:start,settle,relevant}))); }
+      try { return await wfcAwait("content:nvChanged:439:19",()=>(wait(ready,Math.max(1,Math.min(responseBudget,deadline-Date.now())),{action:start,settle,relevant,signal}))); }
       catch (error) {
         // Only a search that is visibly still loading receives this margin.
         // Observe the same request; do not click again, reset its deadline,
@@ -476,7 +477,7 @@
         if (error.message !== 'REGISTRY_RESPONSE_INCOMPLETE' || !pendingGraceMs
             || !loadingSeen || !loading() || Date.now() >= responseEnd) throw error;
         nvTrace('search-response-grace',{remaining_ms:responseEnd-Date.now()});
-        return await wfcAwait("content:nvChanged:447:15",()=>(wait(ready,responseEnd-Date.now(),{settle,relevant})));
+        return await wfcAwait("content:nvChanged:447:15",()=>(wait(ready,responseEnd-Date.now(),{settle,relevant,signal})));
       }
     } catch (error) {
       if (error.message !== 'REGISTRY_RESPONSE_INCOMPLETE') throw error;
@@ -572,6 +573,28 @@
     })));
     return {ok:true};
   }
+  async function nvRequestWatch(name,mode,deadline) {
+    const state={ready:false,started:false,finished:false,http_status:null,stop:()=>{}};
+    if(typeof window.postMessage!=='function')return state;
+    const id=crypto.randomUUID(),channel='cc-nv-search-http-v1';let timer,resolveReady;
+    const ready=new Promise(resolve=>{resolveReady=resolve;});
+    const receive=event=>{
+      const m=event.data;
+      if(event.source!==window||event.origin!==location.origin||m?.channel!==channel||m.direction!=='response'||m.id!==id)return;
+      if(m.phase==='ready'){state.ready=true;clearTimeout(timer);resolveReady();}
+      else if(m.phase==='unavailable'){clearTimeout(timer);resolveReady();}
+      else if(state.ready&&m.phase==='started'){state.started=true;nvTrace('http-search-started');}
+      else if(state.ready&&state.started&&m.phase==='finished'&&Number.isInteger(m.http_status)&&m.http_status>=0&&m.http_status<=599){
+        state.finished=true;state.http_status=m.http_status;nvTrace('http-search-finished',{http_status:m.http_status});
+      }
+    };
+    window.addEventListener('message',receive);
+    state.stop=()=>{clearTimeout(timer);window.removeEventListener('message',receive);
+      try{window.postMessage({channel,direction:'request',id,operation:'stop'},location.origin);}catch{}};
+    timer=setTimeout(resolveReady,Math.max(1,Math.min(1000,deadline-Date.now())));
+    try{window.postMessage({channel,direction:'request',id,operation:'watch',name,mode,budget_ms:Math.max(1,deadline-Date.now())},location.origin);}catch{state.stop();return state;}
+    await ready;if(!state.ready)state.stop();return state;
+  }
   async function nvSearch(query, deadline) {
     const keys=Object.keys(query || {}).sort().join(',');
     const contains=keys==='name,operation,search_mode,state' && query.search_mode==='CONTAINS';
@@ -630,8 +653,11 @@
     // A completed loading cycle is mandatory, including for an empty response.
     const submit = async () => {
       const search=await wfcAwait("content:nvSearch:587:19",()=>(bindSearch()));
+      const request=await nvRequestWatch(query.name,searchMode,deadline);
+      if(!request.ready)throw new Error('REGISTRY_NV_HTTP_OBSERVER_UNAVAILABLE');
       nvTrace('search-submitted',{name:query.name,search_mode:searchMode});
       const readGrid = () => {
+        if(!request.finished||request.http_status!==200)return false;
         if (contains && (field('entityName')?.value !== query.name
             || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== ''
             || !nvSearchModeSelected(searchMode))) {
@@ -639,8 +665,9 @@
         }
         return nvPage('Search Results', nvSearchHeaders);
       };
-      return nvChanged(() => search.click(), readGrid, deadline, {
-      requireLoading:true, searchResponse:true, validateSearch:()=>{
+      try { return await nvChanged(() => search.click(), readGrid, deadline, {
+      requireLoading:true, searchResponse:true, signal:{target:window,type:'message'}, validateSearch:()=>{
+        if(request.finished&&request.http_status!==200)throw new Error('REGISTRY_NV_SEARCH_SOURCE_ERROR');
         if(field('entityName')?.value!==query.name)return;
         const rejected=[...document.querySelectorAll('div,span,p')].some(el=>
           !el.childElementCount && visible(el)
@@ -655,13 +682,13 @@
             && nvSearchModeSelected(searchMode)
             && buttons.length===1) buttons[0].click();
       }
-      });
+      }); } finally {request.stop();}
     };
     let first;
     try {
       first=await wfcAwait("content:nvSearch:601:14",()=>(submit()));
     } catch (error) {
-      if (contains) return probeReply(0,true);
+      if (contains && error.message!=='REGISTRY_NV_SEARCH_SOURCE_ERROR') return probeReply(0,true);
       throw error;
     }
     // A positive count triggers the original plan without paging.

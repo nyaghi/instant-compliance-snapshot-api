@@ -36,11 +36,11 @@ async function scenario({state='NV',delays=[Infinity],cancelAt=null}={}){
  }
  assert.ok(done,'lookup must finish');return{result,error,finished,messages,calls,count};
 }
-test('NV stalled startup/search ends at 45 seconds, with one failure and owned cleanup',async()=>{
- const r=await scenario();assert.equal(r.result.status,'Site Not Reachable');assert.equal(r.finished,45000);assert.equal(r.count,1);assert.equal(r.calls.filter(c=>c.action==='fail').length,1);assert.equal(r.messages.at(-1).action,'finish');
+test('NV hung transport ends at 180 seconds, with one failure and owned cleanup',async()=>{
+ const r=await scenario();assert.equal(r.result.status,'Site Not Reachable');assert.equal(r.finished,180000);assert.equal(r.count,1);assert.equal(r.calls.filter(c=>c.action==='fail').length,1);assert.equal(r.messages.at(-1).action,'finish');
 });
 test('NV successful earlier name does not restart the total budget',async()=>{
- const r=await scenario({delays:[20000,20000,20000]});assert.equal(r.result.status,'Site Not Reachable');assert.equal(r.finished,45000);assert.equal(r.count,3);assert.equal(r.calls.filter(c=>c.action==='advance').length,2);
+ const r=await scenario({delays:[70000,70000,70000]});assert.equal(r.result.status,'Site Not Reachable');assert.equal(r.finished,180000);assert.equal(r.count,3);assert.equal(r.calls.filter(c=>c.action==='advance').length,2);
 });
 test('NV healthy results within the deadline remain conclusive',async()=>{
  const r=await scenario({delays:[10000,10000]});assert.equal(r.result.status,'Not Registered');assert.equal(r.finished,20000);assert.equal(r.calls.filter(c=>c.action==='fail').length,0);
@@ -52,4 +52,5 @@ test('other registry source budgets are unchanged',async()=>{
  const r=await scenario({state:'TN',delays:[60000]});assert.equal(r.result.status,'Not Registered');assert.equal(r.finished,60000);
 });
 
-test('observed 52-second first search cannot consume a fresh budget for the next name',async()=>{const r=await scenario({delays:[52000,Infinity]});assert.equal(r.finished,45000);assert.equal(r.result.status,'Site Not Reachable');assert.equal(r.count,1);assert.equal(r.calls.filter(c=>c.action==='advance').length,0);});
+test('observed slow successes survive the former 45-second cutoff',async()=>{for(const delay of [54000,65000]){const r=await scenario({delays:[delay,5000]});assert.equal(r.finished,delay+5000);assert.equal(r.result.status,'Not Registered');assert.equal(r.count,2);}});
+test('observed 83-second multi-search progress completes within the shared budget',async()=>{const r=await scenario({delays:[24000,14000,10000,7000,7000,7000,7000,7000]});assert.equal(r.finished,83000);assert.equal(r.result.status,'Not Registered');});

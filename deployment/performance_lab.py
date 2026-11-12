@@ -375,7 +375,7 @@ def final_four_asset(name, text):
         # One active Nevada budget spans startup, every name and worker retries.
         # Enforce it on Aurora/Alerts' page, not a throttled registry-page timer.
         replace('      let lookupDeadline = Date.now() + Math.min(300000, Number.isFinite(state.lookup_remaining_ms) ? Math.max(0,state.lookup_remaining_ms) : 300000);',
-                '      let lookupDeadline = Date.now() + Math.min(registryState === "NV" ? 45000 : 300000, Number.isFinite(state.lookup_remaining_ms) ? Math.max(0,state.lookup_remaining_ms) : 300000);')
+                '      let lookupDeadline = Date.now() + Math.min(registryState === "NV" ? 180000 : 300000, Number.isFinite(state.lookup_remaining_ms) ? Math.max(0,state.lookup_remaining_ms) : 300000);')
         replace('reason: "NY_CONNECTOR_TIMEOUT" });\n          break;',
                 'reason: registryState === "NV" ? "NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT" : "NY_CONNECTOR_TIMEOUT" });\n          break;')
         replace('completed = {ok:false,reason:"NY_CONNECTOR_TIMEOUT"};',
