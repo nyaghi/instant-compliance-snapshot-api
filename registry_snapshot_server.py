@@ -8157,9 +8157,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         # single word (e.g. Education or Fitness) produces an unrelated grid;
         # it is not another reviewed identity that the master must search.
         generated = [name for name in generated if len(distinctive_match_tokens(name)) >= 2]
+    nc_initial_variant_plan = False
     if state == "NC" and trial_identity() and not nc_specific_names:
+        initials_probes = nc_reviewed_initial_variants(required)
         required, covering_names, nc_all_words_probes, generated = nc_covering_query_plan(
             required, generated, nc_all_words_probes, org.organization_name)
+        nc_initial_variant_plan = any(
+            nc_all_words_probes.get(probe) == phrase for probe, phrase in initials_probes.items()
+            if probe in required)
         for probe, names in list(covering_names.items()):
             for name in list(names):
                 names.extend(nc_retrieval_coverage.get(name, []))
@@ -8204,6 +8209,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             continue
         if (state == "NC" and trial_identity() and index >= len(required)
                 and nc_completed_all_words and not unreviewed_scope
+                # A new shared spelling search still needs the existing
+                # short-name probes until the ordinary match rule settles them.
+                and not nc_initial_variant_plan
                 and all(any(nc_all_words_covers(phrase, target) for phrase in nc_completed_all_words)
                         or any(target.casefold().startswith(probe.casefold()) for probe in nc_completed_prefixes)
                         or target.casefold() in {probe.casefold() for probe in narrowed_searches}
@@ -9783,6 +9791,19 @@ def licensed_compound_retrieval_names(name):
     return list(dict.fromkeys(parts))
 
 
+def nc_reviewed_initial_variants(required):
+    """Find an exact common phrase for three or more reviewed spellings."""
+    groups = {}
+    for name in required:
+        # Two complete, distinctive-tail words preserve a precise public query.
+        match = re.fullmatch(r"([A-Za-z](?:[. ]+[A-Za-z]){1,3})[. ]+([A-Za-z]{5,} [A-Za-z]{5,})", name)
+        if match and distinctive_match_tokens(match[2]):
+            initials, tail = match.groups()
+            group = re.sub(r"[^a-z]", "", initials.casefold()), tail.casefold()
+            groups.setdefault(group, []).append((name, tail))
+    return dict(variants[0] for variants in groups.values() if len(variants) >= 3)
+
+
 def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
     """Plan precise covering probes; never discard reviewed identity targets.
 
@@ -9799,19 +9820,8 @@ def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
                for target in required)]
     planned = list(dict.fromkeys(required + generated))
     all_words_probes = dict(all_words_probes)
-    initial_variants = {}
-    for name in required:
-        # Retain the distinctive words of a full legal name. The shared tail
-        # retrieves reviewed spellings whose only difference is dotted initials.
-        match = re.fullmatch(r"([A-Za-z](?:[. ]+[A-Za-z]){1,3})[. ]+([A-Za-z]{5,} [A-Za-z]{5,})", name)
-        if match and distinctive_match_tokens(match[2]):
-            initials, tail = match.groups()
-            group = re.sub(r"[^a-z]", "", initials.casefold()), tail.casefold()
-            initial_variants.setdefault(group, []).append((name, tail))
-    for variants in initial_variants.values():
-        if len(variants) >= 3:
-            probe, phrase = variants[0]
-            all_words_probes.setdefault(probe, phrase)
+    for probe, phrase in nc_reviewed_initial_variants(required).items():
+        all_words_probes.setdefault(probe, phrase)
     precise_prefixes = {}
     for target, phrase in list(all_words_probes.items()):
         words = re.findall(r"[A-Za-z0-9]+", phrase)
