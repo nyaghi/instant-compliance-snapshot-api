@@ -1129,6 +1129,15 @@ def nc_completed_results_snapshot(record,query,evidence,url,text):
         and key(row.get('name') or row.get('CSL Legal Name') or row.get('Organization Name')) in key(text)
         for row in evidence['rows'])
 
+def al_scope_name(value):
+    # The portal can index a legal name as "Foundation, Inc. , The".
+    # This is only for preserving an unresolved candidate's original pixels.
+    value = re.sub(r",\s*the\s*$", "", value, flags=re.I)
+    value = re.sub(r"^\s*the\s+", "", value, flags=re.I)
+    value = re.sub(r"(?:,\s*|\s+)inc(?:orporated)?\.?\s*$", "", value, flags=re.I)
+    return key(value)
+
+
 def al_scope_rows(record, query, evidence, url, text):
     """Bind an unnumbered private foundation to its actual visible search row."""
     headers = ['Name', 'License/Registration#', 'Status', 'Registration Type',
@@ -1146,12 +1155,13 @@ def al_scope_rows(record, query, evidence, url, text):
             or len(rows) != count or 'Business Lookup Search' not in visible
             or not re.search(r'Records\s*:\s*1\s+to\s+' + str(count) + r'\s+of\s+' + str(count) + r'\b', visible)):
         return []
-    names = {key(x) for x in [record.get('organization_name', ''), *record.get('alternate_names', [])] if x}
+    names = {al_scope_name(x) for x in [record.get('organization_name', ''), *record.get('alternate_names', [])] if x}
+    names.discard('')
     candidates = [
         ('ALROW-' + hashlib.sha256(json.dumps(row, ensure_ascii=False).encode()).hexdigest(), row[0])
         for row in rows if isinstance(row, list) and len(row) == len(headers)
         and all(isinstance(cell, str) for cell in row)
-        and key(row[0]) in names and not row[1] and row[2] and row[3] == 'Private Foundation'
+        and al_scope_name(row[0]) in names and not row[1] and row[2] and row[3] == 'Private Foundation'
         and ' '.join(' '.join(row[:4]).split()) in visible
     ]
     return candidates if len(candidates) == 1 else []
@@ -1167,7 +1177,8 @@ def attach_al_scope_original(record, result):
     matches = [ref for ref in record.get('source_snapshots', [])
                if ref.get('state') == 'AL' and ref.get('operation') == 'search'
                and digits(ref.get('ein')) == digits(result['ein'])
-               and ref.get('identifier') == ident and ref.get('record_name') == name]
+               and ref.get('identifier') == ident
+               and ' '.join(ref.get('record_name', '').split()) == ' '.join(name.split())]
     if not matches or not re.fullmatch(r'ALROW-[a-f0-9]{64}', ident):
         return result
     ref = matches[-1]

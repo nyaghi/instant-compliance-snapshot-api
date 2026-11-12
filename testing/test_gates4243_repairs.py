@@ -161,6 +161,18 @@ class Gate4243Tests(TestCase):
                                  "Issued Date", "Expiration Date", "Address", "City", "State", "Zip", "Print"])
         visible = f"Business Lookup Search Records: 1 to 1 of 1 {name} Active Private Foundation"
         match, = al_scope_rows(record, query, evidence, url, visible)
+        indexed = "Annie E. Casey Foundation, Inc. , The"
+        indexed_row = [indexed, *row[1:]]
+        indexed_visible = visible.replace(name, indexed)
+        variant, = al_scope_rows(record, query, {**evidence, "rows": [indexed_row]}, url, indexed_visible)
+        self.assertEqual(variant[1], indexed)
+        self.assertNotEqual(variant[0], match[0])
+        duplicate = {**evidence, "total": 2, "rows": [row, indexed_row]}
+        self.assertFalse(al_scope_rows(record, query, duplicate, url,
+            visible.replace("1 to 1 of 1", "1 to 2 of 2") + " " + indexed + " Active Private Foundation"))
+        mismatch = [indexed.replace("Casey", "Casey Family"), *row[1:]]
+        self.assertFalse(al_scope_rows(record, query, {**evidence, "rows": [mismatch]}, url,
+            visible.replace(name, mismatch[0])))
         self.assertFalse(al_scope_rows(record, query, evidence, url, visible.replace("Active", "Inactive")))
         self.assertFalse(al_scope_rows(record, query, {**evidence, "total": 2}, url, visible))
         self.assertFalse(al_scope_rows({**record, "organization_name": "Other Foundation"}, query, evidence, url, visible))
@@ -174,6 +186,21 @@ class Gate4243Tests(TestCase):
             self.assertFalse(result['success'])
             self.assertEqual(result['status'], 'Needs Review')
             self.assertEqual(attach_al_scope_original(record, {**final, 'status': 'Exempt'}).get('evidence_url'), None)
+
+    def test_nc_groups_only_reviewed_initial_punctuation_variants(self):
+        from registry_snapshot_server import nc_covering_query_plan
+
+        names = ["W. K. Kellogg Foundation", "W.K. KELLOGG FOUNDATION", "W K Kellogg Foundation"]
+        fallback = ["K Kellogg"]
+        probes, coverage, modes, generated = nc_covering_query_plan(names, fallback, {}, names[0])
+        self.assertEqual(probes, names[:1])
+        self.assertEqual(coverage, {names[0]: names[1:]})
+        self.assertEqual(modes[names[0]], "Kellogg Foundation")
+        self.assertEqual(generated, fallback)
+
+        for distinct in (names[:2], [*names[:2], "W T Kellogg Foundation"]):
+            _, _, selected, _ = nc_covering_query_plan(distinct, [], {}, distinct[0])
+            self.assertNotIn(distinct[0], selected)
 
     def test_pennsylvania_first_timeout_preserves_usable_retry_in_original_budget(self):
         import json

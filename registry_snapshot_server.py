@@ -9799,6 +9799,19 @@ def nc_covering_query_plan(required, generated, all_words_probes, entered_name):
                for target in required)]
     planned = list(dict.fromkeys(required + generated))
     all_words_probes = dict(all_words_probes)
+    initial_variants = {}
+    for name in required:
+        # Retain the distinctive words of a full legal name. The shared tail
+        # retrieves reviewed spellings whose only difference is dotted initials.
+        match = re.fullmatch(r"([A-Za-z](?:[. ]+[A-Za-z]){1,3})[. ]+([A-Za-z]{5,} [A-Za-z]{5,})", name)
+        if match and distinctive_match_tokens(match[2]):
+            initials, tail = match.groups()
+            group = re.sub(r"[^a-z]", "", initials.casefold()), tail.casefold()
+            initial_variants.setdefault(group, []).append((name, tail))
+    for variants in initial_variants.values():
+        if len(variants) >= 3:
+            probe, phrase = variants[0]
+            all_words_probes.setdefault(probe, phrase)
     precise_prefixes = {}
     for target, phrase in list(all_words_probes.items()):
         words = re.findall(r"[A-Za-z0-9]+", phrase)
