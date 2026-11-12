@@ -15,7 +15,7 @@
     return result.status === 'Site Not Reachable' && !result.identity_review?.candidates?.length
       && (result.state === 'OR' && ['OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED', 'OR_SOURCE_TIME_LIMIT'].includes(result.reason_code)
         || result.state === 'NM' && result.status_reason === 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
-        || result.state === 'NV' && ['NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE','NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT','NY_CONNECTOR_REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT'].includes(result.status_reason)
+        || result.state === 'NV' && ['NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE','NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT','NY_CONNECTOR_REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT','NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT'].includes(result.status_reason)
         || result.state === 'DC' && result.reason_code === 'DC_LICENSE_SOURCE_UNREACHABLE'
         || result.state === 'WI' && ['WI_SOURCE_UNREACHABLE', 'WI_SOURCE_ALLOWANCE_EXHAUSTED'].includes(result.reason_code)
         || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH'

@@ -9347,7 +9347,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
         else:
             result.source_note = ("Nevada's portal could not load its required configuration, so the search form "
                                   "never opened. CharityClarity reports Site Not Reachable.")
-    elif nv_search_timeout:
+    elif nv_search_timeout or state == "NV" and reason == "NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT":
         result.status = "Site Not Reachable"
         result.success = False
         result.source_note = ("Nevada's registry search did not return a completed response within its time limit. "

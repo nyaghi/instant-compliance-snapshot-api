@@ -372,6 +372,14 @@ def final_four_asset(name, text):
                 'onProgress?.(`${label}: the search stalled. Reopening the state page once and resuming this check.`);')
         replace('() => onProgress?.("Illinois: waiting to resume after verification recovery."), "IL", recoverySignal',
                 '() => onProgress?.(`${label}: waiting to resume this check.`), registryState, recoverySignal')
+        # One active Nevada budget spans startup, every name and worker retries.
+        # Enforce it on Aurora/Alerts' page, not a throttled registry-page timer.
+        replace('      let lookupDeadline = Date.now() + Math.min(300000, Number.isFinite(state.lookup_remaining_ms) ? Math.max(0,state.lookup_remaining_ms) : 300000);',
+                '      let lookupDeadline = Date.now() + Math.min(registryState === "NV" ? 45000 : 300000, Number.isFinite(state.lookup_remaining_ms) ? Math.max(0,state.lookup_remaining_ms) : 300000);')
+        replace('reason: "NY_CONNECTOR_TIMEOUT" });\n          break;',
+                'reason: registryState === "NV" ? "NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT" : "NY_CONNECTOR_TIMEOUT" });\n          break;')
+        replace('completed = {ok:false,reason:"NY_CONNECTOR_TIMEOUT"};',
+                'completed = {ok:false,reason:registryState === "NV" ? "NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT" : "NY_CONNECTOR_TIMEOUT"};')
         replace('const searchSignal = recoveryUsed ?', 'const searchSignal = (recoveryUsed || finalFour) ?')
         replace('if (!recoveryUsed) throw error;', 'if (!recoveryUsed && !finalFour) throw error;')
         # Trial-only, public-stage diagnostics. Never emit credentials, signed
