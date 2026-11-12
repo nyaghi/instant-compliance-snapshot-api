@@ -88,13 +88,20 @@
   function render(parent, result, decide, retry) {
     const review = result.identity_review;
     const inconclusive = unresolvedStatuses.has(result.status);
+    const confirmedMAFilingConflict = result.state === 'MA'
+      && (result.status_reason === 'MA_FORM_PC_ATTACHMENT_IDENTITY_CONFLICT'
+        || result.status_reason === 'MA_FORM_PC_DETAIL_UNCONFIRMED'
+          && Number.isInteger(result.ma_filing_evidence?.wrong_filing_year));
     if (!review?.candidates?.length && !inconclusive) return;
     const box = add(parent, 'div', '', 'mt-3 border-t border-slate-200 pt-3 whitespace-normal');
     const message = add(box, 'p', '', 'text-sm text-slate-600'); message.setAttribute('role', 'status');
     const buttons = [];
     if (inconclusive && !review?.candidates?.length) {
       add(box, 'p', maActivityOnly(result) ? 'Filing status unconfirmed' : boundedSourceFailure(result) ? 'Site Not Reachable' : 'Review required', 'font-semibold text-slate-900');
-      add(box, 'p', result.source_note || 'The state lookup did not provide enough confirmed information to establish a status. Review the explanation and available evidence, then retry this state or check its official lookup.', 'mt-1 text-xs text-slate-600');
+      const fallback = confirmedMAFilingConflict
+        ? 'The Massachusetts filing attachment shows a different EIN. Confirm the filing directly with the state.'
+        : 'The state lookup did not provide enough confirmed information to establish a status. Review the explanation and available evidence, then retry this state or check its official lookup.';
+      add(box, 'p', result.source_note || fallback, 'mt-1 text-xs text-slate-600');
       try {
         const url = new URL(result.source_url);
         if (url.protocol === 'https:' && !url.username && !url.password) {
@@ -142,7 +149,7 @@
         if (candidate.decision) action(controls, 'Undo match', () => decide(candidate.id, 'clear'));
       }
     }
-    if (inconclusive && (!review?.candidates?.some(candidate => candidate.decision)
+    if (inconclusive && !confirmedMAFilingConflict && (!review?.candidates?.some(candidate => candidate.decision)
         || result.state === 'NC' && review.search_complete === false
           && review.candidates.some(candidate => candidate.decision === 'reject'))) {
       const controls = add(box, 'div', '', 'mt-3');

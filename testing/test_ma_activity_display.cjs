@@ -23,6 +23,21 @@ test('Massachusetts activity is a display label with an unconfirmed filing note'
   assert.equal(row.status, 'Unable to Confirm');
 });
 
+test('Offers a retry for an incomplete filing read and routes confirmed attachment conflicts to the state', () => {
+  const texts = node => [node.textContent || '', ...node.children.flatMap(texts)];
+  const detail = {...row, status_reason: 'MA_FORM_PC_DETAIL_UNCONFIRMED', source_note: '', source_url: 'https://masscharities.my.site.com/FilingSearch/s/'};
+  for (const [result, canRetry] of [
+    [row, false],
+    [{...detail, ma_filing_evidence: {...row.ma_filing_evidence, wrong_filing_year: 2020}}, false],
+    [detail, true],
+  ]) {
+    const container = element();
+    ui.render(container, result, () => {}, () => {});
+    assert.equal(texts(container).includes('Retry MA'), canRetry);
+    if (result.source_url) assert.ok(texts(container).includes('Open state lookup'));
+  }
+});
+
 test('Does not overwrite a confirmed status, unmatched record, other state, or identity decision', () => {
   for (const changes of [
     {matched_registry_identifier: '019873'}, {state: 'AL'}, {ma_filing_evidence: {}},
