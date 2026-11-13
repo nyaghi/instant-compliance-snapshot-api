@@ -7071,6 +7071,25 @@ def il_ga_connector_advance(record):
             failure['lab_diagnostic'] = {'phase':'IL_PUBLIC_EVIDENCE_VALIDATION',
                 'exception_type':type(exc).__name__,
                 'reason':str(exc) if str(exc) in safe_reasons else 'Source record validation did not complete'}
+        if record['state'] == 'GA' and trial_identity():
+            safe_reasons = {
+                'Georgia detail does not match the selected charity license',
+                'Georgia record is not a qualifying charity registration',
+                'Georgia unnumbered detail does not match its bound name',
+                'Georgia legacy record is not an explicit charity exemption',
+                'Georgia EXEMPT marker is not a confirmed charity exemption',
+                'Georgia unnumbered historical charity could not be reconciled',
+                'Incomplete or mismatched browser evidence', 'Missing selected detail evidence',
+                'Incomplete search pagination', 'Invalid or duplicated charity search identity',
+                'Invalid Georgia detail link',
+            }
+            pending = (record.get('pending') or {}).get('query') or {}
+            failure['lab_diagnostic'] = {
+                'phase': 'GA_PUBLIC_EVIDENCE_VALIDATION',
+                'reason': str(exc) if str(exc) in safe_reasons else type(exc).__name__,
+                'completed_count': len(record['completed']),
+                'pending_identifier': pending.get('identifier', ''),
+            }
         return {"phase": "complete", "result": failure}
     if record["purpose"] == "identity":
         return {"phase": "complete", "result": {"state": record["state"], "source": record["state"], "identity": result}}
@@ -8792,8 +8811,22 @@ def nm_browser_lookup(org, evidence):
                 if year or status == 'Inactive Registration']
         submitted = module.nm_latest_submitted(rows)
         from deployment.gate41_repairs import nm_submitted_period
-        filed_period = nm_submitted_period(rows, submitted, detail['financial_periods'], module.parse_date)
         source = f'https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(ein)}'
+        try:
+            filed_period = nm_submitted_period(rows, submitted, detail['financial_periods'], module.parse_date)
+        except ValueError as exc:
+            if str(exc) != 'Conflicting New Mexico fiscal periods':
+                raise
+            result = checker.StateResult(org.organization_name, org.ein, 'NM', 'Unable to Confirm', source)
+            result.success = False
+            result.matched_registry_name = selected['name']
+            result.matched_registry_identifier = format_ein(ein)
+            result.reason_code = 'NM_CONFLICTING_FISCAL_PERIODS'
+            result._cc_nm_conflicting_fiscal_identity = (selected['name'], format_ein(ein), source)
+            result.source_note = ("New Mexico returned the requested EIN, but its filing history shows conflicting "
+                                  "fiscal periods. The matched state record is available for review.")
+            result.queries_attempted = attempts + [{'query': query, 'completed': True}]
+            return result
         result = module.SearchResult(org.organization_name, org.ein, 'NM', module.STATUS_UNKNOWN, '', source, '')
         result.matched_registry_name = selected['name']
         result.matched_registry_identifier = format_ein(ein)
@@ -9412,6 +9445,13 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
             "pending_name": pending.get("name", ""),
             **({"elapsed_seconds": round(max(0, time.time() - record["issued"]), 2)} if state == "NC" else {}),
         }
+    if state == "NV" and trial_identity():
+        data["lab_diagnostic"].update(
+            pending_identifier=pending.get("identifier", ""),
+            completed_identifiers=[item["query"]["identifier"] for item in record.get("completed", [])
+                                   if item.get("query", {}).get("operation") == "detail"
+                                   and item["query"].get("identifier")],
+        )
     if state in {"AL", "NC"} and candidates:
         from deployment.state_snapshots import attach_links
         from deployment.search_history import attach as attach_search_history
@@ -11304,6 +11344,29 @@ def ri_charity_detail(raw, deadline, headers):
     return row
 
 
+def ri_distinctive_fallback(name, fallback):
+    """Trade a redundant generic prefix for one distinctive word, within the same budget."""
+    words = re.findall(r"[A-Za-z]+", complete_name_identity_key(name))
+    if len(words) < 6 or words[1] not in {"committee", "association", "society", "council", "foundation"}:
+        return fallback
+    prefixes = [i for i, value in enumerate(fallback)
+                if 2 <= len(value.split()) <= 4
+                and value.casefold().split() == words[:len(value.split())]]
+    if len(prefixes) < 2:
+        return fallback
+    distinctive = distinctive_match_tokens(name) - {
+        "american", "committee", "foundation", "institute", "university", "research",
+        "association", "organization", "international", "education", "national",
+        "development", "children", "charitable", "services", "hospital", "memorial",
+    }
+    keyword = next((word for word in words[4:] if len(word) >= 8 and word in distinctive), "")
+    if not keyword or keyword in {value.casefold() for value in fallback}:
+        return fallback
+    updated = list(fallback)
+    updated[prefixes[-1]] = keyword.upper()
+    return updated
+
+
 def search_ri(org):
     deadline = time.monotonic() + 90
     try:
@@ -11317,7 +11380,10 @@ def search_ri(org):
         # Reorder only probes already in the bounded master query plan.
         legal_forms = {value.casefold() for value in literal_name_retrieval_forms(org.organization_name)}
         legal_probes = [value for value in generated if value.casefold() in legal_forms]
-        planned = required + legal_probes + [value for value in generated if value not in legal_probes]
+        fallback = [value for value in generated if value not in legal_probes]
+        fallback = ri_distinctive_fallback(org.organization_name, fallback)
+        planned = required + legal_probes + [value for value in fallback
+                                            if value.casefold() not in {q.casefold() for q in required + legal_probes}]
         rows, seen = [], set()
         for index, query in enumerate(planned):
             if index >= len(required) + len(legal_probes) and rows:
@@ -16331,7 +16397,8 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
     result.reason_code = "MI_NEGATIVE_CONFIRMATION_INCOMPLETE" if confirm_ein else "MI_NAME_SEARCH_INCOMPLETE"
     result.queries_attempted = []
     result.source_attempts = []
-    def incomplete(message):
+    def incomplete(message, stage):
+        result.mi_name_failure_stage = stage
         result.status = "Unable to Verify"
         result.raw_status_text = ("Michigan EIN retry did not complete" if confirm_ein
                                   else "Michigan organization-name search did not complete")
@@ -16342,7 +16409,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
         return result
     variants = [module.format_ein(org.ein)] if confirm_ein else mi_name_fallback_queries(org)
     if not variants:
-        return incomplete("No usable organization-name query was available after the EIN search.")
+        return incomplete("No usable organization-name query was available after the EIN search.", "no_query")
 
     progress = getattr(page, "_cc_mi_search_progress", None)
     identity = (org.organization_name, canonical_ein_digits(org.ein))
@@ -16366,9 +16433,10 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
             result.source_attempts.append(f"Skipped redundant Michigan query: {variant}; completed zero-result query: {covered}")
             continue
         if time.perf_counter() >= deadline:
-            return incomplete("The name-search time budget ended before every planned query completed.")
+            return incomplete("The name-search time budget ended before every planned query completed.", "budget")
         active_page = page
         fresh_page = None
+        stage = "form"
         try:
             page._cc_mi_name_deadline = deadline
             if opened_session:
@@ -16388,7 +16456,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
                 except Exception:
                     active_page = page
             if not opened_form:
-                return incomplete("Michigan could not open the name-search form.")
+                return incomplete("Michigan could not open the name-search form.", "form")
             opened_session = True
             active_page.locator("#ctl00_MainContent_txtName").fill("", timeout=mi_action_timeout(active_page, 3000))
             if not confirm_ein:
@@ -16398,14 +16466,16 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
             active_page.locator("#ctl00_MainContent_ddlName1").select_option("Includes", timeout=mi_action_timeout(active_page, 2000))
             active_page.locator("#ctl00_MainContent_ddlName2").select_option("All words", timeout=mi_action_timeout(active_page, 2000))
             result.queries_attempted.append(variant)
+            stage = "search_response"
             with active_page.expect_navigation(wait_until="domcontentloaded", timeout=mi_action_timeout(active_page, MI_SEARCH_RESPONSE_TIMEOUT_MS)):
                 active_page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=mi_action_timeout(active_page, 3000), no_wait_after=True)
+            stage = "results_frame"
             frame = module.find_results_frame(active_page)
             if not frame:
-                return incomplete("Michigan did not expose a completed name-results frame.")
+                return incomplete("Michigan did not expose a completed name-results frame.", "results_frame")
             results_text = re.sub(r"\s+", " ", module.body_text(frame, timeout=mi_action_timeout(active_page, 3500))).strip()
             if not re.search(r"record\(s\) found|No records found|No results found", results_text, re.I):
-                return incomplete("Michigan returned an unrecognized name-results page.")
+                return incomplete("Michigan returned an unrecognized name-results page.", "results_shape")
             if confirm_ein:
                 echo = frame.locator("#ctl00_MainContent_lblSearchResults").inner_text(
                     timeout=mi_action_timeout(active_page, 2000))
@@ -16415,24 +16485,25 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
                                      re.sub(r"\s+", " ", echo).strip(), re.I)
                 if (frame.url != "https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx" or not count
                         or time.perf_counter() >= deadline):
-                    return incomplete("Michigan did not confirm the submitted EIN in the browser result.")
+                    return incomplete("Michigan did not confirm the submitted EIN in the browser result.", "ein_echo")
                 if count.group(1) == "0":
                     grid = frame.locator("#ctl00_MainContent_GridView1").inner_text(
                         timeout=mi_action_timeout(active_page, 2000))
                     if (grid.strip() != "No records found for your search criteria"
                             or time.perf_counter() >= deadline):
-                        return incomplete("Michigan did not return a complete zero-record result.")
+                        return incomplete("Michigan did not return a complete zero-record result.", "ein_zero")
                     result.source_attempts.append(f"Fresh Michigan browser EIN search returned zero records: {variant}")
                     confirmed_empty = True
                     break
                 if no_registry_results_seen(results_text):
-                    return incomplete("Michigan returned conflicting results for the submitted EIN.")
+                    return incomplete("Michigan returned conflicting results for the submitted EIN.", "ein_conflict")
             query_type = "EIN" if confirm_ein else "name"
             result.source_attempts.append(f"Completed Michigan {query_type} query: {variant}")
             if no_registry_results_seen(results_text):
                 completed_empty_queries.append(variant)
                 progress["completed_empty_name_queries"] = list(completed_empty_queries)
                 continue
+            stage = "candidate_selection"
             chosen = mi_choose_result_link(frame, org.organization_name, module, org=org)
             if not chosen:
                 continue
@@ -16449,6 +16520,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
                         clicked_name_score = 450 + checker_score[0]
                 except Exception:
                     pass
+            stage = "detail"
             from deployment.mi_alias_identity import materially_different,detail_identity,retain_candidate
             distinct_legal_alias=materially_different(sys.modules[__name__],org.organization_name,clicked_name)
             if clicked_name_score >= 0 and not distinct_legal_alias:
@@ -16490,7 +16562,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
                 # Michigan's existing owned-page postback helper for this detail.
                 href = link.get_attribute("href", timeout=mi_action_timeout(active_page, 1000)) or ""
                 if not re.fullmatch(r"javascript:__doPostBack\('[A-Za-z0-9_$]+',''\)", href):
-                    return incomplete("Michigan selected detail has no supported public postback.")
+                    return incomplete("Michigan selected detail has no supported public postback.", "detail_link")
                 module.click_result_link(frame, link, href)
             else:
                 link.click(timeout=mi_action_timeout(active_page, 3000), no_wait_after=True)
@@ -16501,7 +16573,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
             time.sleep(min(1.0, mi_action_timeout(active_page, 1000) / 1000))
             detail_frame = module.find_detail_frame(active_page)
             if not detail_frame:
-                return incomplete("Michigan did not load the selected name-match detail record.")
+                return incomplete("Michigan did not load the selected name-match detail record.", "detail_load")
             detail_text = re.sub(r"\s+", " ", module.body_text(detail_frame, timeout=mi_action_timeout(active_page, 3500))).strip()
             site_name = module.extract_legal_name(detail_frame) or clicked_name or org.organization_name
             ein_digits = re.sub(r"\D", "", org.ein or "")
@@ -16520,7 +16592,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
             raw_status = module.extract_solicitation_status(detail_frame)
             charitable_trust_status = module.extract_charitable_trust_status(detail_frame)
             if not raw_status and not charitable_trust_status:
-                return incomplete("The matched Michigan record did not expose status evidence.")
+                return incomplete("The matched Michigan record did not expose status evidence.", "detail_status")
             result.status = classify_mi_solicitation_status(raw_status) or external_status_to_checker_status(module.classify_mi_status(raw_status, ""))
             result.raw_status_text = (
                 f"Solicitation Registration Status: {raw_status or 'N/A'} | "
@@ -16538,7 +16610,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
             return result
         except Exception as exc:
             result.error = f"MI name fallback error: {exc}"
-            return incomplete("Michigan name fallback failed: " + str(exc)[:160])
+            return incomplete("Michigan name fallback failed: " + str(exc)[:160], stage)
         finally:
             try:
                 del page._cc_mi_name_deadline
@@ -16550,7 +16622,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
                 except Exception:
                     pass
     if confirm_ein and not confirmed_empty:
-        return incomplete("Michigan returned candidates without a confirmed match in the fresh browser search.")
+        return incomplete("Michigan returned candidates without a confirmed match in the fresh browser search.", "identity")
     result.status = checker.STATUS_NOT_REGISTERED
     result.raw_status_text = "No matching organization record"
     result.source_note = ("Michigan returned zero records for the exact EIN in the browser retry." if confirm_ein
@@ -17424,6 +17496,14 @@ def normalize_registry_match_fields(result, org) -> None:
     from deployment.ma_view_more_evidence import preserves_activity_identity
     if preserves_activity_identity(result):
         return  # Preserve the exact account and source image for an unresolved filing period.
+    nm_bound = getattr(result, "_cc_nm_conflicting_fiscal_identity", None)
+    if (result.state == "NM" and getattr(result, "reason_code", "") == "NM_CONFLICTING_FISCAL_PERIODS"
+            and isinstance(nm_bound, tuple) and len(nm_bound) == 3
+            and nm_bound == (getattr(result, "matched_registry_name", ""),
+                             getattr(result, "matched_registry_identifier", ""), result.source_url)
+            and nm_bound[0] and canonical_ein_digits(nm_bound[1]) == canonical_ein_digits(org.ein)
+            and nm_bound[2] == f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={nm_bound[1]}"):
+        return  # Retain only the confirmed EIN record; filing status stays unresolved.
     ct_bound = getattr(result, "_cc_ct_source_identity", None)
     if (result.state == "CT" and getattr(result, "success", False) is True
             and isinstance(ct_bound, tuple) and len(ct_bound) == 4
@@ -24162,6 +24242,26 @@ def wi_result_has_reviewed_identity(result, org) -> bool:
     return bool(result.state == "WI" and expected and evidence == expected)
 
 
+def wi_institute_preposition_variant(original, registry_name):
+    """One institutional preposition can admit a candidate, but cannot prove identity."""
+    left, right = (complete_name_identity_key(name).split() for name in (original, registry_name))
+    if len(left) != len(right) or len(left) < 5 or len(distinctive_match_tokens(original)) < 2:
+        return False
+    differences = [i for i, (a, b) in enumerate(zip(left, right)) if a != b]
+    if len(differences) != 1:
+        return False
+    i = differences[0]
+    return (1 < i < len(left) - 1 and left[i-1] == "institute"
+            and {left[i], right[i]} == {"of", "for"})
+
+
+def wi_official_credential_link(href):
+    parsed = urlparse(urljoin(WI_SEARCH_URL, href))
+    return (parsed.scheme == "https" and parsed.netloc == "apps.dfi.wi.gov"
+            and parsed.path == "/ice/berg/Registration/CredSummaryDetails.aspx"
+            and not parsed.fragment and bool(re.fullmatch(r"chid=\d+(?:&h=\d+)?", parsed.query)))
+
+
 def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_name: str = "", ein: str = "") -> dict | None:
     values = html_table_cells(row_html)
     if len(values) < 6:
@@ -24176,7 +24276,10 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if (explicit_acronym_alias_matches_registry(original_name, registry_name)
             or supplied_separator_component_match(original_name, registry_name)
-            or wi_possessive_supplied_component_match(original_name, registry_name)):
+            or wi_possessive_supplied_component_match(original_name, registry_name)
+            or (wi_institute_preposition_variant(original_name, registry_name)
+                and wi_official_credential_link(review_href)
+                and re.fullmatch(r"\d+-800", license_number))):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text, location)
@@ -24214,7 +24317,10 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if (explicit_acronym_alias_matches_registry(original_name, registry_name)
             or supplied_separator_component_match(original_name, registry_name)
-            or wi_possessive_supplied_component_match(original_name, registry_name)):
+            or wi_possessive_supplied_component_match(original_name, registry_name)
+            or (wi_institute_preposition_variant(original_name, registry_name)
+                and wi_official_credential_link(detail_href)
+                and re.fullmatch(r"\d+-800", license_number))):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text, location)
@@ -24429,6 +24535,13 @@ def wi_verify_candidate_identity(candidate: dict, targets: list[str], original: 
         if normalized_match_name(candidate.get("registry_name", "")) == normalized_match_name(original):
             return dict(candidate, identity_conflict=True)
         return None
+    preposition_variant = wi_institute_preposition_variant(original, candidate["registry_name"])
+    if preposition_variant:
+        if (not wi_official_credential_link(candidate.get("detail_href", ""))
+                or not re.fullmatch(r"\d+-800", candidate["license_number"])
+                or not re.search(r"Credential\s+Type\s*:\s*Charitable\s+Organization\b", detail, re.I)
+                or complete_name_identity_key(primary[1]) != complete_name_identity_key(candidate["registry_name"])):
+            return dict(candidate, identity_conflict=True, identity_detail_unavailable=True)
     location = re.search(r"\bLocation\s*:\s*(.*?)\s+Status\b", detail, re.I)
     address = registry_address_evidence(ein, location[1] if location else candidate.get("location", ""))
     if address["decision"] == "conflict":
@@ -24443,7 +24556,7 @@ def wi_verify_candidate_identity(candidate: dict, targets: list[str], original: 
             [candidate.get("location", ""), location[1] if location else ""])
         if cross_state:
             address = cross_state
-    if (wi_possessive_supplied_component_match(original, primary[1])
+    if ((preposition_variant or wi_possessive_supplied_component_match(original, primary[1]))
             and address["decision"] != "corroborated"):
         return dict(candidate, primary_registry_name=primary[1], address_evidence=address,
                     identity_conflict=True)
@@ -25941,6 +26054,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
                 getattr(org, "organization_name", ""),
                 getattr(result, "matched_registry_name", ""))
             and (getattr(result, "address_evidence", {}) or {}).get("decision") == "corroborated")
+        corroborated_component = corroborated_component or (
+            wi_institute_preposition_variant(org.organization_name, result.matched_registry_name)
+            and (getattr(result, "address_evidence", {}) or {}).get("decision") == "corroborated")
         if identity_decision.get("decision") == "rejected" and not wi_result_has_reviewed_identity(result, org) and not corroborated_component and not explicit_acronym_alias_matches_registry(
             getattr(org, "organization_name", ""), getattr(result, "matched_registry_name", "")
         ):
@@ -25959,6 +26075,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             body = result.raw_status_text
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
+    if state == "MI" and trial_identity() and getattr(result, "mi_name_failure_stage", ""):
+        result.lab_diagnostic = {"phase": result.mi_name_failure_stage,
+                                 "submitted_count": len(result.queries_attempted)}
     from deployment.gates2930_repairs import il_source_identity
     il_bound = il_source_identity(result, getattr(result, '_cc_license_record', {}), canonical_ein_digits)
     if il_bound:
@@ -30582,6 +30701,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if result.state in {"AL", "NC", "NV", "TN"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
         return result.source_note
     if result.state == "AL" and getattr(result, "status_reason", "") == "AL_CONFIRMED_ACTIVE_PRIVATE_FOUNDATION":
+        return result.source_note
+    if result.state == "NM" and getattr(result, "reason_code", "") == "NM_CONFLICTING_FISCAL_PERIODS":
         return result.source_note
     if result.state == "NM" and getattr(result, "reason_code", "") == "NM_DETAIL_CONFIRMATION_INCOMPLETE":
         return result.source_note + " CharityClarity reports Unable to Confirm."

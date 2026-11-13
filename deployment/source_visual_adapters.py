@@ -2424,6 +2424,25 @@ def capture_current_wv_detail(result, page, identifier, name, expires, status, l
   fact['outcome']='capture_unavailable';fact['error_type']=type(exc).__name__
 
 
+def wv_open_selected_search(page, url, stop, fact):
+ # Only the initial idempotent GET may retry. Leave five seconds for the
+ # existing credential lookup and capture, inside the original deadline.
+ available=stop-time.monotonic()
+ def navigate(timeout):
+  return workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1746:13:goto',
+   page.goto,locals(),url,wait_until='commit',timeout=max(1,int(timeout*1000)))
+ if available<12:return navigate(available-1)
+ try:
+  return navigate(min(6,available-6))
+ except Exception as exc:
+  remaining=stop-time.monotonic()
+  if type(exc).__name__!='TimeoutError' or remaining<6:raise
+  # A loaded document or an unexpected redirect must not cause a resubmit.
+  if page.url not in {'about:blank',url}:raise
+  fact['initial_navigation_retry']=1
+  return navigate(remaining-5)
+
+
 def capture_selected_wv_source(master,result,run,deadline):
  """Use the visible WV ID search and actual organization-ID detail link."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1724:5:get',result.get,locals(), 'state')!='WV' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1724:54:get',result.get,locals(), 'ein','')))!=run.ein
@@ -2486,8 +2505,10 @@ def capture_selected_wv_source(master,result,run,deadline):
       continue_pending_navigation(exc)
       # Continue waiting for the same outstanding document; never submit again.
       wait()
-    response=workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1746:13:goto',page.goto,locals(), result['source_url'],wait_until='domcontentloaded',timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
-    fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
+    try:
+     response=wv_open_selected_search(page, result['source_url'], stop, fact)
+    finally:
+     fact['navigation_ms']=round((time.perf_counter()-begin)*1000,2)
     if response is None or response.status!=200 or page.url!=result['source_url']:fact['outcome']='navigation_rejected';return trace_return('deployment/source_visual_adapters.py:capture_selected_wv_source:1748:120:return',None)
     begin=time.perf_counter();fact['phase']='credential_search'
     workflow_call('deployment/source_visual_adapters.py:capture_selected_wv_source:1750:4:select_option',page.locator('#ddlType').select_option,locals(), '1',timeout=max(1,int((stop-time.monotonic()-(5 if fact.get('navigation_continuation') else 1))*1000)))
