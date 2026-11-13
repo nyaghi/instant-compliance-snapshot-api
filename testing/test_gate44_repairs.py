@@ -1,3 +1,4 @@
+from datetime import date
 from time import perf_counter
 from unittest import TestCase
 from unittest.mock import Mock, patch
@@ -76,26 +77,36 @@ class Gate44Controls(TestCase):
                 self.assertTrue(result['identity_conflict'])
                 self.assertTrue(result['identity_detail_unavailable'])
 
-    def test_nm_fiscal_conflict_retains_only_exact_ein_evidence(self):
+    def test_nm_latest_fiscal_period_retains_note_and_exact_ein_evidence(self):
         org = m.checker.Organization(self.name, self.ein)
         def evidence(query):
             base = {'query': query, 'complete': True}
             if query['operation'] == 'search':
                 return dict(base, rows=[{'name': self.name, 'ein': self.ein}], total=1)
             return dict(base, name=self.name, ein=self.ein,
-                        history_rows=[['2024', 'Registration Submitted 20244022608235332', '3/23/2026']],
+                        history_rows=[
+                            ['2024', 'Registration Submitted 20243822532340068', '11/19/2025'],
+                            ['2025', 'Tax Year Registration Open', '10/1/2026'],
+                            ['2024', 'Registration Submitted 20243822624660349', '9/3/2026'],
+                        ],
                         financial_periods=[
-                            {'tax_year': 2024, 'period_start': '7/1/2024', 'period_end': '6/30/2025'},
-                            {'tax_year': 2024, 'period_start': '1/1/2024', 'period_end': '12/31/2024'},
+                            {'tax_year': 2024, 'period_start': '7/1/2024', 'period_end': '9/30/2024'},
+                            {'tax_year': 2024, 'period_start': '10/1/2024', 'period_end': '9/30/2025'},
                         ])
-        started = perf_counter()
-        result = m.nm_browser_lookup(org, evidence)
-        data = m.response_data_for_lookup(result, '', org, self.name, self.ein, 'NM', started)
-        self.assertFalse(data['success'])
-        self.assertEqual(data['status'], 'Unable to Confirm')
-        self.assertEqual(data['reason_code'], 'NM_CONFLICTING_FISCAL_PERIODS')
+        class AsOfDate(date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 11, 13)
+        with patch.object(m, 'date', AsOfDate):
+            started = perf_counter()
+            result = m.nm_browser_lookup(org, evidence)
+            data = m.response_data_for_lookup(result, '', org, self.name, self.ein, 'NM', started)
+        self.assertTrue(data['success'])
+        self.assertEqual(data['status'], 'Upcoming Filing')
         self.assertEqual(data['matched_registry_identifier'], '13-1623886')
-        self.assertIn('conflicting fiscal periods', data['comments'])
+        self.assertIn('Registration Submitted 9/3/2026', data['raw_status_text'])
+        self.assertIn('09/30/2025', data['comments'])
+        self.assertRegex(data['comments'], r'0?9/30/2024')
         selected = {'state': 'NM', 'ein': self.ein, 'identifier': self.ein, 'record_name': self.name,
                     'operation': 'detail', 'url': '/source/original', 'captured_at': 1}
         different = {**selected, 'identifier': '139999999', 'url': '/source/unrelated'}
@@ -182,3 +193,27 @@ class Gate44Controls(TestCase):
         self.assertTrue(actual._cc_license_record['_optional_identity_review'])
         self.assertFalse(m.ga_separate_foundation_history(org,[name],{**selected,'name':foundation},history))
         self.assertFalse(m.ga_separate_foundation_history(org,[name],{**selected,'address_evidence':{'decision':'conflict'}},history))
+
+
+    def test_nd_exact_legal_name_before_explicit_dba_uses_firststop_record(self):
+        from testing.run_nd_inactive_consensus_guardrails import InactiveConsensusTests, row
+        name = "AMERICAN LEBANESE SYRIAN ASSOCIATED CHARITIES, INC. DBA ST JUDE CHILDREN'S RESEARCH HOSPITAL"
+        legal = "AMERICAN LEBANESE SYRIAN ASSOCIATED CHARITIES"
+        with patch.object(m, 'known_names_for_ein', return_value=[]):
+            self.assertEqual(m.nd_search_queries(m.checker.Organization(name, '351044585'))[0], legal)
+            result, page, org = InactiveConsensusTests().lookup(
+                [row('0004010145', legal, 'Active')], name=name, detail_extra=(
+                    {'LABEL':'AR Due Date','VALUE':'9/1/2026'},
+                    {'LABEL':'AR Extended Due Date','VALUE':'12/1/2026'},
+                ))
+        self.assertEqual(result.matched_registry_identifier, '0004010145')
+        self.assertEqual(result.matched_registry_name, legal)
+        self.assertEqual(page.expect_response.call_count, 2)
+        class AsOfDate(date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 11, 13)
+        with patch.object(m, 'date', AsOfDate):
+            data = m.response_data_for_lookup(result, result._cc_detail_body, org, name, org.ein, 'ND', perf_counter())
+        self.assertEqual(data['status'], 'Upcoming Filing')
+        self.assertEqual(data['matched_registry_identifier'], '0004010145')

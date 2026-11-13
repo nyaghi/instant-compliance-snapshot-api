@@ -45,22 +45,15 @@ class Gate41(TestCase):
                     self.assertEqual(m.licensed_charity_identity(org,dict(base),'GA',10),outcome)
             self.assertEqual(m.licensed_charity_identity(org,{**base,'ein':'123456789'},'GA',10),'rejected')
 
-    def test_nm_real_same_label_transitional_period_and_controls(self):
-        rows=[(2024,'Registration Submitted 20244022608235332','3/23/2026'),
-              (2024,'Registration Submitted 20244022517636260','6/25/2025'),
-              (2025,'Tax Year Registration Open','7/1/2026')]
+    def test_nm_same_label_uses_latest_period_and_lists_other_end_dates(self):
+        submitted=(2024,'20244022608235332','3/23/2026')
         periods=[{'tax_year':2024,'period_start':'7/1/2024','period_end':'6/30/2025'},
                  {'tax_year':2024,'period_start':'1/1/2024','period_end':'6/30/2024'}]
-        pick=lambda r,p:g.nm_submitted_period(r,(2024,'20244022608235332','3/23/2026'),p,d)
-        self.assertEqual(pick(rows,periods),'6/30/2025')
-        self.assertEqual(pick(rows,periods[:1]),'6/30/2025')
-        self.assertEqual(pick(rows,[]),'')
-        for history,records in [(rows[:1],periods),
-                  (rows,[periods[0],{**periods[1],'period_end':'7/1/2024'}]),
-                  ([*rows[:1],(2024,'Registration Submitted 20244022517636260','7/1/2025')],periods),
-                  (rows,[periods[0],{**periods[1],'period_start':'7/1/2023'}])]:
-            with self.assertRaisesRegex(ValueError,'Conflicting'):
-                pick(history,records)
+        pick=lambda p:g.nm_submitted_period(submitted,p,d)
+        self.assertEqual(pick(list(reversed(periods))),('06/30/2025',[d('6/30/2024')]))
+        self.assertEqual(pick([periods[0],{**periods[0],'period_end':'06/30/2025'}]),('06/30/2025',[]))
+        self.assertEqual(pick([]),('',[]))
+        self.assertEqual(pick([{**periods[0],'tax_year':2025}]),('',[]))
 
     def test_ms_retry_only_first_incomplete_signed_search(self):
         record={'state':'MS','completed':[],'expires':120,'pending':{'query_id':'signed','query':{'state':'MS','operation':'search','name':'Goodwill Industries International Inc.'}}}

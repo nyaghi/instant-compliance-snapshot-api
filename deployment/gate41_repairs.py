@@ -2,7 +2,6 @@
 import io
 import re
 import time
-from datetime import timedelta
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -45,31 +44,17 @@ def replace_low_value_slot(names, protected, original, variant):
             return [*names[:i], variant, *names[i+1:]]
     return names
 
-def nm_submitted_period(rows, submitted, periods, parse):
-    """Two contiguous fiscal years with the same tax label after a short transition."""
+def nm_submitted_period(submitted, periods, parse):
+    """Use the latest fiscal end for the submitted tax year and retain the other dates."""
     if not submitted:
-        return ''
-    year, number, when = submitted
-    candidates = [(parse(p['period_start']), parse(p['period_end']), p['period_end'])
-                  for p in periods if p['tax_year'] == year]
-    by_end = {p[2] for p in candidates}
-    if len(by_end) <= 1:
-        return next(iter(by_end), '')
-    candidates = sorted(set(candidates))
-    if len(candidates) == 2 and all(p[0] and p[1] for p in candidates):
-        (short_start, short_end, _), (full_start, full_end, full_text) = candidates
-        submissions = [(m[1], parse(on)) for y, detail, on in rows if y == year
-                       and (m := re.fullmatch(r'Registration Submitted (\d{10,})', detail))]
-        if (0 < (short_end - short_start).days < 364
-                and full_start == short_end + timedelta(days=1)
-                and 364 <= (full_end - full_start).days <= 365
-                and len(submissions) == 2 and len({n for n, _ in submissions}) == 2
-                and all(d for _, d in submissions)):
-            earlier, latest = sorted(submissions, key=lambda item: item[1])
-            if (latest == (number, parse(when))
-                    and short_end <= earlier[1] < full_end <= latest[1]):
-                return full_text
-    raise ValueError('Conflicting New Mexico fiscal periods')
+        return "", []
+    year = submitted[0]
+    ends = sorted({parse(period["period_end"]) for period in periods if period["tax_year"] == year}
+                  - {None}, reverse=True)
+    if not ends:
+        return "", []
+    return ends[0].strftime("%m/%d/%Y"), ends[1:]
+
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):

@@ -8827,24 +8827,11 @@ def nm_browser_lookup(org, evidence):
         # Inactive lifecycle rows use an internal zero marker, never a tax year.
         rows = [(int(year) if year else 0, status, when) for year, status, when in detail['history_rows']
                 if year or status == 'Inactive Registration']
+        rows.sort(key=lambda row: module.parse_date(row[2]) or date.min, reverse=True)
         submitted = module.nm_latest_submitted(rows)
         from deployment.gate41_repairs import nm_submitted_period
+        filed_period, other_periods = nm_submitted_period(submitted, detail['financial_periods'], module.parse_date)
         source = f'https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(ein)}'
-        try:
-            filed_period = nm_submitted_period(rows, submitted, detail['financial_periods'], module.parse_date)
-        except ValueError as exc:
-            if str(exc) != 'Conflicting New Mexico fiscal periods':
-                raise
-            result = checker.StateResult(org.organization_name, org.ein, 'NM', 'Unable to Confirm', source)
-            result.success = False
-            result.matched_registry_name = selected['name']
-            result.matched_registry_identifier = format_ein(ein)
-            result.reason_code = 'NM_CONFLICTING_FISCAL_PERIODS'
-            result._cc_nm_conflicting_fiscal_identity = (selected['name'], format_ein(ein), source)
-            result.source_note = ("New Mexico returned the requested EIN, but its filing history shows conflicting "
-                                  "fiscal periods. The matched state record is available for review.")
-            result.queries_attempted = attempts + [{'query': query, 'completed': True}]
-            return result
         result = module.SearchResult(org.organization_name, org.ein, 'NM', module.STATUS_UNKNOWN, '', source, '')
         result.matched_registry_name = selected['name']
         result.matched_registry_identifier = format_ein(ein)
@@ -8852,6 +8839,13 @@ def nm_browser_lookup(org, evidence):
         result.source_note = ('The public browser search and detail heading both match the requested EIN. '
                               + getattr(result, 'source_note', ''))
         copied = copy_external_result(org, 'NM', result)
+        if other_periods:
+            other_ends = ", ".join(format_date(end) for end in other_periods)
+            copied.nm_additional_period_note = (
+                f"New Mexico lists multiple fiscal periods under tax year {submitted[0]}. "
+                f"CharityClarity used the latest period ending {filed_period}. "
+                f"Other fiscal period end dates: {other_ends}.")
+            copied.source_note += " " + copied.nm_additional_period_note
         copied.queries_attempted = attempts + [{'query': query, 'completed': True}]
         return copied
     result = checker.StateResult(org.organization_name, org.ein, 'NM', 'Not Registered',
@@ -17532,14 +17526,6 @@ def normalize_registry_match_fields(result, org) -> None:
     from deployment.ma_view_more_evidence import preserves_activity_identity
     if preserves_activity_identity(result):
         return  # Preserve the exact account and source image for an unresolved filing period.
-    nm_bound = getattr(result, "_cc_nm_conflicting_fiscal_identity", None)
-    if (result.state == "NM" and getattr(result, "reason_code", "") == "NM_CONFLICTING_FISCAL_PERIODS"
-            and isinstance(nm_bound, tuple) and len(nm_bound) == 3
-            and nm_bound == (getattr(result, "matched_registry_name", ""),
-                             getattr(result, "matched_registry_identifier", ""), result.source_url)
-            and nm_bound[0] and canonical_ein_digits(nm_bound[1]) == canonical_ein_digits(org.ein)
-            and nm_bound[2] == f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={nm_bound[1]}"):
-        return  # Retain only the confirmed EIN record; filing status stays unresolved.
     ct_bound = getattr(result, "_cc_ct_source_identity", None)
     if (result.state == "CT" and getattr(result, "success", False) is True
             and isinstance(ct_bound, tuple) and len(ct_bound) == 4
@@ -19953,6 +19939,14 @@ def search_mn(page, org):
         return result
 
 
+def nd_entered_legal_name(name: str) -> str:
+    """Use the full legal name before an explicit DBA in FirstStop."""
+    marker = re.search(r"\b(?:d\s*/?\s*b\s*/?\s*a|doing\s+business\s+as)\b", name, re.I)
+    if marker and explicit_name_alias_segments(name):
+        return name[:marker.start()].strip(" ,;-")
+    return ""
+
+
 def nd_search_queries(org) -> list[str]:
     """FirstStop discovery variants; compare returned rows to the full identity."""
     original = canonical_name_punctuation(org.organization_name)
@@ -19968,8 +19962,24 @@ def nd_search_queries(org) -> list[str]:
         query = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", value.replace("'", ""))).strip()
         if query and query.casefold() not in {q.casefold() for q in queries}:
             queries.append(query)
-    return reviewed_queries_first(original, org.ein, queries, limit=8,
+    planned = reviewed_queries_first(original, org.ein, queries, limit=8,
         transform=lambda value: re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", value.replace("'", ""))).strip())
+    legal_name = nd_entered_legal_name(original)
+    if legal_name:
+        # FirstStop can index the legal name without the terminal entity suffix or DBA.
+        legal_query = re.sub(r"[^A-Za-z0-9 ]", " ", complete_name_identity_key(legal_name))
+        legal_query = re.sub(r"\s+", " ", legal_query).strip().upper()
+        if legal_query:
+            existing = next((value for value in planned if value.casefold() == legal_query.casefold()), None)
+            if existing is not None:
+                planned = [existing, *(value for value in planned if value != existing)]
+            else:
+                # Use a generated slot when one exists. Keep all reviewed names.
+                reviewed_count = len({reviewed_retrieval_key(value) for value in
+                                      [original, *known_names_for_ein(org.ein)]})
+                fallback = planned[:-1] if len(planned) > reviewed_count else planned
+                planned = [legal_query, *fallback]
+    return planned
 
 
 def search_nd_completed(page, org):
@@ -19985,6 +19995,8 @@ def search_nd_completed(page, org):
     deadline = time.perf_counter() + 35.0
     targets = organization_match_target_variants(org.organization_name, org.ein)
     queries = nd_search_queries(org)
+    entered_legal_name = nd_entered_legal_name(org.organization_name)
+    entered_legal_key = complete_name_identity_key(entered_legal_name)
     scope_candidates, review_truncated = {}, False
     try:
         # One recovery navigation, sharing the original 35-second budget.
@@ -20034,11 +20046,13 @@ def search_nd_completed(page, org):
                     if not isinstance(row, dict) or not isinstance(row.get("TITLE"), list) or not row["TITLE"] or not row.get("ID"):
                         raise ValueError("North Dakota returned an incomplete search row")
                     name = str(row["TITLE"][0]).strip()
-                    scope_review = (separator_entity_scope_gap(org.organization_name, name, org.ein)
-                                    or institutional_entity_extension_requires_review(org.organization_name, name, org.ein))
-                    if scope_review or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein):
+                    exact_entered_legal = bool(entered_legal_key and complete_name_identity_key(name) == entered_legal_key)
+                    scope_review = not exact_entered_legal and (
+                        separator_entity_scope_gap(org.organization_name, name, org.ein)
+                        or institutional_entity_extension_requires_review(org.organization_name, name, org.ein))
+                    if exact_entered_legal or scope_review or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein):
                         rank = checker.candidate_selection_score_for_targets(name, targets, str(row.get("STATUS", "")))
-                        candidates.append(((not scope_review, rank), dict(row, _scope_review=scope_review)))
+                        candidates.append(((not scope_review, exact_entered_legal, rank), dict(row, _scope_review=scope_review)))
                 if not candidates:
                     continue
                 candidates.sort(key=lambda item: item[0], reverse=True)
@@ -31166,6 +31180,10 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         public_facing_status,
     )
     source_state = (getattr(result, "state", "") or "").upper()
+    if source_state == "NM":
+        period_note = getattr(result, "nm_additional_period_note", "")
+        if period_note and period_note not in comment:
+            comment += " " + period_note
     if source_state == "CO":
         from deployment.co_dataset_evidence import dataset_ein, NOTE
         if dataset_ein(getattr(result, "source_url", "")) == canonical_ein_digits(result.ein):
