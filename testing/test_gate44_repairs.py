@@ -3,7 +3,7 @@ from unittest import TestCase
 from unittest.mock import Mock, patch
 
 import registry_snapshot_server as m
-from deployment import gate41_repairs, state_snapshots
+from deployment import state_snapshots
 from deployment.source_visual_adapters import wv_open_selected_search
 
 
@@ -139,3 +139,46 @@ class Gate44Controls(TestCase):
             with self.assertRaises(TimeoutError):
                 wv_open_selected_search(page, url, 9, {})
             page.goto.assert_called_once()
+
+    def test_mi_overlong_dba_reaches_full_legal_name_and_alias_within_original_budget(self):
+        label = "AMERICAN LEBANESE SYRIAN ASSOCIATED CHARITIES, INC. DBA ST JUDE CHILDREN'S RESEARCH HOSPITAL"
+        org = m.checker.Organization(label, '351044585')
+        plan = m.mi_name_fallback_queries(org)
+        self.assertEqual(plan[:2], ["AMERICAN LEBANESE SYRIAN ASSOCIATED CHARITIES, INC.",
+                                    "ST JUDE CHILDREN'S RESEARCH HOSPITAL"])
+        self.assertLessEqual(len(plan), 4)
+        self.assertTrue(all(len(value) <= 80 for value in plan))
+        unsplittable = m.checker.Organization("Association for " + ("Very Long " * 8) + "Research", '351044585')
+        self.assertEqual(m.mi_name_fallback_queries(unsplittable), [])
+        plain = m.checker.Organization("Equal Justice Initiative Inc", '631136160')
+        self.assertEqual(m.mi_name_fallback_queries(plain)[0], plain.organization_name)
+
+    def test_ga_unnumbered_separate_foundation_does_not_veto_exact_numbered_charity(self):
+        name = "American Civil Liberties Union, Inc."
+        foundation = "American Civil Liberties Union Foundation, Inc."
+        org = m.checker.Organization(name, '133871360')
+        from testing.run_il_ga_guardrails import ga_html
+        keys = {name:'16686506-034e-4696-b852-45bdb86ec44a',foundation:'09c2a1d2-4aef-4374-95a0-140424020db0'}
+        rows = [
+            {'name':name,'identifier':'CH004137','location':'','detail_key':keys[name]},
+            {'name':foundation,'identifier':'','location':'','detail_key':keys[foundation]},
+        ]
+        def lookup(query):
+            if 'identifier' not in query:
+                return {'rows':rows}
+            selected = name if query['identifier'] else foundation
+            return {'body':ga_html(**{'full_name':selected, 'license_no':query['identifier'],
+                                       'status':'Active' if selected==name else 'Expired',
+                                       'expiry':'12/02/2026' if selected==name else ''})}
+        selected={'name':name,'license_category':'Charity','address_evidence':{'decision':'unavailable'}}
+        history={m.normalized_match_name(foundation)}
+        self.assertTrue(m.ga_separate_foundation_history(org,[name],selected,history))
+        self.assertFalse(m.ga_separate_foundation_history(org,[name,foundation],selected,history))
+        with patch.object(m, 'known_names_for_ein', side_effect=lambda ein: ['ACLU'] if ein==org.ein else []), \
+             patch.object(m, 'registry_address_evidence', return_value={'decision':'unavailable'}):
+            actual = m.il_ga_browser_lookup(org,'GA',lookup)
+        self.assertEqual(actual.matched_registry_identifier,'CH004137')
+        self.assertIn('separately named',actual.source_note)
+        self.assertTrue(actual._cc_license_record['_optional_identity_review'])
+        self.assertFalse(m.ga_separate_foundation_history(org,[name],{**selected,'name':foundation},history))
+        self.assertFalse(m.ga_separate_foundation_history(org,[name],{**selected,'address_evidence':{'decision':'conflict'}},history))

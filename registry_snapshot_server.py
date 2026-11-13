@@ -6825,6 +6825,21 @@ def single_token_typo_review_candidate(expected_name, registry_name):
     return any(longer[:index] + longer[index + 1:] == shorter for index in range(len(longer)))
 
 
+def ga_separate_foundation_history(org, required, selected, historical_names):
+    """An expired unnumbered foundation must not veto its separate numbered charity."""
+    name = selected.get("name", "")
+    primary = normalized_match_name(org.organization_name)
+    if (not primary or normalized_match_name(name) != primary
+            or "foundation" in primary.split()
+            or selected.get("license_category") != "Charity"
+            or selected.get("address_evidence", {}).get("decision") in {"conflict", "different_ein"}):
+        return False
+    reviewed = {normalized_match_name(value) for value in required}
+    return bool(historical_names) and all(
+        historical not in reviewed and historical.split() == [*primary.split(), "foundation"]
+        for historical in historical_names)
+
+
 def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     """Master-owned discovery, matching, duplicate resolution and interpretation."""
     deadline = time.monotonic() + 40
@@ -6951,11 +6966,14 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     result = licensed_charity_result(org, state, records, deadline, IL_GA_SOURCES[state])
     if state == "GA" and historical_ga_names:
         selected = getattr(result, "_cc_license_record", {})
-        if (not re.fullmatch(r"CH\d+", selected.get("identifier", ""))
-                or selected.get("status") not in {"Current", "Upcoming Filing", "Exempt"}
-                or historical_ga_names != {normalized_match_name(selected.get("name", ""))}):
+        numbered_current = (re.fullmatch(r"CH\d+", selected.get("identifier", ""))
+                            and selected.get("status") in {"Current", "Upcoming Filing", "Exempt"})
+        if numbered_current and historical_ga_names == {normalized_match_name(selected.get("name", ""))}:
+            result.source_note += " Georgia also shows an expired, unnumbered entry under the same name. The reported status comes from the verified numbered license."
+        elif numbered_current and ga_separate_foundation_history(org, required, selected, historical_ga_names):
+            result.source_note += " Georgia also shows an expired, unnumbered foundation entry. The reported status comes from the separately named and verified numbered charity license."
+        else:
             raise ValueError("Georgia unnumbered historical charity could not be reconciled")
-        result.source_note += " Georgia also shows an expired, unnumbered entry under the same name. The reported status comes from the verified numbered license."
     if state == "IL":
         # User-approved IL-only interpretation, 2026-09-25. The combined label
         # deliberately does not choose between never registered and noncompliant.
@@ -16106,8 +16124,20 @@ def mi_name_fallback_queries(org):
         # Adapt query punctuation only; keep original names/aliases for identity.
         return re.sub(r"[\u2010-\u2015\u2212]", "-", canonical_name_punctuation(value))
 
+    entered = portal_query(org.organization_name)
+    # The official name field accepts at most 80 characters. For an
+    # overlong composite label use its full legal name and DBA separately;
+    # never truncate a name into a different candidate identity.
+    explicit_parts = []
+    if len(entered) > 80:
+        marker = re.search(r"\b(?:d\s*/?\s*b\s*/?\s*a|doing\s+business\s+as|also\s+known\s+as|aka)\b", entered, re.I)
+        aliases = explicit_name_alias_segments(entered)
+        if marker and aliases:
+            explicit_parts = [entered[:marker.start()].strip(" ,;-"), *aliases]
+        if not explicit_parts or any(not part or len(portal_query(part)) > 80 for part in explicit_parts):
+            return []
     variants = []
-    for variant in organization_name_variants(
+    for variant in [*explicit_parts, *organization_name_variants(
         org.organization_name,
         org.ein,
         include_ein_aliases=True,
@@ -16115,8 +16145,10 @@ def mi_name_fallback_queries(org):
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
-    ):
+    )]:
         variant = portal_query(variant)
+        if len(variant) > 80:
+            continue
         variant_words = re.findall(r"[A-Za-z0-9]+", variant or "")
         substantive_variant_words = [
             word for word in variant_words
@@ -16141,7 +16173,9 @@ def mi_name_fallback_queries(org):
         )
 
     variants = sorted(variants, key=lambda value: (
-        value.strip().casefold() != portal_query(org.organization_name).strip().casefold(), mi_variant_priority(value)))
+        next((i for i, exact in enumerate(explicit_parts or [entered])
+              if value.strip().casefold() == exact.strip().casefold()), len(explicit_parts or [entered])),
+        mi_variant_priority(value)))
 
     distinct = []
     keys = set()
@@ -16409,6 +16443,8 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
         return result
     variants = [module.format_ein(org.ein)] if confirm_ein else mi_name_fallback_queries(org)
     if not variants:
+        if not confirm_ein and len(canonical_name_punctuation(org.organization_name)) > 80:
+            return incomplete("Michigan's name field does not accept the complete organization name.", "name_field_limit")
         return incomplete("No usable organization-name query was available after the EIN search.", "no_query")
 
     progress = getattr(page, "_cc_mi_search_progress", None)
