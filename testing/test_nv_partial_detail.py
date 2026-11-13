@@ -82,3 +82,28 @@ class NevadaPartialDetail(unittest.TestCase):
         self.record["mode"] = "standard"
         self.record["source_snapshots"][0]["ein"] = "987654321"
         self.assertIsNone(budget(self.record))
+
+    def test_single_distinctive_word_needs_full_name_and_same_record_image(self):
+        name = "Americans for Prosperity"
+        ein = "75-3148958"
+        search, detail = self.record["completed"]
+        key = detail["query"]["identifier"]
+        self.record.update(organization_name=name, ein=ein, mode="standard")
+        search["query"]["name"] = name
+        search["evidence"]["rows"][0]["name"] = name
+        search["evidence"]["rows"].append(dict(search["evidence"]["rows"][0],
+                                                name=name+" Foundation", identifier="NV202"))
+        search["evidence"]["total"] = 2
+        detail["evidence"]["fields"]["Entity Name"] = name
+        self.record["pending"] = {"query": dict(detail["query"], identifier="NV202")}
+        self.assertEqual(server.nv_completed_candidates_for_review(self.record), [])
+        ref = {"state":"NV", "operation":"detail", "identifier":key, "ein":"753148958",
+               "record_name":name, "url":"/state-snapshots/fixture.pdf"}
+        self.record["source_snapshots"] = [ref]
+        self.assertEqual(server.nv_completed_candidates_for_review(self.record)[0]["identifier"], key)
+        self.assertEqual(server.nv_followup_detail_budget(self.record), 45000)
+        ref["identifier"] = "NV202"
+        self.assertEqual(server.nv_completed_candidates_for_review(self.record), [])
+        ref["identifier"] = key
+        detail["evidence"]["fields"]["Entity Name"] = "The "+name
+        self.assertEqual(server.nv_completed_candidates_for_review(self.record), [])

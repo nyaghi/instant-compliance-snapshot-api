@@ -225,6 +225,21 @@ class LicenseControls(unittest.TestCase):
         with patch.object(cc,'registry_json_request',return_value=d):
             r=cc.ri_charity_detail({'id':'C1','title':self.org.organization_name},self.deadline,{})
         self.assertEqual(r['initial'],date(2023,2,27));self.assertEqual(r['initial_label'],'Initial Credential Date')
+    def test_ri_duplicate_address_punctuation_preserves_suite_and_rejects_conflicting_unit(self):
+        payload = self.ri_detail()
+        data = payload['tiles'][0]['steps'][0]['contents'][0]['data']
+        data.extend([
+            {'label':'Business Address', 'value':['4201 Wilson Boulevard', 'Suite 1000', 'Arlington, Virginia 22203', 'United States']},
+            {'label':'Business Address', 'value':['4201 Wilson Boulevard,', 'Suite 1000', 'Arlington, Virginia 22203', 'United States']},
+        ])
+        with patch.object(cc, 'registry_json_request', return_value=payload):
+            raw = {'id':'C1', 'title':self.org.organization_name}
+            record = cc.ri_charity_detail(raw, self.deadline, {})
+            self.assertEqual(cc.registry_street_key(record['street']), '4201 WILSON BLVD STE 1000')
+            data[-1]['value'][1] = 'Suite 2000'
+            with self.assertRaisesRegex(ValueError, 'conflicting selected detail values'):
+                cc.ri_charity_detail(raw, self.deadline, {})
+
     def test_ri_bad_date_cannot_become_current(self):
         with patch.object(cc,'registry_json_request',return_value=self.ri_detail('not a date')):
             with self.assertRaises(ValueError):cc.ri_charity_detail({'id':'C1','title':self.org.organization_name},self.deadline,{})

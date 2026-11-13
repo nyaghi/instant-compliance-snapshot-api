@@ -9352,7 +9352,9 @@ def nv_completed_candidates_for_review(record):
     if record.get("state") != "NV" or not trial_identity():
         return []
     primary = normalized_match_name(record["organization_name"])
-    if len(distinctive_match_tokens(primary)) < 2:
+    exact_name = complete_name_identity_key(record["organization_name"])
+    distinctive = distinctive_match_tokens(primary)
+    if not distinctive or (len(distinctive) < 2 and len(exact_name.split()) < 3):
         return []
     requested_ein = canonical_ein_digits(record["ein"])
     blocked = set(record.get("identity_context", {}).get("rejected", []))
@@ -9388,6 +9390,11 @@ def nv_completed_candidates_for_review(record):
                 continue
             if not nv_official_detail_url(payload.get("source_url")):
                 continue
+            if len(distinctive) < 2 and (
+                    complete_name_identity_key(row["name"]) != exact_name
+                    or complete_name_identity_key(candidate["name"]) != exact_name
+                    or not nv_primary_snapshot_saved(record, candidate)):
+                continue
             candidate["url"] = payload["source_url"]
             candidate["_identity_outcome"] = "possible"
             if key in candidates and candidates[key] != candidate:
@@ -9402,6 +9409,16 @@ NV_FOLLOWUP_DETAIL_MS = 45000
 NV_FOLLOWUP_TOTAL_SECONDS = 55
 
 
+def nv_primary_snapshot_saved(record, primary):
+    from deployment.state_snapshots import matching_reference
+    detail_refs = [ref for ref in record.get("source_snapshots", [])
+                   if ref.get("operation") == "detail"]
+    ref = matching_reference({"state": "NV", "ein": record["ein"],
+                              "matched_registry_name": primary["name"],
+                              "matched_registry_identifier": primary["identifier"]}, detail_refs)
+    return bool(ref and ref.get("url"))
+
+
 def nv_followup_detail_budget(record):
     """Bound a different-name detail only after archiving the primary evidence."""
     pending = (record.get("pending") or {}).get("query", {})
@@ -9413,11 +9430,7 @@ def nv_followup_detail_budget(record):
         return None
     primary = candidates[0]
     primary_name = normalized_match_name(primary["name"])
-    if not any(ref.get("state") == "NV" and ref.get("operation") == "detail"
-               and ref.get("identifier") == primary["identifier"]
-               and normalized_match_name(ref.get("record_name", "")) == primary_name
-               and canonical_ein_digits(ref.get("ein", "")) == canonical_ein_digits(record["ein"])
-               and ref.get("url") for ref in record["source_snapshots"]):
+    if not nv_primary_snapshot_saved(record, primary):
         return None
     for item in reversed(record["completed"]):
         if item["query"].get("operation") != "search":
@@ -11396,15 +11409,16 @@ def ri_charity_detail(raw, deadline, headers):
     values, address = {}, ""
 
     def business_address_key(lines):
-        # Tyler can print the locality in both the street and city lines.
-        # Strip only an exact repeated city, with state/ZIP and country intact.
-        if len(lines) != 3 or lines[-1].casefold() != "united states":
+        # Tyler repeats address blocks with punctuation or a separate suite.
+        # Preserve the street, unit, locality, ZIP and country in the comparison.
+        if len(lines) not in (3, 4) or lines[-1].casefold() != "united states":
             return None
-        locality = re.fullmatch(r"(.+?),\s*[A-Za-z ]+\s+\d{5}(?:-\d{4})?", lines[1])
+        locality = re.fullmatch(r"(.+?),\s*[A-Za-z ]+\s+\d{5}(?:-\d{4})?", lines[-2])
         if not locality:
             return None
         street = re.sub(r",\s*" + re.escape(locality[1]) + r"\s*,?\s*$", "", lines[0], flags=re.I)
-        return street.casefold(), lines[1].casefold(), lines[2].casefold()
+        street_lines = [street, *lines[1:-2]]
+        return tuple(line.rstrip(" ,").casefold() for line in (*street_lines, *lines[-2:]))
 
     for tile in detail.get("tiles", []):
         for step in tile.get("steps", []):
@@ -11500,6 +11514,7 @@ def search_ri(org):
         planned = required + legal_probes + [value for value in fallback
                                             if value.casefold() not in {q.casefold() for q in required + legal_probes}]
         rows, seen = [], set()
+        unresolved_foundation = None
         for index, query in enumerate(planned):
             if index >= len(required) + len(legal_probes) and rows:
                 selected, _ = select_licensed_charity(org, rows, "RI", deadline)
@@ -11509,7 +11524,34 @@ def search_ri(org):
                 seen.add(candidate["id"])
                 decision = score_candidate(org.organization_name, org.ein, {"name": candidate["title"]})
                 if decision["decision"] == "rejected": continue
-                rows.append(ri_charity_detail(candidate, deadline, headers))
+                separate_name = trial_identity() and distinct_foundation_name_scope(
+                    org.organization_name, candidate["title"])
+                try:
+                    row = ri_charity_detail(candidate, deadline, headers)
+                except ValueError as exc:
+                    if not separate_name:
+                        raise
+                    unresolved_foundation = exc
+                    continue
+                if separate_name:
+                    foreign = licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+                    if foreign.get("decision") == "different_ein":
+                        continue
+                    unresolved_foundation = ValueError("Rhode Island cannot distinguish a potential foundation match")
+                    continue
+                rows.append(row)
+        if unresolved_foundation is not None:
+            result = licensed_charity_failure(org, "RI", RI_PUBLIC_PORTAL, unresolved_foundation)
+            primary_name = complete_name_identity_key(org.organization_name)
+            primary = [row for row in rows if complete_name_identity_key(row["name"]) == primary_name
+                       and licensed_charity_identity(org, row, "RI", deadline) == "accepted"]
+            if primary:
+                for row in primary:
+                    row["_identity_outcome"] = "possible"
+                result._cc_identity_review = {"records": primary, "search_complete": False, "freshness": ""}
+                result.source_note += (" Rhode Island returned the requested record, but a similarly named "
+                                       "organization could not be ruled out. Review the original record.")
+            return result
         return licensed_charity_result(org, "RI", rows, deadline, RI_PUBLIC_PORTAL)
     except Exception as exc:
         return licensed_charity_failure(org, "RI", RI_PUBLIC_PORTAL, exc)
