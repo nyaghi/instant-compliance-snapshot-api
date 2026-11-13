@@ -46,11 +46,14 @@
     if(event.source!==window||event.origin!==origin||m?.channel!==channel||m.direction!=='request'
        ||typeof m.id!=='string'||! /^[a-f0-9-]{36}$/.test(m.id))return;
     if(m.operation==='stop'){if(active?.id===m.id)active=null;return;}
-    if(m.operation!=='watch'||typeof m.name!=='string'||!m.name.trim()||m.name.length>500
+    const businessId = m.business_id ?? '';
+    if(m.operation!=='watch'||typeof m.name!=='string'||m.name.length>500
+       ||typeof businessId!=='string'
+       ||(businessId ? (!/^NV\d+$/.test(businessId)||m.name!==''||m.mode!=='STARTS_WITH') : !m.name.trim())
        ||!['STARTS_WITH','CONTAINS','EXACT_MATCH'].includes(m.mode)
        ||!Number.isFinite(m.budget_ms)||m.budget_ms<=0)return;
     if(active&&active.expires>Date.now()){emit({id:m.id},'unavailable');return;}
-    active={id:m.id,name:m.name,mode:m.mode,expires:Date.now()+Math.min(180000,m.budget_ms),xhr:null};
+    active={id:m.id,name:m.name,mode:m.mode,businessId,expires:Date.now()+Math.min(180000,m.budget_ms),xhr:null};
     emit(active,'ready');
   });
   const open=XMLHttpRequest.prototype.open,send=XMLHttpRequest.prototype.send;
@@ -65,7 +68,7 @@
     if(job&&Date.now()<job.expires&&!job.xhr&&requests.get(this))try{
       const body=JSON.parse(args[0]),p=body.parameters,g=body.gridInput?.params?.parameters;
       bound=body.pageNo===1&&p?.tabRoute===g?.tabRoute&&[p,g].every(v=>v&&v.entityName===job.name&&v.searchType===job.mode
-        &&v.entityNumber===''&&v.nvBusinessId===''&&['business','business.Miss'].includes(v.tabRoute));
+        &&v.entityNumber===''&&v.nvBusinessId===job.businessId&&['business','business.Miss'].includes(v.tabRoute));
     }catch{}
     if(bound){
       job.xhr=this;emit(job,'started');

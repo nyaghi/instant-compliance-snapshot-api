@@ -89,10 +89,10 @@ test('Nevada visible inputs and search type are not ready while the initial load
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,returnAttribute=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,resetOnReturn=false,transientBlankMs=0,replayButtonDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false,exactRows=null,ignoreModeChange=false,ignoredDetailClicks=0,changedDetailQuery=false,detailRenderDelay=0}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,returnAttribute=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,resetOnReturn=false,transientBlankMs=0,replayButtonDelay=0,idResult=null,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false,exactRows=null,ignoreModeChange=false,ignoredDetailClicks=0,changedDetailQuery=false,detailRenderDelay=0}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true,returnResultsClicks=0,returnSearchClicks=0;
  let pageSize=initialPageSize,sizeMenu=false,resizeClicks=0,detailClicks=0;
- const broadRows=rows;let searchMode='STARTS_WITH',modeMenu=false,modeClicks=0,pagingClicks=0;
+ const broadRows=rows;const submitted=[];let searchMode='STARTS_WITH',modeMenu=false,modeClicks=0,pagingClicks=0;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{let id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
  const node=selector=>({nodeType:1,matches:s=>s.split(',').map(x=>x.trim()).includes(selector),querySelector:()=>null,closest:s=>s.includes(selector)?{}:null});
@@ -107,7 +107,11 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  class Input {get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){if(replayButtonDelay && returnResultsClicks){searchButton.disabled=true;schedule(()=>{searchButton.disabled=false;mutate();},replayButtonDelay);}if(replaceSearchOnInput){buttonCurrent=false;schedule(()=>{buttonCurrent=true;mutate();},100);}}}
  const inputs=Object.fromEntries(['entityName','entityNumber','nvBusinessId'].map(k=>[k,new Input()]));
  const searchButton={innerText:'Search',getClientRects:()=>[{}],disabled:false,click:()=>{
-  page=1;searchClicks++;rows=searchMode==='EXACT_MATCH'?(exactRows||[]):broadRows;
+  page=1;searchClicks++;
+  const id=inputs.nvBusinessId.value;
+  submitted.push({id,name:inputs.entityName.value,mode:searchMode});
+  const source=exactRows||broadRows;
+  rows=id?(idResult||source.filter(row=>row[1]===id)):searchMode==='EXACT_MATCH'?(exactRows||[]):broadRows;
   if(changedQueryBeforeRetry&&searchClicks===1)schedule(()=>{inputs.entityName.value='OTHER ENTITY';mutate();},1000);
   if(searchClicks>ignoredSearches&&(searchClicks===1||repeatSearchActivity))begin();
  }};
@@ -129,7 +133,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   schedule(()=>{formReady=true;
    if(resetOnReturn) {
     const prior={rows,rendered,page,name:inputs.entityName.value,searchMode};
-    rows=[];rendered=[];page=1;inputs.entityName.value='';searchMode='STARTS_WITH';
+    rows=[];rendered=[];page=1;inputs.entityName.value='';inputs.nvBusinessId.value='';searchMode='STARTS_WITH';
     if(transientBlankMs)schedule(()=>{
      ({rows,rendered,page,searchMode}=prior);inputs.entityName.value=prior.name;mutate();
     },transientBlankMs);
@@ -218,7 +222,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   }
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
- return {context,drive,api:context.testNV,get opened(){return opened;},get detailClicks(){return detailClicks;},get clicks(){return searchClicks;},get returnResultsClicks(){return returnResultsClicks;},get returnSearchClicks(){return returnSearchClicks;},get modeClicks(){return modeClicks;},get modeMenuOpen(){return modeMenu;},get pagingClicks(){return pagingClicks;},get mode(){return searchMode;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
+ return {context,drive,submitted,api:context.testNV,get opened(){return opened;},get detailClicks(){return detailClicks;},get clicks(){return searchClicks;},get returnResultsClicks(){return returnResultsClicks;},get returnSearchClicks(){return returnSearchClicks;},get modeClicks(){return modeClicks;},get modeMenuOpen(){return modeMenu;},get pagingClicks(){return pagingClicks;},get mode(){return searchMode;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
   search:(budget=45000)=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+budget)),
   setHttpStatus:value=>{httpStatus=value;},
   detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,reservationFields,grid};
@@ -959,16 +963,16 @@ test('Nevada reuses the original list after a brief blank screen on return',asyn
  assert.deepEqual(returnDiagnostic,{replay_clicks:0,result:'restored'});
 });
 
-test('Nevada reset replay binds a slow remount and submits only the original Exact Match',async()=>{
+test('Nevada reset reopens only the observed business ID after a slow remount',async()=>{
  const f=fixture({rows:manyPublicRows(21),exactRows:observed.slice(0,2),resetOnReturn:true,replayButtonDelay:3300});
  await f.drive(f.api.nvSearch(adaptiveQuery,f.time+45000));
  await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
  const returnDiagnostic={replay_clicks:0};
  const result=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000,{returnDiagnostic}));
  assert.equal(result.fields['NV Business ID'],observed[1][1]);
- assert.equal(f.mode,'EXACT_MATCH');
+ assert.deepEqual(f.submitted.slice(-1),[{id:observed[1][1],name:'',mode:'STARTS_WITH'}]);
  assert.equal(f.clicks,3);
- assert.deepEqual(returnDiagnostic,{replay_clicks:1,result:'replayed',request_started:true,http_status:200});
+ assert.deepEqual(returnDiagnostic,{replay_clicks:1,result:'reopened_by_id',request_started:true,http_status:200});
 });
 
 test('Nevada does not submit an unsettled reset or repeat a failed reset replay',async()=>{
@@ -982,7 +986,29 @@ test('Nevada does not submit an unsettled reset or repeat a failed reset replay'
    blocked?/FORM_NOT_SETTLED/:/SEARCH_SOURCE_ERROR/);
   assert.equal(f.clicks,blocked?1:2);
   assert.deepEqual(f.opened,[observed[0][1]]);
-  assert.deepEqual(returnDiagnostic,blocked?{result:'reset',replay_clicks:0}:
-   {result:'reset',replay_clicks:1,request_started:true,http_status:429});
+  assert.deepEqual(returnDiagnostic,blocked?{result:'lookup_by_id',replay_clicks:0}:
+   {result:'lookup_by_id',replay_clicks:1,request_started:true,http_status:429});
  }
+});
+
+
+test('Nevada refuses a business ID result whose observed row changed',async()=>{
+ const changed=[...observed[1]];changed[6]='Revoked';
+ const f=fixture({rows:observed.slice(0,2),resetOnReturn:true,idResult:[changed]});
+ await f.search();
+ await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000)),/RESTORED_RESULTS_CHANGED/);
+ assert.equal(f.clicks,2);
+ assert.deepEqual(f.opened,[observed[0][1]]);
+});
+
+test('Nevada retains the original shortlist after opening a candidate by business ID',async()=>{
+ const rows=manyPublicRows(3), f=fixture({rows,resetOnReturn:true,initialPageSize:25});
+ await f.search();
+ for(const row of rows) {
+  const result=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:row[1]},f.time+45000,{skipHistory:true}));
+  assert.equal(result.fields['NV Business ID'],row[1]);
+ }
+ assert.deepEqual(f.opened,rows.map(row=>row[1]));
+ assert.deepEqual(f.submitted.slice(1).map(search=>search.id),rows.slice(1).map(row=>row[1]));
 });

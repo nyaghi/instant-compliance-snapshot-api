@@ -8411,6 +8411,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             # exact legal/EIN match before plausible affiliates; do not skip
             # any other qualifying row or change its acceptance threshold.
             rows = prioritized_registry_candidates(org.organization_name, org.ein, state, rows)
+        if state == "NV" and trial_identity():
+            # Capture exact primary records before affiliates can consume the
+            # browser's evidence allowance. Selection still evaluates all rows.
+            primary_name = normalized_match_name(org.organization_name)
+            rows = sorted(rows, key=lambda row: normalized_match_name(row["name"]) != primary_name)
         if state == "NC":
             for card in payload["rows"]:
                 if card.get("CSL Type", "").strip() in {"Fund-Raising Consultant", "Solicitor"}:

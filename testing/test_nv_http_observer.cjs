@@ -20,3 +20,12 @@ test('expired request and wrong-origin messages cannot report a result',()=>{con
 test('existing startup configuration observation is preserved',()=>{const h=fixture();for(let i=0;i<2;i++){const x=new h.XHR();x.open('GET','https://content.orion.nv.gov/api/tenants');x.send();x.finish(500);}assert.equal(h.attributes.has('data-cc-nv-config-unavailable'),true);});
 test('both observed Nevada business routes report outcomes',()=>{for(const route of ['business','business.Miss'])for(const status of [200,500]){const h=fixture();h.watch();h.request(h.body({tabRoute:route})).finish(status);assert.deepEqual(h.messages.map(x=>x.m.phase),['ready','started','finished']);assert.equal(h.messages.at(-1).m.http_status,status);}});
 test('unrelated or conflicting routes cannot satisfy a watch',()=>{for(const route of ['notary','mark','business.Other','']){const h=fixture();h.watch();h.request(h.body({tabRoute:route})).finish(200);assert.equal(h.messages.length,1);}const h=fixture();h.watch();const b=JSON.parse(h.body());b.parameters.tabRoute='business';h.request(JSON.stringify(b)).finish(200);assert.equal(h.messages.length,1);});
+
+test('business ID replay observes only the exact public ID search with empty name',()=>{
+ for(const change of [{},{nvBusinessId:'NV2'},{entityName:'Casey'},{entityNumber:'E123'},{searchType:'EXACT_MATCH'}]){
+  const h=fixture();
+  h.watch({business_id:'NV1',name:''});
+  h.request(h.body({entityName:'',nvBusinessId:'NV1',...change})).finish(200);
+  assert.equal(h.messages.length,Object.keys(change).length?1:3);
+ }
+});

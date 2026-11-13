@@ -50,7 +50,13 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
     job.requiredCaptureSpentByState={[state]:old===undefined?0:Number.isFinite(old)&&old>=0?old:20000};
   }
   const completionSpent=completionState?job.requiredCaptureSpentByState[state]??0:0;
-  if(completionRequired&&(!Number.isFinite(completionSpent)||completionSpent<0||completionSpent>=19500)) {
+  // The signed Nevada primary detail gets a reserve when earlier candidates
+  // spent most of the shared allowance. It still shares the absolute deadline.
+  const nvReserve = state==='NV' && completionRequired && job.nvPrimaryCaptureCommand===commandId
+    && !job.nvPrimaryCaptureUsed && completionSpent>=12000;
+  if(nvReserve)job.nvPrimaryCaptureUsed=true;
+  const completionLimit=nvReserve?Math.max(20000,completionSpent+8000):20000;
+  if(completionRequired&&(!Number.isFinite(completionSpent)||completionSpent<0||completionSpent>=completionLimit-500)) {
     if(state==='AL')delete job.alSnapshotCaptureBusy;
     observed.phase='required-capture-budget-exhausted';trace();return null;
   }
@@ -68,7 +74,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       &&prepared.metadata.document_id===prepared.document_id
       &&Number.isFinite(prepared.observed_at)&&Date.now()-prepared.observed_at>=0
       &&Date.now()-prepared.observed_at<=45000) {
-    captureBudgetMs=Math.min(20000-completionSpent,job.activeExpiresAt-started-500);
+    captureBudgetMs=Math.min(completionLimit-completionSpent,job.activeExpiresAt-started-500);
   }
   const workerSettledDetail=(state==='IL'&&ilDetail)||(state==='TN'&&query.operation==='detail');
   if(workerSettledDetail) {
@@ -282,7 +288,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       // can become one page after its original layout settles. Give a bound
       // detail the shared completion allowance, preserving the state deadline.
       if(boundNvDetail&&!cancelled) {
-        const remaining=Math.min(20000-completionSpent,job.activeExpiresAt-started-500);
+        const remaining=Math.min(completionLimit-completionSpent,job.activeExpiresAt-started-500);
         if(remaining>captureBudgetMs) {
           captureBudgetMs=remaining;observed.budget_ms=remaining;
           clearTimeout(timeoutId);timeoutId=setTimeout(expireCapture,Math.max(1,started+remaining-Date.now()));

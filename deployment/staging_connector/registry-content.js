@@ -573,7 +573,7 @@
     })));
     return {ok:true};
   }
-  async function nvRequestWatch(name,mode,deadline) {
+  async function nvRequestWatch(name,mode,deadline,businessId='') {
     const state={ready:false,started:false,finished:false,http_status:null,stop:()=>{}};
     if(typeof window.postMessage!=='function')return state;
     const id=crypto.randomUUID(),channel='cc-nv-search-http-v1';let timer,resolveReady;
@@ -592,7 +592,7 @@
     state.stop=()=>{clearTimeout(timer);window.removeEventListener('message',receive);
       try{window.postMessage({channel,direction:'request',id,operation:'stop'},location.origin);}catch{}};
     timer=setTimeout(resolveReady,Math.max(1,Math.min(1000,deadline-Date.now())));
-    try{window.postMessage({channel,direction:'request',id,operation:'watch',name,mode,budget_ms:Math.max(1,deadline-Date.now())},location.origin);}catch{state.stop();return state;}
+    try{window.postMessage({channel,direction:'request',id,operation:'watch',name,mode,...(businessId ? {business_id:businessId} : {}),budget_ms:Math.max(1,deadline-Date.now())},location.origin);}catch{state.stop();return state;}
     await ready;if(!state.ready)state.stop();return state;
   }
   async function nvSearch(query, deadline, replay = null) {
@@ -611,6 +611,8 @@
     const name = field('entityName'), number = field('entityNumber'), id = field('nvBusinessId');
     if (!name || !number || !id || !Object.keys(nvSearchModes).some(nvSearchModeSelected))
       throw new Error("REGISTRY_NV_FORM_CHANGED");
+    const businessId = replay?.target?.identifier || '';
+    const searchName = businessId ? '' : query.name;
     let searchMode=replay?.mode ?? (contains?'CONTAINS':'STARTS_WITH'), broadTotal=null;
     const probeReply = (count, unavailable=false) => ({
       query,state:'NV',complete:true,verification_pending:false,total:0,rows:[],
@@ -629,22 +631,22 @@
     // keep resetting the settle clock for the same button with bound inputs.
     // This stays inside the command deadline and resets on a replaced button.
     const boundButton = () => {
-      if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== ''
-          || field('nvBusinessId')?.value !== '' || !nvSearchModeSelected(searchMode)) return false;
+      if (field('entityName')?.value !== searchName || field('entityNumber')?.value !== ''
+          || field('nvBusinessId')?.value !== businessId || !nvSearchModeSelected(searchMode)) return false;
       const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
       return buttons.length === 1 && buttons[0];
     };
     const bindSearch = (bindDeadline) => wait(() => {
       // Filter changes can replace all three inputs. Rebind only changed
       // values to the current nodes before observing the settled button.
-      for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',''],['entityName',query.name]]) {
+      for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',businessId],['entityName',searchName]]) {
         const input=field(suffix);
         if(!input)return false;
         if(input.value!==value){set(input,value);return false;}
       }
       return boundButton();
     }, Math.max(1,bindDeadline-Date.now()), {settle:200,sameCandidate:(prior,current)=>prior===current,action:()=>{
-      for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',''],['entityName',query.name]]) {
+      for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',businessId],['entityName',searchName]]) {
         const input=field(suffix);if(!input)throw new Error('REGISTRY_NV_FORM_CHANGED');
         if(input.value!==value)set(input,value);
       }
@@ -652,13 +654,13 @@
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_FORM_NOT_SETTLED');
       throw error;
     });
-    nvObserved.clear(); nvLastSearch = null;
+    if (!businessId) { nvObserved.clear(); nvLastSearch = null; }
     // The initial blank grid and old rows remain visible while ORION searches.
     // A completed loading cycle is mandatory, including for an empty response.
     const submit = async () => {
       const bindDeadline = Math.min(deadline, Date.now() + (replay ? 5000 : 3000));
       let search = await wfcAwait("content:nvSearch:587:19", () => bindSearch(bindDeadline));
-      const request=await nvRequestWatch(query.name,searchMode,deadline);
+      const request=await nvRequestWatch(searchName,searchMode,deadline,businessId);
       if(!request.ready)throw new Error('REGISTRY_NV_HTTP_OBSERVER_UNAVAILABLE');
       try {
         if (replay && boundButton() !== search) search = await bindSearch(bindDeadline);
@@ -666,8 +668,8 @@
           throw new Error('REGISTRY_NV_FORM_NOT_SETTLED');
         const readGrid = () => {
           if(!request.finished||request.http_status!==200)return false;
-          if (contains && (field('entityName')?.value !== query.name
-              || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== ''
+          if ((contains || businessId) && (field('entityName')?.value !== searchName
+              || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== businessId
               || !nvSearchModeSelected(searchMode))) {
             throw new Error('REGISTRY_NV_FORM_CHANGED');
           }
@@ -678,9 +680,9 @@
           nvTrace('search-submitted',{name:query.name,search_mode:searchMode});
           search.click();
         }, readGrid, deadline, {
-          requireLoading:true, searchResponse:true, signal:{target:window,type:'message'}, validateSearch:()=>{
+          requireLoading:!businessId, searchResponse:true, signal:{target:window,type:'message'}, validateSearch:()=>{
             if(request.finished&&request.http_status!==200)throw new Error('REGISTRY_NV_SEARCH_SOURCE_ERROR');
-            if(field('entityName')?.value!==query.name)return;
+            if(field('entityName')?.value!==searchName)return;
             const rejected=[...document.querySelectorAll('div,span,p')].some(el=>
               !el.childElementCount && visible(el)
               && text(el)==='This field contains unsupported special characters. Please remove them and try again.');
@@ -689,7 +691,7 @@
             if (request.started) return;
             // Re-read the current visible controls. A changed query must not be
             // submitted or allowed to inherit the original query's evidence.
-            if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return;
+            if (field('entityName')?.value !== searchName || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== businessId) return;
             const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Search' && visible(el) && !el.disabled);
             if (business?.getAttribute('aria-selected')==='true'
                 && nvSearchModeSelected(searchMode)
@@ -713,6 +715,13 @@
     }
     // A positive count triggers the original plan without paging.
     if (contains) return probeReply(first.total);
+    if (businessId) {
+      if (first.total !== 1 || first.page !== 1 || first.pages !== 1
+          || first.values.length !== 1 || JSON.stringify(first.values[0]) !== replay.target.signature
+          || boundButton() === false)
+        throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+      return first;
+    }
     if (!replay && query.exact_above===20 && first.total>query.exact_above) {
       broadTotal=first.total;searchMode='EXACT_MATCH';
       nvTrace('search-narrowed',{name:query.name,broad_total:broadTotal,search_mode:searchMode});
@@ -815,6 +824,7 @@
     // Pagination detaches earlier-page rows too. That does not mean we left
     // the search screen. Return from a detail only when actually on a detail
     // route; otherwise navigate to the saved page and revalidate its row.
+    let businessIdPage = null;
     if (!target.node.isConnected && !onSearch) {
       const backLabel=location.hash.includes('screen=NameReservationDetails&')?'Back':'Return To Results';
       const back = [...document.querySelectorAll('button')].find(el => text(el) === backLabel && visible(el));
@@ -866,18 +876,26 @@
       if (restoredGrid.blank) {
         if (Date.now() >= deadline) throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
         returnDiagnostic.result = 'reset';
-        const priorMode=nvLastSearchMode;
-        const priorRows=new Map([...nvObserved].map(([id,row])=>[id,
-          {signature:row.signature,occurrences:row.occurrences}]));
-        const replayed=await wfcAwait('content:nvDetail:restored-search-replay',
-          () => nvSearch(sourceQuery,deadline,{mode:priorMode,diagnostic:returnDiagnostic}));
-        if (replayed?.complete !== true || replayed.verification_pending !== false
-            || replayed.total !== priorRows.size || nvLastSearchMode !== priorMode
-            || nvObserved.size !== priorRows.size || [...priorRows].some(([id,row])=>
-              nvObserved.get(id)?.signature !== row.signature
-              || nvObserved.get(id)?.occurrences !== row.occurrences))
-          throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-        returnDiagnostic.result = 'replayed';
+        if (/^NV\d+$/.test(query.identifier)) {
+          returnDiagnostic.result = 'lookup_by_id';
+          businessIdPage = await nvSearch(sourceQuery,deadline,{
+            mode:'STARTS_WITH',target,diagnostic:returnDiagnostic
+          });
+          returnDiagnostic.result = 'reopened_by_id';
+        } else {
+          const priorMode=nvLastSearchMode;
+          const priorRows=new Map([...nvObserved].map(([id,row])=>[id,
+            {signature:row.signature,occurrences:row.occurrences}]));
+          const replayed=await wfcAwait('content:nvDetail:restored-search-replay',
+            () => nvSearch(sourceQuery,deadline,{mode:priorMode,diagnostic:returnDiagnostic}));
+          if (replayed?.complete !== true || replayed.verification_pending !== false
+              || replayed.total !== priorRows.size || nvLastSearchMode !== priorMode
+              || nvObserved.size !== priorRows.size || [...priorRows].some(([id,row])=>
+                nvObserved.get(id)?.signature !== row.signature
+                || nvObserved.get(id)?.occurrences !== row.occurrences))
+            throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+          returnDiagnostic.result = 'replayed';
+        }
       } else {
         returnDiagnostic.result = 'restored';
         let restored = restoredGrid.page;
@@ -913,12 +931,12 @@
           nvObserved.set(identifier,{...nvObserved.get(identifier),node,page});
         }
       }
-      if (!restoredQueryMatches()) throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
+      if (!businessIdPage && !restoredQueryMatches()) throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
     }
     let current = nvObserved.get(query.identifier);
     if (!current || current.name !== target.name || current.entity_type !== target.entity_type) throw new Error("REGISTRY_NV_DETAIL_CHANGED");
-    let page = nvPage('Search Results',nvSearchHeaders);
-    while (page.page > current.page) {
+    let page = businessIdPage || nvPage('Search Results',nvSearchHeaders);
+    while (!businessIdPage && page.page > current.page) {
       const expectedPage=page.page-1,expectedTotal=page.total;
       const previous = page.table.querySelector('button[aria-label="Go to the previous page"]');
       if (!previous || previous.disabled) throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
@@ -958,12 +976,13 @@
           if(Date.now()>=deadline || detailStarted || loading() || detailRoute())return;
           try {
             const field=s=>document.querySelector(`input[id$="-${s}"]`);
-            if(field('entityName')?.value!==sourceQuery.name || field('entityNumber')?.value!==''
-                || field('nvBusinessId')?.value!=='' || !nvSearchModeSelected(nvLastSearchMode))return;
+            if(field('entityName')?.value!==(businessIdPage?'':sourceQuery.name) || field('entityNumber')?.value!==''
+                || field('nvBusinessId')?.value!==(businessIdPage?query.identifier:'')
+                || !nvSearchModeSelected(businessIdPage?'STARTS_WITH':nvLastSearchMode))return;
             const fresh=nvPage('Search Results',nvSearchHeaders);
             const exact=fresh.values.map((cells,i)=>({cells,node:fresh.rows[i]}))
               .filter(row=>sameIdentifier(row.cells) && JSON.stringify(row.cells)===target.signature);
-            if(fresh.page!==target.page || exact.length!==1)return;
+            if(fresh.page!==(businessIdPage?1:target.page) || exact.length!==1)return;
             const retry=exact[0].node.querySelector('[role="gridcell"] a');
             if(!retry || text(retry)!==target.name)return;
             retry.click();nvTrace('detail-click-retried',{identifier:query.identifier});
