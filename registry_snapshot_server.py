@@ -9398,6 +9398,42 @@ def nv_completed_candidates_for_review(record):
     return [row for key, row in candidates.items() if key not in blocked]
 
 
+NV_FOLLOWUP_DETAIL_MS = 45000
+NV_FOLLOWUP_TOTAL_SECONDS = 55
+
+
+def nv_followup_detail_budget(record):
+    """Bound a different-name detail only after archiving the primary evidence."""
+    pending = (record.get("pending") or {}).get("query", {})
+    if (record.get("state") != "NV" or record.get("mode") != "standard"
+            or pending.get("operation") != "detail" or not record.get("source_snapshots")):
+        return None
+    candidates = nv_completed_candidates_for_review(record)
+    if len(candidates) != 1 or candidates[0]["status"] not in {"Current", "Upcoming Filing", "Exempt"}:
+        return None
+    primary = candidates[0]
+    primary_name = normalized_match_name(primary["name"])
+    if not any(ref.get("state") == "NV" and ref.get("operation") == "detail"
+               and ref.get("identifier") == primary["identifier"]
+               and normalized_match_name(ref.get("record_name", "")) == primary_name
+               and canonical_ein_digits(ref.get("ein", "")) == canonical_ein_digits(record["ein"])
+               and ref.get("url") for ref in record["source_snapshots"]):
+        return None
+    for item in reversed(record["completed"]):
+        if item["query"].get("operation") != "search":
+            continue
+        row = next((row for row in item["evidence"].get("rows", [])
+                    if row.get("identifier") == pending.get("identifier")), None)
+        if row is not None:
+            name = normalized_match_name(row.get("name", ""))
+            if not name or name == primary_name:
+                return None
+            now = time.time()
+            started = record.setdefault("nv_followup_started", now)
+            return max(0, min(NV_FOLLOWUP_DETAIL_MS, int((started + NV_FOLLOWUP_TOTAL_SECONDS - now) * 1000)))
+    return None
+
+
 def final_four_connector_failure(record, reason="", diagnostic=""):
     state = record["state"]
     sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
@@ -9422,6 +9458,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     from deployment.registry_validation_reason import public_validation_reason
     validation_note = public_validation_reason(state, diagnostic)
     why = (validation_note if validation_note else
+           "Nevada did not finish checking another candidate within the time allowed after saving the primary record." if state == "NV" and reason == "NY_CONNECTOR_NV_FOLLOWUP_TIMEOUT" else
            "The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
            "Alabama presented another verification challenge after two bounded code submissions; the search remains incomplete." if state == "AL" and attempts >= 2 and reason == "NY_CONNECTOR_AL_VERIFICATION_REQUIRED" else
            "Alabama's verification image could not be read with sufficient confidence; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_IMAGE_UNCERTAIN" else
@@ -9596,7 +9633,11 @@ def final_four_connector_advance(record):
         if len(record["completed"]) >= len(required) + len(generated) + 100:
             return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_QUERY_LIMIT")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
-        return {"phase": "search", **record["pending"]}
+        response = {"phase": "search", **record["pending"]}
+        followup_ms = nv_followup_detail_budget(record)
+        if followup_ms is not None:
+            response["nv_followup_ms"] = followup_ms
+        return response
     except (ValueError, TimeoutError) as exc:
         log_event(f"{record['state']} final-four public evidence incomplete: {type(exc).__name__}")
         safe_errors = {

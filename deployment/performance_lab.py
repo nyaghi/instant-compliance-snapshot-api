@@ -401,7 +401,20 @@ def final_four_asset(name, text):
         replace('          if (!recoveryUsed && !finalFour) throw error;',
                 '          trace("browser query exception",state.query,{name:error?.name||"Error",reason:error?.message||""});\n          if (!recoveryUsed && !finalFour) throw error;')
         replace('      const payload = await response.json();', '      const payload = await response.json();\n      if (!cleanup) trace("master response", null, {action:fields.action,http_status:response.status,phase:payload.phase,diagnostic:payload.result?.lab_diagnostic||null});')
-        replace('        let completed;', '        let completed;\n        trace("browser query started", state.query);')
+        replace('        let completed;', '''        const nvFollowup = registryState === "NV" && state.query?.operation === "detail"
+          && Number.isInteger(state.nv_followup_ms) && state.nv_followup_ms >= 0 && state.nv_followup_ms <= 45000
+          ? state.nv_followup_ms : null;
+        const nvTimeout = nvFollowup !== null && nvFollowup < lookupDeadline - Date.now()
+          ? AbortSignal.timeout(nvFollowup) : null;
+        let completed;
+        trace("browser query started", state.query);''')
+        replace('          const searchSignal = (recoveryUsed || finalFour) ? AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(Math.max(1, lookupDeadline-Date.now()))]) : signal;',
+                '          const searchSignal = (recoveryUsed || finalFour) ? AbortSignal.any([...(signal ? [signal] : []), ...(nvTimeout ? [nvTimeout] : []), AbortSignal.timeout(Math.max(1, lookupDeadline-Date.now()))]) : signal;')
+        replace('          completed = await bridge("search",', '''          if (nvFollowup === 0) {
+            completed = {ok:false,reason:"NY_CONNECTOR_NV_FOLLOWUP_TIMEOUT"};
+          } else completed = await bridge("search",''')
+        replace('completed = {ok:false,reason:registryState === "NV" ? "NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT" : "NY_CONNECTOR_TIMEOUT"};',
+                'completed = {ok:false,reason:nvTimeout?.aborted ? "NY_CONNECTOR_NV_FOLLOWUP_TIMEOUT" : registryState === "NV" ? "NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT" : "NY_CONNECTOR_TIMEOUT"};')
         replace('progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.',
                 'progress => ["opening_page","waiting_for_form","preparing_query","query_sent"].includes(progress.ny_phase) ? trace("browser stage", state.query, {ny_phase:progress.ny_phase}) : Array.isArray(progress.ny_diagnostics) ? trace("browser stage", state.query, {ny_diagnostics:nyDiagnostics(progress.ny_diagnostics)}) : onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.')
         replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",query_id:state.query_id||null,workflow_observation:completed.workflow_observation||null,workflow_delivery:completed.workflow_delivery||null,...(registryState==="NY" ? {ny_diagnostics:nyDiagnostics(completed.ny_diagnostics)} : {}),...(["GA","MS","NC","TN","AL","IL","NM","NV","NY"].includes(registryState) && Array.isArray(completed.trial_diagnostics) ? {trial_diagnostics:completed.trial_diagnostics} : {}),...(["NY_CONNECTOR_VERIFICATION_REJECTED","NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(completed.ny_failure_cause) ? {ny_failure_cause:completed.ny_failure_cause,ny_reset_cooldown:completed.ny_reset_cooldown===true} : {}),...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {}),...(completed.nc_submission ? {nc_submission:completed.nc_submission} : {}),...(["visible","hidden"].includes(completed.page_visibility) ? {page_visibility:completed.page_visibility} : {}),...(registryState === "IL" && Array.isArray(completed.diagnostics) ? {il_dom:completed.diagnostics.slice(0,32).map(({phase,event,elapsed_ms,visibility})=>({phase,event,elapsed_ms,visibility}))} : {}),...(registryState === "NV" && completed.evidence?.filings ? {nv_filings:{complete:completed.evidence.filings.complete===true,total:completed.evidence.filings.total??null,failure_code:completed.evidence.filings.failure_code||""}} : {})});\n        state = completed.ok')

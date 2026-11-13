@@ -48,3 +48,37 @@ class NevadaPartialDetail(unittest.TestCase):
         record = copy.deepcopy(self.record)
         record["completed"].pop(0)
         self.assertEqual(server.nv_completed_candidates_for_review(record), [])
+
+    def test_followup_budget_requires_a_saved_primary_and_a_different_name(self):
+        search, primary = self.record["completed"]
+        evidence = search["evidence"]
+        main_id = primary["query"]["identifier"]
+        evidence["rows"].extend([
+            dict(evidence["rows"][0], identifier="NV101", name="American Civil Liberties Union Foundation"),
+            dict(evidence["rows"][0], identifier="NV102", name="American Civil Liberties Union of Nevada"),
+            dict(evidence["rows"][0], identifier="NV103"),
+        ])
+        evidence["total"] = len(evidence["rows"])
+        self.record["mode"] = "standard"
+        self.record["pending"] = {"query": dict(primary["query"], identifier="NV101")}
+        budget = server.nv_followup_detail_budget
+        self.assertIsNone(budget(self.record))
+        self.record["source_snapshots"] = [{
+            "state": "NV", "operation": "detail", "identifier": main_id, "ein": self.record["ein"],
+            "record_name": self.record["organization_name"], "url": "/state-snapshots/fixture.pdf",
+        }]
+        with patch.object(server.time, "time", return_value=1000):
+            self.assertEqual(budget(self.record), 45000)
+        self.record["pending"]["query"]["identifier"] = "NV102"
+        with patch.object(server.time, "time", return_value=1042):
+            self.assertEqual(budget(self.record), 13000)
+        with patch.object(server.time, "time", return_value=1056):
+            self.assertEqual(budget(self.record), 0)
+        self.record["pending"]["query"]["identifier"] = "NV103"
+        self.assertIsNone(budget(self.record))
+        self.record["pending"]["query"]["identifier"] = "NV102"
+        self.record["mode"] = "sales"
+        self.assertIsNone(budget(self.record))
+        self.record["mode"] = "standard"
+        self.record["source_snapshots"][0]["ein"] = "987654321"
+        self.assertIsNone(budget(self.record))

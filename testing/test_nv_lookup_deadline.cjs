@@ -1,7 +1,7 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),{test}=require('node:test'),{webcrypto}=require('node:crypto');
 const source=fs.readFileSync(process.argv[2]||require('node:path').join(__dirname,'../artifacts/nv-pf-served.js'),'utf8');
 const caps=['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','il-large-pages-v1','ga-exempt-record-v1','ga-legacy-rows-v1','final-four-public-v1','il-dom-events-v1'];
-async function scenario({state='NV',delays=[Infinity],cancelAt=null}={}){
+async function scenario({state='NV',delays=[Infinity],cancelAt=null,followups=null}={}){
  let now=0,seq=0,listener,count=0,advances=0;const timers=new Map(),messages=[],calls=[];
  const timer=(fn,delay)=>{const id=++seq;timers.set(id,{at:now+delay,fn});return id;};
  const timeout=ms=>{const c=new AbortController();timer(()=>c.abort(new DOMException('Timeout','TimeoutError')),ms);return c.signal;};
@@ -16,13 +16,14 @@ async function scenario({state='NV',delays=[Infinity],cancelAt=null}={}){
    for(const d of [10000,20000,30000,40000])timer(()=>reply({progress:true,retrying:true}),d);
   } else queueMicrotask(()=>reply({ok:true,version:'0.6.135',capabilities:caps,cleanup_complete:true}));
  }};
- const query=()=>({phase:'search',check_token:'fixture',query_id:String(advances),lookup_remaining_ms:300000,query:{state,operation:'search',name:'Example '+advances}});
+ const query=()=>({phase:'search',check_token:'fixture',query_id:String(advances),lookup_remaining_ms:300000,query:followups && advances>0 ? {state,operation:'detail',identifier:'NV'+advances} : {state,operation:'search',name:'Example '+advances},
+  ...(followups && advances>0 ? {nv_followup_ms:followups[advances-1]} : {})});
  const ctx={window,location:{origin},document:{visibilityState:'visible',querySelector:()=>null,getElementById:()=>null},crypto:webcrypto,Date:{now:()=>now},setTimeout:timer,clearTimeout:id=>timers.delete(id),AbortSignal:{timeout,any:AbortSignal.any.bind(AbortSignal)},fetch:async(url,options)=>{
   const p=JSON.parse(options.body);calls.push({action:p.action,reason:p.reason,at:now});
   let data;
   if(p.action==='start')data=query();
   else if(p.action==='advance'){advances++;data=advances>=delays.length?{phase:'complete',result:{state,status:'Not Registered',success:true}}:query();}
-  else if(p.action==='fail')data={phase:'complete',result:{state,status:p.reason==='NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT'?'Site Not Reachable':'Unable to Confirm',success:false}};
+  else if(p.action==='fail')data={phase:'complete',result:{state,status:p.reason==='NY_CONNECTOR_NV_FOLLOWUP_TIMEOUT'?'Confirm match':p.reason==='NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT'?'Site Not Reachable':'Unable to Confirm',success:false}};
   else data={};
   return {ok:true,status:200,json:async()=>data};
  }};
@@ -54,3 +55,29 @@ test('other registry source budgets are unchanged',async()=>{
 
 test('observed slow successes survive the former 45-second cutoff',async()=>{for(const delay of [54000,65000]){const r=await scenario({delays:[delay,5000]});assert.equal(r.finished,delay+5000);assert.equal(r.result.status,'Not Registered');assert.equal(r.count,2);}});
 test('observed 83-second multi-search progress completes within the shared budget',async()=>{const r=await scenario({delays:[24000,14000,10000,7000,7000,7000,7000,7000]});assert.equal(r.finished,83000);assert.equal(r.result.status,'Not Registered');});
+
+test('saved Nevada primary bounds a stalled follow-up without treating it as an outage', async()=>{
+ const r=await scenario({delays:[45000,42000,Infinity],followups:[45000,13000]});
+ assert.equal(r.finished,100000);
+ assert.equal(r.result.status,'Confirm match');
+ assert.equal(r.calls.filter(c=>c.action==='fail').length,1);
+ assert.equal(r.calls.find(c=>c.action==='fail').reason,'NY_CONNECTOR_NV_FOLLOWUP_TIMEOUT');
+ assert.equal(r.messages.at(-1).action,'finish');
+});
+test('completed Nevada follow-ups are submitted and an exhausted budget starts no new command', async()=>{
+ const completed=await scenario({delays:[45000,42000,7000],followups:[45000,13000]});
+ assert.equal(completed.finished,94000);
+ assert.equal(completed.calls.filter(c=>c.action==='advance').length,3);
+ assert.equal(completed.calls.some(c=>c.action==='fail'),false);
+ const exhausted=await scenario({delays:[45000,42000,Infinity],followups:[45000,0]});
+ assert.equal(exhausted.finished,87000);
+ assert.equal(exhausted.count,2);
+ assert.equal(exhausted.result.status,'Confirm match');
+});
+test('user Stop takes precedence over the Nevada follow-up timeout',async()=>{
+ const r=await scenario({delays:[45000,Infinity],followups:[45000],cancelAt:54000});
+ assert.equal(r.finished,54000);
+ assert.equal(r.error.name,'AbortError');
+ assert.equal(r.calls.some(c=>c.action==='fail'),false);
+ assert.equal(r.messages.at(-1).action,'finish');
+});
