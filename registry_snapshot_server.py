@@ -8566,14 +8566,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                             and not nv_entity_type_in(record["entity_type"], {row["entity_type"]}))
                             or normalized_match_name(record["name"]) != normalized_match_name(row["name"])):
                         raise ValueError("Nevada detail differs from the selected search identity")
-                    url = urlparse(str(detail.get("source_url") or ""))
-                    fragment_path, _, params = url.fragment.partition("?")
-                    params = parse_qs(params)
-                    if (url.scheme != "https" or url.netloc != "orion.nv.gov" or url.path != "/portal/public/"
-                            or url.query or fragment_path != "/public/nvsos/en/CaseXscreen"
-                            or set(params) != {"screen", "id"} or params.get("screen") != ["Manage-Business"]
-                            or len(params.get("id", [])) != 1
-                            or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", params["id"][0])):
+                    if not nv_official_detail_url(detail.get("source_url")):
                         raise ValueError("Nevada detail is not an official business record")
                     record["url"] = detail["source_url"]
                     if record.get("requires_solicitation_history") and detail.get("filings") is not None:
@@ -9343,6 +9336,64 @@ def al_completed_candidates_for_review(record):
         REVIEWED_NAME_CONTEXT.reset(token)
 
 
+def nv_official_detail_url(value):
+    url = urlparse(str(value or ""))
+    fragment_path, _, params = url.fragment.partition("?")
+    params = parse_qs(params)
+    return (url.scheme == "https" and url.netloc == "orion.nv.gov" and url.path == "/portal/public/"
+            and not url.query and fragment_path == "/public/nvsos/en/CaseXscreen"
+            and set(params) == {"screen", "id"} and params.get("screen") == ["Manage-Business"]
+            and len(params.get("id", [])) == 1
+            and re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", params["id"][0]) is not None)
+
+
+def nv_completed_candidates_for_review(record):
+    """Recover a verified primary Nevada detail when a later command fails."""
+    if record.get("state") != "NV" or not trial_identity():
+        return []
+    primary = normalized_match_name(record["organization_name"])
+    if len(distinctive_match_tokens(primary)) < 2:
+        return []
+    requested_ein = canonical_ein_digits(record["ein"])
+    blocked = set(record.get("identity_context", {}).get("rejected", []))
+    observed, candidates = {}, {}
+    for item in record.get("completed", []):
+        query, payload = item.get("query", {}), item.get("evidence", {})
+        if query.get("state") != "NV":
+            continue
+        try:
+            final_four_clean_evidence(payload, query)
+            if query.get("operation") == "search":
+                for row in final_four_search_evidence(payload, "NV", query):
+                    key = row["identifier"]
+                    if key in observed and observed[key] != row:
+                        blocked.add(key)
+                    observed[key] = row
+                continue
+            key = query.get("identifier", "")
+            row = observed.get(key)
+            if key in blocked or not row or normalized_match_name(row["name"]) != primary:
+                continue
+            candidate = nv_charity_detail_evidence(payload["fields"], key, payload.get("filings"))
+            if (normalized_match_name(candidate["name"]) != primary
+                    or not nv_entity_type_in(candidate["entity_type"], {row["entity_type"]})
+                    or candidate.get("ein") and canonical_ein_digits(candidate["ein"]) != requested_ein
+                    or candidate.get("requires_solicitation_history")
+                    and not (candidate.get("solicitation_statement_filed") or candidate.get("solicitation_exemption_filed"))
+                    or candidate.get("non_charity_withdrawal_history")):
+                continue
+            if not nv_official_detail_url(payload.get("source_url")):
+                continue
+            candidate["url"] = payload["source_url"]
+            candidate["_identity_outcome"] = "possible"
+            if key in candidates and candidates[key] != candidate:
+                blocked.add(key)
+            candidates[key] = candidate
+        except (KeyError, TypeError, ValueError):
+            continue
+    return [row for key, row in candidates.items() if key not in blocked]
+
+
 def final_four_connector_failure(record, reason="", diagnostic=""):
     state = record["state"]
     sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
@@ -9418,10 +9469,12 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     else:
         result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
     candidates = (al_completed_candidates_for_review(record) if state == "AL"
+                  else nv_completed_candidates_for_review(record) if state == "NV"
                   else nc_completed_candidates_for_review(record))
     if candidates:
         result._cc_identity_review = {"records": candidates, "search_complete": False, "freshness": ""}
         result.source_note += (" Complete North Carolina profiles were retrieved before the later search failed. Their identity remains unconfirmed; use Accept or Reject match to review them. Rejecting them does not establish non-registration because the search is incomplete." if state == "NC" else
+            " Nevada returned the primary record before a later lookup failed. Review the captured record and confirm the match if appropriate. Rejecting it does not establish non-registration." if state == "NV" else
             " Complete Alabama records were retrieved before the later search failed. "
             "Their identity remains unconfirmed; use Accept or Reject match to review them. "
             "Rejecting them does not establish non-registration because the search is incomplete.")
@@ -9429,7 +9482,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     # An incomplete later AL query can return before the continuation installs
     # its evidence context. Preserve already validated candidate images in the
     # signed review, without treating the failed search as complete.
-    if state in {"AL", "NC"} and candidates:
+    if state in {"AL", "NC", "NV"} and candidates:
         from deployment.state_snapshots import REFERENCES
         snapshot_context = REFERENCES.set(record.get("source_snapshots", []))
         try:
@@ -9469,7 +9522,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
                                    if item.get("query", {}).get("operation") == "detail"
                                    and item["query"].get("identifier")],
         )
-    if state in {"AL", "NC"} and candidates:
+    if state in {"AL", "NC", "NV"} and candidates:
         from deployment.state_snapshots import attach_links
         from deployment.search_history import attach as attach_search_history
         from deployment.identity_evidence import bind as bind_review_evidence
