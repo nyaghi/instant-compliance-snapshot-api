@@ -30,6 +30,7 @@ class NevadaPartialDetail(unittest.TestCase):
         self.addCleanup(trial.stop)
 
     def test_keeps_source_verified_primary_as_review_only(self):
+        self.record["completed"][0]["evidence"]["master_search_audit"] = {"source_total": 6, "rejected": 5}
         candidate, = server.nv_completed_candidates_for_review(self.record)
         self.assertEqual(candidate["identifier"], "NV20181623507")
         self.assertEqual(candidate["status"], "Current")

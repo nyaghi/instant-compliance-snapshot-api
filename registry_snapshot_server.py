@@ -9362,14 +9362,18 @@ def nv_completed_candidates_for_review(record):
         if query.get("state") != "NV":
             continue
         try:
-            final_four_clean_evidence(payload, query)
             if query.get("operation") == "search":
+                # The signed continuation already validated and compacted the
+                # public search. The audit field is added by the master.
+                payload = {k: v for k, v in payload.items() if k != "master_search_audit"}
+                final_four_clean_evidence(payload, query)
                 for row in final_four_search_evidence(payload, "NV", query):
                     key = row["identifier"]
                     if key in observed and observed[key] != row:
                         blocked.add(key)
                     observed[key] = row
                 continue
+            final_four_clean_evidence(payload, query)
             key = query.get("identifier", "")
             row = observed.get(key)
             if key in blocked or not row or normalized_match_name(row["name"]) != primary:
