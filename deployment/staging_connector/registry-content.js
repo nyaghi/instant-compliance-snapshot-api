@@ -595,7 +595,7 @@
     try{window.postMessage({channel,direction:'request',id,operation:'watch',name,mode,budget_ms:Math.max(1,deadline-Date.now())},location.origin);}catch{state.stop();return state;}
     await ready;if(!state.ready)state.stop();return state;
   }
-  async function nvSearch(query, deadline) {
+  async function nvSearch(query, deadline, replay = null) {
     const keys=Object.keys(query || {}).sort().join(',');
     const contains=keys==='name,operation,search_mode,state' && query.search_mode==='CONTAINS';
     if (query?.state !== 'NV' || query.operation !== 'search' || typeof query.name !== 'string' || !query.name.trim() || query.name.length > 500
@@ -611,7 +611,7 @@
     const name = field('entityName'), number = field('entityNumber'), id = field('nvBusinessId');
     if (!name || !number || !id || !Object.keys(nvSearchModes).some(nvSearchModeSelected))
       throw new Error("REGISTRY_NV_FORM_CHANGED");
-    let searchMode=contains?'CONTAINS':'STARTS_WITH', broadTotal=null;
+    let searchMode=replay?.mode ?? (contains?'CONTAINS':'STARTS_WITH'), broadTotal=null;
     const probeReply = (count, unavailable=false) => ({
       query,state:'NV',complete:true,verification_pending:false,total:0,rows:[],
       search_mode:'CONTAINS',broad_total:count||null,...(unavailable?{probe_unavailable:true}:{})
@@ -628,7 +628,13 @@
     // the same turn as input/change. Unrelated mask/chat animations must not
     // keep resetting the settle clock for the same button with bound inputs.
     // This stays inside the command deadline and resets on a replaced button.
-    const bindSearch = () => wait(() => {
+    const boundButton = () => {
+      if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== ''
+          || field('nvBusinessId')?.value !== '' || !nvSearchModeSelected(searchMode)) return false;
+      const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
+      return buttons.length === 1 && buttons[0];
+    };
+    const bindSearch = (bindDeadline) => wait(() => {
       // Filter changes can replace all three inputs. Rebind only changed
       // values to the current nodes before observing the settled button.
       for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',''],['entityName',query.name]]) {
@@ -636,10 +642,8 @@
         if(!input)return false;
         if(input.value!==value){set(input,value);return false;}
       }
-      if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return false;
-      const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
-      return buttons.length === 1 && buttons[0];
-    }, Math.max(1,Math.min(3000,deadline-Date.now())), {settle:200,sameCandidate:(prior,current)=>prior===current,action:()=>{
+      return boundButton();
+    }, Math.max(1,bindDeadline-Date.now()), {settle:200,sameCandidate:(prior,current)=>prior===current,action:()=>{
       for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',''],['entityName',query.name]]) {
         const input=field(suffix);if(!input)throw new Error('REGISTRY_NV_FORM_CHANGED');
         if(input.value!==value)set(input,value);
@@ -652,37 +656,53 @@
     // The initial blank grid and old rows remain visible while ORION searches.
     // A completed loading cycle is mandatory, including for an empty response.
     const submit = async () => {
-      const search=await wfcAwait("content:nvSearch:587:19",()=>(bindSearch()));
+      const bindDeadline = Math.min(deadline, Date.now() + (replay ? 5000 : 3000));
+      let search = await wfcAwait("content:nvSearch:587:19", () => bindSearch(bindDeadline));
       const request=await nvRequestWatch(query.name,searchMode,deadline);
       if(!request.ready)throw new Error('REGISTRY_NV_HTTP_OBSERVER_UNAVAILABLE');
-      nvTrace('search-submitted',{name:query.name,search_mode:searchMode});
-      const readGrid = () => {
-        if(!request.finished||request.http_status!==200)return false;
-        if (contains && (field('entityName')?.value !== query.name
-            || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== ''
-            || !nvSearchModeSelected(searchMode))) {
-          throw new Error('REGISTRY_NV_FORM_CHANGED');
+      try {
+        if (replay && boundButton() !== search) search = await bindSearch(bindDeadline);
+        if (replay && (Date.now() >= deadline || boundButton() !== search || request.started))
+          throw new Error('REGISTRY_NV_FORM_NOT_SETTLED');
+        const readGrid = () => {
+          if(!request.finished||request.http_status!==200)return false;
+          if (contains && (field('entityName')?.value !== query.name
+              || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== ''
+              || !nvSearchModeSelected(searchMode))) {
+            throw new Error('REGISTRY_NV_FORM_CHANGED');
+          }
+          return nvPage('Search Results', nvSearchHeaders);
+        };
+        return await nvChanged(() => {
+          if (replay) replay.diagnostic.replay_clicks++;
+          nvTrace('search-submitted',{name:query.name,search_mode:searchMode});
+          search.click();
+        }, readGrid, deadline, {
+          requireLoading:true, searchResponse:true, signal:{target:window,type:'message'}, validateSearch:()=>{
+            if(request.finished&&request.http_status!==200)throw new Error('REGISTRY_NV_SEARCH_SOURCE_ERROR');
+            if(field('entityName')?.value!==query.name)return;
+            const rejected=[...document.querySelectorAll('div,span,p')].some(el=>
+              !el.childElementCount && visible(el)
+              && text(el)==='This field contains unsupported special characters. Please remove them and try again.');
+            if(rejected)throw new Error('REGISTRY_NV_SEARCH_CHARACTERS_REJECTED');
+          }, retryNotStarted:replay ? null : ()=>{
+            if (request.started) return;
+            // Re-read the current visible controls. A changed query must not be
+            // submitted or allowed to inherit the original query's evidence.
+            if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return;
+            const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Search' && visible(el) && !el.disabled);
+            if (business?.getAttribute('aria-selected')==='true'
+                && nvSearchModeSelected(searchMode)
+                && buttons.length===1) buttons[0].click();
+          }
+        });
+      } finally {
+        if (replay) {
+          replay.diagnostic.request_started = request.started;
+          replay.diagnostic.http_status = request.http_status;
         }
-        return nvPage('Search Results', nvSearchHeaders);
-      };
-      try { return await nvChanged(() => search.click(), readGrid, deadline, {
-      requireLoading:true, searchResponse:true, signal:{target:window,type:'message'}, validateSearch:()=>{
-        if(request.finished&&request.http_status!==200)throw new Error('REGISTRY_NV_SEARCH_SOURCE_ERROR');
-        if(field('entityName')?.value!==query.name)return;
-        const rejected=[...document.querySelectorAll('div,span,p')].some(el=>
-          !el.childElementCount && visible(el)
-          && text(el)==='This field contains unsupported special characters. Please remove them and try again.');
-        if(rejected)throw new Error('REGISTRY_NV_SEARCH_CHARACTERS_REJECTED');
-      }, retryNotStarted:()=>{
-        // Re-read the current visible controls. A changed query must not be
-        // submitted or allowed to inherit the original query's evidence.
-        if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return;
-        const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Search' && visible(el) && !el.disabled);
-        if (business?.getAttribute('aria-selected')==='true'
-            && nvSearchModeSelected(searchMode)
-            && buttons.length===1) buttons[0].click();
+        request.stop();
       }
-      }); } finally {request.stop();}
     };
     let first;
     try {
@@ -693,7 +713,7 @@
     }
     // A positive count triggers the original plan without paging.
     if (contains) return probeReply(first.total);
-    if (query.exact_above===20 && first.total>query.exact_above) {
+    if (!replay && query.exact_above===20 && first.total>query.exact_above) {
       broadTotal=first.total;searchMode='EXACT_MATCH';
       nvTrace('search-narrowed',{name:query.name,broad_total:broadTotal,search_mode:searchMode});
       await wfcAwait("content:nvSearch:605:6",()=>(nvSelectSearchMode(searchMode,deadline)));
@@ -780,7 +800,7 @@
     if(!wanted.every(k=>Object.hasOwn(fields,k))||fields['Entity Number']!==identifier||!fields['Reserved Name']||!fields.Status||!fields['Linked Entity Information'])return null;
     return fields;
   }
-  async function nvDetail(query, deadline, {skipHistory=false}={}) {
+  async function nvDetail(query, deadline, {skipHistory=false, returnDiagnostic={replay_clicks:0}}={}) {
     if (query?.state !== 'NV' || query.operation !== 'detail' || !/^(?:NV\d+|(?:NR|C)\d{8}-\d+|E\d{7,14}-\d)$/.test(query.identifier)
         || Object.keys(query).sort().join(',') !== 'identifier,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
     const target = nvObserved.get(query.identifier), sourceQuery = nvLastSearch;
@@ -810,68 +830,90 @@
       const restoredQueryMatches = () => field('entityName')?.value === sourceQuery.name
         && field('entityNumber')?.value === '' && field('nvBusinessId')?.value === ''
         && nvSearchModeSelected(nvLastSearchMode);
-      if (!restoredQueryMatches()) {
-        // The observed public Return To Results action can reset the whole
-        // form and grid. Only that blank, completed state may replay the same
-        // public query; changed filters or a different result set still fail.
-        let blankPage=null;
-        try { blankPage=nvPage('Search Results',nvSearchHeaders); } catch {}
-        const resetForm=field('entityName')?.value === '' && field('entityNumber')?.value === ''
-          && field('nvBusinessId')?.value === '' && nvStartsWithSelected()
-          && ![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)
-          && blankPage?.total === 0 && blankPage.values.length === 0;
-        if (!resetForm) throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
+      const sourceTotal = [...nvObserved.values()].reduce((total,row)=>total+row.occurrences,0);
+      const restoreDeadline = Math.min(deadline, Date.now()+5000);
+      returnDiagnostic.result = 'waiting';
+      const readReturnedGrid = () => {
+        let page;
+        if (registryDocumentReady()) {
+          try { page=nvPage('Search Results',nvSearchHeaders); } catch {}
+        }
+        if (page && restoredQueryMatches() && page.total === sourceTotal) return {page};
+        const blank = page?.total === 0 && nvStartsWithSelected()
+          && ['entityName','entityNumber','nvBusinessId'].every(suffix => field(suffix)?.value === '');
+        return blank && {blank:true};
+      };
+      const remaining = () => Math.max(1,restoreDeadline-Date.now());
+      let restoredGrid;
+      try {
+        restoredGrid = await wait(readReturnedGrid,remaining());
+        if (restoredGrid.blank) {
+          // A temporary blank screen can precede restoration of the original
+          // query and grid. Wait for a stable reset before submitting again.
+          const settled = await wait(readReturnedGrid,remaining(), {
+            settle:1500,
+            sameCandidate:(prior,current) => prior.blank === current.blank
+          });
+          restoredGrid = readReturnedGrid();
+          if (!restoredGrid || restoredGrid.blank !== settled.blank)
+            throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        }
+      } catch (error) {
+        if (error.message === 'REGISTRY_RESPONSE_INCOMPLETE' && !restoredQueryMatches())
+          throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
+        throw error;
+      }
+      if (restoredGrid.blank) {
         if (Date.now() >= deadline) throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        returnDiagnostic.result = 'reset';
         const priorMode=nvLastSearchMode;
         const priorRows=new Map([...nvObserved].map(([id,row])=>[id,
           {signature:row.signature,occurrences:row.occurrences}]));
-        nvTrace('restored-search-replay-started',{rows:priorRows.size});
-        const replayed=await wfcAwait('content:nvDetail:restored-search-replay',()=>nvSearch(sourceQuery,deadline));
+        const replayed=await wfcAwait('content:nvDetail:restored-search-replay',
+          () => nvSearch(sourceQuery,deadline,{mode:priorMode,diagnostic:returnDiagnostic}));
         if (replayed?.complete !== true || replayed.verification_pending !== false
             || replayed.total !== priorRows.size || nvLastSearchMode !== priorMode
             || nvObserved.size !== priorRows.size || [...priorRows].some(([id,row])=>
               nvObserved.get(id)?.signature !== row.signature
               || nvObserved.get(id)?.occurrences !== row.occurrences))
           throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-        nvTrace('restored-search-replay-completed',{rows:priorRows.size});
+        returnDiagnostic.result = 'replayed';
+      } else {
+        returnDiagnostic.result = 'restored';
+        let restored = restoredGrid.page;
+        if (!restoredQueryMatches()) throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
+        while (restored.page > 1) {
+          const expectedPage=restored.page-1,expectedTotal=restored.total;
+          const previous = restored.table.querySelector('button[aria-label="Go to the previous page"]');
+          if (!previous || previous.disabled) throw new Error('REGISTRY_NV_PAGINATION_INCOMPLETE');
+          restored = await wfcAwait("content:nvDetail:730:19",()=>(nvChanged(()=>previous.click(),()=>{
+            const fresh=nvPage('Search Results',nvSearchHeaders);
+            return fresh.page===expectedPage && fresh.total===expectedTotal && fresh;
+          },deadline,{previous:JSON.stringify(restored.values),settle:0})));
+        }
+        const rows = await wfcAwait("content:nvDetail:735:19",()=>(nvPages('Search Results',nvSearchHeaders,deadline,restored))), restoredIds = new Map();
+        if (rows.length !== sourceTotal) throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+        for (const {cells,page} of rows) {
+          let row;
+          try { row=nvPublicRow(cells); }
+          catch { throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED'); }
+          const prior = nvObserved.get(row.identifier);
+          const occurrence = restoredIds.get(row.identifier);
+          if (!prior || prior.signature !== JSON.stringify(cells) || occurrence?.page === page)
+            throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+          restoredIds.set(row.identifier,{page,count:(occurrence?.count||0)+1});
+        }
+        if (restoredIds.size !== nvObserved.size || [...restoredIds].some(([id,value])=>value.count!==nvObserved.get(id).occurrences))
+          throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+        const updated = new Set();
+        for (const {cells,node,page} of rows) {
+          const identifier=nvPublicRow(cells).identifier;
+          if(updated.has(identifier))continue;
+          updated.add(identifier);
+          nvObserved.set(identifier,{...nvObserved.get(identifier),node,page});
+        }
       }
       if (!restoredQueryMatches()) throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
-      const sourceTotal = [...nvObserved.values()].reduce((total,row)=>total+row.occurrences,0);
-      let restored = await wfcAwait("content:nvDetail:721:21",()=>(wait(() => {
-        if ([...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)) return false;
-        try { const page=nvPage('Search Results',nvSearchHeaders);return page.total===sourceTotal && page; }
-        catch { return false; }
-      },Math.max(1,Math.min(5000,deadline-Date.now())))));
-      while (restored.page > 1) {
-        const expectedPage=restored.page-1,expectedTotal=restored.total;
-        const previous = restored.table.querySelector('button[aria-label="Go to the previous page"]');
-        if (!previous || previous.disabled) throw new Error('REGISTRY_NV_PAGINATION_INCOMPLETE');
-        restored = await wfcAwait("content:nvDetail:730:19",()=>(nvChanged(()=>previous.click(),()=>{
-          const fresh=nvPage('Search Results',nvSearchHeaders);
-          return fresh.page===expectedPage && fresh.total===expectedTotal && fresh;
-        },deadline,{previous:JSON.stringify(restored.values),settle:0})));
-      }
-      const rows = await wfcAwait("content:nvDetail:735:19",()=>(nvPages('Search Results',nvSearchHeaders,deadline,restored))), restoredIds = new Map();
-      if (rows.length !== sourceTotal) throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-      for (const {cells,page} of rows) {
-        let row;
-        try { row=nvPublicRow(cells); }
-        catch { throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED'); }
-        const prior = nvObserved.get(row.identifier);
-        const occurrence = restoredIds.get(row.identifier);
-        if (!prior || prior.signature !== JSON.stringify(cells) || occurrence?.page === page)
-          throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-        restoredIds.set(row.identifier,{page,count:(occurrence?.count||0)+1});
-      }
-      if (restoredIds.size !== nvObserved.size || [...restoredIds].some(([id,value])=>value.count!==nvObserved.get(id).occurrences))
-        throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-      const updated = new Set();
-      for (const {cells,node,page} of rows) {
-        const identifier=nvPublicRow(cells).identifier;
-        if(updated.has(identifier))continue;
-        updated.add(identifier);
-        nvObserved.set(identifier,{...nvObserved.get(identifier),node,page});
-      }
     }
     let current = nvObserved.get(query.identifier);
     if (!current || current.name !== target.name || current.entity_type !== target.entity_type) throw new Error("REGISTRY_NV_DETAIL_CHANGED");
@@ -2113,15 +2155,20 @@
       const maximum=m.query?.operation==='search'?150000:45000;
       const deadline = Date.now() + Math.min(maximum, Number.isFinite(m.budgetMs) && m.budgetMs > 0 ? m.budgetMs : 45000);
       nvDiagnosticId=typeof m.diagnosticId==='string' && /^[a-zA-Z0-9_-]{16,80}$/.test(m.diagnosticId)?m.diagnosticId:null;
+      const returnDiagnostic = {replay_clicks:0};
       try {
-        const evidence = m.query?.operation === 'search' ? await wfcAwait("content:handle:1910:59",()=>(nvSearch(m.query,deadline))) : await wfcAwait("content:handle:1910:94",()=>(nvDetail(m.query,deadline,{skipHistory:m.skipHistory===true})));
+        const evidence = m.query?.operation === 'search' ? await wfcAwait("content:handle:1910:59",()=>(nvSearch(m.query,deadline))) : await wfcAwait("content:handle:1910:94",()=>(nvDetail(m.query,deadline,{skipHistory:m.skipHistory===true,returnDiagnostic})));
         // Piggyback only this completed detail's metadata. Failure to collect
         // optional pixels must never change the successful registry evidence.
         let nv_snapshot_metadata;
         if(m.includeSnapshotMetadata===true&&m.query?.operation==='detail'&&nvDiagnosticId&&evidence?.complete===true) {
           try {nv_snapshot_metadata=await wfcAwait("content:handle:1915:36",()=>(snapshotNvAfterVisualReady(m.query,nvDiagnosticId,deadline,m.captureDeadline)));} catch {}
         }
-        return {ok:true,evidence,...(nv_snapshot_metadata?{nv_snapshot_metadata}:{})};
+        return {ok:true,evidence,...(nv_snapshot_metadata?{nv_snapshot_metadata}:{}),
+          ...(returnDiagnostic.result ? {nv_readiness:{return_to_results:returnDiagnostic}} : {})};
+      } catch (error) {
+        if (returnDiagnostic.result) error.nvReturnDiagnostic = returnDiagnostic;
+        throw error;
       } finally {nvDiagnosticId=null;}
     }
     if (m.action === "registry-il" && IL) {
@@ -2716,7 +2763,8 @@ try {
         &&code==='REGISTRY_RESPONSE_INCOMPLETE'&&msLastDiagnostic?.detail?.click_dispatched
         &&msLastDiagnostic.detail.empty_dialog===true;
       reply({ok:false,reason:(msDetailUnavailable?'NY_CONNECTOR_MS_DETAIL_UNAVAILABLE':trialReason) || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
-        ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState}} : {}),
+        ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState,
+          ...(error.nvReturnDiagnostic ? {return_to_results:error.nvReturnDiagnostic} : {})}} : {}),
         ...(MS ? {ms_diagnostic:{...msLastDiagnostic,source_error:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'}} : {}),
         ...(TN ? {tn_diagnostics:tnLastDiagnostics} : {}),
         ...(TN&&code==='REGISTRY_TN_RATE_LIMITED'&&Number.isSafeInteger(error.retryAfterMs)&&error.retryAfterMs>=0?{tn_retry_after_ms:error.retryAfterMs}:{}),
