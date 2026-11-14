@@ -8086,6 +8086,18 @@ def final_four_search_candidate_scores(name, ein, state, row):
     return candidates
 
 
+def weak_candidate_in_different_region(org, row, candidates, expected_region):
+    """Leave exact/reviewed identities and records without an office in scope."""
+    region = str(row.get("region", "")).upper()
+    return (re.fullmatch(r"[A-Z]{2}", expected_region or "") is not None
+            and re.fullmatch(r"[A-Z]{2}", region) is not None and region != expected_region
+            and not row.get("ein") and not row.get("_al_multiple_addresses") and bool(candidates)
+            and all(score["decision"] != "accepted" for score in candidates)
+            and all(normalized_match_name(name) != normalized_match_name(target)
+                    for name in [row["name"], *row.get("aliases", [])]
+                    for target in [org.organization_name, *known_names_for_ein(org.ein)]))
+
+
 def prioritized_registry_candidates(name, ein, state, rows):
     """Read the strongest observed identity first without accepting or omitting it.
 
@@ -8262,6 +8274,21 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 names.extend(nc_retrieval_coverage.get(name, []))
         for probe, names in covering_names.items():
             nc_retrieval_coverage.setdefault(probe, []).extend(names)
+    if (state == "NC" and trial_identity() and not nc_specific_names
+            and len(distinctive_match_tokens(org.organization_name)) < 2
+            and literal_name_retrieval_forms(org.organization_name)
+            and literal_name_retrieval_forms(org.organization_name)[0].casefold() != org.organization_name.casefold()
+            and required and all(name.casefold() != org.organization_name.casefold() for name in required)):
+        exact_primary = [org.organization_name, *(
+            name for name in nc_reviewed_identity_names
+            if normalized_match_name(name) == normalized_match_name(org.organization_name)
+            and literal_name_retrieval_forms(name)
+            and literal_name_retrieval_forms(name)[0].casefold() != name.casefold()
+            and not re.search(r"[,;]", name))]
+        exact_primary = list(dict.fromkeys(exact_primary))
+        exact_keys = {name.casefold() for name in exact_primary}
+        required = exact_primary + [name for name in required if name.casefold() not in exact_keys]
+        generated = [name for name in generated if name.casefold() not in exact_keys]
     records, seen = [], set()
     unreviewed_scope = False
     missing_nv_business_id = False
@@ -8294,6 +8321,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         if trial_identity():
             required, nv_promoted = nv_order_covering_searches(required, generated)
     nv_empty_phrase = ""
+    primary_region = ""
     for index, name in enumerate(required + generated):
         if nv_empty_phrase and name.isascii() and nv_empty_phrase.lower() in name.lower():
             if index < len(required) and name not in nv_promoted:
@@ -8411,6 +8439,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             # exact legal/EIN match before plausible affiliates; do not skip
             # any other qualifying row or change its acceptance threshold.
             rows = prioritized_registry_candidates(org.organization_name, org.ein, state, rows)
+        if state == "NC" and trial_identity() and len(distinctive_match_tokens(org.organization_name)) < 2:
+            rows = prioritized_registry_candidates(org.organization_name, org.ein, state, rows)
         if state == "NV" and trial_identity():
             # Capture exact primary records before affiliates can consume the
             # browser's evidence allowance. Selection still evaluates all rows.
@@ -8440,6 +8470,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     ("completed_all_words" if all_words_phrase else "completed_starts_with"):
                         all_words_phrase or name}
                     for reviewed in nc_retrieval_coverage.get(name, []))
+        # A verified primary office can disqualify weak Tennessee candidates
+        # with visibly different origins. Keep every reviewed name and EIN.
         for row in rows:
             if row["identifier"] in seen:
                 continue
@@ -8454,6 +8486,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 row["_review_minor_typo"] = True
                 candidates.append({"decision": "possible", "score": 55,
                                    "reason": "MATCH_SINGLE_TOKEN_TYPO_REVIEW"})
+            if (primary_region and weak_candidate_in_different_region(org, row, candidates, primary_region)
+                    and not any(item["reason"] == "REVIEW_TN_HISTORICAL_NAME" for item in candidates)):
+                continue
             if not candidates or all(c["decision"] == "rejected" for c in candidates):
                 seen.add(row["identifier"])
                 continue
@@ -8593,6 +8628,12 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                         seen.add(row["identifier"])
                         continue
             records.append(record); seen.add(row["identifier"])
+            if (state == "TN" and not primary_region and trial_identity()
+                    and len(distinctive_match_tokens(org.organization_name)) < 2
+                    and normalized_match_name(record["name"]) == normalized_match_name(org.organization_name)
+                    and record["status"] in {"Current", "Upcoming Filing", "Exempt"}
+                    and licensed_charity_street_evidence(org, record, deadline).get("decision") == "corroborated"):
+                primary_region = record["region"]
         if state == "NC" and trial_identity() and records:
             selected, review = select_licensed_charity(org, records, state, deadline)
             uncovered = [target for target in nc_reviewed_identity_names
@@ -9397,7 +9438,8 @@ def al_completed_candidates_for_review(record):
                     continue
                 row["_identity_outcome"] = "possible"
                 retained[key] = row
-        return list(retained.values())
+        return al_prioritize_plausible_office(
+            checker.Organization(record["organization_name"], record["ein"]), list(retained.values()))
     finally:
         REVIEWED_NAME_CONTEXT.reset(token)
 
@@ -10789,6 +10831,21 @@ def licensed_charity_identity(org, row, state, deadline):
                  for name in names if name]
     decision, matched_name = max(decisions, key=lambda item: item[0]["score"])
     row["match"] = decision
+    if state == "DC" and row.get("_dc_generic_office_conflict"):
+        row["address_evidence"] = row["_dc_generic_office_conflict"]
+        row["match"] = {"score": 0, "decision": "rejected", "reason": "DIFFERENT_EIN_CORROBORATED"}
+        return "rejected"
+    if state == "DC" and row.get("_dc_generic_namesake"):
+        row["match"] = {"score": 0, "decision": "rejected", "reason": "DC_WEAK_NAME_OFFICE_CONFLICT"}
+        return "rejected"
+    if state == "DC" and row.get("_dc_generic_local_name") and not row.get("_user_identity_decision"):
+        if not (proof := licensed_charity_street_evidence(org, row, deadline)):
+            row["address_evidence"] = {"decision": "unavailable", "basis":
+                "The short District license label and its local premises do not independently identify the requested EIN."}
+            row["match"] = {"score": 55, "decision": "possible", "reason": "DC_SHORT_LOCAL_NAME"}
+            return "possible"
+        row["address_evidence"] = proof
+        return "accepted"
     if row.get("_user_identity_decision") == "accept" and not (
             row.get("ein") and canonical_ein_digits(row["ein"]) != canonical_ein_digits(org.ein)):
         row["match"] = {"decision": "accepted", "score": 100, "reason": "USER_CONFIRMED_IDENTITY"}
@@ -11084,6 +11141,31 @@ def licensed_same_legal_dba_records(rows):
     return len(rows) > 1 and explicit_dba and len(keys) == 1 and len(eins) <= 1
 
 
+def al_prioritize_plausible_office(org, rows, deadline=None):
+    """For generic names, prefer the review candidate at the verified office."""
+    if len(distinctive_match_tokens(org.organization_name)) >= 2 or len(rows) < 2:
+        return rows
+    ein = canonical_ein_digits(org.ein)
+    sources = [identity_cached_source_result(source, ein) or {} for source in ("CA", "CO", "IRS")]
+    offices = discovered_organization_addresses(ein, sources)
+    if not any(row["street"] for row in offices) and deadline and deadline - time.monotonic() > 2:
+        try:
+            irs = identity_irs_names(ein, min(deadline, time.monotonic() + 3), latest_only=True)
+            offices = discovered_organization_addresses(ein, [irs])
+        except (OSError, TimeoutError, TypeError, ValueError):
+            pass
+    addresses = {(registry_street_key(row["street"]), row["state"].upper(), row["postal_code"][:5])
+                 for row in offices if row["street"]}
+    for row in rows:
+        office = (registry_street_key(row.get("street")), row.get("region", "").upper(),
+                  str(row.get("postal_code", ""))[:5])
+        if office in addresses and re.match(r"^\d+ ", office[0]) and re.fullmatch(r"\d{5}", office[2]):
+            return [candidate for candidate in rows if not weak_candidate_in_different_region(
+                org, candidate, final_four_search_candidate_scores(org.organization_name, org.ein, "AL", candidate),
+                office[1])]
+    return rows
+
+
 def select_licensed_charity(org, rows, state, deadline):
     """Evaluate the full candidate set, then prefer a live record of the same entity.
 
@@ -11198,6 +11280,8 @@ def dc_corroborated_result_match(result):
 
 
 def licensed_charity_result(org, state, rows, deadline, source, *, freshness=""):
+    if state == "AL" and trial_identity():
+        rows = al_prioritize_plausible_office(org, rows, deadline)
     result = checker.StateResult(org.organization_name, format_ein(org.ein), state, "Not Registered", source)
     result.status_reason = "LICENSED_CHARITY_SOURCE"
     selected, review = select_licensed_charity(org, rows, state, deadline)
@@ -11276,7 +11360,10 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
         if excluded:
             result.identity_evidence = {"excluded_records": [{"name": r["name"], "identifier": r["identifier"],
                 **r["address_evidence"]} for r in excluded]}
-            result.source_note += " Related records were excluded after their full names and office addresses were corroborated against different EINs in Colorado's official charity records."
+            if any(r["address_evidence"].get("source") == "IRS" for r in excluded):
+                result.source_note += " Related records were excluded where their names and offices matched separate EINs in federal tax filings or public state records."
+            else:
+                result.source_note += " Related records were excluded after their full names and office addresses were corroborated against different EINs in Colorado's official charity records."
     if freshness:
         result.source_note += " " + freshness
     return result
@@ -11289,6 +11376,55 @@ def licensed_charity_failure(org, state, source, exc):
     result.raw_status_text = str(exc)[:250]
     log_error(f"{state} public license lookup {format_ein(org.ein)} incomplete: {type(exc).__name__}: {str(exc)[:160]}")
     return result
+
+
+def dc_irs_office_conflict(org, row, deadline, cache):
+    """Identify a different filer only from its complete name and street address."""
+    region = row.get("region", "").upper()
+    postal = str(row.get("postal_code", ""))[:5]
+    street = registry_street_key(row.get("street"))
+    name = row["name"]
+    key = public_filer_name_key(name)
+    if (not re.fullmatch(r"[A-Z]{2}", region) or not re.fullmatch(r"\d{5}", postal)
+            or not re.match(r"^\d+ ", street) or len(key.split()) < 2):
+        return {}
+    binding = (key, region, postal, street)
+    if binding in cache:
+        return cache[binding]
+    cache[binding] = {}
+    deadline = min(deadline, time.monotonic() + 4)
+    lookup = "https://projects.propublica.org/nonprofits/api/v2/search.json?" + urlencode(
+        {"q": '+"' + key + '"', "state[id]": region})
+    try:
+        data = json.loads(identity_fetch(lookup, deadline, request_timeout=2))
+        candidates = data.get("organizations")
+        if not isinstance(candidates, list) or data.get("total_results") != len(candidates):
+            return {}
+        eins = {canonical_ein_digits(str(candidate.get("ein", "")).zfill(9)) for candidate in candidates
+                if candidate.get("state", "").upper() == region
+                and public_filer_name_key(candidate.get("name", "")) == key}
+        requested = canonical_ein_digits(org.ein)
+        if len(eins) != 1 or requested in eins:
+            return {}
+        ein = next(iter(eins))
+        if not re.fullmatch(r"\d{9}", ein):
+            return {}
+        irs = identity_irs_names(ein, deadline, latest_only=True)
+        filer = irs.get("filer_address") or {}
+        filing_street = registry_street_key(filer.get("street"))
+        if (filer.get("ein") != ein or filer.get("state", "").upper() != region
+                or str(filer.get("zipcode", ""))[:5] != postal
+                or not (street == filing_street or re.fullmatch(
+                    re.escape(filing_street) + r" (?:STE |SUITE |UNIT )?\d+[A-Z]?", street))
+                or not any(item.get("verified") and public_filer_name_key(item.get("name", "")) == key
+                           for item in irs.get("names", []))):
+            return {}
+        cache[binding] = {"decision": "different_ein", "ein": ein, "source": "IRS",
+                          "source_url": filer.get("source_url", ""),
+                          "basis": "The full registry name and office match a different EIN's IRS filing."}
+        return cache[binding]
+    except (AttributeError, OSError, TimeoutError, TypeError, ValueError):
+        return {}
 
 
 def dc_license_query_patterns(names):
@@ -11396,20 +11532,59 @@ def dc_charity_records(org, deadline, query_patterns=None):
         for receipt in history_receipts:receipt.incomplete()
 
 
+def dc_screen_generic_candidates(org, rows, deadline):
+    """Check a short local label against IRS office evidence before matching."""
+    cache = {}
+    requested = canonical_ein_digits(org.ein)
+    try:
+        irs = identity_irs_names(requested, min(deadline, time.monotonic() + 3), latest_only=True)
+    except (AttributeError, OSError, TimeoutError, TypeError, ValueError):
+        irs = {}
+    filer = irs.get("filer_address") or {}
+    filer_region = filer.get("state", "").upper() if filer.get("ein") == requested else ""
+    primary_key = normalized_match_name(org.organization_name)
+    primary_words = len(re.findall(r"[a-z0-9]+", org.organization_name.casefold().removeprefix("the ")))
+    for row in rows:
+        # Check only possible local identities. All other rows keep their
+        # existing rules, including matching credentials at different offices.
+        scores = [score_candidate(org.organization_name, org.ein, {"name": name, "ein": row.get("ein", "")})
+                  for name in [row["name"], *row.get("aliases", [])] if name]
+        if all(score["decision"] == "rejected" for score in scores):
+            continue
+        if row.get("location") and weak_candidate_in_different_region(org, row, scores, filer_region):
+            row["_dc_generic_namesake"] = True
+            continue
+        if row.get("location") or row.get("region") != "DC" or row.get("ein"):
+            continue
+        if len(cache) < 4 and deadline - time.monotonic() > 2:
+            row["_dc_generic_office_conflict"] = dc_irs_office_conflict(org, row, deadline, cache)
+        row["_dc_generic_local_name"] = (
+            bool(primary_key) and normalized_match_name(row["name"]) == primary_key
+            and len(re.findall(r"[a-z0-9]+", row["name"].casefold().removeprefix("the "))) < primary_words)
+
+
 def search_dc(org):
     # Keep both existing recoverable read windows plus their half-second pause.
     # This allowance is shared across the full lookup, never reset per page.
     deadline = time.monotonic() + 35.5
     primary_completed = False
+    generic_core = False
     try:
         # Complete primary-name spelling first. Never collapse it into a
         # generated one-word predicate before the first source request.
         primary = literal_name_retrieval_forms(org.organization_name)[:1]
-        patterns = dc_license_query_patterns(primary)
         required, generated = licensed_charity_names(org)
+        generic_core = bool(trial_identity()) and len(distinctive_match_tokens(org.organization_name)) < 2
         fallback = dc_license_query_patterns(required + generated)
+        if generic_core:
+            # The short primary would repeat the broad fallback. Submit their
+            # full union once and evaluate each returned license once.
+            fallback = dc_license_query_patterns(primary + required + generated)
+        patterns = fallback if generic_core else dc_license_query_patterns(primary)
         rows, freshness = dc_charity_records(org, deadline, patterns)
         primary_completed = True
+        if generic_core:
+            dc_screen_generic_candidates(org, rows, deadline)
         result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         selected = getattr(result, "_cc_license_record", {})
         if patterns != fallback and not (result.success and not getattr(result, "_cc_identity_review", None)
@@ -11425,6 +11600,9 @@ def search_dc(org):
         return result
     except Exception as exc:
         result = licensed_charity_failure(org, "DC", DC_LICENSE_API, exc)
+        if generic_core and type(exc) is TimeoutError:
+            result.source_note = ("D.C. returned candidate licenses, but their identities could not all be checked "
+                                  "within the allowed time. No registration was confirmed.")
         if isinstance(exc, DcLicenseSourceUnavailable) and not primary_completed:
             result.status = "Site Not Reachable"
             result.reason_code = "DC_LICENSE_SOURCE_UNREACHABLE"

@@ -1340,7 +1340,8 @@ async function performRegistryQuery(job, query) {
     // Keep one ordinary search form through the same organization's fallbacks.
     // Reloading for every name repeatedly discards normal page readiness and
     // verification. The content handler clears all public filters each time.
-    // A previously opened detail or failed command still requires a fresh form.
+    // Close a completed detail before the next query. A failed command
+    // still requires the existing fresh-form recovery.
     if (job.tab === null || !job.ilReusableForm) await wfAwait(job,"registry-worker.js:performRegistryQuery:1164:49:await",()=>(registryNavigate(job, registryStart("IL"))));
     else await wfAwait(job,"registry-worker.js:performRegistryQuery:1165:9:await",()=>(registryReady(job,null,"/search")));
     job.ilReusableForm = false;
@@ -1359,13 +1360,14 @@ async function performRegistryQuery(job, query) {
     let result = await wfAwait(job,"registry-worker.js:performRegistryQuery:1179:17:await",()=>(collect(0)));
     if (result?.reason === "NY_CONNECTOR_IL_VERIFICATION_PENDING") {
       result = await wfAwait(job,"registry-worker.js:performRegistryQuery:1181:15:await",()=>(registryIllinoisVerification(job, collect)));
-      job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
+      job.ilReusableForm = result?.ok === true;
       return wfReturn(job,"registry-worker.js:performRegistryQuery:1183:6:return",(result));
     }
     // One fresh-form retry for a search that never completed or an unopened
     // detail. Loaded records with absent dates are complete evidence.
     const retryable = ["NY_CONNECTOR_IL_FORM_READY_TIMEOUT", "NY_CONNECTOR_IL_FORM_DISABLED", "NY_CONNECTOR_IL_FORM_MISSING", "NY_CONNECTOR_IL_RESPONSE_TIMEOUT",
-      "NY_CONNECTOR_IL_DETAIL_NOT_OPENED", "NY_CONNECTOR_IL_DETAIL_BLANK", "NY_CONNECTOR_IL_DETAIL_RESPONSE_TIMEOUT"];
+      "NY_CONNECTOR_IL_DETAIL_NOT_OPENED", "NY_CONNECTOR_IL_DETAIL_BLANK", "NY_CONNECTOR_IL_DETAIL_RESPONSE_TIMEOUT",
+      "NY_CONNECTOR_IL_DETAIL_NOT_CLOSED"];
     if (retryable.includes(result?.reason) && job.activeExpiresAt-Date.now()>50000) {
       diagnostic("il-public-retry",job,result.reason);
       await wfAwait(job,"registry-worker.js:performRegistryQuery:1191:6:await",()=>(registryNavigate(job, registryStart("IL"))));
@@ -1373,7 +1375,7 @@ async function performRegistryQuery(job, query) {
       if (result?.reason === "NY_CONNECTOR_IL_VERIFICATION_PENDING")
         result = await wfAwait(job,"registry-worker.js:performRegistryQuery:1194:17:await",()=>(registryIllinoisVerification(job, collect)));
     }
-    job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
+    job.ilReusableForm = result?.ok === true;
     return wfReturn(job,"registry-worker.js:performRegistryQuery:1197:4:return",(result));
   }
   if (Object.hasOwn(query,"identifier")) {

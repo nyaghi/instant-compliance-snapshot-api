@@ -147,10 +147,24 @@
       throw new Error(!visible(d)?'NY_CONNECTOR_IL_DETAIL_NOT_OPENED':!text(d)?'NY_CONNECTOR_IL_DETAIL_BLANK':readDetail()?'NY_CONNECTOR_IL_DETAIL_RESPONSE_TIMEOUT':'NY_CONNECTOR_IL_DETAIL_IDENTITY_INCOMPLETE');
     }
   }
+  async function ilReturnToSearch() {
+    const dialog = document.querySelector('#KendoWindowLevel1');
+    if (!visible(dialog)) return;
+    const controls = [...dialog.parentElement.querySelectorAll('button[aria-label="Close"], a[aria-label="Close"]')]
+      .filter(control => visible(control) && !control.disabled);
+    if (controls.length !== 1) throw new Error('NY_CONNECTOR_IL_DETAIL_NOT_CLOSED');
+    try {
+      await wait(() => !visible(document.querySelector('#KendoWindowLevel1')), 1500,
+        {action: () => controls[0].click()});
+    } catch {
+      throw new Error('NY_CONNECTOR_IL_DETAIL_NOT_CLOSED');
+    }
+  }
   async function illinois(query, trace = () => {}, formWaitMs = 45000) {
     const inputs = key => document.querySelector(`input[data-val-property-name="${key}"]`);
     const phase = name => (event, elapsed_ms) => trace({phase:name, event, elapsed_ms,
       visibility:document.visibilityState || "unknown"});
+    await ilReturnToSearch();
     if(query.identifier) {
       const existing=ilSelectedVisibleRow(query);
       if(existing)return ilOpenSelectedDetail(query,existing,phase('detail'));
@@ -2797,7 +2811,7 @@ try {
       const msDetailUnavailable=MS&&m.action==='registry-ms'&&m.query?.operation==='detail'
         &&code==='REGISTRY_RESPONSE_INCOMPLETE'&&msLastDiagnostic?.detail?.click_dispatched
         &&msLastDiagnostic.detail.empty_dialog===true;
-      reply({ok:false,reason:(msDetailUnavailable?'NY_CONNECTOR_MS_DETAIL_UNAVAILABLE':trialReason) || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
+      reply({ok:false,reason:(msDetailUnavailable?'NY_CONNECTOR_MS_DETAIL_UNAVAILABLE':trialReason) || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|NOT_CLOSED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
         ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState,
           ...(error.nvReturnDiagnostic ? {return_to_results:error.nvReturnDiagnostic} : {})}} : {}),
         ...(MS ? {ms_diagnostic:{...msLastDiagnostic,source_error:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'}} : {}),
