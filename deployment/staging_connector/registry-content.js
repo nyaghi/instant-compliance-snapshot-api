@@ -337,26 +337,44 @@
     const combos=[...document.querySelectorAll('[role="combobox"]')].filter(el=>el.querySelector('select[name="data[searchType]"]'));
     if (combos.length!==1) throw new Error('REGISTRY_NV_FORM_CHANGED');
     const combo=combos[0];
-    const option=await wfcAwait("content:nvSelectSearchMode:327:17",()=>(wait(()=>{
-      const label=nvSearchModes[mode];
-      const options=[...combo.querySelectorAll('[role="option"]')].filter(el=>el.getAttribute('data-value')===mode
-        && (el.textContent||'').replace(/\s+/g,' ').trim()===label && el.getAttribute('aria-disabled')!=='true');
+    const optionFor = control => {
+      const options=[...control.querySelectorAll('[role="option"]')].filter(el=>el.getAttribute('data-value')===mode
+        && (el.textContent||'').replace(/\s+/g,' ').trim()===nvSearchModes[mode] && el.getAttribute('aria-disabled')!=='true');
       return options.length===1&&options[0];
-    },Math.max(1,Math.min(3000,deadline-Date.now()))).catch(error=>{
-      if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_MENU_INCOMPLETE');
-      throw error;
-    })));
-    // The ordinary public choice is present in the collapsed dropdown's DOM.
-    // Choices selects on mousedown; opening its animated menu is unnecessary.
-    // A subsequent click can reopen that menu after selection and race the
-    // next search. Select the labelled option once and verify the rendered
-    // value. No Choices instance, application state or private API is used.
-    await wfcAwait("content:nvSelectSearchMode:341:4",()=>(wait(()=>nvSearchModeSelected(mode),Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>{
-      option.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,view:window}));
-    },settle:200,sameCandidate:(prior,current)=>prior===current}).catch(error=>{
-      if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_NOT_SELECTED');
-      throw error;
-    })));
+    };
+    const option=await wfcAwait("content:nvSelectSearchMode:327:17",()=>(wait(()=>optionFor(combo),
+      Math.max(1,Math.min(3000,deadline-Date.now()))).catch(error=>{
+        if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_MENU_INCOMPLETE');
+        throw error;
+      })));
+    const modeDeadline=Math.min(deadline,Date.now()+3000);
+    const select=choice=>choice.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,view:window}));
+    const confirm=(choice,ms)=>wait(()=>nvSearchModeSelected(mode),ms,{
+      action:()=>select(choice),settle:200,sameCandidate:(prior,current)=>prior===current
+    });
+    try {
+      await wfcAwait("content:nvSelectSearchMode:341:4",()=>confirm(option,Math.max(1,Math.min(1000,modeDeadline-Date.now()))));
+    } catch(error) {
+      if(error.message!=='REGISTRY_RESPONSE_INCOMPLETE')throw error;
+      if(nvSearchModeSelected(mode))return;
+      if(Date.now()>=modeDeadline)throw new Error('REGISTRY_NV_MODE_NOT_SELECTED');
+      try {
+        // ORION can ignore a collapsed option. Open the public menu once,
+        // find its visible option after any redraw, then verify selection.
+        const openOption=await wait(()=>{
+          const control=[...document.querySelectorAll('[role="combobox"]')]
+            .find(el=>el.querySelector('select[name="data[searchType]"]') && el.getAttribute('aria-expanded')==='true');
+          const choice=control&&optionFor(control);
+          return visible(choice)&&choice;
+        },Math.max(1,Math.min(700,modeDeadline-Date.now())),{action:()=>{
+          if(combo.getAttribute('aria-expanded')!=='true')combo.click();
+        }});
+        await confirm(openOption,Math.max(1,modeDeadline-Date.now()));
+      } catch(error) {
+        if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_NOT_SELECTED');
+        throw error;
+      }
+    }
     nvTrace('mode-selected',{mode});
   }
   function nvPublicRow(cells) {

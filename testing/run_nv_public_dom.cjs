@@ -89,7 +89,7 @@ test('Nevada visible inputs and search type are not ready while the initial load
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,returnAttribute=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,resetOnReturn=false,transientBlankMs=0,replayButtonDelay=0,idResult=null,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false,exactRows=null,ignoreModeChange=false,ignoredDetailClicks=0,changedDetailQuery=false,detailRenderDelay=0}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,returnAttribute=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,resetOnReturn=false,transientBlankMs=0,replayButtonDelay=0,idResult=null,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false,exactRows=null,ignoreModeChange=false,requireOpenMode=false,ignoredDetailClicks=0,changedDetailQuery=false,detailRenderDelay=0}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true,returnResultsClicks=0,returnSearchClicks=0;
  let pageSize=initialPageSize,sizeMenu=false,resizeClicks=0,detailClicks=0;
  const broadRows=rows;const submitted=[];let searchMode='STARTS_WITH',modeMenu=false,modeClicks=0,pagingClicks=0;
@@ -119,13 +119,14 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const textEl=innerText=>({innerText});
  const labels={STARTS_WITH:'Starts With',EXACT_MATCH:'Exact Match',CONTAINS:'Contains'};
  const searchCombo={get innerText(){return labels[searchMode];},
+  getAttribute:k=>k==='aria-expanded'?String(modeMenu):null,
   querySelector:q=>q==='select[name="data[searchType]"]'?{}:null,
   click:()=>{modeMenu=true;mutate();},querySelectorAll:q=>q==='[role="option"]'?Object.keys(labels).map(mode=>({
     textContent:labels[mode],
     getAttribute:k=>k==='data-value'?mode:null,getClientRects:()=>modeMenu?[{}]:[],click:()=>{modeMenu=!modeMenu;mutate();},
     dispatchEvent:event=>{
       if(event.type!=='mousedown'||!event.bubbles||event.button!==0)return;
-      modeClicks++;modeMenu=false;if(!ignoreModeChange)searchMode=mode;mutate();
+      modeClicks++;if(requireOpenMode&&!modeMenu)return;modeMenu=false;if(!ignoreModeChange)searchMode=mode;mutate();
     }})):[]};
  const backButton={innerText:'Return To Results',getClientRects:()=>[{}],click:()=>{
   detail=false;formReady=false;context.location.hash='screen=external-GenericFilingsSearch&tabRoute=business';mutate();
@@ -284,6 +285,12 @@ test('Nevada changes the public mode without opening or reopening the animated m
  await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
  assert.equal(h.mode,'EXACT_MATCH');assert.equal(h.modeMenuOpen,false);
  await h.search();assert.equal(h.mode,'STARTS_WITH');assert.equal(h.modeMenuOpen,false);
+});
+test('Nevada opens the public menu once when a collapsed option is ignored',async()=>{
+ const h=fixture({rows:manyPublicRows(57),exactRows:manyPublicRows(17),initialPageSize:25,requireOpenMode:true});
+ const result=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
+ assert.equal(result.broad_total,57);assert.equal(result.total,17);
+ assert.equal(result.search_mode,'EXACT_MATCH');assert.equal(h.modeClicks,2);assert.equal(h.clicks,2);
 });
 test('Nevada refuses a mode option with a changed public label or disabled state',async()=>{
  for(const changed of ['label','disabled']){
