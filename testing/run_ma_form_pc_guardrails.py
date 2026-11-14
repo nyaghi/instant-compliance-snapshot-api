@@ -1,4 +1,5 @@
 """MA submitted fiscal-period regression tests; offline tooling only."""
+import json
 import sys
 import time
 import unittest
@@ -193,7 +194,7 @@ class MassachusettsTests(unittest.TestCase):
                 "Employer_Idendification_Number_EIN__c": ein, "Charity_Status__c": "Registered"}]}}]}
             evidence = {}
             cc.ma_capture_completed_response(response, org, evidence)
-            self.assertEqual(bool(evidence), ein == "123456789" and state == "SUCCESS")
+            self.assertEqual("record" in evidence, ein == "123456789" and state == "SUCCESS")
 
     def test_only_all_filings_success_can_confirm_empty(self):
         import json
@@ -292,6 +293,38 @@ class MassachusettsSelectionTests(unittest.TestCase):
             self.assertEqual(result.status_reason, "MA_FILING_LIST_UNCONFIRMED")
             self.assertIn("incomplete lookup", cc.comments_for_result(result, body, result.status))
             self.assertEqual(cc.source_note_for_result(result), result.source_note)
+
+    def test_selected_state_tax_id_conflict_ends_wait_without_classifying_filing(self):
+        completed = {}
+        page, _ = self.page(completed, finish=False)
+        click = page.get_by_role.return_value.click.side_effect
+
+        def click_and_observe(**kwargs):
+            click(**kwargs)
+            if page.get_by_role.return_value.click.call_count != 3:
+                return
+            response = Mock(url="https://masscharities.my.site.com/FilingSearch/s/sfsites/aura")
+            from urllib.parse import urlencode
+            response.request.post_data = urlencode({"message": json.dumps({"actions": [{
+                "id": "1", "params": {"classname": "AeS_Apex_Controller_Class",
+                    "method": "get_CharityInfo", "params": {"recID": "right"}},
+            }]})})
+            response.json.return_value = {"actions": [{"id": "1", "state": "SUCCESS",
+                "returnValue": {"returnValue": [{"Id": "right", "AGO_Charity_Number__c": "040659",
+                    "Organization_Name__c": "Example Foundation",
+                    "Employer_Idendification_Number_EIN__c": "40428-30242"}]}}]}
+            cc.ma_capture_completed_response(response, self.org, completed)
+
+        page.get_by_role.return_value.click.side_effect = click_and_observe
+        with patch.object(cc, "registry_page_body", side_effect=["No Charity Found", "Select a Charity", "AG Account Number 040659"]), \
+             patch.object(cc, "ma_read_latest_form_pc") as read:
+            result, body = cc.search_ma_master(page, self.org, completed)
+        read.assert_not_called()
+        page.wait_for_timeout.assert_called_once()
+        self.assertEqual(cc.true_status_from_body(result, body), "Unable to Confirm")
+        self.assertEqual(result.status_reason, "MA_SOURCE_TAX_ID_CONFLICT")
+        self.assertIn("40428-30242", cc.source_note_for_result(result))
+        self.assertIn("12-3456789", cc.source_note_for_result(result))
 
     def test_clean_no_record_and_timeout_are_distinct(self):
         for fail in (False, True):

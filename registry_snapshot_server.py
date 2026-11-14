@@ -21992,6 +21992,15 @@ def search_ma_master(page, org, completed):
                 except Exception:
                     pass
                 return result, body
+            conflict = completed.get("tax_id_conflict", {})
+            if conflict.get("record_id") == candidate["value"]:
+                body = registry_page_body(page)
+                return incomplete(
+                    "MA_SOURCE_TAX_ID_CONFLICT",
+                    f"Massachusetts account {conflict['ago_account']} displays Tax ID "
+                    f"{conflict['source_tax_id']}; the search used EIN {format_ein(requested_ein)}. "
+                    "The selected state record could not be verified for the entered EIN.",
+                )
             record = completed.get("record", {})
             account = record.get("ago_account")
             if (record.get("record_id") == candidate["value"] and account and account in completed.get("filings", {})
@@ -22281,8 +22290,17 @@ def ma_capture_completed_response(response, org, evidence: dict) -> None:
                 row = rows[0]
                 identity = score_candidate(org.organization_name, org.ein, {
                     "name": row.get("Organization_Name__c"), "ein": row.get("Employer_Idendification_Number_EIN__c")})
-                actual_ein = re.sub(r"\D", "", str(row.get("Employer_Idendification_Number_EIN__c") or ""))
+                source_tax_id = str(row.get("Employer_Idendification_Number_EIN__c") or "").strip()
+                actual_ein = re.sub(r"\D", "", source_tax_id)
                 expected_ein = re.sub(r"\D", "", org.ein or "")
+                source_name = str(row.get("Organization_Name__c") or "")
+                account = str(row.get("AGO_Charity_Number__c") or "")
+                if (row.get("Id") == query["recID"] and expected_ein and actual_ein != expected_ein
+                        and re.fullmatch(r"[0-9-]{9,16}", source_tax_id) and re.fullmatch(r"[0-9]{1,12}", account)
+                        and source_name and complete_name_identity_key(source_name) == complete_name_identity_key(org.organization_name)):
+                    evidence["tax_id_conflict"] = {
+                        "record_id": row["Id"], "ago_account": account, "source_tax_id": source_tax_id,
+                    }
                 if (row.get("Id") == query["recID"] and identity["decision"] == "accepted"
                         and (not expected_ein or actual_ein == expected_ein)):
                     evidence["record"] = {"record_id": row["Id"], "ago_account": str(row.get("AGO_Charity_Number__c") or ""),
@@ -31093,7 +31111,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return ("New York's registry did not complete the request within the available time or returned a temporary service error. "
                 "CharityClarity reports Unable to Confirm because the registry evidence could not be retrieved. "
                 "Retry the state later; this result does not establish delinquency or non-registration.")
-    if state == "MA" and reason in {"MA_CHARITY_SELECTION_UNCONFIRMED", "MA_FILING_LIST_UNCONFIRMED"}:
+    if state == "MA" and reason in {"MA_CHARITY_SELECTION_UNCONFIRMED", "MA_FILING_LIST_UNCONFIRMED", "MA_SOURCE_TAX_ID_CONFLICT"}:
         return result.source_note
     if (state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED"
             and getattr(result, "ma_filing_evidence", {}).get("wrong_filing_year")):
