@@ -285,7 +285,7 @@ test('master-authorized broad Nevada query switches to Exact Match before paging
  assert.equal(h.api.registryDocumentReady(),true);
 });
 test('Nevada changes the public mode without opening or reopening the animated menu',async()=>{
- const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25});
+ const h=fixture({rows:manyPublicRows(101),exactRows:[],initialPageSize:25});
  const combo=h.context.document.querySelectorAll('[role="combobox"]')[0];
  combo.click=()=>{throw Error('Opening the menu is unnecessary');};
  await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
@@ -293,13 +293,13 @@ test('Nevada changes the public mode without opening or reopening the animated m
  await h.search();assert.equal(h.mode,'STARTS_WITH');assert.equal(h.modeMenuOpen,false);
 });
 test('Nevada opens the public menu once when a collapsed option is ignored',async()=>{
- const h=fixture({rows:manyPublicRows(57),exactRows:manyPublicRows(17),initialPageSize:25,requireOpenMode:true});
+ const h=fixture({rows:manyPublicRows(101),exactRows:manyPublicRows(17),initialPageSize:25,requireOpenMode:true});
  const result=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
- assert.equal(result.broad_total,57);assert.equal(result.total,17);
+ assert.equal(result.broad_total,101);assert.equal(result.total,17);
  assert.equal(result.search_mode,'EXACT_MATCH');assert.equal(h.modeClicks,2);assert.equal(h.clicks,2);
 });
 test('Nevada reopens the attached search control after an ORION redraw',async()=>{
- const h=fixture({rows:manyPublicRows(57),exactRows:manyPublicRows(17),initialPageSize:25,requireOpenMode:true});
+ const h=fixture({rows:manyPublicRows(101),exactRows:manyPublicRows(17),initialPageSize:25,requireOpenMode:true});
  const doc=h.context.document, read=doc.querySelectorAll;
  const oldControl=read('[role="combobox"]')[0];
  const replacement=Object.defineProperties({},Object.getOwnPropertyDescriptors(oldControl));
@@ -316,12 +316,12 @@ test('Nevada reopens the attached search control after an ORION redraw',async()=
  const result=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
  assert.equal(result.search_mode,'EXACT_MATCH');assert.equal(result.total,17);assert.equal(h.clicks,2);
 });
-test('Nevada completes an unchanged small broad grid when Exact Match cannot be selected',async()=>{
+test('Nevada reads the complete 57-row grid without needing Exact Match',async()=>{
  const h=fixture({rows:manyPublicRows(57),exactRows:[],initialPageSize:25,ignoreModeChange:true,pageSizeControl:true});
  const result=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
  assert.equal(result.total,57);assert.equal(result.rows.length,57);
  assert.equal(result.search_mode,'STARTS_WITH');assert.equal(result.broad_total,null);
- assert.equal(h.clicks,1);
+ assert.equal(h.clicks,1);assert.equal(h.modeClicks,0);
  const capped=fixture({rows:manyPublicRows(101),initialPageSize:25,ignoreModeChange:true});
  await assert.rejects(capped.drive(capped.api.nvSearch(adaptiveQuery,capped.time+45000)),/MODE_NOT_SELECTED/);
  assert.equal(capped.clicks,1);
@@ -346,18 +346,18 @@ test('Nevada small result set stays Starts With and an ordinary command is never
  const h=fixture({rows:manyPublicRows(21),initialPageSize:25});assert.equal((await h.search()).total,21);assert.equal(h.modeClicks,0);
 });
 test('a second Nevada search explicitly resets Exact Match to Starts With before evaluating its threshold',async()=>{
- const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25});
+ const h=fixture({rows:manyPublicRows(101),exactRows:[],initialPageSize:25});
  const r=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));assert.equal(r.total,0);assert.equal(r.search_mode,'EXACT_MATCH');
- const ordinary=await h.search();assert.equal(ordinary.total,21);assert.equal(h.mode,'STARTS_WITH');assert.equal(h.modeClicks,2);
+ const ordinary=await h.search();assert.equal(ordinary.total,101);assert.equal(h.mode,'STARTS_WITH');assert.equal(h.modeClicks,2);
 });
 test('ignored Exact Match selection or absent fresh response is incomplete, never an empty successful result',async()=>{
  for(const opts of [{ignoreModeChange:true},{repeatSearchActivity:false}]){
-  const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25,...opts});
+  const h=fixture({rows:manyPublicRows(101),exactRows:[],initialPageSize:25,...opts});
   await assert.rejects(h.drive(h.api.nvSearch(adaptiveQuery,h.time+10000)),opts.ignoreModeChange?/MODE_NOT_SELECTED/:/NOT_STARTED/);
  }
 });
 test('exact-match detail navigation preserves the selected mode and only opens observed record identities',async()=>{
- const h=fixture({rows:manyPublicRows(21),exactRows:observed.slice(0,2),initialPageSize:25});
+ const h=fixture({rows:manyPublicRows(101),exactRows:observed.slice(0,2),initialPageSize:25});
  await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
  await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},h.time+45000));
  await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},h.time+45000));
@@ -642,9 +642,9 @@ test('healthy Nevada positive and zero responses retain their results below the 
 });
 test('Nevada broad and exact searches retain the original parent deadline',async()=>{
  const query={state:'NV',operation:'search',name:'ELI',exact_above:20};
- const f=fixture({rows:manyPublicRows(25),exactRows:[],responseDelay:10000});
+ const f=fixture({rows:manyPublicRows(101),exactRows:[],responseDelay:10000});
  const r=await f.drive(f.api.nvSearch(query,f.time+60000));assert.equal(r.total,0);assert.equal(r.search_mode,'EXACT_MATCH');assert.equal(f.clicks,2);
- const bounded=fixture({rows:manyPublicRows(25),exactRows:[],responseDelay:10000});
+ const bounded=fixture({rows:manyPublicRows(101),exactRows:[],responseDelay:10000});
  await assert.rejects(bounded.drive(bounded.api.nvSearch(query,bounded.time+15000)),/SEARCH_RESPONSE_TIMEOUT/);
  assert.equal(bounded.clicks,2);assert.ok(bounded.time<=16000);
 });
@@ -1005,7 +1005,7 @@ test('Nevada reuses the original list after a brief blank screen on return',asyn
 });
 
 test('Nevada reset reopens only the observed business ID after a slow remount',async()=>{
- const f=fixture({rows:manyPublicRows(21),exactRows:observed.slice(0,2),resetOnReturn:true,replayButtonDelay:3300});
+ const f=fixture({rows:manyPublicRows(101),exactRows:observed.slice(0,2),resetOnReturn:true,replayButtonDelay:3300});
  await f.drive(f.api.nvSearch(adaptiveQuery,f.time+45000));
  await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
  const returnDiagnostic={replay_clicks:0};
@@ -1038,7 +1038,7 @@ test('narrowed Nevada reservation reopens only by its observed entity number',as
   ["Children's Hospital",id,id,'Name Reservation','','10/18/2019','Expired']);
  for(const changed of [false,true]) {
   const resultRows=changed?[[...rows[1].slice(0,6),'Active']]:null;
-  const f=fixture({rows:manyPublicRows(57),exactRows:rows,reservation:true,resetOnReturn:true,
+  const f=fixture({rows:manyPublicRows(101),exactRows:rows,reservation:true,resetOnReturn:true,
                    initialPageSize:25,idResult:resultRows});
   await f.drive(f.api.nvSearch(adaptiveQuery,f.time+45000));
   await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:rows[0][1]},f.time+45000));

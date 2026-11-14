@@ -752,22 +752,14 @@
         throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
       return first;
     }
-    if (!replay && query.exact_above===20 && first.total>query.exact_above) {
-      const initial=first;
-      broadTotal=initial.total;searchMode='EXACT_MATCH';
-      nvTrace('search-narrowed',{name:query.name,broad_total:broadTotal,search_mode:searchMode});
-      try {
-        await wfcAwait("content:nvSearch:605:6",()=>(nvSelectSearchMode(searchMode,deadline)));
-      } catch(error) {
-        if(!['REGISTRY_NV_MODE_NOT_SELECTED','REGISTRY_NV_MODE_MENU_INCOMPLETE'].includes(error.message)
-            || initial.total>100 || !nvStartsWithSelected() || Date.now()>=deadline)throw error;
-        const current=nvPage('Search Results',nvSearchHeaders);
-        if(current.page!==initial.page || current.total!==initial.total
-            || JSON.stringify(current.values)!==JSON.stringify(initial.values))throw error;
-        searchMode='STARTS_WITH';broadTotal=null;first=current;
-        nvTrace('mode-fallback',{name:query.name,rows:current.total});
-      }
-      if(searchMode==='EXACT_MATCH')first=await wfcAwait("content:nvSearch:606:12",()=>(submit()));
+    // The completed prefix grid already covers Exact Match. Keep it when
+    // it fits in the public 100-row page; dropdown selection is only useful
+    // for larger grids. The full grid still passes the master identity checks.
+    if (!replay && query.exact_above===20 && first.total>100) {
+      broadTotal=first.total;searchMode='EXACT_MATCH';
+      nvTrace('search-narrowed',{name:query.name,broad_total:broadTotal,search_mode:searchMode,total:broadTotal});
+      await wfcAwait("content:nvSearch:605:6",()=>(nvSelectSearchMode(searchMode,deadline)));
+      first=await wfcAwait("content:nvSearch:606:12",()=>(submit()));
     }
     first = await wfcAwait("content:nvSearch:608:12",()=>(nvExpandSearchPage(first,deadline)));
     const collected = await wfcAwait("content:nvSearch:609:22",()=>(nvPages('Search Results', nvSearchHeaders, deadline, first)));

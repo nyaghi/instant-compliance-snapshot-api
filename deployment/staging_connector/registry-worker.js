@@ -641,10 +641,8 @@ async function registryMessage(job, message) {
   if(P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-ready'||message.action==='registry-tn'&&['search','detail'].includes(message.query?.operation)))
     return registryTnPendingDelivery(job,message,send);
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return wfReturn(job,"registry-worker.js:registryMessage:553:70:return",(send()));
-  // Keep the overall job deadline as the transport bound. A second timer at
-  // exactly the page's allowance races its normal timeout reply and prevents
-  // the existing bounded fresh-form recovery from running. Page observers
-  // retain their own allowances; a hung message cannot outlive this job.
+  // A hidden page can delay its own watchdog. Give it a small delivery
+  // reserve, then release an unanswered search within the original job budget.
   let timer, visibilityTimer, visibilityPending=null, previousVisible=null;
   let settled=false;
   // ORION's detail hydration can stall in a background tab. Keep the same
@@ -662,8 +660,10 @@ async function registryMessage(job, message) {
   },Math.min(3000,Math.max(1,job.activeExpiresAt-Date.now())));
   try {
     return wfReturn(job,"registry-worker.js:registryMessage:574:4:return",(await wfAwait(job,"registry-worker.js:registryMessage:574:11:await",()=>(Promise.race([send(),new Promise((_,reject)=>{
+      const remaining=job.activeExpiresAt-Date.now();
+      const allowance=message.query?.operation==='search'?message.budgetMs+1500:remaining;
       timer=setTimeout(()=>reject(new Error('NY_CONNECTOR_REGISTRY_NV_COMMAND_TIMEOUT')),
-        Math.max(1,job.activeExpiresAt-Date.now()));
+        Math.max(1,Math.min(remaining,allowance)));
     })])))));
   } finally {
     settled=true;clearTimeout(timer);clearTimeout(visibilityTimer);
