@@ -46,6 +46,25 @@ class LicenseControls(unittest.TestCase):
         self.assertLessEqual(len(generated),3*len(required))
         self.assertTrue(all(cc.distinctive_match_tokens(name) for name in generated))
         with self.assertRaises(TimeoutError):cc.select_licensed_charity(self.org,[row()],'RI',time.monotonic()-1)
+
+    def test_dc_reuses_completed_source_query_but_checks_each_candidate_office(self):
+        name = 'Beacon Learning Foundation'
+        matching = row(name, '400200123', street='1 Main St', region='MA', postal_code='02115',
+                       _dc_source_memo=True)
+        different_office = {**matching, 'identifier': '400200124', 'street': '10 Main St'}
+        source = json.dumps([{'name': name, 'principaladdress': '1 Main Street',
+                              'principalstate': 'MA', 'principalzipcode': '02115',
+                              'fein': '987654321'}]).encode()
+        context = cc.LICENSED_FOREIGN_EIN_CONTEXT.set({})
+        try:
+            with patch.object(cc, 'identity_fetch', side_effect=[TimeoutError(), source]) as fetch:
+                check = cc.licensed_charity_foreign_ein
+                self.assertEqual(check(self.org, matching, self.deadline, exact_name=True), {})
+                self.assertEqual(check(self.org, matching, self.deadline, exact_name=True)['ein'], '987654321')
+                self.assertEqual(check(self.org, different_office, self.deadline, exact_name=True), {})
+                self.assertEqual(fetch.call_count, 2)
+        finally:
+            cc.LICENSED_FOREIGN_EIN_CONTEXT.reset(context)
     def test_ri_dotted_initialism_gets_literal_suffix_free_probe_within_cap(self):
         dotted='A.B.C. Community Research Foundation, Inc.'
         token=cc.REVIEWED_NAME_CONTEXT.set({'123456789':(dotted,)})

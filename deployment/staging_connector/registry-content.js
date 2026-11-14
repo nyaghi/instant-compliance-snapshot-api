@@ -867,8 +867,8 @@
       // Wait for the same complete form used on initial navigation, within the
       // original command budget, before searching for the next observed record.
       await wfcAwait("content:nvDetail:711:6",()=>(wait(() => registryDocumentReady(), Math.max(1,deadline-Date.now()), {action:()=>back.click()})));
-      if (reservation && nvLastSearchMode === 'EXACT_MATCH') {
-        // The public return can reset a narrowed reservation grid. Reopen
+      if (reservation) {
+        // The public return can reset a reservation grid. Reopen
         // only this previously observed row through the public number field.
         returnDiagnostic.result = 'lookup_by_number';
         businessIdPage = await nvSearch(sourceQuery, deadline, {
@@ -2230,7 +2230,10 @@
         // Piggyback only this completed detail's metadata. Failure to collect
         // optional pixels must never change the successful registry evidence.
         let nv_snapshot_metadata;
-        if(m.includeSnapshotMetadata===true&&m.query?.operation==='detail'&&nvDiagnosticId&&evidence?.complete===true) {
+        const unlinkedReservation = /^(?:NR|C)\d{8}-\d+$/.test(m.query?.identifier||'')
+          && evidence?.fields?.['Entity Number']===m.query.identifier
+          && evidence.fields['Linked Entity Information']==='This name reservation has not been linked to a business';
+        if(m.includeSnapshotMetadata===true&&m.query?.operation==='detail'&&nvDiagnosticId&&evidence?.complete===true&&!unlinkedReservation) {
           try {nv_snapshot_metadata=await wfcAwait("content:handle:1915:36",()=>(snapshotNvAfterVisualReady(m.query,nvDiagnosticId,deadline,m.captureDeadline)));} catch {}
         }
         return {ok:true,evidence,...(nv_snapshot_metadata?{nv_snapshot_metadata}:{}),

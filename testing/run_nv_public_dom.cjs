@@ -245,6 +245,17 @@ test('Nevada opens an observed matching reservation, binds its identity and retu
  await h.drive(h.api.nvReturnSearch(h.time+10000));assert.equal(h.api.registryDocumentReady(),true);
 });
 
+test('Nevada retains the verified unlinked reservation without awaiting optional screenshot metadata',async()=>{
+ const row=['CCA','C20190204-2019','C20190204-2019','','','','Expired'];
+ const h=fixture({rows:[row],reservation:true});await h.search();
+ const query={state:'NV',operation:'detail',identifier:row[1]};
+ const result=await h.drive(h.api.handle({action:'registry-nv',query,includeSnapshotMetadata:true,
+   diagnosticId:'fixture-command-token',captureDeadline:h.time+45000}));
+ assert.equal(result.ok,true);
+ assert.equal(result.evidence.fields['Linked Entity Information'],'This name reservation has not been linked to a business');
+ assert.ok(!Object.hasOwn(result,'nv_snapshot_metadata'));
+});
+
 test('Nevada never reads a reservation as corporate status or accepts a changed reservation identity',async()=>{
  const row=['Example Charity','NR20230725-22746','NR20230725-22746','','','','Expired'];
  const h=fixture({rows:[row],reservation:true});await h.search();
@@ -1033,12 +1044,12 @@ test('Nevada does not submit an unsettled reset or repeat a failed reset replay'
 });
 
 
-test('narrowed Nevada reservation reopens only by its observed entity number',async()=>{
+test('Nevada reservation reopens only by its observed entity number in either search mode',async()=>{
  const rows=['NR20201008-06698','NR20191018-02121'].map(id=>
   ["Children's Hospital",id,id,'Name Reservation','','10/18/2019','Expired']);
- for(const changed of [false,true]) {
+ for(const narrowed of [true,false]) for(const changed of [false,true]) {
   const resultRows=changed?[[...rows[1].slice(0,6),'Active']]:null;
-  const f=fixture({rows:manyPublicRows(101),exactRows:rows,reservation:true,resetOnReturn:true,
+  const f=fixture({rows:narrowed?manyPublicRows(101):rows,exactRows:rows,reservation:true,resetOnReturn:true,
                    initialPageSize:25,idResult:resultRows});
   await f.drive(f.api.nvSearch(adaptiveQuery,f.time+45000));
   await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:rows[0][1]},f.time+45000));

@@ -10628,9 +10628,17 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
         if cache_key in checks:
             return checks[cache_key]
     try:
-        records = json.loads(identity_fetch(url, min(deadline, time.monotonic()+6)))
+        source_key = ("dc-source:" + hashlib.sha256(url.encode()).hexdigest()
+                      if checks is not None and row.get("_dc_source_memo") else None)
+        records = checks.get(source_key) if source_key else None
+        if records is None:
+            records = json.loads(identity_fetch(url, min(deadline, time.monotonic()+6)))
         if not isinstance(records, list) or len(records) >= 100:
             return {}
+        if source_key and source_key not in checks and len(checks) < 24 and len(json.dumps(records)) <= 32_000:
+            # Reuse only the completed raw query in this DC lookup. Each
+            # candidate still has its own address, credential and EIN checks.
+            checks[source_key] = records
         matching = [r for r in records if isinstance(r, dict) and normalized_match_name(str(r.get("name") or "")) == key
             and registry_street_key(r.get("principaladdress")) == street
             and str(r.get("principalstate") or "").upper() == region
@@ -11402,6 +11410,9 @@ def search_dc(org):
         # the full core of short names, including single-word brands.
         fallback = dc_license_query_patterns(required + focused_generated_name_queries(required, generated))
         rows, freshness = dc_charity_records(org, deadline, patterns)
+        if trial_identity():
+            for row in rows:
+                row["_dc_source_memo"] = True
         original_rows = [dict(row) for row in rows] if trial_identity() else []
         result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         selected = getattr(result, "_cc_license_record", {})
@@ -11414,6 +11425,8 @@ def search_dc(org):
                          if row.get("match", {}).get("reason") == "DIFFERENT_EIN_CORROBORATED"]
             rows, freshness = dc_charity_records(org, deadline, fallback)
             for row in rows:
+                if trial_identity():
+                    row["_dc_source_memo"] = True
                 previous = next((previous for source, previous in evaluated if row == source), None)
                 if previous and previous.get("address_evidence", {}).get("decision") == "different_ein":
                     row["_dc_different_ein_confirmed"] = previous["address_evidence"]
