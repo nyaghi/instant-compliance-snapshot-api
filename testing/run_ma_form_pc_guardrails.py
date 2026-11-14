@@ -268,7 +268,7 @@ class MassachusettsSelectionTests(unittest.TestCase):
                         cc, "ma_detail_body", return_value="AG Account Number 051172"), patch.object(
                         cc, "ma_read_latest_form_pc", return_value={}) as read:
                     result, body = cc.search_ma_master(page, self.org, completed)
-                fills = [call.args[0] for call in page.get_by_role.return_value.first.fill.call_args_list]
+                fills = [call.args[0] for call in page.get_by_role.return_value.first.type.call_args_list]
                 self.assertEqual(fills, ["123456789", "Example Foundation"])
                 if observed_ein == "123456789":
                     self.assertEqual(result.status_reason, "MA_MATCHED_FILING_PERIOD_UNVERIFIED")

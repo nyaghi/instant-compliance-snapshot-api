@@ -21909,8 +21909,10 @@ def search_ma_master(page, org, completed):
         empty = re.compile(r"\bNo Charity Found\b", re.I)
 
         def submit_search(mode, query):
-            page.get_by_role("combobox").first.select_option(label=mode, timeout=5000)
-            page.get_by_role("textbox").first.fill(query, timeout=5000)
+            page.get_by_role("combobox").first.select_option(label=mode, timeout=15000)
+            field = page.get_by_role("textbox").first
+            field.fill("")
+            field.type(query, delay=35)
             page.get_by_role("button", name="Search", exact=True).click(timeout=5000)
             outcome = page.get_by_text(re.compile(r"^Select a Charity$|^No Charity Found[.!]?$", re.I))
             outcome.and_(page.locator(":visible")).first.wait_for(timeout=15000)
