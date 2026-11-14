@@ -6,8 +6,9 @@ const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env
 const columns=[null,'Id','Id','FileNumber','DisplayName','OtherNames','Status','City','StateName','StateCode','RegistrationDate'];
 const national=['Details','unused summary','2162','CO2559','YWCA USA, INC.',"YOUNG WOMEN'S CHRISTIAN ASSOCIATION OF THE UNITED STATES OF AMERICA, INC.\nYWCA OF THE U.S.A.",'Active','WASHINGTON','DC','DC','5/12/1995'];
 const local=['Details','unused summary','3596572','CO224','YWCA NASHVILLE & MIDDLE TENNESSEE','','Active','NASHVILLE','TN','TN','11/14/1985'];
-function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false,pageErrorOnClick=null,watchAvailable=true,requestStatus=200}={}) {
+function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false,pageErrorOnClick=null,watchAvailable=true,requestStatus=200,wrongPageStart=false,pageSizes=true}={}) {
  let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=!closedInitially,opened=[],detailClicks=0;
+ let pageNumber=1,pageSize=10,sizeMenu=false;
  const events=new Map(),observers=new Set(),root={},errorListeners=new Set(),messageListeners=new Set();let watchId=null;
  const later=(fn,ms)=>{let id=++serial;events.set(id,{fn,at:clock+ms});return id;};
  const target={nodeType:1,closest:()=>({}),matches:()=>false,querySelector:()=>null};
@@ -33,14 +34,29 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
    return;}
    opened.push(cells[3]);if(watchId)phase('started');if(detailLoading){loading=true;mutate([mask]);}
    later(()=>{loading=false;dialogVisible=true;mutate();if(watchId)phase('finished',{http_status:requestStatus,retry_after_ms:7000});},detailDelay);}}]:[]}))};
+ function renderPage(number, size) {
+  loading=true;mutate([mask]);
+  later(()=>{pageNumber=number;pageSize=size;doneRows=rows.slice((number-1)*size,number*size);
+    loading=false;mutate();},responseDelay);
+ }
+ const sizeOption={innerText:'100',getClientRects:()=>sizeMenu?[{}]:[],click:()=>{sizeMenu=false;renderPage(1,100);}};
  const grid={closest:()=>({}),get innerText(){return doneRows.length?'Public search results':'No Records Available';},
-  querySelector:q=>q==='table[role="grid"]'?table:q==='.k-pager-info'?txt(doneRows.length?`1 - ${doneRows.length} of ${doneRows.length} items`:'No items to display'):
-   q==='[aria-current="page"]'?txt(doneRows.length?'1':'0'):null};
+  querySelector:q=>{
+   if(q==='table[role="grid"]')return table;
+   if(q==='.k-pager-info'){
+    const start=(pageNumber-1)*pageSize+1+(wrongPageStart&&pageNumber>1?1:0);
+    return txt(doneRows.length?`${start} - ${start+doneRows.length-1} of ${rows.length} items`:'No items to display');
+   }
+   if(q==='[aria-current="page"]')return txt(doneRows.length?String(pageNumber):'0');
+   if(q==='[role="combobox"][aria-label="Page sizes drop down"]'&&pageSizes)return {getClientRects:()=>[{}],click:()=>{sizeMenu=true;}};
+   const delta=q==='button[aria-label="Go to the next page"]'?1:q==='button[aria-label="Go to the previous page"]'?-1:0;
+   return delta?{click:()=>renderPage(pageNumber+delta,pageSize),getAttribute:()=>String(pageNumber+delta<1||(pageNumber+delta-1)*pageSize>=rows.length)}:null;
+  }};
  const search={innerText:'Search',disabled:false,getClientRects:()=>ready?[{}]:[],click:()=>{
-  if(activity&&!dialogVisible){loading=true;mutate([mask]);later(()=>{doneRows=rows;loading=false;mutate();},responseDelay);}
+  if(activity&&!dialogVisible)renderPage(1,10);
  }};
  const document={documentElement:root,readyState:'complete',querySelector:q=>q==='#KendoWindowLevel1'?dialog:q.startsWith('input[id^=')?inputs[q.match(/="([^_]+)_/)[1]]:null,
-  querySelectorAll:q=>q==='.k-grid'?[grid]:q==='button[id^="Search_"]'?[search]:(q==='[id^="SearchResults_"] .k-loading-mask'||q==='.k-loading-mask')?[mask]:[]};
+  querySelectorAll:q=>q==='[role="option"]'?[sizeOption]:q==='.k-grid'?[grid]:q==='button[id^="Search_"]'?[search]:(q==='[id^="SearchResults_"] .k-loading-mask'||q==='.k-loading-mask')?[mask]:[]};
  const phase=(name,extra={})=>{for(const fn of [...messageListeners])fn({source:win,origin:'https://tncab.tnsos.gov',data:{channel:'cc-final-four-tn-phase-v1',direction:'response',id:watchId,phase:name,...extra}});};
  const win={addEventListener:(type,fn)=>{if(type==='error')errorListeners.add(fn);if(type==='message')messageListeners.add(fn);},
   removeEventListener:(type,fn)=>{if(type==='error')errorListeners.delete(fn);if(type==='message')messageListeners.delete(fn);},
@@ -59,6 +75,21 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
   detail:()=>drive(context.testTN.tnDetail({state:'TN',operation:'detail',identifier:targetId},clock+45000))};
 }
 test('Tennessee retains national and local candidates with separate CO identifiers',async()=>{const f=fixture(),r=await f.search();assert.equal(r.total,2);assert.deepEqual(Array.from(r.rows,x=>x.identifier),['CO224','CO2559']);assert.equal(r.rows[1].aliases.length,2);assert.ok(!JSON.stringify(r).includes('unused summary'));});
+test('large Tennessee search captures all 947 rows and can open a bound later-page detail',async()=>{
+ const rows=Array.from({length:947},(_,i)=>i===241?national:local.map((field,col)=>col===3?`CO${30000+i}`:field));
+ const f=fixture({rows,queryName:'CLU'}), result=await f.search();
+ assert.equal(result.total,947);
+ assert.equal(result.rows.length,947);
+ assert.equal(new Set(Array.from(result.rows,row=>row.identifier)).size,947);
+ assert.equal((await f.detail()).fields['CO Number'],'CO2559');
+ assert.deepEqual(f.opened,['CO2559']);
+});
+test('large grid without a page-size control and a discontinuous grid fail conservatively',async()=>{
+ const rows=Array.from({length:947},(_,i)=>local.map((field,col)=>col===3?`CO${30000+i}`:field));
+ await assert.rejects(fixture({rows,pageSizes:false}).search(),/REGISTRY_TN_RESULT_LIMIT/);
+ await assert.rejects(fixture({rows,wrongPageStart:true}).search(),/REGISTRY_TN_PAGINATION_INCOMPLETE/);
+ await assert.rejects(fixture({rows:[...rows,...rows.slice(0,54)]}).search(),/REGISTRY_TN_RESULT_LIMIT/);
+});
 test('initial zero grid cannot become Not Registered before source completion',async()=>{const f=fixture({rows:[],activity:false});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('completed zero results require the count, zero page, and explicit empty marker',async()=>{const f=fixture({rows:[]});assert.equal((await f.search()).total,0);});
 test('verification/form readiness failure is distinct from no records',async()=>{const f=fixture({ready:false});await assert.rejects(f.search(),/VERIFICATION_OR_FORM_PENDING/);});

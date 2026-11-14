@@ -1110,7 +1110,7 @@
       const row = {name:text(get('DisplayName')),identifier:text(get('FileNumber')),city:text(get('City')),region:text(get('StateName')),
         aliases:(get('OtherNames').innerText||'').split(/\r?\n/).map(v=>v.trim()).filter(Boolean),raw_status:text(get('Status')),
         registration_date:text(get('RegistrationDate'))};
-      if (!row.name || !/^CO\d+$/.test(row.identifier) || !row.raw_status) throw new Error('REGISTRY_TN_ROW_CHANGED');
+      if (!row.name || !/^(?:Un)?CO\d+$/.test(row.identifier) || !row.raw_status) throw new Error('REGISTRY_TN_ROW_CHANGED');
       return row;
     });
     const info = text(grid.querySelector('.k-pager-info'));
@@ -1120,9 +1120,9 @@
       return {grid,rows,values,total:0,page:1};
     }
     const count = info.match(/^(\d+)\s*-\s*(\d+) of (\d+) items$/);
-    if (!count || !/^[1-9]\d*$/.test(current) || Number(count[2])-Number(count[1])+1!==rows.length || Number(count[3])>500)
+    if (!count || !/^[1-9]\d*$/.test(current) || Number(count[2])-Number(count[1])+1!==rows.length)
       throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
-    return {grid,rows,values,total:Number(count[3]),page:Number(current)};
+    return {grid,rows,values,total:Number(count[3]),page:Number(current),first:Number(count[1]),last:Number(count[2])};
   }
   async function tnChanged(action, deadline, previous=null) {
     // Completion requires the observed loading cycle to finish and tnPage
@@ -1178,9 +1178,25 @@
     tnObserved.clear();
     tnAbsentDetailProof=null;
     let page=await wfcAwait("content:tnSearch:991:13",()=>(tnChanged(()=>search.click(),deadline))),total=page.total;
+    if (total > 1000) throw new Error('REGISTRY_TN_RESULT_LIMIT');
+    if (total > 500) {
+      // The state resets to ten rows after every search. Use the registry's
+      // own page-size selector to cover a large result without 50+ requests.
+      const selector=page.grid.querySelector('[role="combobox"][aria-label="Page sizes drop down"]');
+      if (!visible(selector)) throw new Error('REGISTRY_TN_RESULT_LIMIT');
+      selector.click();
+      const option=await wait(()=>[...document.querySelectorAll('[role="option"]')]
+        .find(el=>visible(el)&&text(el)==='100'),Math.max(1,Math.min(3000,deadline-Date.now())));
+      page=await tnChanged(()=>option.click(),deadline,JSON.stringify(page.values));
+      if(page.total!==total||page.page!==1||page.values.length!==100)
+        throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+    }
     const rows=[];
-    for(let expected=1;expected<=50;expected++) {
-      if(Date.now()>=deadline||page.total!==total||page.page!==expected)throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+    const pageLimit=total>500?10:50;
+    for(let expected=1;expected<=pageLimit;expected++) {
+      if(Date.now()>=deadline||page.total!==total||page.page!==expected
+          ||(total>0&&(page.first!==rows.length+1||page.last>total)))
+        throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
       for(let i=0;i<page.values.length;i++) {
         const row=page.values[i];
         if(tnObserved.has(row.identifier))throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');

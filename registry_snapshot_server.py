@@ -7920,7 +7920,7 @@ def final_four_search_evidence(payload, state, query):
             if not required.issubset(raw) or not all(isinstance(raw[k], str) for k in required - {"aliases"}):
                 raise ValueError(f"{state} search identity fields are incomplete")
             row = dict(raw)
-            identity_ok = re.fullmatch(r"CO\d+" if state == "TN" else r"NV\d+", row["identifier"])
+            identity_ok = re.fullmatch(r"(?:Un)?CO\d+" if state == "TN" else r"NV\d+", row["identifier"])
             if state == "NV":
                 identity_ok = identity_ok and (bool(row["entity_type"].strip()) or nv_untyped_search_row_can_read_detail(row))
             if state == "NV" and re.fullmatch(r"(?:NR|C)\d{8}-\d+", row["identifier"]):
@@ -8497,6 +8497,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                                       "_source_row": row["identifier"], "_record": row})
                 seen.add(row["identifier"])
                 continue
+            if state == "TN" and row["identifier"].startswith("UnCO"):
+                # Keep the legacy row in the complete grid. If it could be
+                # the organization, the normal CO detail path cannot verify it.
+                raise ValueError("Tennessee matching legacy record needs verification")
             if state == "AL":
                 record = row
             else:
@@ -9185,7 +9189,9 @@ def final_four_clean_evidence(payload, query):
                 if state == "TN" and query.get("operation") == "detail" and depth == 2 and field == "Purpose"
                 else 1500)):
             return
-        maximum = 10000 if state == "NV" and query.get("operation") == "search" and field == "rows" and depth == 1 else 500
+        maximum = 500
+        if query.get("operation") == "search" and field == "rows" and depth == 1:
+            maximum = {"NV": 10000, "TN": 1000}.get(state, maximum)
         if isinstance(value, list) and len(value) <= maximum:
             for item in value: bounded(item, depth+1)
             return
@@ -9194,7 +9200,8 @@ def final_four_clean_evidence(payload, query):
             return
         raise ValueError("Registry evidence exceeded its field bound")
     bounded(payload)
-    maximum_bytes = 4000000 if state == "NV" and query.get("operation") == "search" else 180000
+    maximum_bytes = ({"NV": 4000000, "TN": 480000}.get(state, 180000)
+                     if query.get("operation") == "search" else 180000)
     if len(json.dumps(payload).encode("utf-8")) > maximum_bytes:
         raise ValueError("Registry evidence exceeded its message bound")
     if query.get("operation") == "search":
