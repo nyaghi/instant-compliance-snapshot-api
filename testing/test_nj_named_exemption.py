@@ -58,6 +58,26 @@ class NamedExemption(unittest.TestCase):
         response.json.return_value=response_body([{**self.row,'crsm_filestanding':'Compliant'}])
         self.assertIsNone(m.nj_completed_query_rows(request,'Example Relief'))
 
+    def test_legacy_unnumbered_zero_ein_needs_user_confirmation(self):
+        org = m.checker.Organization(
+            'CATHOLIC RELIEF SERVICES-UNITED STATES CONFERENCE OF CATHOLIC BISHOPS', '135563422')
+        row = {**self.row, 'name': 'CATHOLIC RELIEF SERVICES-USCC', 'crsm_federalein': '000000000'}
+        with patch.object(m, 'trial_identity', return_value=True):
+            token = m.LAB_LOOKUP_MODE_CONTEXT.set('standard')
+            try:
+                result = m.nj_name_exemption_result(response_body([row]), org, time.monotonic()+1)
+                self.assertEqual(result.status, 'Needs Review')
+                self.assertEqual(result.reason_code, 'NJ_UNNUMBERED_EXEMPTION_REVIEW')
+                selected = result._cc_identity_review['records'][0]
+                self.assertEqual(selected['ein'], '')
+                self.assertEqual(selected['raw_status'], 'Exempt')
+                for changed in ({'name': 'CATHOLIC RELIEF SERVICES-OTHER'},
+                                {'crsm_federalein': '987654321'}):
+                    self.assertIsNone(m.nj_name_exemption_result(
+                        response_body([{**row, **changed}]), org, time.monotonic()+1))
+            finally:
+                m.LAB_LOOKUP_MODE_CONTEXT.reset(token)
+
     def test_scope_keeps_mature_state_rules_discovery_and_shared_matching_exact(self):
         root=Path(__file__).resolve().parents[1]
         old=ast.parse(subprocess.check_output(['git','show','887ccc7:registry_snapshot_server.py'],cwd=root).decode('utf-8'))

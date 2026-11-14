@@ -1154,8 +1154,10 @@
       return {grid,rows,values,total:0,page:1};
     }
     const count = info.match(/^(\d+)\s*-\s*(\d+) of (\d+) items$/);
-    if (!count || !/^[1-9]\d*$/.test(current) || Number(count[2])-Number(count[1])+1!==rows.length || Number(count[3])>500)
+    if (!count || !/^[1-9]\d*$/.test(current) || Number(count[2])-Number(count[1])+1!==rows.length
+        || Number(count[3])<Number(count[2]))
       throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+    if (Number(count[3])>500) throw new Error('REGISTRY_TN_RESULT_LIMIT');
     return {grid,rows,values,total:Number(count[3]),page:Number(current)};
   }
   async function tnChanged(action, deadline, previous=null) {
@@ -1168,7 +1170,10 @@
       loadingSeen ||= loading();
       if (!loadingSeen || loading()) return false;
       try { const page=tnPage();lastParseError='';return previous!==null&&JSON.stringify(page.values)===previous?false:page; }
-      catch (error) { lastParseError=error.message;return false; }
+      catch (error) {
+        if(error.message==='REGISTRY_TN_RESULT_LIMIT')throw error;
+        lastParseError=error.message;return false;
+      }
     },Math.max(1,Math.min(35000,deadline-Date.now())),{action,settle:0,relevant:mutations=>{
       loadingSeen ||= loading() || mutations.some(m=>[...m.addedNodes].some(n=>n.nodeType===1
         && (n.matches?.('.k-loading-mask') || n.querySelector?.('.k-loading-mask'))));
