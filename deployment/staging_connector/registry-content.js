@@ -2733,6 +2733,7 @@
     return {...(snapshotGaPrimary(query)||{}),...(snapshotNcDetail(query)||{}),...(NM&&query?.state==='NM'&&query.operation==='detail'?{source_viewport_width:innerWidth}:{}),...(snapshotMsDetail(query)||{}),...(snapshotNmPageFit(query)||{}),...(snapshotAlGridLayout(query)||{}),url:location.href,public_text:((IL||TN)&&dialog?dialog.innerText:document.body?.innerText||'').slice(0,20000),
       ...(dialog?{source_summary_ready:!!snapshotSummaryFields(dialog)}:{}),
       ...(IL&&dialog?{source_heading_texts:[...dialog.querySelectorAll('h4')].slice(0,40).map(el=>text(el).slice(0,500))}:{}),
+      ...(TN&&query?.operation==='detail'?{document_id:documentId}:{}),
       ...(NV?{document_id:documentId,...(query?.operation==='detail'?{source_binding:snapshotNvBinding(query)}:{})}:{}),
       ...((TN&&query?.operation==='detail'||IL&&query?.state==='IL'&&Object.hasOwn(query,'identifier'))?{source_detail:!!dialog}:{}),...(snapshotNvVisibility(query)||{}),...(NV?{source_visible:document.visibilityState==='visible',...(query?.operation==='detail'?{source_loading_visible:snapshotNvPaintedLoader()}:{})}:{}),...(capture_views?{capture_views}:{})};
   }

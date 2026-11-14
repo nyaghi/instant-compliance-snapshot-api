@@ -7424,11 +7424,14 @@ def nc_charity_profile_evidence(card, profile, filings=None):
     return result
 
 
-def final_four_license_result(org, state, records, deadline, source):
+def final_four_license_result(org, state, records, deadline, source, *, selection=None):
     """Use master identity/status handling with source-specific date wording."""
     if state not in {"AL", "NC", "NV", "TN"}:
         raise ValueError("Unsupported final-four license source")
-    result = licensed_charity_result(org, state, records, deadline, source)
+    if selection is None:
+        result = licensed_charity_result(org, state, records, deadline, source)
+    else:
+        result = licensed_charity_result(org, state, records, deadline, source, selection=selection)
     selected = getattr(result, "_cc_license_record", {})
     if state == "TN" and selected.get("expiration") and selected.get("date_evidence_note", "").startswith("Tennessee displays no expiration date."):
         result.source_note = result.source_note.replace(
@@ -8322,6 +8325,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             required, nv_promoted = nv_order_covering_searches(required, generated)
     nv_empty_phrase = ""
     primary_region = ""
+    nc_confirmed_selection = None
     for index, name in enumerate(required + generated):
         if nv_empty_phrase and name.isascii() and nv_empty_phrase.lower() in name.lower():
             if index < len(required) and name not in nv_promoted:
@@ -8364,7 +8368,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             # record; they are not additional accepted identities. Preserve
             # the master's selection across all collected rows, including a
             # newer record under any reviewed alias, before ending the search.
-            selected, review = select_licensed_charity(org, records, state, deadline)
+            ranked_records = al_prioritize_plausible_office(org, records) if state == "AL" and trial_identity() else records
+            selected, review = select_licensed_charity(org, ranked_records, state, deadline)
             if selected and not review and ((state == "TN" and selected["status"] in {
                     "Current", "Upcoming Filing", "Exempt"}) or (state != "TN" and (state == "NV" or selected["status"] in {
                     "Current", "Upcoming Filing", "Exempt", "Pending", "Delinquent",
@@ -8641,6 +8646,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 and not any(nc_all_words_covers(phrase, target) for phrase in nc_completed_all_words)
                 and target.casefold() not in {probe.casefold() for probe in narrowed_searches}]
             if nc_reliable_match_complete(org, selected, records, review, unreviewed_scope, uncovered):
+                # The same accepted rows immediately feed the final result.
+                nc_confirmed_selection = selected, review
                 break
         # Avoid re-running address reconciliation for each alias unless there
         # is a primary positive candidate that could safely finish this lookup.
@@ -8662,13 +8669,15 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             # This is only an early-positive exit. With no positive TN record,
             # defer identity work to final selection after the same full plan.
             # Signed continuation replays must not repeat futile source lookups.
-            selected, review = select_licensed_charity(org, records, state, deadline)
+            ranked_records = al_prioritize_plausible_office(org, records) if state == "AL" and trial_identity() else records
+            selected, review = select_licensed_charity(org, ranked_records, state, deadline)
             if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:
                 if index >= len(required) - 1 or licensed_primary_positive_complete(
                         org, selected, records, unreviewed_scope=unreviewed_scope, state=state,
                         completed_searches=completed_searches):
                     break
-    result = final_four_license_result(org, state, records, deadline, sources[state])
+    result = final_four_license_result(org, state, records, deadline, sources[state],
+                                      selection=nc_confirmed_selection)
     if nc_deferred_applications:
         selected = getattr(result, "_cc_license_record", {})
         from deployment.nc_pending_precedence import confirmed_pending
@@ -11279,12 +11288,12 @@ def dc_corroborated_result_match(result):
     return dict(match)
 
 
-def licensed_charity_result(org, state, rows, deadline, source, *, freshness=""):
+def licensed_charity_result(org, state, rows, deadline, source, *, freshness="", selection=None):
     if state == "AL" and trial_identity():
         rows = al_prioritize_plausible_office(org, rows, deadline)
     result = checker.StateResult(org.organization_name, format_ein(org.ein), state, "Not Registered", source)
     result.status_reason = "LICENSED_CHARITY_SOURCE"
-    selected, review = select_licensed_charity(org, rows, state, deadline)
+    selected, review = selection if selection is not None else select_licensed_charity(org, rows, state, deadline)
     if review:
         result.status = "Needs Review"; result.success = False; result.source_note = review
         if any(r.get("_identity_outcome") in {"possible", "conflict"} for r in rows):

@@ -68,6 +68,35 @@ class BostonRegistryControls(unittest.TestCase):
         with patch.object(cc, "identity_cached_source_result", return_value=None):
             self.assertEqual(cc.al_prioritize_plausible_office(self.org, candidates), candidates)
 
+    def test_alabama_filters_before_the_first_candidate_evaluation(self):
+        from testing.run_final_four_source_guardrails import AL_HEADERS
+
+        rows = [
+            [OTHER, "AL17-249", "Active", "Charitable Organization", "01/02/2023",
+             "12/31/2026", "123 Main Street", "Aurora", "CO", "80011", ""],
+            ["The Children's Hospital Foundation", "AL25-369", "Active", "Charitable Organization",
+             "01/02/2023", "12/29/2026", OFFICE["street"], "Boston", "MA", "02115", ""],
+        ]
+
+        def collect(query):
+            found = rows if query["name"] == BOSTON else []
+            return {"state": "AL", "query": query, "complete": True, "verification_pending": False,
+                    "headers": AL_HEADERS, "rows": found, "total": len(found)}
+
+        seen = []
+        def identity(_org, row, _state, _deadline):
+            seen.append(row["identifier"])
+            return "possible"
+
+        with patch.object(cc, "trial_identity", return_value=True), \
+                patch.object(cc, "identity_cached_source_result", return_value={"filer_address": OFFICE}), \
+                patch.object(cc, "licensed_charity_identity", side_effect=identity):
+            final = cc.final_four_browser_lookup(self.org, "AL", collect)
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {"AL25-369"})
+        self.assertFalse(final.success)
+        self.assertEqual([r["identifier"] for r in final._cc_identity_review["records"]], ["AL25-369"])
+
     def test_north_carolina_exact_profile_completes_without_a_broad_grid(self):
         aliases = ("The Children's Hospital Corporation", "Boston Children's Hospital", "Children's Hospital Boston")
         token = cc.REVIEWED_NAME_CONTEXT.set({EIN: aliases})
@@ -92,8 +121,9 @@ class BostonRegistryControls(unittest.TestCase):
 
         try:
             with patch.object(cc, "trial_identity", return_value=True), \
-                    patch.object(cc, "reconciled_registry_address", return_value={"decision": "corroborated"}):
+                    patch.object(cc, "reconciled_registry_address", return_value={"decision": "corroborated"}) as reconcile:
                 result = cc.final_four_browser_lookup(self.org, "NC", collect)
+            self.assertEqual(reconcile.call_count, 1)
             self.assertEqual(result.matched_registry_identifier, "SL017506")
             self.assertEqual(lookups[0]["name"], BOSTON)
             self.assertEqual([r["operation"] for r in lookups], ["search", "search", "detail"])

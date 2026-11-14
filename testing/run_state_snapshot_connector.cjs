@@ -10,8 +10,8 @@ function fixture(changes={}) {
     owned:new Set([1]),isActive:()=>true,P:{TRIAL_ORIGIN:'https://fixture.onrender.com',sameQuery:(a,b)=>JSON.stringify(a)===JSON.stringify(b)},
     registryOrigin:()=> 'https://www.sosnc.gov',
     chrome:{tabs:{get:async()=>({url:state.url}),sendMessage:async(_tab,message)=>{
-      if(message.action==='registry-snapshot-view'){calls.push(['view:'+message.view,{tabId:_tab}]);state.view=message.view;if(state.viewError)return {ok:false};return {ok:true};}
-      return {url:state.url,public_text:state.text,source_detail:state.sourceDetail!==false,source_search_empty:state.sourceSearchEmpty===true,source_fields_visible:state.sourceFieldsVisible!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{}),...(state.nvViews?{capture_views:state.sourceFieldsVisible===false?[]:state.nvViews}:{})};}},
+      if(message.action==='registry-snapshot-view'){calls.push(['view:'+message.view,{tabId:_tab}]);state.view=message.view;if(state.viewError)return {ok:false};return {ok:true,...(message.worker_step?{view_protocol:'worker-settle-1',view_ready:true,view_shape:[640,400],view_text:state.text,summary_views:['top']}: {})};}
+      return {url:state.url,public_text:state.text,document_id:state.documentId,source_detail:state.sourceDetail!==false,source_search_empty:state.sourceSearchEmpty===true,source_fields_visible:state.sourceFieldsVisible!==false,...(state.modal?{capture_views:state.views||['top','expiration','financial']}:{}),...(state.nvViews?{capture_views:state.sourceFieldsVisible===false?[]:state.nvViews}:{})};}},
       debugger:{attach:async target=>{calls.push(['attach',target]);if(state.attachError)throw Error('refused');},
         sendCommand:async(target,command,params)=>{calls.push([command,target]);if(state.throwCommand)throw Error('capture error');
           if(state.mutate)job.generation++;
@@ -21,7 +21,10 @@ function fixture(changes={}) {
           if(state.captureHook)state.captureHook(job);
           return {data:state.imageData||((state.modal||state.nvViews&&state.view)?{top:'AA==',expiration:'AQ==',financial:'Ag==','nv-0':'AA==','nv-1':'AQ==','nv-2':'Ag=='}[state.view]:'AA==')};},
         detach:async target=>calls.push(['detach',target])}}};
-  vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(root,'state-snapshot-worker.js'),'utf8'),ctx);
+  vm.createContext(ctx);
+  const observation=path.join(root,'workflow-observation.js');
+  if(fs.existsSync(observation))vm.runInContext(fs.readFileSync(observation,'utf8'),ctx);
+  vm.runInContext(fs.readFileSync(path.join(root,'state-snapshot-worker.js'),'utf8'),ctx);
   return {ctx,job,query,calls,state,run:()=>ctx.captureStateSnapshot(job,query,'command123')};
 }
 test('30 organization workflow captures keep source query and original deadlines',async()=>{
@@ -146,6 +149,30 @@ test('narrow TN viewport failure restores and detaches the original target',asyn
 test('busy source viewport cannot start another capture',async()=>{const h=fixture();h.job.snapshotViewportBusy=true;assert.equal(await h.run(),null);assert.deepEqual(h.calls,[]);});
 test('ordinary state and TN search never receive a viewport override',async()=>{
  for(const state of ['NC','TN']){const h=fixture({text:'LOCAL CO42115',url:state==='TN'?'https://tncab.tnsos.gov/portal/registered-charities-search':'https://www.sosnc.gov/public'});h.job.registryState=state;h.query.state=state;h.query.operation='search';h.ctx.registryOrigin=()=>new URL(h.state.url).origin;assert.ok(await h.run());assert.equal(h.calls.some(c=>c[0].startsWith('Emulation.')),false);}
+});
+test('Tennessee detail survives a failed second tab read only with fresh same-document proof',async()=>{
+ for(const variation of ['same','changed-document','changed-url','changed-status','legacy']){
+  const h=fixture({text:'LOCAL CO42115 Active',url:'https://tncab.tnsos.gov/portal/registered-charities-search',
+    modal:true,views:['top'],documentId:variation==='legacy'?undefined:'document-1'});
+  Object.assign(h.query,{state:'TN',identifier:'CO42115'});
+  h.job.registryState='TN';h.ctx.registryOrigin=()=> 'https://tncab.tnsos.gov';
+  const deadline=h.job.activeExpiresAt;
+  const get=h.ctx.chrome.tabs.get;let reads=0;
+  h.ctx.chrome.tabs.get=target=>{
+   if(++reads>1)throw Error('second tab read unavailable');
+   return get(target);
+  };
+  h.state.captureHook=()=>{
+   if(variation==='changed-document')h.state.documentId='document-2';
+   if(variation==='changed-url')h.state.url+='?changed=true';
+   if(variation==='changed-status')h.state.text='LOCAL CO42115 Expired';
+  };
+  const result=await h.run();
+  if(variation==='same')assert.equal(result.image,'AA==');
+  else assert.equal(result,null,variation);
+  assert.equal(reads,variation==='legacy'?2:1,variation);
+  assert.equal(h.job.activeExpiresAt,deadline);
+ }
 });
 test('late TN viewport callback cannot publish after its original capture deadline',async()=>{
  const h=fixture({text:'LOCAL CO42115',url:'https://tncab.tnsos.gov/portal/registered-charities-search',modal:true});Object.assign(h.query,{state:'TN',identifier:'CO42115'});h.job.registryState='TN';h.ctx.registryOrigin=()=> 'https://tncab.tnsos.gov';

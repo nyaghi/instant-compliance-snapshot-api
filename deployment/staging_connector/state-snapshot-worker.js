@@ -738,7 +738,13 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       // Require every validated capture to complete; keep identical pixels once.
       if(modal&&(ilModal?completedViews:images.length)!==captureViews.length)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:408:83:return",(null));
 
-      observed.phase='postvalidation';const after=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:410:50:await",()=>(sampled('post-tab',()=>chrome.tabs.get(tabId))));
+      observed.phase='postvalidation';
+      // TN's fresh top-frame response can prove the same URL and document
+      // after capture. Older content scripts still require the tab read.
+      const tnDocument=state==='TN'&&query.operation==='detail'&&
+        typeof meta.document_id==='string'&&meta.document_id.length>0&&meta.document_id.length<=100
+        ?meta.document_id:null;
+      const after=tnDocument?null:await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:410:50:await",()=>(sampled('post-tab',()=>chrome.tabs.get(tabId))));
 
       let afterMeta;
 
@@ -761,6 +767,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       // message. Missing fresh metadata never authorizes publication.
 
       if(!afterMeta)afterMeta=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:432:30:await",()=>(sampled('post-metadata',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}))));
+      const sameSource=tnDocument?afterMeta?.url===tab.url&&afterMeta.document_id===tnDocument:after?.url===tab.url;
 
       // ORION can repaint its loader after the original pixels were taken.
       // Discard that image. Permit only the existing once-only same-record
@@ -834,7 +841,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       if(state==='TN'&&query.operation==='detail'&&typeof diagnostic==='function')try {
         const beforeText=String(meta.public_text||''),afterText=String(afterMeta?.public_text||'');
         diagnostic('source-snapshot-phase',job,JSON.stringify({operation:'detail',phase:'tn-final-check',
-          alive:alive(),cancelled,tab_same:after.url===tab.url,url_same:afterMeta?.url===meta.url,
+          alive:alive(),cancelled,tab_same:sameSource,url_same:afterMeta?.url===meta.url,
           body_same:afterText===beforeText,detail:afterMeta?.source_detail===true,
           images:images.length,completed_views:completedViews,views:meta.capture_views,
           after_views:afterMeta?.capture_views,before_length:beforeText.length,after_length:afterText.length}));
@@ -872,7 +879,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
         ||/verify you are human|user validation required|just a moment|access denied/i.test(afterMeta.public_text||'')))return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:505:120:return",(null));
 
-      if(cancelled || !alive() || after.url!==tab.url || !images.length
+      if(cancelled || !alive() || !sameSource || !images.length
 
           || afterMeta?.url!==meta.url || (!boundNvDetail&&!ilHeadingLabelsOnly&&!tnSummaryOnly&&afterMeta?.public_text!==meta.public_text)
 
