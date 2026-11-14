@@ -9488,6 +9488,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "New Mexico returned its public unexpected-error page for the submitted search." if state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR' else
            "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
            "The Tennessee search returned more results than can be verified through the public registry in a single lookup. Search the official registry using a more specific organization name or filing number." if state == "TN" and reason == "NY_CONNECTOR_REGISTRY_TN_RESULT_LIMIT" else
+           "Tennessee did not deliver a completed response for the submitted search within its browser allowance." if state == "TN" and reason == "NY_CONNECTOR_REGISTRY_TN_RESPONSE_PENDING" else
            "The registry requires browser verification before its search can complete." if "VERIFICATION" in reason else
            "The browser connector could not preserve this registry's search sequence." if reason == "NY_CONNECTOR_INVALID_SEQUENCE" else
            "The trial browser connector is unavailable or needs an update." if reason in {"NY_CONNECTOR_UNAVAILABLE", "NY_CONNECTOR_UPDATE_REQUIRED"} else
@@ -10914,7 +10915,7 @@ def licensed_charity_identity(org, row, state, deadline):
             return "rejected"
     # This bounded cross-check resolves only DC's related-name candidates.
     if state == "DC" and decision["decision"] == "possible":
-        foreign = licensed_charity_foreign_ein(org, row, deadline)
+        foreign = row.get("_dc_different_ein_confirmed") or licensed_charity_foreign_ein(org, row, deadline)
         if foreign:
             row["address_evidence"] = foreign
             row["match"] = {"decision": "rejected", "score": 0, "reason": "DIFFERENT_EIN_CORROBORATED"}
@@ -11384,6 +11385,7 @@ def search_dc(org):
         required, generated = licensed_charity_names(org)
         fallback = dc_license_query_patterns(required + generated)
         rows, freshness = dc_charity_records(org, deadline, patterns)
+        original_rows = [dict(row) for row in rows] if trial_identity() else []
         result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         selected = getattr(result, "_cc_license_record", {})
         if patterns != fallback and not (result.success and not getattr(result, "_cc_identity_review", None)
@@ -11391,7 +11393,13 @@ def search_dc(org):
             # No negative/adverse/alias-only conclusion from the primary
             # search. The complete old alias/fallback coverage is retained.
             fallback_started = True
+            evaluated = [(source, row) for source, row in zip(original_rows, rows)
+                         if row.get("match", {}).get("reason") == "DIFFERENT_EIN_CORROBORATED"]
             rows, freshness = dc_charity_records(org, deadline, fallback)
+            for row in rows:
+                previous = next((previous for source, previous in evaluated if row == source), None)
+                if previous and previous.get("address_evidence", {}).get("decision") == "different_ein":
+                    row["_dc_different_ein_confirmed"] = previous["address_evidence"]
             result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         try:
             from deployment.dc_native_evidence import capture_dc

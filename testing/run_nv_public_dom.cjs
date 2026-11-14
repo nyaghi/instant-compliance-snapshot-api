@@ -316,9 +316,19 @@ test('Nevada reopens the attached search control after an ORION redraw',async()=
  const result=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
  assert.equal(result.search_mode,'EXACT_MATCH');assert.equal(result.total,17);assert.equal(h.clicks,2);
 });
+test('Nevada completes an unchanged small broad grid when Exact Match cannot be selected',async()=>{
+ const h=fixture({rows:manyPublicRows(57),exactRows:[],initialPageSize:25,ignoreModeChange:true,pageSizeControl:true});
+ const result=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
+ assert.equal(result.total,57);assert.equal(result.rows.length,57);
+ assert.equal(result.search_mode,'STARTS_WITH');assert.equal(result.broad_total,null);
+ assert.equal(h.clicks,1);
+ const capped=fixture({rows:manyPublicRows(101),initialPageSize:25,ignoreModeChange:true});
+ await assert.rejects(capped.drive(capped.api.nvSearch(adaptiveQuery,capped.time+45000)),/MODE_NOT_SELECTED/);
+ assert.equal(capped.clicks,1);
+});
 test('Nevada refuses a mode option with a changed public label or disabled state',async()=>{
  for(const changed of ['label','disabled']){
-  const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25});
+  const h=fixture({rows:manyPublicRows(101),exactRows:[],initialPageSize:25});
   const combo=h.context.document.querySelectorAll('[role="combobox"]')[0],read=combo.querySelectorAll;
   combo.querySelectorAll=q=>read(q).map(option=>option.getAttribute('data-value')!=='EXACT_MATCH'?option:{...option,
    textContent:changed==='label'?'Different mode':option.textContent,
