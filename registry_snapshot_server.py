@@ -19993,12 +19993,12 @@ def search_mn(page, org):
             result.queries_attempted.append(variant)
             # The official result page is server rendered. Once the existing
             # validator confirms the submitted query, no idle wait is needed.
-            if mn_completed_empty_response(page, variant):
+            if mn_completed_empty_response(page, variant, allow_fundraisers=True):
                 continue
             checker.safe_wait_for_network_idle(page, timeout=7000)
             time.sleep(0.5)
             text = readable_page_text(page)
-            if no_registry_results_seen(text) or mn_completed_empty_response(page, variant):
+            if no_registry_results_seen(text) or mn_completed_empty_response(page, variant, allow_fundraisers=True):
                 continue
             try:
                 row_candidates = page.evaluate(

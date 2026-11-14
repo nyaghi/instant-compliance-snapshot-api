@@ -2210,7 +2210,9 @@
       nvDiagnosticId=typeof m.diagnosticId==='string' && /^[a-zA-Z0-9_-]{16,80}$/.test(m.diagnosticId)?m.diagnosticId:null;
       const returnDiagnostic = {replay_clicks:0};
       try {
-        const evidence = m.query?.operation === 'search' ? await wfcAwait("content:handle:1910:59",()=>(nvSearch(m.query,deadline))) : await wfcAwait("content:handle:1910:94",()=>(nvDetail(m.query,deadline,{skipHistory:m.skipHistory===true,returnDiagnostic})));
+        const restore = m.query?.operation==='search' && m.query.exact_above===20
+          && m.restoreSearchMode==='EXACT_MATCH' ? {mode:'EXACT_MATCH',diagnostic:returnDiagnostic} : null;
+        const evidence = m.query?.operation === 'search' ? await wfcAwait("content:handle:1910:59",()=>(nvSearch(m.query,deadline,restore))) : await wfcAwait("content:handle:1910:94",()=>(nvDetail(m.query,deadline,{skipHistory:m.skipHistory===true,returnDiagnostic})));
         // Piggyback only this completed detail's metadata. Failure to collect
         // optional pixels must never change the successful registry evidence.
         let nv_snapshot_metadata;

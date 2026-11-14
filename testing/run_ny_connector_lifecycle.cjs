@@ -15,20 +15,20 @@ function harness(initial={}) {
   const tabs=new Map(initial.tabs||[[1,{id:1,windowId:10,url:'https://staging.compliance-express.com/'}],[2,{id:2,windowId:99,url:'https://charities-search.ag.ny.gov/RegistrySearch'}]]);
   let next=Math.max(100,...[...tabs.keys()].map(n=>n+1)), deferred=null, now=initial.now??10000;
   const chrome={storage:{local:area('local'),session:area('session')},runtime:{id:'fixture-extension',getManifest:()=>JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8')),onMessage:event(),onConnect:event()},tabs:{
-    onRemoved:event(),create:async options=>{if(deferred)await deferred;const tab={id:next++,...options};tabs.set(tab.id,tab);created.push(tab.id);return tab;},
+    onCreated:event(),onUpdated:event(),onActivated:event(),onRemoved:event(),create:async options=>{if(deferred)await deferred;const tab={id:next++,...options};tabs.set(tab.id,tab);created.push(tab.id);return tab;},
     get:async id=>{if(!tabs.has(id))throw Error('Tab absent');return tabs.get(id);},
     update:async(id,options)=>Object.assign(tabs.get(id),options),
     remove:async id=>{tabs.delete(id);removed.push(id);chrome.tabs.onRemoved.emit(id);},
     sendMessage:async(tab,message)=>{if(message.action==='ready')return {ready:true,url:tabs.get(tab).url};if(message.action==='back-to-results'){tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch';return {ok:true};}if(message.action==='open-detail'){tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch/'+message.query.orgID;return {ok:true};}queries.push({tab,...message});return {ok:true,evidence:{query:message.query,rows:[]}};}
   }};
-  chrome.windows={create:async options=>({id:20,tabs:[await chrome.tabs.create({windowId:20,url:options.url,active:true})]})};
+  chrome.windows={onCreated:event(),onRemoved:event(),onFocusChanged:event(),create:async options=>({id:20,tabs:[await chrome.tabs.create({windowId:20,url:options.url,active:true})]})};
   class Clock extends Date { static now(){return now;} }
   const recovery={clearForTab:async(tabId,owned,close)=>{repairs.push({tabId,owned});await close();}};
-  const context=vm.createContext({URL,Date:Clock,chrome,CCNYRecovery:recovery,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
+  const context=vm.createContext({URL,Date:Clock,chrome,wfAwait:(_job,_site,fn)=>fn(),wfReturn:(_job,_site,value)=>value,CCNYRecovery:recovery,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
   for(const file of ['protocol.js','registry-worker.js','worker.js']) {
-    const sourceRoot=['registry-worker.js','worker.js'].includes(file)&&process.env.CC_TEST_TRIAL_DIR?process.env.CC_TEST_TRIAL_DIR:root;
+    const sourceRoot=process.env.CC_TEST_TRIAL_DIR||root;
     let source=fs.readFileSync(path.join(sourceRoot,file),'utf8');
-    if(file==='protocol.js' && initial.trialOrigin) source=source.replace('const TRIAL_ORIGIN = "";',`const TRIAL_ORIGIN = ${JSON.stringify(initial.trialOrigin)};`);
+    if(file==='protocol.js' && initial.trialOrigin) source=source.replace(/const TRIAL_ORIGIN = "[^"]*";/,`const TRIAL_ORIGIN = ${JSON.stringify(initial.trialOrigin)};`);
     if(file==='protocol.js' && initial.trialOrigin && initial.trialOnly) source=source.replace('function registryAllowed(state, origin) {','function registryAllowed(state, origin) { if (origin !== TRIAL_ORIGIN || state === "NY") return false;');
     vm.runInContext(source,context);
   }
@@ -308,19 +308,24 @@ test('NV navigation-only readiness cannot weaken another state or a results-docu
  assert.equal(h.queries.length,0);
 });
 
-for(const next of ['search','detail','changed-detail'])test(`NV reservation return uses public form and preserves identity: ${next}`,async()=>{
+for(const next of ['search','detail','changed-detail','reordered-exact-detail'])test(`NV reservation return uses public form and preserves identity: ${next}`,async()=>{
  const trialOrigin='https://fixture-final-four.onrender.com',h=harness({trialOrigin});
  const start=vm.runInContext("registryStart('NV')",h.context),reservation='https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=NameReservationDetails&id=fixture';
  h.tabs.set(1,{id:1,windowId:10,url:trialOrigin});h.tabs.set(3,{id:3,windowId:10,url:reservation});
  let generation=1,reloads=0;const actions=[];
  const prior={query:{state:'NV',operation:'search',name:'Example'},evidence:{query:{state:'NV',operation:'search',name:'Example'},complete:true,total:1,rows:[{identifier:'NV12345',name:'Example'}]}};
+ if(next==='reordered-exact-detail'){
+  prior.query.exact_above=20;prior.evidence.search_mode='EXACT_MATCH';prior.evidence.total=2;
+  prior.evidence.rows.push({identifier:'NV99999',name:'Second Example'});
+ }
  h.chrome.tabs.reload=async()=>{generation++;reloads++;};
  h.chrome.tabs.sendMessage=async(tab,m)=>{
   actions.push(m);
   if(m.action==='registry-ready')return {ready:true,documentId:String(generation),url:h.tabs.get(tab).url};
   if(m.action==='registry-nv-return')throw Error('Reservation Back would leave public search');
   if(m.query.operation==='search')return {ok:true,evidence:{...prior.evidence,query:m.query,
-    rows:next==='changed-detail'?[{identifier:'NV12345',name:'Other Organization'}]:prior.evidence.rows}};
+    rows:next==='changed-detail'?[{identifier:'NV12345',name:'Other Organization'}]
+      :next==='reordered-exact-detail'?[...prior.evidence.rows].reverse():prior.evidence.rows}};
   return {ok:true,evidence:{query:m.query,complete:true,fields:{'NV Business ID':'NV12345'}}};
  };
  const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false,finalFourSearchComplete:true,
@@ -333,6 +338,7 @@ for(const next of ['search','detail','changed-detail'])test(`NV reservation retu
  const searches=actions.filter(m=>m.query?.operation==='search');assert.equal(searches.length,1);
  assert.equal(searches[0].query.name,next==='search'?'Next Alias':'Example');
  if(next==='changed-detail')assert.equal(actions.some(m=>m.query?.operation==='detail'),false);
+ if(next==='reordered-exact-detail')assert.equal(searches[0].restoreSearchMode,'EXACT_MATCH');
 });
 
 test('one owned tab serves EIN and name; finish closes only that tab',async()=>{

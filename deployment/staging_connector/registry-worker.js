@@ -1237,12 +1237,21 @@ async function performRegistryQuery(job, query) {
       job.nvReservationDetail=false;job.finalFourReusableForm=true;
       if (query.operation==='detail') {
         if (!prior?.evidence?.complete) throw registrySequenceError(job,query,'reservation-prior-search');
+        const priorMode=prior.evidence.search_mode;
         const restored=await wfAwait(job,"registry-worker.js:performRegistryQuery:1060:23:await",()=>(registryMessage(job,{action:'registry-nv',query:prior.query,
+          ...(priorMode==='EXACT_MATCH'?{restoreSearchMode:priorMode}:{}),
           budgetMs:Math.max(1,Math.min(150000,job.activeExpiresAt-Date.now()))})));
-        if (!restored?.ok || restored.evidence?.complete!==true || !P.sameQuery(restored.evidence.query,prior.query)
-            || restored.evidence.total!==prior.evidence.total
-            || JSON.stringify(restored.evidence.rows)!==JSON.stringify(prior.evidence.rows))
+        const current=restored?.evidence;
+        const rowSet=rows=>Array.isArray(rows)?rows.map(row=>JSON.stringify(row)).sort():null;
+        if (!restored?.ok || current?.complete!==true || !P.sameQuery(current.query,prior.query)
+            || current.total!==prior.evidence.total || current.search_mode!==priorMode
+            || !Array.isArray(current.rows) || !Array.isArray(prior.evidence.rows)
+            || JSON.stringify(rowSet(current.rows))!==JSON.stringify(rowSet(prior.evidence.rows))) {
+          diagnostic('nv-reservation-replay',job,JSON.stringify({prior_mode:priorMode||'STARTS_WITH',
+            mode:current?.search_mode||'',prior_total:prior.evidence.total,total:current?.total??null,
+            reason:restored?.reason||''}));
           throw new Error('NY_CONNECTOR_REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+        }
       }
     }
     if (query.operation === "search") {

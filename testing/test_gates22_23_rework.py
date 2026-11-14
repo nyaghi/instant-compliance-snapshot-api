@@ -80,6 +80,26 @@ class ObservedPages(unittest.TestCase):
         self.load_mn(original,url='https://www.ag.state.mn.us/Charity/Search/')
         self.assertFalse(mn.complete(self.page,'The Johns Hopkins Hospital'))
 
+    def test_mn_fundraiser_only_is_a_completed_charity_name_lookup(self):
+        markup = """<div id="content"><h1>Search Organization Database</h1>
+            <h4>Showing Results for "<strong>Chapman</strong>"</h4>
+            <p><a href="Default.asp">Conduct New Search</a></p>
+            <table><tr><td>Type</td><td>Organization Name</td><td>Alternate Name(s)</td><td>City State</td></tr>
+            <tr><td>Fundraiser</td><td><a href="PFR_GeneralInfo.asp?RegNumber=00068">Chapman Cubine Allen &amp; Hussey LLC</a></td>
+            <td><ul class="altName"><li>Chapman Cubine Adams Hussey, Inc.</li></ul></td><td>Washington, DC</td></tr></table></div>"""
+        self.load_mn(markup)
+        self.assertTrue(mn.complete(self.page, 'Chapman', allow_fundraisers=True))
+        self.assertFalse(mn.complete(self.page, 'Chapman'))
+        self.assertFalse(mn.complete(self.page, 'Chapman University', allow_fundraisers=True))
+        for changed in (
+            markup.replace('<td>Fundraiser</td>', '<td>Charity</td>'),
+            markup.replace('PFR_GeneralInfo.asp?RegNumber=00068', 'CHR_GeneralInfo.asp?FederalID=951643992'),
+            markup.replace('</table>', '<tr><td>Loading</td></tr></table>'),
+            markup.replace('</table>', '</table><p>Partial response</p>'),
+        ):
+            self.load_mn(changed)
+            self.assertFalse(mn.complete(self.page, 'Chapman', allow_fundraisers=True))
+
     def test_mn_source_response_runs_through_real_name_lookup(self):
         fixture = (FIXTURES/'mn-empty-observed.html').read_bytes().decode('utf-8', errors='replace')
         name='The Johns Hopkins Hospital';self.markup=fixture
