@@ -8957,8 +8957,25 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
         if key not in seen_names:
             reviewed.append(name)
             seen_names.add(key)
+    # A bare hospital name is shared by unrelated entities. Keep it as a
+    # retrieval term, but avoid generated fragments that drop the hospital
+    # name or the differentiating words of a reviewed alias.
+    generic_hospital = distinctive_match_tokens(org.organization_name) == {"hospital"}
+    if generic_hospital:
+        reviewed_keys = {
+            re.sub(r"^the\s+|\s+the$", "", complete_name_identity_key(name))
+            for name in reviewed
+        }
+        reviewed_tokens = [distinctive_match_tokens(name) for name in reviewed]
     planned, seen_queries = [], set()
     plans = [ms_name_search_plan(target, '') for target in reviewed]
+    if generic_hospital:
+        plans = [
+            [query for query in plan
+             if query in {ascii_dash_search_name(target), *literal_name_retrieval_forms(target)}
+             and normalized_match_name(query) == normalized_match_name(target)]
+            for target, plan in zip(reviewed, plans)
+        ]
     # Move literal reviewed names ahead of generated probes, subject to the
     # existing query safety rules. Retain each remaining probe in its old order.
     for query in [*(plan[0] for target, plan in zip(reviewed, plans)
@@ -8975,6 +8992,7 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
     attempted = []
     possible = []
     review_details = {}
+    excluded_foundations = set()
     if ms_recovery:
         planned = [ms_recovery]
     elif probe:
@@ -8993,12 +9011,39 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
             scores = [score_candidate(target, '', {'name': row['name'], 'ein': ''})
                       for target in reviewed if target]
             best = max(scores, key=lambda item: item['score']) if scores else None
+            if generic_hospital and row['identifier'] in excluded_foundations:
+                continue
             if (best and best['decision'] == 'accepted'
                     and any(ms_registry_name_is_safe(row['name'], target, '') for target in reviewed)):
                 accepted.append(row)
             elif (best and best['decision'] in {'accepted', 'possible'}
                   and len(distinctive_match_tokens(row['name'])) >= 2):
+                if generic_hospital:
+                    row_tokens = distinctive_match_tokens(row['name'])
+                    shared = set().union(*(tokens & row_tokens for tokens in reviewed_tokens))
+                    if shared == {"hospital"}:
+                        continue
                 possible_on_page.append(row)
+        if generic_hospital:
+            for row in accepted.copy():
+                if distinctive_match_tokens(row['name']) != {"hospital"}:
+                    continue
+                detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
+                fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
+                if (normalized_match_name(fields['Name']) != normalized_match_name(row['name'])
+                        or not fields['Filing Status'].strip()):
+                    raise ValueError('Mississippi detail identity or status changed')
+                registered = fields['Registered Name'].strip()
+                registered_key = re.sub(r"^the\s+|\s+the$", "", complete_name_identity_key(registered))
+                if registered_key in reviewed_keys and registered_key != complete_name_identity_key(row['name']):
+                    continue
+                accepted.remove(row)
+                registered_entity = re.sub(r"\s+d\s*/\s*b\s*/\s*a\s+", " ", registered, flags=re.I)
+                if distinct_foundation_name_scope(row['name'], registered_entity):
+                    excluded_foundations.add(row['identifier'])
+                    attempted.append({'query': detail_query, 'completed': True})
+                else:
+                    possible_on_page.append(row)
         # The exact-match branch below has always selected from accepted
         # records only. Fetch weaker review records only if that branch has
         # no match, so an unrelated detail cannot discard an accepted filing.
@@ -9104,6 +9149,11 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
                           'Mississippi completed a surname search covering all reviewed names without a qualifying registration record.'
                           if attempted and attempted[-1]['query'].get('name') == probe else
                           'Mississippi completed all planned public name searches without a qualifying registration record.')
+    if excluded_foundations:
+        result.source_note += (
+            ' Mississippi filing(s) ' + ', '.join(sorted(excluded_foundations)) +
+            ' separately list a foundation as the registered entity and were excluded.'
+        )
     if candidates:
         result._cc_identity_review = {'records': candidates, 'search_complete': len(possible) <= 10,
                                      'exclusive': True, 'freshness': ''}

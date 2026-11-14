@@ -19,25 +19,68 @@ class RhodeIslandMississippiRepair(unittest.TestCase):
         self.assertEqual(len(searched), len(set(q.casefold() for q in searched)))
 
     def test_mississippi_verified_record_ignores_weaker_detail_that_times_out(self):
-        org = cc.checker.Organization("Children's Hospital Corporation", "04-2774441")
-        name = "Children's Hospital"
+        name = "Beacon Learning Academy"
+        org = cc.checker.Organization(name, "12-3456789")
         wanted = dict(name=name, identifier="100001780", raw_status="Closed/Withdrawn")
-        weaker = dict(name="Children's Hospital Medical Center", identifier="100033077", raw_status="Current")
+        weaker = dict(name=name + " Foundation", identifier="100033077", raw_status="Current")
         requests = []
+
         def evidence(query):
             requests.append(query)
             if query["operation"] == "search":
-                rows = [weaker, wanted] if query["name"] == name else []
-                return dict(state="MS", query=query, complete=True, verification_pending=False, rows=rows, total=len(rows))
+                return dict(state="MS", query=query, complete=True, verification_pending=False,
+                            rows=[weaker, wanted], total=2)
             if query["identifier"] != wanted["identifier"]:
                 raise TimeoutError("weak detail failed")
             return dict(query=query, complete=True, source_url=cc.MS_BROWSER_SOURCE, fields={
                 "Name": name, "Registered Name": name, "Filing Number": wanted["identifier"],
                 "Filing Status": wanted["raw_status"], "Expiration Date": ""})
-        result = cc.ms_browser_lookup(org, evidence, [name])
+
+        result = cc.ms_browser_lookup(org, evidence)
         self.assertEqual(result.matched_registry_identifier, wanted["identifier"])
         self.assertTrue(result.status.startswith("Closed / Withdrawn"))
         self.assertEqual([q["identifier"] for q in requests if q["operation"] == "detail"], ["100001780"])
+
+    def test_mississippi_generic_hospital_uses_its_registered_identity(self):
+        org = cc.checker.Organization("CHILDREN'S HOSPITAL CORPORATION", "04-2774441")
+        aliases = ["THE CHILDREN'S HOSPITAL CORPORATION", "Boston Children's Hospital",
+                   "Children's Hospital Boston", "Boston Children's Hospital Trust",
+                   "BCH Trust", "Children's Hospital Corporation, The"]
+        registry_name = "Children's Hospital"
+        filing = "100001780"
+        unrelated = "Children's Hospital & Research Center Foundation"
+
+        def lookup(registered_name):
+            details = []
+            def evidence(query):
+                if query["operation"] == "detail":
+                    details.append(query["identifier"])
+                    self.assertEqual(query["identifier"], filing)
+                    return dict(query=query, complete=True, source_url=cc.MS_BROWSER_SOURCE, fields={
+                        "Name": registry_name, "Registered Name": registered_name, "Filing Number": filing,
+                        "Filing Status": "Closed - Expired", "Expiration Date": "04/12/1995"})
+                rows = []
+                if query["name"].casefold() == registry_name.casefold():
+                    rows = [
+                        dict(name=registry_name, identifier=filing, raw_status="Closed - Expired"),
+                        dict(name=unrelated, identifier="100001931", raw_status="Current"),
+                    ]
+                return dict(state="MS", query=query, complete=True, verification_pending=False,
+                            rows=rows, total=len(rows))
+            return cc.ms_browser_lookup(org, evidence, aliases), details
+
+        result, details = lookup("Children's Hospital D/B/A FOUNDATION")
+        self.assertEqual(result.status, "Not Registered")
+        self.assertIn(filing, result.source_note)
+        self.assertEqual(details, [filing])
+
+        result, _ = lookup("Boston Children's Hospital")
+        self.assertTrue(result.status.startswith("Closed / Withdrawn"))
+        self.assertEqual(result.matched_registry_identifier, filing)
+
+        result, _ = lookup("")
+        self.assertEqual(result.status, "Needs Review")
+        self.assertFalse(result.success)
 
     def test_rhode_island_foundation_requires_expiry_and_absence_of_identity(self):
         org = cc.checker.Organization("Children's Hospital Corporation", "04-2774441")
