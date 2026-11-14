@@ -40,6 +40,34 @@ class IllinoisCoverage(unittest.TestCase):
             cc.il_ga_browser_lookup(org, 'GA', evidence)
         self.assertEqual(seen, ['Example Charity', 'Example Foundation', 'Example'])
 
+    def test_complete_nonempty_literal_grid_covers_longer_reviewed_name(self):
+        self.assertEqual(self.replay_literal_coverage(True),
+                         ['Example Charity', 'Example-Charity Chapter'])
+
+    def test_empty_literal_grid_keeps_every_reviewed_name_query(self):
+        self.assertEqual(self.replay_literal_coverage(False),
+                         ['Example Charity', 'Example Charity Chapter', 'Example-Charity Chapter'])
+
+    def replay_literal_coverage(self, nonempty):
+        org = cc.checker.Organization('Example Charity', '123456789')
+        names = ['Example Charity', 'Example Charity Chapter', 'Example-Charity Chapter']
+        seen = []
+
+        def evidence(query):
+            if 'ein' in query:
+                return {'rows': []}
+            name = query['orgName']
+            seen.append(name)
+            if nonempty and name == names[0]:
+                return {'rows': [{'identifier': '10466', 'name': 'Different Entity'}]}
+            return {'rows': []}
+
+        with patch.object(cc, 'trial_identity', return_value=True), patch.object(
+                cc, 'licensed_charity_names', return_value=(names, [])):
+            result = cc.il_ga_browser_lookup(org, 'IL', evidence)
+        self.assertEqual(result.status, 'Not Registered / Non-Compliant')
+        return seen
+
 
 class DeadlineCleanup(unittest.TestCase):
     def setUp(self):

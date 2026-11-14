@@ -245,7 +245,12 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
       const boundNvDetail=state==='NV'&&query.operation==='detail'&&validBinding(meta);
 
-      observed.phase='identity';if((ilDetail||['TN','NV'].includes(state)&&query.operation==='detail')&&meta.source_detail!==true)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:167:130:return",(null));
+      // A narrow Nevada window may have a fully bound record with no usable
+      // capture geometry. Let the existing desktop viewport step recover it.
+      // The same record, document, stable layout and clear loader are still
+      // required before any original pixels are accepted.
+      observed.phase='identity';if((ilDetail||state==='TN'&&query.operation==='detail'
+        ||state==='NV'&&query.operation==='detail'&&!boundNvDetail)&&meta.source_detail!==true)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:167:130:return",(null));
 
       // A selected record can render its identity before its date labels.
       // Wait only within this same capture allowance, never photograph a shell.
@@ -317,6 +322,8 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
       if(state==='NV'){observed.width=layout.cssLayoutViewport?.clientWidth||0;observed.height=layout.cssLayoutViewport?.clientHeight||0;}
 
+      if(boundNvDetail&&meta.source_detail!==true
+          &&!(layout.cssLayoutViewport?.clientWidth<1024||layout.cssLayoutViewport?.clientHeight<1000))return null;
       if(boundNvDetail&&(layout.cssLayoutViewport?.clientWidth<1024||layout.cssLayoutViewport?.clientHeight<1000)) {
         // Render the state's own desktop layout in this owned capture target.
         // Preserve its content, selected-record binding, and existing time budget.

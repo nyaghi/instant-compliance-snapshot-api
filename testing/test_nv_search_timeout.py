@@ -19,10 +19,13 @@ class NevadaSearchTimeout(unittest.TestCase):
     def test_total_lookup_timeout_includes_later_search_and_detail(self):
         for operation in ['search','detail']:
             for state in ['NV','TN','NC']:
-                with patch.object(cc,'response_data_for_lookup',side_effect=lambda result,*args:dict(status=result.status,success=result.success)):
+                with patch.object(cc,'response_data_for_lookup',side_effect=lambda result,*args:dict(
+                        status=result.status,success=result.success,note=result.source_note)):
                     out=cc.final_four_connector_failure(self.record(state,operation),'NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT')
                 self.assertEqual(out['status'],'Site Not Reachable' if state=='NV' else 'Unable to Confirm')
                 self.assertFalse(out['success'])
+                if state=='NV' and operation=='detail':
+                    self.assertIn('Nevada returned search results',out['note'])
     def test_actual_renderer_and_partial_history_preserve_failed_check(self):
         completed=[{'query':{'state':'NV','operation':'search','name':'Example Research'}}]
         with patch.object(cc,'reconciled_registry_address',return_value=''):

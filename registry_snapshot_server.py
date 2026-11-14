@@ -6867,11 +6867,15 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     covered_ga_names = set()
     historical_ga_names = set()
     failed_ga_prefixes = set()
+    completed_il_fragments = set()
     for query in queries:
         # Exact EIN is decisive for IL. Name fallbacks never admit a different EIN.
         if state == "IL" and any(r.get("ein") == canonical_ein_digits(org.ein) for r in records):
             break
         planned_name = query.get("orgName", "")
+        if state == "IL" and trial_identity() and planned_name.isascii() and any(
+                fragment in planned_name.lower() for fragment in completed_il_fragments):
+            continue
         if state == "GA" and planned_name.casefold() in covered_ga_names:
             continue
         probe = query
@@ -6899,6 +6903,11 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
             coverage = [planned_name]
             found = evidence(query)["rows"]
         completed.append(probe)
+        if state == "IL" and trial_identity() and planned_name.isascii() and found:
+            # A completed literal Contains query with observed rows already
+            # covers its longer literal variants. Do not inherit an empty
+            # result, normalize punctuation, or substitute an EIN lookup.
+            completed_il_fragments.add(planned_name.lower())
         if state == "GA":
             covered_ga_names.update(name.casefold() for name in coverage)
         for row in found:
@@ -9520,9 +9529,14 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     elif nv_search_timeout or state == "NV" and reason == "NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT":
         result.status = "Site Not Reachable"
         result.success = False
-        result.source_note = ("Nevada's registry search did not return a completed response within its time limit. "
-                              "CharityClarity stopped waiting. No registration status was established; "
-                              "retry when the registry responds normally.")
+        pending_operation = ((record.get("pending") or {}).get("query") or {}).get("operation")
+        if pending_operation == "detail":
+            result.source_note = ("Nevada returned search results, but a candidate record did not finish loading "
+                                  "within the lookup time limit. No registration status was established.")
+        else:
+            result.source_note = ("Nevada's registry search did not return a completed response within its time limit. "
+                                  "CharityClarity stopped waiting. No registration status was established; "
+                                  "retry when the registry responds normally.")
     elif nm_http_error:
         result.status = 'Site Not Reachable'
         result.success = False
@@ -11383,7 +11397,10 @@ def search_dc(org):
         primary = literal_name_retrieval_forms(org.organization_name)[:1]
         patterns = dc_license_query_patterns(primary)
         required, generated = licensed_charity_names(org)
-        fallback = dc_license_query_patterns(required + generated)
+        # Broad fragments such as "Hospital" add unrelated licenses and can
+        # exhaust the identity-check deadline. Keep every reviewed name and
+        # the full core of short names, including single-word brands.
+        fallback = dc_license_query_patterns(required + focused_generated_name_queries(required, generated))
         rows, freshness = dc_charity_records(org, deadline, patterns)
         original_rows = [dict(row) for row in rows] if trial_identity() else []
         result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
