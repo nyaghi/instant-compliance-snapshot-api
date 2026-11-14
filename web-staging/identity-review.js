@@ -97,7 +97,7 @@
     const message = add(box, 'p', '', 'text-sm text-slate-600'); message.setAttribute('role', 'status');
     const buttons = [];
     if (inconclusive && !review?.candidates?.length) {
-      add(box, 'p', maActivityOnly(result) ? 'Filing status unconfirmed' : boundedSourceFailure(result) ? 'Site Not Reachable' : 'Review required', 'font-semibold text-slate-900');
+      add(box, 'p', maActivityOnly(result) ? 'Filing status unconfirmed' : statusLabel(result), 'font-semibold text-slate-900');
       const fallback = confirmedMAFilingConflict
         ? 'The Massachusetts filing attachment shows a different EIN. Confirm the filing directly with the state.'
         : 'The state lookup did not provide enough confirmed information to establish a status. Review the explanation and available evidence, then retry this state or check its official lookup.';
@@ -162,6 +162,10 @@
     if (maActivityOnly(result)) return 'Not Doing Business in Massachusetts';
     const inconclusive = unresolvedStatuses.has(result.status);
     if (inconclusive && result.identity_review?.candidates?.some(candidate => !candidate.decision)) return 'Confirm match';
+    if (inconclusive && result.state === 'RI') {
+      return result.status_reason === 'RI_LOOKUP_TIMEOUT' || result.reason_code === 'RUNNER_TIMEOUT'
+        ? 'Search timed out' : 'Registry check incomplete';
+    }
     return inconclusive ? 'Review required' : result.status || 'Unknown';
   }
   window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel, usesSearchHistoryOnly});

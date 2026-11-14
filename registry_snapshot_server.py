@@ -8958,12 +8958,16 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
             reviewed.append(name)
             seen_names.add(key)
     planned, seen_queries = [], set()
-    for target in reviewed:
-        for query in ms_name_search_plan(target, ''):
-            key = query.casefold()
-            if key not in seen_queries:
-                planned.append(query)
-                seen_queries.add(key)
+    plans = [ms_name_search_plan(target, '') for target in reviewed]
+    # Move literal reviewed names ahead of generated probes, subject to the
+    # existing query safety rules. Retain each remaining probe in its old order.
+    for query in [*(plan[0] for target, plan in zip(reviewed, plans)
+                    if plan and plan[0] == ascii_dash_search_name(target)),
+                  *(query for plan in plans for query in plan)]:
+        key = query.casefold()
+        if key not in seen_queries:
+            planned.append(query)
+            seen_queries.add(key)
     if not planned:
         raise ValueError('No safe Mississippi name search')
     from deployment.casey_state_repairs import ms_personal_foundation_probe
@@ -8982,7 +8986,7 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
         # filings are one candidate, not competing identity matches.
         rows = list({row['identifier']: row for row in source_rows}.values())
         attempted.append({'query': query, 'completed': True})
-        accepted = []
+        accepted, possible_on_page = [], []
         for row in rows:
             # This public result has no EIN. Match only against names signed
             # into this workflow, never an EIN-keyed discovery cache.
@@ -8994,22 +8998,27 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
                 accepted.append(row)
             elif (best and best['decision'] in {'accepted', 'possible'}
                   and len(distinctive_match_tokens(row['name'])) >= 2):
-                if not any(item['identifier'] == row['identifier'] for item in possible):
-                    possible.append(row)
-                    if len(possible) <= 10:
-                        # The browser detail is bound to the current search's
-                        # grid. Later variants replace that grid, so retain
-                        # verified detail evidence before advancing the plan.
-                        detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
-                        fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
-                        if (normalized_match_name(fields['Name']) != normalized_match_name(row['name'])
-                                or not fields['Filing Status'].strip()):
-                            raise ValueError('Mississippi review detail identity or status changed')
-                        if (fields['Expiration Date']
-                                and not module.parse_mmddyyyy_date(fields['Expiration Date'])):
-                            raise ValueError('Mississippi review expiration date is malformed')
-                        review_details[row['identifier']] = fields
-                        attempted.append({'query': detail_query, 'completed': True})
+                possible_on_page.append(row)
+        # The exact-match branch below has always selected from accepted
+        # records only. Fetch weaker review records only if that branch has
+        # no match, so an unrelated detail cannot discard an accepted filing.
+        if not accepted:
+            for row in possible_on_page:
+                if any(item['identifier'] == row['identifier'] for item in possible):
+                    continue
+                possible.append(row)
+                if len(possible) > 10:
+                    continue
+                detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
+                fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
+                if (normalized_match_name(fields['Name']) != normalized_match_name(row['name'])
+                        or not fields['Filing Status'].strip()):
+                    raise ValueError('Mississippi review detail identity or status changed')
+                if (fields['Expiration Date']
+                        and not module.parse_mmddyyyy_date(fields['Expiration Date'])):
+                    raise ValueError('Mississippi review expiration date is malformed')
+                review_details[row['identifier']] = fields
+                attempted.append({'query': detail_query, 'completed': True})
         # Two plausible filing numbers need a user identity decision. Read each
         # detail now so later confirmation can apply only signed state evidence.
         if len(accepted) > 1:
@@ -11515,6 +11524,9 @@ def search_ri(org):
                                             if value.casefold() not in {q.casefold() for q in required + legal_probes}]
         rows, seen = [], set()
         unresolved_foundation = None
+        historical_foundations = []
+        reviewed_keys = {complete_name_identity_key(value) for value in required}
+        reviewed_tokens = [distinctive_match_tokens(value) for value in required]
         for index, query in enumerate(planned):
             if index >= len(required) + len(legal_probes) and rows:
                 selected, _ = select_licensed_charity(org, rows, "RI", deadline)
@@ -11526,12 +11538,27 @@ def search_ri(org):
                 if decision["decision"] == "rejected": continue
                 separate_name = trial_identity() and distinct_foundation_name_scope(
                     org.organization_name, candidate["title"])
+                if (trial_identity() and index >= len(required)
+                        and decision["decision"] == "possible" and not separate_name
+                        and complete_name_identity_key(candidate["title"]) not in reviewed_keys):
+                    candidate_tokens = distinctive_match_tokens(candidate["title"])
+                    shared = set().union(*(tokens & candidate_tokens for tokens in reviewed_tokens))
+                    if shared == {"hospital"}:
+                        continue
                 try:
                     row = ri_charity_detail(candidate, deadline, headers)
                 except ValueError as exc:
                     if not separate_name:
                         raise
                     unresolved_foundation = exc
+                    continue
+                if (separate_name and complete_name_identity_key(row["name"]) not in reviewed_keys
+                        and row["raw_status"].strip().casefold() == "inactive"
+                        and row.get("expiration") and row["expiration"] < date.today()
+                        and not any(row.get(key) for key in ("ein", "location", "street"))):
+                    # A historical credential for a differently named foundation
+                    # with no published identity cannot qualify for the hospital.
+                    historical_foundations.append(row["identifier"])
                     continue
                 if separate_name:
                     foreign = licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
@@ -11552,9 +11579,20 @@ def search_ri(org):
                 result.source_note += (" Rhode Island returned the requested record, but a similarly named "
                                        "organization could not be ruled out. Review the original record.")
             return result
-        return licensed_charity_result(org, "RI", rows, deadline, RI_PUBLIC_PORTAL)
+        result = licensed_charity_result(org, "RI", rows, deadline, RI_PUBLIC_PORTAL)
+        if result.status == "Not Registered" and historical_foundations:
+            identifiers = ", ".join(historical_foundations)
+            result.source_note += (f" Inactive foundation credentials {identifiers} had expired "
+                                   "and showed no published identity linking them to the organization searched.")
+        return result
     except Exception as exc:
-        return licensed_charity_failure(org, "RI", RI_PUBLIC_PORTAL, exc)
+        result = licensed_charity_failure(org, "RI", RI_PUBLIC_PORTAL, exc)
+        if (isinstance(exc, TimeoutError) or time.monotonic() >= deadline
+                or re.search(r"\b(?:timeout|timed out)\b", str(exc), re.I)):
+            result.status_reason = "RI_LOOKUP_TIMEOUT"
+            result.source_note = ("The Rhode Island registry lookup timed out before it could finish. "
+                                  "Use Retry RI to run the search again.")
+        return result
 
 
 def possessive_search_phrases(name: str) -> list[str]:
