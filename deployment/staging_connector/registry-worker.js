@@ -518,7 +518,7 @@ async function registryTnPendingDelivery(job,message,send) {
   // the other owned collector is idle so recovery cannot steal its surface.
   let pending=true,timer=null;
   const command=job.pending,tab=job.tab,deadline=job.activeExpiresAt;
-  const phase=message.action==='registry-ready'?'ready':message.query.operation;
+  const phase=message.action==='registry-ready'?'ready':'detail';
   const current=()=>pending&&!job.closed&&owned.has(tab)&&job.tab===tab
     &&job.pending===command&&job.activeExpiresAt===deadline&&Date.now()<deadline;
   const peerBusy=()=>allJobs().some(other=>other!==job&&!other.closed&&isActive(other)&&other.pending);
@@ -534,19 +534,8 @@ async function registryTnPendingDelivery(job,message,send) {
     } catch { /* Observation/recovery failure cannot replace the real reply. */ }
   };
   timer=setTimeout(()=>{inspect().catch(()=>{});},Math.min(3000,Math.max(1,deadline-Date.now())));
-  let watchdog;
-  try {
-    if(phase!=='search')return await send();
-    // Bound a silent message independently of timers in the registry tab.
-    // A timed-out command remains incomplete and is never resent.
-    const waitMs=Math.max(1,Math.min(message.budgetMs,35000)+1500);
-    return await Promise.race([send(),new Promise(resolve=>{
-      watchdog=setTimeout(()=>{
-        diagnostic('tn-search-watchdog',job,JSON.stringify({wait_ms:waitMs,same_command:true}));
-        resolve({ok:false,reason:'NY_CONNECTOR_REGISTRY_TN_RESPONSE_PENDING'});
-      },Math.min(waitMs,Math.max(1,deadline-Date.now())));
-    })]);
-  } finally {pending=false;clearTimeout(timer);clearTimeout(watchdog);}
+  try {return await send();}
+  finally {pending=false;clearTimeout(timer);}
 }
 
 async function registryMessage(job, message) {
@@ -638,11 +627,13 @@ async function registryMessage(job, message) {
       })])))));
     } finally {clearTimeout(timer);}
   }
-  if(P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-ready'||message.action==='registry-tn'&&['search','detail'].includes(message.query?.operation)))
+  if(P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-ready'||message.action==='registry-tn'&&message.query?.operation==='detail'))
     return registryTnPendingDelivery(job,message,send);
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return wfReturn(job,"registry-worker.js:registryMessage:553:70:return",(send()));
-  // A hidden page can delay its own watchdog. Give it a small delivery
-  // reserve, then release an unanswered search within the original job budget.
+  // Keep the overall job deadline as the transport bound. A second timer at
+  // exactly the page's allowance races its normal timeout reply and prevents
+  // the existing bounded fresh-form recovery from running. Page observers
+  // retain their own allowances; a hung message cannot outlive this job.
   let timer, visibilityTimer, visibilityPending=null, previousVisible=null;
   let settled=false;
   // ORION's detail hydration can stall in a background tab. Keep the same
@@ -660,10 +651,8 @@ async function registryMessage(job, message) {
   },Math.min(3000,Math.max(1,job.activeExpiresAt-Date.now())));
   try {
     return wfReturn(job,"registry-worker.js:registryMessage:574:4:return",(await wfAwait(job,"registry-worker.js:registryMessage:574:11:await",()=>(Promise.race([send(),new Promise((_,reject)=>{
-      const remaining=job.activeExpiresAt-Date.now();
-      const allowance=message.query?.operation==='search'?message.budgetMs+1500:remaining;
       timer=setTimeout(()=>reject(new Error('NY_CONNECTOR_REGISTRY_NV_COMMAND_TIMEOUT')),
-        Math.max(1,Math.min(remaining,allowance)));
+        Math.max(1,job.activeExpiresAt-Date.now()));
     })])))));
   } finally {
     settled=true;clearTimeout(timer);clearTimeout(visibilityTimer);
@@ -1248,21 +1237,12 @@ async function performRegistryQuery(job, query) {
       job.nvReservationDetail=false;job.finalFourReusableForm=true;
       if (query.operation==='detail') {
         if (!prior?.evidence?.complete) throw registrySequenceError(job,query,'reservation-prior-search');
-        const priorMode=prior.evidence.search_mode;
         const restored=await wfAwait(job,"registry-worker.js:performRegistryQuery:1060:23:await",()=>(registryMessage(job,{action:'registry-nv',query:prior.query,
-          ...(priorMode==='EXACT_MATCH'?{restoreSearchMode:priorMode}:{}),
           budgetMs:Math.max(1,Math.min(150000,job.activeExpiresAt-Date.now()))})));
-        const current=restored?.evidence;
-        const rowSet=rows=>Array.isArray(rows)?rows.map(row=>JSON.stringify(row)).sort():null;
-        if (!restored?.ok || current?.complete!==true || !P.sameQuery(current.query,prior.query)
-            || current.total!==prior.evidence.total || current.search_mode!==priorMode
-            || !Array.isArray(current.rows) || !Array.isArray(prior.evidence.rows)
-            || JSON.stringify(rowSet(current.rows))!==JSON.stringify(rowSet(prior.evidence.rows))) {
-          diagnostic('nv-reservation-replay',job,JSON.stringify({prior_mode:priorMode||'STARTS_WITH',
-            mode:current?.search_mode||'',prior_total:prior.evidence.total,total:current?.total??null,
-            reason:restored?.reason||''}));
+        if (!restored?.ok || restored.evidence?.complete!==true || !P.sameQuery(restored.evidence.query,prior.query)
+            || restored.evidence.total!==prior.evidence.total
+            || JSON.stringify(restored.evidence.rows)!==JSON.stringify(prior.evidence.rows))
           throw new Error('NY_CONNECTOR_REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-        }
       }
     }
     if (query.operation === "search") {

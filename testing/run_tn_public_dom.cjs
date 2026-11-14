@@ -6,7 +6,7 @@ const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env
 const columns=[null,'Id','Id','FileNumber','DisplayName','OtherNames','Status','City','StateName','StateCode','RegistrationDate'];
 const national=['Details','unused summary','2162','CO2559','YWCA USA, INC.',"YOUNG WOMEN'S CHRISTIAN ASSOCIATION OF THE UNITED STATES OF AMERICA, INC.\nYWCA OF THE U.S.A.",'Active','WASHINGTON','DC','DC','5/12/1995'];
 const local=['Details','unused summary','3596572','CO224','YWCA NASHVILLE & MIDDLE TENNESSEE','','Active','NASHVILLE','TN','TN','11/14/1985'];
-function fixture({rows=[local,national],declaredTotal=null,activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false,pageErrorOnClick=null,watchAvailable=true,requestStatus=200}={}) {
+function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',targetId='CO2559',detailName='YWCA USA, INC.',queryName='YWCA',address='1400 I STREET NW, SUITE 540 WASHINGTON DC 20005',expiration='12/31/2026',periods=['06/30/2024','06/30/2025'],count=2,financialTab=true,officersTab=true,closeDelay=0,closedInitially=true,ignoredDetailClicks=0,detailDelay=50,detailLoading=false,changedQueryOnClick=false,changedRowOnClick=false,pageErrorOnClick=null,watchAvailable=true,requestStatus=200}={}) {
  let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=!closedInitially,opened=[],detailClicks=0;
  const events=new Map(),observers=new Set(),root={},errorListeners=new Set(),messageListeners=new Set();let watchId=null;
  const later=(fn,ms)=>{let id=++serial;events.set(id,{fn,at:clock+ms});return id;};
@@ -34,7 +34,7 @@ function fixture({rows=[local,national],declaredTotal=null,activity=true,ready=t
    opened.push(cells[3]);if(watchId)phase('started');if(detailLoading){loading=true;mutate([mask]);}
    later(()=>{loading=false;dialogVisible=true;mutate();if(watchId)phase('finished',{http_status:requestStatus,retry_after_ms:7000});},detailDelay);}}]:[]}))};
  const grid={closest:()=>({}),get innerText(){return doneRows.length?'Public search results':'No Records Available';},
-  querySelector:q=>q==='table[role="grid"]'?table:q==='.k-pager-info'?txt(doneRows.length?`1 - ${doneRows.length} of ${declaredTotal??doneRows.length} items`:'No items to display'):
+  querySelector:q=>q==='table[role="grid"]'?table:q==='.k-pager-info'?txt(doneRows.length?`1 - ${doneRows.length} of ${doneRows.length} items`:'No items to display'):
    q==='[aria-current="page"]'?txt(doneRows.length?'1':'0'):null};
  const search={innerText:'Search',disabled:false,getClientRects:()=>ready?[{}]:[],click:()=>{
   if(activity&&!dialogVisible){loading=true;mutate([mask]);later(()=>{doneRows=rows;loading=false;mutate();},responseDelay);}
@@ -55,15 +55,10 @@ function fixture({rows=[local,national],declaredTotal=null,activity=true,ready=t
   assert.ok(done);assert.equal(observers.size,0);assert.equal(errorListeners.size,0);assert.equal(messageListeners.size,0);if(error)throw error;return value;
  }
  return {api:context.testTN,drive,h4s,dialog,grid,table,opened,get clicks(){return detailClicks;},get time(){return clock;},
-  now:()=>clock,search:()=>drive(context.testTN.tnSearch({state:'TN',operation:'search',name:queryName},clock+45000)),
+  search:()=>drive(context.testTN.tnSearch({state:'TN',operation:'search',name:queryName},clock+45000)),
   detail:()=>drive(context.testTN.tnDetail({state:'TN',operation:'detail',identifier:targetId},clock+45000))};
 }
 test('Tennessee retains national and local candidates with separate CO identifiers',async()=>{const f=fixture(),r=await f.search();assert.equal(r.total,2);assert.deepEqual(Array.from(r.rows,x=>x.identifier),['CO224','CO2559']);assert.equal(r.rows[1].aliases.length,2);assert.ok(!JSON.stringify(r).includes('unused summary'));});
-test('a completed over-limit Tennessee query fails immediately instead of waiting for a different pager count',async()=>{
- const f=fixture({declaredTotal:947});
- await assert.rejects(f.search(),/TN_RESULT_LIMIT/);
- assert.ok(f.now()<2000);
-});
 test('initial zero grid cannot become Not Registered before source completion',async()=>{const f=fixture({rows:[],activity:false});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('completed zero results require the count, zero page, and explicit empty marker',async()=>{const f=fixture({rows:[]});assert.equal((await f.search()).total,0);});
 test('verification/form readiness failure is distinct from no records',async()=>{const f=fixture({ready:false});await assert.rejects(f.search(),/VERIFICATION_OR_FORM_PENDING/);});

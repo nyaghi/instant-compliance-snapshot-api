@@ -60,3 +60,19 @@ window.CCExcelExport.build(cases).arrayBuffer()
              (snapshots, "State snapshot"), (snapshots, "State snapshot"), (history, "Search history"),
              (history, "Search attempts"), (snapshots, "Candidate snapshot"), ("See Candidate Evidence tab", "")],
         )
+
+    def test_alerts_hyperlinks_stay_in_the_evidence_column(self):
+        root = Path(__file__).resolve().parents[1]
+        program = r"""
+global.window={};
+require('./web-staging/excel-export.js');
+const url='https://staging.example.test/api/alerts/evidence/42';
+window.CCExcelExport.buildAlerts([['Example','12-3456789','NV','Old','New','Date','Now','',''+url]])
+    .arrayBuffer().then(bytes=>process.stdout.write(Buffer.from(bytes)));
+"""
+        run = subprocess.run(["node", "-e", program], cwd=root, capture_output=True, check=True)
+        with ZipFile(io.BytesIO(run.stdout)) as book:
+            sheet = ElementTree.fromstring(book.read("xl/worksheets/sheet1.xml"))
+            relation = ElementTree.fromstring(book.read("xl/worksheets/_rels/sheet1.xml.rels"))
+            self.assertEqual(sheet.find(".//{*}hyperlink").attrib["ref"], "I2")
+            self.assertEqual(relation[0].attrib["Target"], "https://staging.example.test/api/alerts/evidence/42")

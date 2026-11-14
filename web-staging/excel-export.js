@@ -99,12 +99,12 @@
     }
     // Staging diagnostics remain a separate non-display part of the ZIP. They
     // never become worksheet cells, formulas, macros or customer-facing text.
-    if(options.diagnostics)files['cc-diagnostics.json']=JSON.stringify({...options.diagnostics,exporter_version:'29.2PQ-evidence.1'});
+    if(options.diagnostics)files['cc-diagnostics.json']=JSON.stringify({...options.diagnostics,exporter_version:'29.2QD-evidence.1'});
     return zip(files);
   }
   function buildAlerts(rows) {
     const headers=['Organization','EIN','State','Previous status','New status','Change','Checked (UTC)','Review','Evidence'];
-    const links=rows.flatMap((r,i)=>/^https?:\/\/[^\s]+\/api\/alerts\/evidence\/[1-9]\d*$/.test(r[8])?[{row:i+2,url:r[8]}]:[]);
+    const links=rows.flatMap((r,i)=>/^https?:\/\/[^\s]+\/api\/alerts\/evidence\/[1-9]\d*$/.test(r[8])?[{cell:`I${i+2}`,url:r[8]}]:[]);
     const files={
       '[Content_Types].xml':declaration+'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
       '_rels/.rels':declaration+`<Relationships xmlns="${relns}"><Relationship Id="rId1" Type="${office}officeDocument" Target="xl/workbook.xml"/></Relationships>`,

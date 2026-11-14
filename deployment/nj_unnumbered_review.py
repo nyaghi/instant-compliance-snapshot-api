@@ -45,7 +45,7 @@ VIEW=r"""({expected,query,prepare})=>{
  return {fields,query:input.value,url:location.href,name_fits:fits};
 }"""
 
-def capture(master,page,org,data,*,candidate=None):
+def capture(master,page,org,data):
     run=CURRENT.get()
     if (run is None or run.state!='NJ' or run.ein!=master.canonical_ein_digits(org.ein)
             or not isinstance(data,dict) or type(data.get('ItemCount'))is not int or data['ItemCount']!=1
@@ -59,14 +59,8 @@ def capture(master,page,org,data,*,candidate=None):
     if len(values)!=len(attrs):return
     fields={k:re.sub(r'\s+',' ',str(values.get(k)or '')).strip()for k in KEYS}
     if fields['accountnumber']or fields['crsm_filestanding']!='Exempt'or not fields['name']:return
-    field_ein=master.canonical_ein_digits(fields['crsm_federalein'])
-    signed_legacy=(field_ein=='000000000' and isinstance(candidate,dict)
-                   and candidate.get('match',{}).get('reason')=='NJ_LEGACY_SUFFIX_INITIALS'
-                   and candidate.get('name')==fields['name'] and candidate.get('raw_status')=='Exempt'
-                   and not candidate.get('ein') and candidate.get('identifier')=='')
-    evidence_ein='' if field_ein=='000000000' else fields['crsm_federalein']
-    if evidence_ein and field_ein!=run.ein:return
-    if not signed_legacy and master.score_candidate(org.organization_name,org.ein,{'name':fields['name'],'ein':evidence_ein})['decision']=='rejected':return
+    if fields['crsm_federalein']and master.canonical_ein_digits(fields['crsm_federalein'])!=run.ein:return
+    if master.score_candidate(org.organization_name,org.ein,{'name':fields['name'],'ein':fields['crsm_federalein']})['decision']=='rejected':return
     query=getattr(page,'_cc_nj_query_diagnostic',{}).get('query')
     if not isinstance(query,str)or not query or page.url!=URL:return
     run.nj_unnumbered_capture_guard=True

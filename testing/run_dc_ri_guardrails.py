@@ -46,25 +46,6 @@ class LicenseControls(unittest.TestCase):
         self.assertLessEqual(len(generated),3*len(required))
         self.assertTrue(all(cc.distinctive_match_tokens(name) for name in generated))
         with self.assertRaises(TimeoutError):cc.select_licensed_charity(self.org,[row()],'RI',time.monotonic()-1)
-
-    def test_dc_reuses_completed_source_query_but_checks_each_candidate_office(self):
-        name = 'Beacon Learning Foundation'
-        matching = row(name, '400200123', street='1 Main St', region='MA', postal_code='02115',
-                       _dc_source_memo=True)
-        different_office = {**matching, 'identifier': '400200124', 'street': '10 Main St'}
-        source = json.dumps([{'name': name, 'principaladdress': '1 Main Street',
-                              'principalstate': 'MA', 'principalzipcode': '02115',
-                              'fein': '987654321'}]).encode()
-        context = cc.LICENSED_FOREIGN_EIN_CONTEXT.set({})
-        try:
-            with patch.object(cc, 'identity_fetch', side_effect=[TimeoutError(), source]) as fetch:
-                check = cc.licensed_charity_foreign_ein
-                self.assertEqual(check(self.org, matching, self.deadline, exact_name=True), {})
-                self.assertEqual(check(self.org, matching, self.deadline, exact_name=True)['ein'], '987654321')
-                self.assertEqual(check(self.org, different_office, self.deadline, exact_name=True), {})
-                self.assertEqual(fetch.call_count, 2)
-        finally:
-            cc.LICENSED_FOREIGN_EIN_CONTEXT.reset(context)
     def test_ri_dotted_initialism_gets_literal_suffix_free_probe_within_cap(self):
         dotted='A.B.C. Community Research Foundation, Inc.'
         token=cc.REVIEWED_NAME_CONTEXT.set({'123456789':(dotted,)})
@@ -180,27 +161,6 @@ class LicenseControls(unittest.TestCase):
             with patch.object(cc,method,side_effect=TimeoutError('source timed out')),patch.object(cc,'log_error'):
                 result=(cc.search_dc if state=='DC' else cc.search_ri)(self.org)
             self.assertEqual(result.status,'Unable to Confirm');self.assertFalse(result.success)
-    def test_ri_unverified_foundation_preserves_both_official_candidates(self):
-        org=cc.checker.Organization("Children's Hospital Corporation","042774441")
-        name="Children's Hospital Foundation"
-        candidates=[{'id':'C40643','title':name},{'id':'C40920','title':name}]
-        rows=[{**row(name, credential, status='Closed / Withdrawn / Canceled'),
-               'raw_status':'INACTIVE','url':cc.RI_PUBLIC_PORTAL+'/search/'+candidate['id']+'/detail'}
-              for credential,candidate in zip(('CO.9701175','CO.9700737'),candidates)]
-        with patch.object(cc,'trial_identity',return_value=True), \
-             patch.object(cc,'registry_json_request',return_value={'access_token':'public-test-token'}), \
-             patch.object(cc,'licensed_charity_names',return_value=(['Primary'],[])), \
-             patch.object(cc,'ri_charity_search',return_value=candidates), \
-             patch.object(cc,'ri_charity_detail',side_effect=rows), \
-             patch.object(cc,'licensed_charity_foreign_ein',return_value={}), \
-             patch.object(cc,'score_candidate',return_value={'decision':'possible'}):
-            result=cc.search_ri(org)
-        self.assertEqual(result.status,'Needs Review')
-        review=result._cc_identity_review
-        self.assertFalse(review['search_complete'])
-        self.assertEqual([candidate['identifier'] for candidate in review['records']],
-                         ['CO.9701175','CO.9700737'])
-
     def test_ri_generated_query_continues_after_only_rejected_rows(self):
         candidate={'id':'C1','title':'Beacon Learning Foundation'}
         with patch.object(cc,'registry_json_request',return_value={'access_token':'public-test-token'}),patch.object(cc,'licensed_charity_names',return_value=(['Original'],['Fallback'])),patch.object(cc,'ri_charity_search',side_effect=[[candidate],[]]) as search,patch.object(cc,'ri_charity_detail',return_value=row(ein='987654321')):
@@ -221,34 +181,6 @@ class LicenseControls(unittest.TestCase):
             result=cc.search_ri(self.org)
         self.assertEqual(result.status,'Pending')
         self.assertEqual([call.args[0] for call in search.call_args_list],required+[generated[0]])
-    def test_dc_initial_and_later_required_source_timeouts_stay_unreachable(self):
-        epoch = int(time.time() * 1000)
-        incomplete_page = {"features": [{"attributes": {"OBJECTID": 1,
-            "ENTITYNAME": "Beacon Learning Foundation", "DATAREFRESHEDON": epoch}}],
-            "exceededTransferLimit": True}
-        for responses, phase in [
-            ([TimeoutError("source stalled")], "first search page"),
-            ([incomplete_page, TimeoutError("source stalled")], "next search page"),
-            ([{"features": []}, TimeoutError("source stalled")], "source freshness check"),
-        ]:
-            with self.subTest(phase=phase), patch.object(cc, "registry_json_request", side_effect=responses), patch.object(cc, "log_error"):
-                result = cc.search_dc(self.org)
-                self.assertEqual(result.status, "Site Not Reachable")
-                self.assertEqual(result.reason_code, "DC_LICENSE_SOURCE_UNREACHABLE")
-                self.assertIn(phase, result.source_note)
-                self.assertFalse(result.success)
-
-    def test_dc_alternate_name_timeout_is_not_a_completed_negative(self):
-        failure = TimeoutError("source stalled")
-        failure._cc_dc_transport = {"source": "DC_LICENSE_API", "attempt": 2, "observed_phase": "response_headers"}
-        with patch.object(cc, "licensed_charity_names", return_value=(["Beacon"], [])), patch.object(
-                cc, "registry_json_request", side_effect=[
-                    {"features": []}, {"features": [{"attributes": {"DATAREFRESHEDON": int(time.time()*1000)}}]}, failure
-                ]), patch.object(cc, "log_error"):
-            result = cc.search_dc(self.org)
-        self.assertEqual(result.status, "Site Not Reachable")
-        self.assertEqual(result.source_attempts[0]["step"], "alternate-name first search page")
-
     def test_dc_error_payload_is_not_completed_negative(self):
         with patch.object(cc,'registry_json_request',return_value={'error':{'message':'Invalid field'}}):
             with self.assertRaises(ValueError):cc.dc_charity_records(self.org,self.deadline)

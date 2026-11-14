@@ -19,21 +19,6 @@ class KentuckyReviewedCandidateTests(unittest.TestCase):
         self.assertEqual(result.matched_registry_identifier,'4223')
         self.assertEqual(result.matched_registry_name,'NLEAFCF DBA FIRST RESPONDERS')
         self.assertEqual(c.public_status(result),'Current')
-    def test_verified_registration_with_unreadable_period_applies_disclosed_rule(self):
-        org = c.checker.Organization("Example Health Foundation", "123456789")
-        rows = [("123", "EXAMPLE HEALTH FOUNDATION", "2025", "")]
-        for observed_ein in ("123456789", "987654321"):
-            with self.subTest(ein=observed_ein), patch.object(c, "load_ky_snapshot_records", return_value=rows), patch.object(
-                    c, "ky_filed_period_evidence", return_value={
-                        "ein": observed_ein, "period_unconfirmed": True,
-                        "period_read_failure": "The filing could not be read."
-                    }):
-                result = c.search_ky_strict_snapshot(org)
-                self.assertEqual(result.matched_registry_identifier, "123")
-                self.assertEqual(c.true_status_from_body(result, ""), "Delinquent" if observed_ein == org.ein else "Unable to Confirm")
-                if observed_ein == org.ein:
-                    self.assertIn("No overdue date was established", c.comments_for_result(result, "", "Delinquent"))
-
     def test_generated_children_fragment_cannot_win_the_inner_selector(self):
         with patch.object(c,'load_ky_snapshot_records',return_value=[r for r in self.rows if r[0]=='9894']):
             result=c.search_ky_strict_snapshot(self.org)

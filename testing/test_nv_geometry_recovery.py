@@ -10,11 +10,9 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
         connector = Path(__file__).resolve().parents[1] / "deployment/staging_connector"
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
-            for fault in ("geometry", "identity", "loader", "loader-identity", "none", "short", "short-identity"):
+            for fault in ("geometry", "identity", "loader", "loader-identity", "none"):
                 with self.subTest(fault=fault):
-                    narrow = fault.startswith("short")
-                    page = await browser.new_page(viewport={"width": 640 if narrow else 1680,
-                                                            "height": 140 if narrow else 927})
+                    page = await browser.new_page(viewport={"width": 1680, "height": 927})
                     await page.route("**/*", lambda route: route.fulfill(content_type="text/html", body=HTML))
                     await page.goto("https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=local")
                     cdp = await page.context.new_cdp_session(page)
@@ -28,9 +26,7 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
                       window.chrome={runtime:{id:'local',onMessage:{addListener:fn=>window.localListener=fn}},
                         tabs:{get:async()=>({url:location.href}),sendMessage:async(_,m)=>{
                           const reply=await new Promise(resolve=>localListener(m,{id:'local'},resolve));
-                          if(m.action==='registry-snapshot-metadata'&&localFault==='short-identity'&&innerWidth>=1024)
-                            reply.source_binding+='changed';
-                          if(m.action==='registry-snapshot-metadata'&&shots===1&&localFault!=='none'&&!localFault.startsWith('short')){
+                          if(m.action==='registry-snapshot-metadata'&&shots===1&&localFault!=='none'){
                             reply.source_view_shape=[...reply.source_view_shape];reply.source_view_shape[0]+=1;
                             if(localFault.includes('identity'))reply.source_binding+='changed';
                             if(localFault.startsWith('loader')&&!window.loaderSeen){reply.source_loading_visible=true;window.loaderSeen=true;}
@@ -53,17 +49,8 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
                       const first=await captureStateSnapshot(job,query,'local',prepared);
                       const retry=job.nvGeometryRetryCommand==='local';
                       const second=retry?await captureStateSnapshot(job,query,'local',prepared,true):null;
-                      return {first:!!first,retry,second:!!second,shots,ready:metadata.source_fields_visible,
-                              bound:!!metadata.source_binding,detail:metadata.source_detail,width:innerWidth,height:innerHeight};
+                      return {first:!!first,retry,second:!!second,shots,ready:metadata.source_fields_visible};
                     }""")
-                    if narrow:
-                        self.assertFalse(result["detail"], result)
-                        self.assertTrue(result["bound"], result)
-                        self.assertEqual(result["first"], fault == "short", result)
-                        self.assertEqual(result["shots"], 1 if fault == "short" else 0, result)
-                        self.assertEqual((result["width"], result["height"]), (640, 140))
-                        await page.close()
-                        continue
                     self.assertTrue(result["ready"])
                     self.assertEqual(result["first"], fault == "none", result)
                     self.assertEqual(result["retry"], fault in ("geometry", "loader"), result)
