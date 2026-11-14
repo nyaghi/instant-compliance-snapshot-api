@@ -109,9 +109,10 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const searchButton={innerText:'Search',getClientRects:()=>[{}],disabled:false,click:()=>{
   page=1;searchClicks++;
   const id=inputs.nvBusinessId.value;
-  submitted.push({id,name:inputs.entityName.value,mode:searchMode});
+  const number=inputs.entityNumber.value;
+  submitted.push({id,...(number?{number}:{}),name:inputs.entityName.value,mode:searchMode});
   const source=exactRows||broadRows;
-  rows=id?(idResult||source.filter(row=>row[1]===id)):searchMode==='EXACT_MATCH'?(exactRows||[]):broadRows;
+  rows=id||number?(idResult||source.filter(row=>id?row[1]===id:row[2]===number)):searchMode==='EXACT_MATCH'?(exactRows||[]):broadRows;
   if(changedQueryBeforeRetry&&searchClicks===1)schedule(()=>{inputs.entityName.value='OTHER ENTITY';mutate();},1000);
   if(searchClicks>ignoredSearches&&(searchClicks===1||repeatSearchActivity))begin();
  }};
@@ -152,7 +153,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   {tagName:'H4',innerText:'Agent Information'},
   {tagName:'P',querySelector:()=>textEl('NV Business ID'),nextElementSibling:{tagName:'P',innerText:'AGENT-ID'}},
   {tagName:'P',querySelector:()=>textEl('Entity Status'),nextElementSibling:{tagName:'P',innerText:'Inactive'}}];
- const reservationFields={'Reserved Name':rows[0]?.[0]||'','Entity Number':rows[0]?.[1]||'','Status':'Expired','Formation Date':'02/04/2019','Expiration Date':''};
+ const reservationFields={'Reserved Name':(rows.find(r=>r[1]===opened.at(-1))||rows[0])?.[0]||'','Entity Number':opened.at(-1)||rows[0]?.[1]||'','Status':'Expired','Formation Date':'02/04/2019','Expiration Date':''};
  const form={querySelectorAll:q=>reservation?(q==='h4'?[textEl('Name Reservation Information'),textEl('Linked Entity Information')]:[
   ...Object.entries(reservationFields).map(([label,value])=>({tagName:'P',querySelector:s=>s==='strong'?textEl(label):null,nextElementSibling:{tagName:'P',innerText:value}})),
   {tagName:'H4',innerText:'Linked Entity Information'},{tagName:'P',innerText:'This name reservation has not been linked to a business'},
@@ -166,7 +167,12 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
     tr.querySelector=q=>q==='[role="gridcell"]'?{}:q==='[role="gridcell"] a'?{innerText:cells[0],click:()=>{
      detailClicks++;
      if(detailClicks<=ignoredDetailClicks){if(changedDetailQuery)schedule(()=>{inputs.entityName.value='DIFFERENT ORGANIZATION';mutate();},1000);return;}
-     opened.push(cells[1]);context.location.hash='screen='+(reservation?'NameReservationDetails':'Manage-Business')+'&id=fixture';
+     opened.push(cells[1]);
+     if(reservation&&broadRows.length>1) {
+      reservationFields['Reserved Name']=cells[0];
+      reservationFields['Entity Number']=cells[1];
+     }
+     context.location.hash='screen='+(reservation?'NameReservationDetails':'Manage-Business')+'&id=fixture';
      const renderDetail=()=>{detail=true;fieldValues['NV Business ID']=detailId||cells[1];fieldValues['Entity Status']=cells[6];mutate();};
      if(detailRenderDelay)schedule(renderDetail,detailRenderDelay);else {detail=true;fieldValues['NV Business ID']=detailId||cells[1];fieldValues['Entity Status']=cells[6];schedule(()=>mutate(),10);}
     }}:null;
@@ -998,6 +1004,23 @@ test('Nevada does not submit an unsettled reset or repeat a failed reset replay'
  }
 });
 
+
+test('narrowed Nevada reservation reopens only by its observed entity number',async()=>{
+ const rows=['NR20201008-06698','NR20191018-02121'].map(id=>
+  ["Children's Hospital",id,id,'Name Reservation','','10/18/2019','Expired']);
+ for(const changed of [false,true]) {
+  const resultRows=changed?[[...rows[1].slice(0,6),'Active']]:null;
+  const f=fixture({rows:manyPublicRows(57),exactRows:rows,reservation:true,resetOnReturn:true,
+                   initialPageSize:25,idResult:resultRows});
+  await f.drive(f.api.nvSearch(adaptiveQuery,f.time+45000));
+  await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:rows[0][1]},f.time+45000));
+  const detail=f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:rows[1][1]},f.time+45000));
+  if(changed)await assert.rejects(detail,/RESTORED_RESULTS_CHANGED/);
+  else assert.equal((await detail).fields['Entity Number'],rows[1][1]);
+  assert.deepEqual(f.submitted.at(-1),{id:'',number:rows[1][1],name:'',mode:'STARTS_WITH'});
+  assert.deepEqual(f.opened,changed?[rows[0][1]]:rows.map(row=>row[1]));
+ }
+});
 
 test('Nevada refuses a business ID result whose observed row changed',async()=>{
  const changed=[...observed[1]];changed[6]='Revoked';

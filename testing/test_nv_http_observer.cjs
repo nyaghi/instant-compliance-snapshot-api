@@ -29,3 +29,12 @@ test('business ID replay observes only the exact public ID search with empty nam
   assert.equal(h.messages.length,Object.keys(change).length?1:3);
  }
 });
+
+test('reservation replay observes only the original entity number and empty other filters',()=>{
+ for(const changes of [{},{entityNumber:'NR20201008-06698'},{nvBusinessId:'NV1'},{entityName:'Other'}]) {
+  const h=fixture();
+  h.watch({entity_number:'NR20191018-02121',name:''});
+  h.request(h.body({entityName:'',entityNumber:'NR20191018-02121',...changes})).finish(200);
+  assert.equal(h.messages.length,Object.keys(changes).length?1:3);
+ }
+});

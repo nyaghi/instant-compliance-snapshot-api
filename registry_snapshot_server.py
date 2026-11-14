@@ -1960,6 +1960,7 @@ def known_names_for_ein(ein: str) -> list[str]:
 REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
 USER_IDENTITY_CONTEXT = ContextVar("user_identity_review", default={})
 AL_FOREIGN_EIN_CONTEXT = ContextVar("al_connector_foreign_ein", default=None)
+TN_FOREIGN_EIN_CONTEXT = ContextVar("tn_connector_foreign_ein", default=None)
 IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
 IDENTITY_CACHE_LOCK = threading.Lock()
 IRS_HISTORY_HEADER_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
@@ -9634,6 +9635,8 @@ def final_four_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     al_identity_context = AL_FOREIGN_EIN_CONTEXT.set(
         record.setdefault("al_foreign_ein_checks", {}) if record["state"] == "AL" else None)
+    tn_identity_context = TN_FOREIGN_EIN_CONTEXT.set(
+        record.setdefault("tn_foreign_ein_checks", {}) if record["state"] == "TN" else None)
     try:
         result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ()), ms_recovery=record.get('ms_search_recovery', ''),
                             ms_skip_probe=record.get('ms_skip_probe', False)) if record['state'] == 'MS' else
@@ -9668,6 +9671,7 @@ def final_four_connector_advance(record):
         return {"phase": "complete", "result": final_four_connector_failure(
             record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "", diagnostic)}
     finally:
+        TN_FOREIGN_EIN_CONTEXT.reset(tn_identity_context)
         AL_FOREIGN_EIN_CONTEXT.reset(al_identity_context)
     if time.time() >= record["expires"]:
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
@@ -10592,19 +10596,31 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
              "upper(name) like '%" + "%".join(words) + "%'")
     url = "https://data.colorado.gov/resource/37wu-kn3g.json?" + urlencode({"$limit": "100",
         "$where": where, "$order": "registrationapproveddate DESC"})
+    checks = TN_FOREIGN_EIN_CONTEXT.get() if exact_name else None
+    cache_key = None
+    if checks is not None and len(canonical_ein_digits(org.ein)) == 9:
+        identity = [canonical_ein_digits(org.ein), row.get("identifier"), url, street, postal, region]
+        cache_key = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
+        if cache_key in checks:
+            return checks[cache_key]
     try:
         records = json.loads(identity_fetch(url, min(deadline, time.monotonic()+6)))
-        if not isinstance(records, list) or len(records) >= 100: return {}
+        if not isinstance(records, list) or len(records) >= 100:
+            return {}
         matching = [r for r in records if isinstance(r, dict) and normalized_match_name(str(r.get("name") or "")) == key
             and registry_street_key(r.get("principaladdress")) == street
             and str(r.get("principalstate") or "").upper() == region
             and str(r.get("principalzipcode") or "")[:5] == postal]
         eins = {canonical_ein_digits(str(r.get("fein") or "")) for r in matching}
-        if len(eins) != 1 or any(len(ein) != 9 or ein == canonical_ein_digits(org.ein) for ein in eins): return {}
-        return {"decision": "different_ein", "ein": next(iter(eins)), "source": "CO", "source_url": url,
-            "basis": "The full registered name, street, state and ZIP agree with Colorado charity records tied to a different EIN.",
-            "registry_name": row["name"], "records": [{k:r.get(k, "") for k in
-                ("name", "fein", "principaladdress", "principalcity", "principalstate", "principalzipcode", "registrationapproveddate")} for r in matching]}
+        proof = {}
+        if len(eins) == 1 and all(len(ein) == 9 and ein != canonical_ein_digits(org.ein) for ein in eins):
+            proof = {"decision": "different_ein", "ein": next(iter(eins)), "source": "CO", "source_url": url,
+                "basis": "The full registered name, street, state and ZIP agree with Colorado charity records tied to a different EIN.",
+                "registry_name": row["name"], "records": [{k:r.get(k, "") for k in
+                    ("name", "fein", "principaladdress", "principalcity", "principalstate", "principalzipcode", "registrationapproveddate")} for r in matching]}
+        if cache_key is not None and len(checks) < 24 and len(json.dumps(proof)) <= 2048:
+            checks[cache_key] = proof
+        return proof
     except Exception as exc:
         row["foreign_ein_check"] = {"outcome": "unavailable", "source": "CO",
                                     "error_type": type(exc).__name__, **identity_failure_evidence(exc)}
@@ -29665,9 +29681,11 @@ NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
 def ny_connector_pack(record):
     # Public search evidence and check binding only; no passcode or state credential.
     body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
-    if len(body) > 320000 and record.pop("al_foreign_ein_checks", None):
-        # Preserve the completed searches before any optional identity memo.
-        body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 320000:
+        discarded_memos = [record.pop(key, None) for key in ("al_foreign_ein_checks", "tn_foreign_ein_checks")]
+        if any(discarded_memos):
+            # Preserve the completed searches before any optional identity memo.
+            body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     if len(body) > 320000:
         from deployment.history_returned_rows import drop_returned_details
         if drop_returned_details(record):
