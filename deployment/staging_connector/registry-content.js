@@ -373,7 +373,13 @@
           const control=searchControl();
           if(control && control.getAttribute('aria-expanded')!=='true')control.click();
         }});
-        await confirm(openOption,Math.max(1,modeDeadline-Date.now()));
+        await wait(()=>nvSearchModeSelected(mode),Math.max(1,modeDeadline-Date.now()),{
+          action:()=>{
+            select(openOption);
+            if(!nvSearchModeSelected(mode)&&openOption.isConnected&&visible(openOption))openOption.click();
+          },
+          settle:200,sameCandidate:(prior,current)=>prior===current
+        });
       } catch(error) {
         if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_NOT_SELECTED');
         throw error;

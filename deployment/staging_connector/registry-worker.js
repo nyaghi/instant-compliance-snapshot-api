@@ -518,7 +518,7 @@ async function registryTnPendingDelivery(job,message,send) {
   // the other owned collector is idle so recovery cannot steal its surface.
   let pending=true,timer=null;
   const command=job.pending,tab=job.tab,deadline=job.activeExpiresAt;
-  const phase=message.action==='registry-ready'?'ready':'detail';
+  const phase=message.action==='registry-ready'?'ready':message.query.operation;
   const current=()=>pending&&!job.closed&&owned.has(tab)&&job.tab===tab
     &&job.pending===command&&job.activeExpiresAt===deadline&&Date.now()<deadline;
   const peerBusy=()=>allJobs().some(other=>other!==job&&!other.closed&&isActive(other)&&other.pending);
@@ -534,8 +534,19 @@ async function registryTnPendingDelivery(job,message,send) {
     } catch { /* Observation/recovery failure cannot replace the real reply. */ }
   };
   timer=setTimeout(()=>{inspect().catch(()=>{});},Math.min(3000,Math.max(1,deadline-Date.now())));
-  try {return await send();}
-  finally {pending=false;clearTimeout(timer);}
+  let watchdog;
+  try {
+    if(phase!=='search')return await send();
+    // Bound a silent message independently of timers in the registry tab.
+    // A timed-out command remains incomplete and is never resent.
+    const waitMs=Math.max(1,Math.min(message.budgetMs,35000)+1500);
+    return await Promise.race([send(),new Promise(resolve=>{
+      watchdog=setTimeout(()=>{
+        diagnostic('tn-search-watchdog',job,JSON.stringify({wait_ms:waitMs,same_command:true}));
+        resolve({ok:false,reason:'NY_CONNECTOR_REGISTRY_TN_RESPONSE_PENDING'});
+      },Math.min(waitMs,Math.max(1,deadline-Date.now())));
+    })]);
+  } finally {pending=false;clearTimeout(timer);clearTimeout(watchdog);}
 }
 
 async function registryMessage(job, message) {
@@ -627,7 +638,7 @@ async function registryMessage(job, message) {
       })])))));
     } finally {clearTimeout(timer);}
   }
-  if(P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-ready'||message.action==='registry-tn'&&message.query?.operation==='detail'))
+  if(P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-ready'||message.action==='registry-tn'&&['search','detail'].includes(message.query?.operation)))
     return registryTnPendingDelivery(job,message,send);
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return wfReturn(job,"registry-worker.js:registryMessage:553:70:return",(send()));
   // Keep the overall job deadline as the transport bound. A second timer at

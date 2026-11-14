@@ -161,6 +161,27 @@ class LicenseControls(unittest.TestCase):
             with patch.object(cc,method,side_effect=TimeoutError('source timed out')),patch.object(cc,'log_error'):
                 result=(cc.search_dc if state=='DC' else cc.search_ri)(self.org)
             self.assertEqual(result.status,'Unable to Confirm');self.assertFalse(result.success)
+    def test_ri_unverified_foundation_preserves_both_official_candidates(self):
+        org=cc.checker.Organization("Children's Hospital Corporation","042774441")
+        name="Children's Hospital Foundation"
+        candidates=[{'id':'C40643','title':name},{'id':'C40920','title':name}]
+        rows=[{**row(name, credential, status='Closed / Withdrawn / Canceled'),
+               'raw_status':'INACTIVE','url':cc.RI_PUBLIC_PORTAL+'/search/'+candidate['id']+'/detail'}
+              for credential,candidate in zip(('CO.9701175','CO.9700737'),candidates)]
+        with patch.object(cc,'trial_identity',return_value=True), \
+             patch.object(cc,'registry_json_request',return_value={'access_token':'public-test-token'}), \
+             patch.object(cc,'licensed_charity_names',return_value=(['Primary'],[])), \
+             patch.object(cc,'ri_charity_search',return_value=candidates), \
+             patch.object(cc,'ri_charity_detail',side_effect=rows), \
+             patch.object(cc,'licensed_charity_foreign_ein',return_value={}), \
+             patch.object(cc,'score_candidate',return_value={'decision':'possible'}):
+            result=cc.search_ri(org)
+        self.assertEqual(result.status,'Needs Review')
+        review=result._cc_identity_review
+        self.assertFalse(review['search_complete'])
+        self.assertEqual([candidate['identifier'] for candidate in review['records']],
+                         ['CO.9701175','CO.9700737'])
+
     def test_ri_generated_query_continues_after_only_rejected_rows(self):
         candidate={'id':'C1','title':'Beacon Learning Foundation'}
         with patch.object(cc,'registry_json_request',return_value={'access_token':'public-test-token'}),patch.object(cc,'licensed_charity_names',return_value=(['Original'],['Fallback'])),patch.object(cc,'ri_charity_search',side_effect=[[candidate],[]]) as search,patch.object(cc,'ri_charity_detail',return_value=row(ein='987654321')):

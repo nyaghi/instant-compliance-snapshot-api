@@ -11568,6 +11568,7 @@ def search_ri(org):
                                             if value.casefold() not in {q.casefold() for q in required + legal_probes}]
         rows, seen = [], set()
         unresolved_foundation = None
+        foundation_candidates = []
         for index, query in enumerate(planned):
             phase = "evaluating previously retrieved candidates"
             if index >= len(required) + len(legal_probes) and rows:
@@ -11595,6 +11596,10 @@ def search_ri(org):
                     if foreign.get("decision") == "different_ein":
                         continue
                     unresolved_foundation = ValueError("Rhode Island cannot distinguish a potential foundation match")
+                    if trial_identity() and not user_rejected_credential(org.ein, "RI", row["identifier"]):
+                        foundation_candidates.append({**row, "_identity_outcome": "possible",
+                            "address_evidence": {"decision": "unavailable",
+                                "basis": "The foundation credential has no independently corroborated identity."}})
                     continue
                 rows.append(row)
         if unresolved_foundation is not None:
@@ -11602,6 +11607,12 @@ def search_ri(org):
             primary_name = complete_name_identity_key(org.organization_name)
             primary = [row for row in rows if complete_name_identity_key(row["name"]) == primary_name
                        and licensed_charity_identity(org, row, "RI", deadline) == "accepted"]
+            if trial_identity() and (primary or foundation_candidates):
+                for row in primary:
+                    row["_identity_outcome"] = "possible"
+                return scope_identity_review_result(
+                    org, "RI", (primary + foundation_candidates)[:10], False, RI_PUBLIC_PORTAL,
+                    foundation_scope_name=org.organization_name)
             if primary:
                 for row in primary:
                     row["_identity_outcome"] = "possible"

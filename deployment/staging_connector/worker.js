@@ -246,7 +246,7 @@ function allowedSender(sender) {
 function post(job, message) {
   message=nvHandoffDiagnostic(job,message);
   if(P.TRIAL_ORIGIN)message={...message,workflow_observation:wfExport(job)};
-  if(P.TRIAL_ORIGIN && ["GA","MS","NC","TN","AL","IL","NM","NY"].includes(job.registryState)
+  if(P.TRIAL_ORIGIN && ["GA","MS","NC","TN","AL","IL","NM","NY","NV"].includes(job.registryState)
       && (message.action==="closed" || (typeof message.ok==="boolean" && !message.progress)))
     message={...message,trial_diagnostics:[...(job.trialDiagnostics||[])]};
   if(P.TRIAL_ORIGIN && job.registryState==='IL' && typeof message.ok==='boolean' && !message.progress)

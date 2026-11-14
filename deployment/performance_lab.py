@@ -282,11 +282,16 @@ def final_four_asset(name, text):
       onResult(result);''')
         replace('      connectorStarted=true;', '''      connectorStarted=true;
       const tnFirst=mode==='standard';
-      const nvEarly=tnFirst && location.pathname==='/' &&
-        new URLSearchParams(location.search).get('aurora_connector_test')==='background';
-      const priority=nvEarly?['TN','NV']:tnFirst?['TN']:[];
-      const dispatchOrder=[...priority.filter(state=>external.includes(state)),...external.filter(state=>!priority.includes(state))];
-      trace("browser collectors dispatched",{states:[...dispatchOrder],collector_order:nvEarly?'tn-nv-first':tnFirst?'tn-first':'default'});''')
+      const params=new URLSearchParams(location.search);
+      const quietDuo=tnFirst && location.pathname==='/' &&
+        params.get('aurora_connector_test')==='background' && params.get('collector_layout')==='duo';
+      // Start Tennessee's long continuation without letting Nevada occupy the
+      // only other browser position before the rest can get through it.
+      const priority=quietDuo?['TN','NC','IL','NY']:tnFirst?['TN']:[];
+      const pending=quietDuo?external.filter(state=>state!=='NV'):external;
+      const dispatchOrder=[...priority.filter(state=>pending.includes(state)),...pending.filter(state=>!priority.includes(state)),
+        ...(quietDuo&&external.includes('NV')?['NV']:[])];
+      trace("browser collectors dispatched",{states:[...dispatchOrder],collector_order:quietDuo?'quiet-duo-preserve-second-slot':tnFirst?'tn-first':'default'});''')
         replace('connector=Promise.all(external.map(async state=>{', 'connector=Promise.all(dispatchOrder.map(async state=>{')
         replace('    let connector=Promise.resolve(),connectorStarted=false;', '''    const quietTennessee = mode==='standard' && location.pathname==='/' &&
       new URLSearchParams(location.search).get('aurora_connector_test')==='background';

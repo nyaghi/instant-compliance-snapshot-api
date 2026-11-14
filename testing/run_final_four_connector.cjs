@@ -51,6 +51,20 @@ function fixture(enabled=true){
   return Object.assign(h,{calls,reloads});
 }
 
+test('TN unanswered search returns at the worker deadline without a second command',async()=>{
+ const h=fixture();await tick();
+ const job={activeExpiresAt:310000,closed:false,registryState:'TN'};
+ let calls=0;
+ const pending=h.context.registryTnPendingDelivery(job,{action:'registry-tn',
+   query:{operation:'search'},budgetMs:45000},()=>{calls++;return new Promise(()=>{});});
+ await h.advance(36499);
+ assert.equal(calls,1);
+ await h.advance(1);
+ assert.equal((await pending).reason,'NY_CONNECTOR_REGISTRY_TN_RESPONSE_PENDING');
+ assert.equal(calls,1);
+ assert.equal(job.activeExpiresAt,310000);
+});
+
 test('TN commands wait three seconds after completion without extending the job deadline',async()=>{
  const h=fixture();await tick();await h.context.registryTnAfterCommand({ok:true});
  const job={activeExpiresAt:70000,closed:false,registryState:'TN'};let done=false;

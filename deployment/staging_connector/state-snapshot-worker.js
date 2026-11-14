@@ -701,7 +701,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         const captureImage=options=>wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:389:45:await",
           ()=>sampled('capture:'+images.length,()=>chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',options)));
         let image;
-        if(nyRequiredDetail&&gaFullViewport) {
+        if((nyRequiredDetail||ncSelectedDetail)&&gaFullViewport) {
           // The selected source already fits its owned viewport. Request
           // viewport pixels directly and retain every existing post-check.
           const {clip,...viewportOptions}=screenshotOptions;
