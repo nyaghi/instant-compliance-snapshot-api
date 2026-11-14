@@ -527,9 +527,9 @@
 
 
 
-  <script src="/ny-connector.js?v=2026.09.29.2PP"></script>
+  <script src="/ny-connector.js?v=2026.09.29.2PQ"></script>
   <script src="/organization-identity.js?v=20261013.7"></script>
-  <script src="/excel-export.js?v=29.2OX-history.2"></script>
+  <script src="/excel-export.js?v=29.2PQ-evidence.1"></script>
   <script src="/identity-review.js?v=20261112.6"></script>
   <script>
 
@@ -1134,6 +1134,8 @@
       resultPanel.classList.remove("hidden");
 
       downloadExcelButton.classList.remove("hidden");
+      const excelNotice = document.getElementById("excelDownloadNotice");
+      if (excelNotice) excelNotice.textContent = "";
 
       downloadLeadLogButton.classList.toggle("hidden", !internalUnlocked);
 
@@ -1221,12 +1223,31 @@
 
     function downloadExcel() {
       const diagnostics = null;
-      const blob = window.CCExcelExport.build(latestResults, {comments: commentsWithRegistryFooter, diagnostics});
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `compliance-express-charity-clarity-${new Date().toISOString().slice(0, 10)}.xlsx`;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      let notice = document.getElementById("excelDownloadNotice");
+      if (!notice) {
+        notice = document.createElement("p");
+        notice.id = "excelDownloadNotice";
+        notice.setAttribute("role", "status");
+        notice.className = "mt-2 text-sm";
+        downloadExcelButton.parentElement.insertAdjacentElement("afterend", notice);
+      }
+      try {
+        const blob = window.CCExcelExport.build(latestResults, {comments: commentsWithRegistryFooter, diagnostics});
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.href = url;
+        link.download = `compliance-express-charity-clarity-${new Date().toISOString().slice(0, 10)}.xlsx`;
+        document.body.appendChild(link);
+        try {
+          link.click();
+          notice.textContent = "Excel download requested. Check your browser’s downloads for the file.";
+        } finally {
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 30000);
+        }
+      } catch {
+        notice.textContent = "The Excel workbook could not be prepared. Try Download Excel again.";
+      }
     }
 
 
@@ -1295,6 +1316,9 @@
           if (state === 'NY' && error?.ccRegistryHandoffFailed) {
             result.status_reason = 'NY_RESULT_SUBMISSION_FAILED';
             result.comments = result.source_note = 'The New York browser search returned, but CharityClarity could not process its result because the server handoff failed. This does not establish a registration status. Retry New York.';
+          } else if (error?.ccRegistryRequestTimedOut) {
+            result.status_reason = 'REGISTRY_CONNECTOR_REQUEST_TIMEOUT';
+            result.comments = result.source_note = `CharityClarity timed out waiting for the server during the ${state} check. Retry ${state}.`;
           }
           return result;
         }

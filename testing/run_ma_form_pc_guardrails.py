@@ -253,6 +253,32 @@ class MassachusettsSelectionTests(unittest.TestCase):
         read.assert_called_once()
         self.assertEqual(result.status_reason, "MA_FORM_PC_DETAIL_UNCONFIRMED")
 
+    def test_empty_ein_search_checks_legal_name_and_requires_identity_bound_detail(self):
+        for observed_ein in ("123456789", "987654321"):
+            with self.subTest(ein=observed_ein):
+                completed = {}
+                page, _ = self.page(completed)
+                click = page.get_by_role.return_value.click.side_effect
+                def click_with_ein(**kwargs):
+                    click(**kwargs)
+                    if "record" in completed:
+                        completed["record"]["ein"] = observed_ein
+                page.get_by_role.return_value.click.side_effect = click_with_ein
+                with patch.object(cc, "registry_page_body", side_effect=["No Charity Found", "Select a Charity"]), patch.object(
+                        cc, "ma_detail_body", return_value="AG Account Number 051172"), patch.object(
+                        cc, "ma_read_latest_form_pc", return_value={}) as read:
+                    result, body = cc.search_ma_master(page, self.org, completed)
+                fills = [call.args[0] for call in page.get_by_role.return_value.first.fill.call_args_list]
+                self.assertEqual(fills, ["123456789", "Example Foundation"])
+                if observed_ein == "123456789":
+                    self.assertEqual(result.status_reason, "MA_MATCHED_FILING_PERIOD_UNVERIFIED")
+                    self.assertEqual(cc.true_status_from_body(result, body), "Delinquent")
+                    self.assertIn("No overdue date", cc.source_note_for_result(result))
+                    read.assert_called_once()
+                else:
+                    self.assertEqual(result.status_reason, "MA_CHARITY_SELECTION_UNCONFIRMED")
+                    read.assert_not_called()
+
     def test_incomplete_or_wrong_record_never_becomes_empty_history(self):
         for finish, record_id in ((False, "right"), (True, "wrong")):
             completed = {}

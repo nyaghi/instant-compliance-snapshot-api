@@ -11237,7 +11237,29 @@ def dc_license_query_patterns(names):
 
 
 class DcLicenseSourceUnavailable(Exception):
-    """The DC public license feed failed before its first response."""
+    """A required DC license-feed request failed before its response was usable."""
+
+    def __init__(self, phase, cause):
+        super().__init__(str(cause))
+        self.phase = phase
+
+
+def dc_license_request(deadline, phase, **payload):
+    # Running out of local time before a request is different from a source
+    # that failed to answer an attempted request.
+    if time.monotonic() >= deadline:
+        raise TimeoutError("DC lookup allowance expired before " + phase)
+    try:
+        return registry_json_request(DC_LICENSE_API, deadline, form=True, payload=payload)
+    except (TimeoutError, urllib.error.URLError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            unreachable = exc.code in {408, 500, 502, 503, 504}
+        else:
+            unreachable = isinstance(exc, TimeoutError) or isinstance(
+                exc.reason, (TimeoutError, ConnectionError))
+        if unreachable:
+            raise DcLicenseSourceUnavailable(phase, exc) from exc
+        raise
 
 
 def dc_charity_records(org, deadline, query_patterns=None):
@@ -11259,17 +11281,9 @@ def dc_charity_records(org, deadline, query_patterns=None):
     try:
         offset, raw_rows, seen = 0, [], set()
         while True:
-            try:
-                data = registry_json_request(DC_LICENSE_API, deadline, form=True, payload={"where": where, "outFields": fields,
-                    "returnGeometry": "false", "f": "json", "orderByFields": "OBJECTID", "resultOffset": offset, "resultRecordCount": 500})
-            except (TimeoutError, urllib.error.URLError) as exc:
-                if isinstance(exc, urllib.error.HTTPError):
-                    unreachable = exc.code in {500, 502, 503, 504}
-                else:
-                    unreachable = isinstance(exc, TimeoutError) or isinstance(exc.reason, (TimeoutError, ConnectionError))
-                if offset == 0 and unreachable:
-                    raise DcLicenseSourceUnavailable(str(exc)) from exc
-                raise
+            data = dc_license_request(deadline, "first search page" if offset == 0 else "next search page",
+                where=where, outFields=fields, returnGeometry="false", f="json",
+                orderByFields="OBJECTID", resultOffset=offset, resultRecordCount=500)
             if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("features"), list):
                 raise ValueError("DC returned an incomplete or rejected query")
             batch = [r.get("attributes") for r in data["features"]]
@@ -11282,8 +11296,9 @@ def dc_charity_records(org, deadline, query_patterns=None):
             offset += len(batch)
         refreshed = max((dc_source_date(r.get("DATAREFRESHEDON")) or date.min for r in raw_rows), default=date.min)
         if not raw_rows:
-            probe = registry_json_request(DC_LICENSE_API, deadline, form=True, payload={"where": "UPPER(BUSINESSACTIVITY) LIKE '%CHARITABLE%'",
-                "outFields": "DATAREFRESHEDON", "orderByFields": "DATAREFRESHEDON DESC", "resultRecordCount": 1, "returnGeometry": "false", "f": "json"})
+            probe = dc_license_request(deadline, "source freshness check",
+                where="UPPER(BUSINESSACTIVITY) LIKE '%CHARITABLE%'", outFields="DATAREFRESHEDON",
+                orderByFields="DATAREFRESHEDON DESC", resultRecordCount=1, returnGeometry="false", f="json")
             if not isinstance(probe, dict) or probe.get("error") or not probe.get("features"):
                 raise ValueError("DC source freshness could not be verified")
             refreshed = dc_source_date(probe["features"][0].get("attributes", {}).get("DATAREFRESHEDON")) or date.min
@@ -11334,7 +11349,7 @@ def search_dc(org):
     # Keep both existing recoverable read windows plus their half-second pause.
     # This allowance is shared across the full lookup, never reset per page.
     deadline = time.monotonic() + 35.5
-    primary_completed = False
+    fallback_started = False
     try:
         # Complete primary-name spelling first. Never collapse it into a
         # generated one-word predicate before the first source request.
@@ -11343,13 +11358,13 @@ def search_dc(org):
         required, generated = licensed_charity_names(org)
         fallback = dc_license_query_patterns(required + generated)
         rows, freshness = dc_charity_records(org, deadline, patterns)
-        primary_completed = True
         result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         selected = getattr(result, "_cc_license_record", {})
         if patterns != fallback and not (result.success and not getattr(result, "_cc_identity_review", None)
                 and licensed_primary_positive_complete(org, selected, rows, state="DC")):
             # No negative/adverse/alias-only conclusion from the primary
             # search. The complete old alias/fallback coverage is retained.
+            fallback_started = True
             rows, freshness = dc_charity_records(org, deadline, fallback)
             result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         try:
@@ -11359,15 +11374,22 @@ def search_dc(org):
         return result
     except Exception as exc:
         result = licensed_charity_failure(org, "DC", DC_LICENSE_API, exc)
-        if isinstance(exc, DcLicenseSourceUnavailable) and not primary_completed:
+        if isinstance(exc, DcLicenseSourceUnavailable):
             result.status = "Site Not Reachable"
             result.reason_code = "DC_LICENSE_SOURCE_UNREACHABLE"
-            cause = exc.__cause__
-            transport = getattr(cause, "_cc_dc_transport", None)
+            stage = ("alternate-name " if fallback_started else "") + exc.phase
+            transport = getattr(exc.__cause__, "_cc_dc_transport", None)
             if transport:
-                result.source_attempts = [transport]
-            result.source_note = ("D.C.'s public license feed was unavailable before any search results were returned. "
-                                  "CharityClarity reports Site Not Reachable.")
+                result.source_attempts = [dict(transport, step=stage)]
+            result.source_note = (
+                f"D.C.'s public license feed could not complete the {stage}. "
+                "The registration check could not be completed."
+            )
+        elif isinstance(exc, TimeoutError):
+            result.source_note = (
+                "D.C. returned a response, but the required record checks did not finish "
+                "within the lookup allowance. Registration remains unconfirmed."
+            )
         return result
 
 
@@ -11498,6 +11520,7 @@ def ri_distinctive_fallback(name, fallback):
 
 def search_ri(org):
     deadline = time.monotonic() + 90
+    phase = "starting the public search session"
     try:
         token = registry_json_request(RI_PUBLIC_PORTAL + "/api/auth/token", deadline, payload={})
         if not isinstance(token, dict) or not token.get("access_token"): raise ValueError("Rhode Island public search session unavailable")
@@ -11516,9 +11539,11 @@ def search_ri(org):
         rows, seen = [], set()
         unresolved_foundation = None
         for index, query in enumerate(planned):
+            phase = "evaluating previously retrieved candidates"
             if index >= len(required) + len(legal_probes) and rows:
                 selected, _ = select_licensed_charity(org, rows, "RI", deadline)
                 if selected: break
+            phase = "reading search results"
             for candidate in ri_charity_search(query, deadline, headers):
                 if candidate["id"] in seen: continue
                 seen.add(candidate["id"])
@@ -11527,6 +11552,7 @@ def search_ri(org):
                 separate_name = trial_identity() and distinct_foundation_name_scope(
                     org.organization_name, candidate["title"])
                 try:
+                    phase = "reading the candidate detail"
                     row = ri_charity_detail(candidate, deadline, headers)
                 except ValueError as exc:
                     if not separate_name:
@@ -11534,6 +11560,7 @@ def search_ri(org):
                     unresolved_foundation = exc
                     continue
                 if separate_name:
+                    phase = "verifying the similarly named organization"
                     foreign = licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
                     if foreign.get("decision") == "different_ein":
                         continue
@@ -11552,9 +11579,14 @@ def search_ri(org):
                 result.source_note += (" Rhode Island returned the requested record, but a similarly named "
                                        "organization could not be ruled out. Review the original record.")
             return result
+        phase = "evaluating the retrieved registrations"
         return licensed_charity_result(org, "RI", rows, deadline, RI_PUBLIC_PORTAL)
     except Exception as exc:
-        return licensed_charity_failure(org, "RI", RI_PUBLIC_PORTAL, exc)
+        result = licensed_charity_failure(org, "RI", RI_PUBLIC_PORTAL, exc)
+        result.source_note = (
+            f"Rhode Island did not finish {phase}. Registration remains unconfirmed."
+        )
+        return result
 
 
 def possessive_search_phrases(name: str) -> list[str]:
@@ -21871,34 +21903,47 @@ def search_ma_master(page, org, completed):
 
     try:
         page.goto(result.source_url, wait_until="domcontentloaded", timeout=45000)
-        mode = "Employer Identification Number" if re.sub(r"\D", "", org.ein or "") else "Charity Name Contains"
-        page.get_by_role("combobox").first.select_option(label=mode, timeout=15000)
-        query = re.sub(r"\D", "", org.ein or "") or org.organization_name
-        field = page.get_by_role("textbox").first
-        field.fill("")
-        field.type(query, delay=35)
-        page.get_by_role("button", name="Search", exact=True).click(timeout=5000)
-        page.get_by_text(re.compile(r"^Select a Charity$|^No Charity Found[.!]?$", re.I)).and_(page.locator(":visible")).first.wait_for(timeout=15000)
-        body = registry_page_body(page)
-        # Record the actual submitted field only after its result is displayed.
-        # Passive traffic parsing does not recognize this Salesforce form.
-        try:
-            from deployment.state_snapshots import CURRENT
-            from deployment.search_history import SourceQueryReceipt
-            run = CURRENT.get()
-            if run is not None and run.state == "MA":
-                receipt = SourceQueryReceipt(run, {
-                    "state": "MA", "operation": "search",
-                    "ein" if mode == "Employer Identification Number" else "name": query,
-                    "filter_label": mode, "source_kind": "state_portal", "url": result.source_url,
-                })
-                receipt.complete(0 if re.search(r"\bNo Charity Found\b", body, re.I) else None)
-        except Exception:
-            pass  # History capture cannot change the completed registry result.
-        if re.search(r"\bNo Charity Found\b", body, re.I):
+        requested_ein = re.sub(r"\D", "", org.ein or "")
+        mode = "Employer Identification Number" if requested_ein else "Charity Name Contains"
+        query = requested_ein or org.organization_name
+        empty = re.compile(r"\bNo Charity Found\b", re.I)
+
+        def submit_search(mode, query):
+            page.get_by_role("combobox").first.select_option(label=mode, timeout=5000)
+            page.get_by_role("textbox").first.fill(query, timeout=5000)
+            page.get_by_role("button", name="Search", exact=True).click(timeout=5000)
+            outcome = page.get_by_text(re.compile(r"^Select a Charity$|^No Charity Found[.!]?$", re.I))
+            outcome.and_(page.locator(":visible")).first.wait_for(timeout=15000)
+            response = registry_page_body(page)
+            try:
+                from deployment.state_snapshots import CURRENT
+                from deployment.search_history import SourceQueryReceipt
+                run = CURRENT.get()
+                if run is not None and run.state == "MA":
+                    receipt = SourceQueryReceipt(run, {
+                        "state": "MA", "operation": "search",
+                        "ein" if mode == "Employer Identification Number" else "name": query,
+                        "filter_label": mode, "source_kind": "state_portal", "url": result.source_url,
+                    })
+                    receipt.complete(0 if empty.search(response) else None)
+            except Exception:
+                pass
+            return response
+
+        body = submit_search(mode, query)
+        name_fallback = bool(requested_ein and empty.search(body) and org.organization_name.strip())
+        if name_fallback:
+            # Clear the previous "No Charity Found" before observing a second
+            # search so an old empty response cannot settle the name lookup.
+            page.reload(wait_until="domcontentloaded", timeout=8000)
+            mode = "Charity Name Contains"
+            query = org.organization_name.strip()
+            body = submit_search(mode, query)
+        if empty.search(body):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No record found"
-            result.source_note = "Massachusetts completed the registry search and returned No Charity Found."
+            result.source_note = ("Massachusetts completed the EIN and legal-name searches without a record."
+                                  if name_fallback else "Massachusetts completed the registry search and returned No Charity Found.")
             result.success = True
             return result, body
         step = "selection"
@@ -21910,6 +21955,9 @@ def search_ma_master(page, org, completed):
             options = combo.locator("option").evaluate_all(
                 "nodes => nodes.map(n => ({value:n.value,label:n.textContent.trim()}))")
             candidate = ma_selection_candidate(org, options)
+            if name_fallback and candidate and not registry_name_is_safe_for_org(
+                    candidate['label'], org.organization_name, org.ein):
+                candidate = None
             if candidate:
                 selections.append((combo, candidate))
         if len(selections) != 1:
@@ -21928,6 +21976,9 @@ def search_ma_master(page, org, completed):
             # response without inventing registration or filing currency.
             if page.get_by_text("This Charity is not available for public.", exact=True).is_visible() is True:
                 body = registry_page_body(page)
+                if name_fallback:
+                    return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED",
+                                      "Massachusetts withheld the name-search result, so the EIN could not be verified.")
                 result.matched_registry_name = candidate["label"]
                 result.matched_registry_identifier = candidate["value"]
                 result, _ = incomplete("MA_RECORD_NOT_PUBLIC", "Massachusetts found the selected charity but explicitly withholds its record from public view.")
@@ -21950,6 +22001,9 @@ def search_ma_master(page, org, completed):
         account_match = re.search(r"AG\s+Account\s+Number\s*:?\s*(\d+)", re.sub(r"\s+", " ", body), re.I)
         if not account_match or account_match.group(1) != account:
             return incomplete("MA_FILING_LIST_UNCONFIRMED", "The displayed Massachusetts filing record could not be tied to the selected charity account.")
+        if name_fallback and record.get("ein") != requested_ein:
+            return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED",
+                              "Massachusetts returned a name-search result without a matching EIN.")
         result.matched_registry_name = record["name"]
         result.matched_registry_identifier = account
         result.success = True
@@ -21960,6 +22014,19 @@ def search_ma_master(page, org, completed):
             result.source_attempts = ["Massachusetts completed its filing list; retried the unavailable Form PC detail once."]
             evidence = ma_read_latest_form_pc(page, result, body, completed)
         result = annotate_ma_visible_form_pc_due(result, evidence)
+        if (result.status == "Unable to Confirm"
+                and result.status_reason == "MA_FORM_PC_DETAIL_UNCONFIRMED"
+                and requested_ein and record.get("ein") == requested_ein
+                and not evidence.get("wrong_filing_year")
+                and not evidence.get("contrary_status")
+                and str(evidence.get("registry_status", "")).strip().casefold() != "not doing business in mass"):
+            result.status = "Delinquent"
+            result.status_reason = "MA_MATCHED_FILING_PERIOD_UNVERIFIED"
+            result.source_note = (
+                "Massachusetts confirmed the charity and EIN, but the latest filing did not establish "
+                "a fiscal period or confirm current filing standing. CharityClarity applies its "
+                "Delinquent rule for insufficient filing information. No overdue date was established."
+            )
         try:
             from deployment.state_snapshots import CURRENT
             from deployment.ma_view_more_evidence import capture
@@ -30458,6 +30525,8 @@ def true_status_from_body(result, body: str) -> str:
         return public_status(result)
     if result.state == "HI" and getattr(result, "status_reason", "") == "HI_EXACT_EIN_SOURCE_STATUS":
         return public_status(result)
+    if result.state == "KY" and getattr(result, "status_reason", "") == "KY_MATCHED_FILING_PERIOD_UNVERIFIED":
+        return "Delinquent"
     if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
         return "Unable to Confirm"
     if getattr(result, "reason_code", "") == "FISCAL_PERIOD_UNCONFIRMED":
@@ -30474,7 +30543,7 @@ def true_status_from_body(result, body: str) -> str:
         return base_status
     if state == "MA" and getattr(result, "status_reason", "") == "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD":
         return status_from_calendar_date(parsed_result_date(result.computed_due_date))
-    if state == "MA" and getattr(result, "status_reason", "") in {"MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT"}:
+    if state == "MA" and getattr(result, "status_reason", "") in {"MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT", "MA_MATCHED_FILING_PERIOD_UNVERIFIED"}:
         return "Delinquent"
     if state == "MA" and getattr(result, "status_reason", "") == "MA_PRIMARY_REGISTRATION_PENDING":
         return "Pending"
@@ -30929,6 +30998,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 f"Period evidence: {evidence['period_basis']}. {transition} IRS information is used to interpret the period; the state’s own listing establishes the year on record.")
     if result.state == "HI" and getattr(result, "status_reason", "") == "HI_EXACT_EIN_SOURCE_STATUS":
         return result.source_note
+    if result.state == "KY" and getattr(result, "status_reason", "") == "KY_MATCHED_FILING_PERIOD_UNVERIFIED":
+        return result.source_note
     if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
         state_name = "Kentucky" if result.state == "KY" else "Hawaii"
         if getattr(result, "period_read_failure", ""):
@@ -30993,7 +31064,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
         return note
 
-    if state == "MA" and reason in {"MA_RECORD_NOT_PUBLIC", "MA_PRIMARY_REGISTRATION_PENDING", "MA_LEGACY_URS_NO_LATER_ANNUAL", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT"}:
+    if state == "MA" and reason in {"MA_RECORD_NOT_PUBLIC", "MA_PRIMARY_REGISTRATION_PENDING", "MA_LEGACY_URS_NO_LATER_ANNUAL", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT", "MA_MATCHED_FILING_PERIOD_UNVERIFIED"}:
         return note
 
     if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
@@ -31847,6 +31918,16 @@ def search_ky_strict_snapshot(org):
                 result.status = "Unable to Confirm"
                 result.status_reason = "KY_TAX_PERIOD_UNCONFIRMED"
                 result.raw_status_text = f"Yr Last Filed: {filed_year} | KY ID: {registry_id} | Corresponding fiscal period not confirmed"
+                if evidence.get("period_unconfirmed") and evidence.get("ein") == canonical_ein_digits(org.ein):
+                    result.status = "Delinquent"
+                    result.status_reason = "KY_MATCHED_FILING_PERIOD_UNVERIFIED"
+                    result.computed_due_date = result.fiscal_year_end = result.next_required_period = ""
+                    result.source_note += (
+                        " The matched state listing shows a filing year. The available filing information "
+                        "could not establish the fiscal period or confirm current filing standing. "
+                        "CharityClarity applies its Delinquent rule for insufficient filing information. "
+                        "No overdue date was established."
+                    )
         return result
 
 

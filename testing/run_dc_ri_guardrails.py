@@ -181,6 +181,34 @@ class LicenseControls(unittest.TestCase):
             result=cc.search_ri(self.org)
         self.assertEqual(result.status,'Pending')
         self.assertEqual([call.args[0] for call in search.call_args_list],required+[generated[0]])
+    def test_dc_initial_and_later_required_source_timeouts_stay_unreachable(self):
+        epoch = int(time.time() * 1000)
+        incomplete_page = {"features": [{"attributes": {"OBJECTID": 1,
+            "ENTITYNAME": "Beacon Learning Foundation", "DATAREFRESHEDON": epoch}}],
+            "exceededTransferLimit": True}
+        for responses, phase in [
+            ([TimeoutError("source stalled")], "first search page"),
+            ([incomplete_page, TimeoutError("source stalled")], "next search page"),
+            ([{"features": []}, TimeoutError("source stalled")], "source freshness check"),
+        ]:
+            with self.subTest(phase=phase), patch.object(cc, "registry_json_request", side_effect=responses), patch.object(cc, "log_error"):
+                result = cc.search_dc(self.org)
+                self.assertEqual(result.status, "Site Not Reachable")
+                self.assertEqual(result.reason_code, "DC_LICENSE_SOURCE_UNREACHABLE")
+                self.assertIn(phase, result.source_note)
+                self.assertFalse(result.success)
+
+    def test_dc_alternate_name_timeout_is_not_a_completed_negative(self):
+        failure = TimeoutError("source stalled")
+        failure._cc_dc_transport = {"source": "DC_LICENSE_API", "attempt": 2, "observed_phase": "response_headers"}
+        with patch.object(cc, "licensed_charity_names", return_value=(["Beacon"], [])), patch.object(
+                cc, "registry_json_request", side_effect=[
+                    {"features": []}, {"features": [{"attributes": {"DATAREFRESHEDON": int(time.time()*1000)}}]}, failure
+                ]), patch.object(cc, "log_error"):
+            result = cc.search_dc(self.org)
+        self.assertEqual(result.status, "Site Not Reachable")
+        self.assertEqual(result.source_attempts[0]["step"], "alternate-name first search page")
+
     def test_dc_error_payload_is_not_completed_negative(self):
         with patch.object(cc,'registry_json_request',return_value={'error':{'message':'Invalid field'}}):
             with self.assertRaises(ValueError):cc.dc_charity_records(self.org,self.deadline)

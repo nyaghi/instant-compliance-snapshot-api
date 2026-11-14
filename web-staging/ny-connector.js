@@ -153,6 +153,8 @@
         // credentials, signed continuations, or arbitrary exception text.
         if (registryState === 'NY' && fields.action === 'advance' && requestPhase !== 'serialize')
           error.ccRegistryHandoffFailed = true;
+        if (!cleanup && !signal?.aborted && timeout.aborted && requestPhase !== 'serialize')
+          error.ccRegistryRequestTimedOut = true;
         if (!cleanup) try {
           const reason = signal?.aborted ? 'CALLER_ABORTED' : timeout.aborted ? 'API_TIMEOUT'
             : requestPhase === 'serialize' ? 'API_SERIALIZATION_FAILED'

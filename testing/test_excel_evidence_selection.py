@@ -34,6 +34,13 @@ const cases = [
   {...both, state: 'CA'},
   {...both, state: 'AR', success: false, status: 'Unable to Verify', evidence_url: '',
     status_reason: 'AR_REQUIRED_SEARCH_INCOMPLETE'},
+  {state:'GA', status:'Current', matched_registry_identifier:'GA41', identity_review:{candidates:[
+    {name:'Good charity', identifier:'GA41', evidence_url:snapshot}] }},
+  {state:'RI', status:'Unable to Confirm', identity_review:{candidates:[
+    {name:'First candidate', identifier:'RI1', evidence_url:snapshot},
+    {name:'Second candidate', identifier:'RI2', evidence_url:snapshot},
+    {name:'Rejected candidate', identifier:'RI3', evidence_url:snapshot, decision:'reject'},
+    {name:'Untrusted candidate', identifier:'RI4', evidence_url:'https://wrong.example/file.pdf'}] }},
 ];
 window.CCExcelExport.build(cases).arrayBuffer()
   .then(bytes => process.stdout.write(Buffer.from(bytes)));
@@ -41,12 +48,15 @@ window.CCExcelExport.build(cases).arrayBuffer()
         run = subprocess.run(["node", "-e", program], cwd=root, capture_output=True, check=True)
         with ZipFile(io.BytesIO(run.stdout)) as workbook:
             sheet = ElementTree.fromstring(workbook.read("xl/worksheets/sheet2.xml"))
+            candidates = ElementTree.fromstring(workbook.read("xl/worksheets/sheet3.xml"))
+            self.assertEqual([c.attrib["ref"] for c in candidates.findall(".//{*}hyperlink")], ["E2", "E3", "E4"])
+            self.assertEqual([c.attrib["ref"] for c in sheet.findall(".//{*}hyperlink")][-1], "C9")
         cells = {cell.attrib["r"]: "".join(cell.itertext()) for cell in sheet.findall(".//{*}c")}
         snapshots = "https://staging.example.test/state-snapshots/" + "a" * 64 + ".pdf"
         history = "https://staging.example.test/state-evidence/" + "b" * 64 + "/search-history.pdf"
         self.assertEqual(
-            [(cells[f"C{row}"], cells[f"I{row}"]) for row in range(2, 9)],
+            [(cells[f"C{row}"], cells[f"I{row}"]) for row in range(2, 11)],
             [(history, "Search history"), ("Names searched unavailable", ""), (history, "Search history"),
              (snapshots, "State snapshot"), (snapshots, "State snapshot"), (history, "Search history"),
-             (history, "Search attempts")],
+             (history, "Search attempts"), (snapshots, "Candidate snapshot"), ("See Candidate Evidence tab", "")],
         )
