@@ -1961,6 +1961,7 @@ REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
 USER_IDENTITY_CONTEXT = ContextVar("user_identity_review", default={})
 AL_FOREIGN_EIN_CONTEXT = ContextVar("al_connector_foreign_ein", default=None)
 TN_FOREIGN_EIN_CONTEXT = ContextVar("tn_connector_foreign_ein", default=None)
+LICENSED_FOREIGN_EIN_CONTEXT = ContextVar("licensed_foreign_ein", default=None)
 IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
 IDENTITY_CACHE_LOCK = threading.Lock()
 IRS_HISTORY_HEADER_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
@@ -8983,7 +8984,7 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
         # filings are one candidate, not competing identity matches.
         rows = list({row['identifier']: row for row in source_rows}.values())
         attempted.append({'query': query, 'completed': True})
-        accepted = []
+        accepted, possible_on_page = [], []
         for row in rows:
             # This public result has no EIN. Match only against names signed
             # into this workflow, never an EIN-keyed discovery cache.
@@ -8995,22 +8996,27 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
                 accepted.append(row)
             elif (best and best['decision'] in {'accepted', 'possible'}
                   and len(distinctive_match_tokens(row['name'])) >= 2):
-                if not any(item['identifier'] == row['identifier'] for item in possible):
-                    possible.append(row)
-                    if len(possible) <= 10:
-                        # The browser detail is bound to the current search's
-                        # grid. Later variants replace that grid, so retain
-                        # verified detail evidence before advancing the plan.
-                        detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
-                        fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
-                        if (normalized_match_name(fields['Name']) != normalized_match_name(row['name'])
-                                or not fields['Filing Status'].strip()):
-                            raise ValueError('Mississippi review detail identity or status changed')
-                        if (fields['Expiration Date']
-                                and not module.parse_mmddyyyy_date(fields['Expiration Date'])):
-                            raise ValueError('Mississippi review expiration date is malformed')
-                        review_details[row['identifier']] = fields
-                        attempted.append({'query': detail_query, 'completed': True})
+                possible_on_page.append(row)
+        # The exact-match branch below has always selected from accepted
+        # records only. Fetch weaker review records only if that branch has
+        # no match, so an unrelated detail cannot discard an accepted filing.
+        if not accepted:
+            for row in possible_on_page:
+                if any(item['identifier'] == row['identifier'] for item in possible):
+                    continue
+                possible.append(row)
+                if len(possible) > 10:
+                    continue
+                detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': row['identifier']}
+                fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
+                if (normalized_match_name(fields['Name']) != normalized_match_name(row['name'])
+                        or not fields['Filing Status'].strip()):
+                    raise ValueError('Mississippi review detail identity or status changed')
+                if (fields['Expiration Date']
+                        and not module.parse_mmddyyyy_date(fields['Expiration Date'])):
+                    raise ValueError('Mississippi review expiration date is malformed')
+                review_details[row['identifier']] = fields
+                attempted.append({'query': detail_query, 'completed': True})
         # Two plausible filing numbers need a user identity decision. Read each
         # detail now so later confirmation can apply only signed state evidence.
         if len(accepted) > 1:
@@ -10596,7 +10602,9 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
              "upper(name) like '%" + "%".join(words) + "%'")
     url = "https://data.colorado.gov/resource/37wu-kn3g.json?" + urlencode({"$limit": "100",
         "$where": where, "$order": "registrationapproveddate DESC"})
-    checks = TN_FOREIGN_EIN_CONTEXT.get() if exact_name else None
+    checks = LICENSED_FOREIGN_EIN_CONTEXT.get()
+    if checks is None and exact_name:
+        checks = TN_FOREIGN_EIN_CONTEXT.get()
     cache_key = None
     if checks is not None and len(canonical_ein_digits(org.ein)) == 9:
         identity = [canonical_ein_digits(org.ein), row.get("identifier"), url, street, postal, region]
@@ -11366,6 +11374,7 @@ def search_dc(org):
     # This allowance is shared across the full lookup, never reset per page.
     deadline = time.monotonic() + 35.5
     fallback_started = False
+    checks = LICENSED_FOREIGN_EIN_CONTEXT.set({} if trial_identity() else None)
     try:
         # Complete primary-name spelling first. Never collapse it into a
         # generated one-word predicate before the first source request.
@@ -11407,6 +11416,9 @@ def search_dc(org):
                 "within the lookup allowance. Registration remains unconfirmed."
             )
         return result
+
+    finally:
+        LICENSED_FOREIGN_EIN_CONTEXT.reset(checks)
 
 
 def ri_charity_search(query, deadline, headers):
@@ -11537,6 +11549,7 @@ def ri_distinctive_fallback(name, fallback):
 def search_ri(org):
     deadline = time.monotonic() + 90
     phase = "starting the public search session"
+    checks = LICENSED_FOREIGN_EIN_CONTEXT.set({} if trial_identity() else None)
     try:
         token = registry_json_request(RI_PUBLIC_PORTAL + "/api/auth/token", deadline, payload={})
         if not isinstance(token, dict) or not token.get("access_token"): raise ValueError("Rhode Island public search session unavailable")
@@ -11603,6 +11616,9 @@ def search_ri(org):
             f"Rhode Island did not finish {phase}. Registration remains unconfirmed."
         )
         return result
+
+    finally:
+        LICENSED_FOREIGN_EIN_CONTEXT.reset(checks)
 
 
 def possessive_search_phrases(name: str) -> list[str]:
@@ -27542,7 +27558,10 @@ def nj_name_fallback_queries(org):
         queries = [name for name in queries if normalized_match_name(name) in reviewed
                    or (normalized_match_name(name) not in geography and distinctive_match_tokens(name))]
         queries = focused_generated_name_queries([org.organization_name, *known_names_for_ein(org.ein)], queries)
+        components = {normalized_match_name(part) for part in re.split(r"[-–—/]", org.organization_name)
+                      if len(distinctive_match_tokens(part)) >= 2}
         return sorted(queries,key=lambda name:(normalized_match_name(name) not in reviewed,
+                                             normalized_match_name(name) not in components,
                                              len(distinctive_match_tokens(name)) < 2))
     return queries
 

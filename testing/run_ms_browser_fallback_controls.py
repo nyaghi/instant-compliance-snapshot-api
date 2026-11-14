@@ -32,6 +32,26 @@ class MississippiBrowserFallbackControls(unittest.TestCase):
         self.assertEqual(result.matched_registry_identifier, '100000800')
         self.assertIn('Expiration Date: 11/15/2026', result.raw_status_text)
 
+    def test_unavailable_weaker_detail_does_not_discard_accepted_filing(self):
+        weaker = {'name': 'Better World Fund Foundation', 'identifier': '100000801',
+                  'raw_status': 'Current - Registered'}
+        queried = []
+
+        def evidence(query):
+            if query['operation'] == 'search':
+                return self.search(query, [weaker, self.row])
+            queried.append(query['identifier'])
+            if query['identifier'] == weaker['identifier']:
+                raise TimeoutError('Weaker candidate detail did not open')
+            return self.detail(query)
+
+        with patch.object(cc, 'score_candidate',
+                          side_effect=lambda _name, _ein, row: {'score': 50, 'decision':
+                              'accepted' if row['name'] == self.row['name'] else 'possible'}):
+            result = cc.ms_browser_lookup(self.org, evidence)
+        self.assertEqual(result.matched_registry_identifier, self.row['identifier'])
+        self.assertEqual(queried, [self.row['identifier']])
+
     def test_descriptive_dash_component_retrieves_record_without_relaxing_identity(self):
         name = 'WGU Corporation - Western Governors University'
         org = cc.checker.Organization(name, '12-3456789')

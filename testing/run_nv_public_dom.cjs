@@ -298,6 +298,24 @@ test('Nevada opens the public menu once when a collapsed option is ignored',asyn
  assert.equal(result.broad_total,57);assert.equal(result.total,17);
  assert.equal(result.search_mode,'EXACT_MATCH');assert.equal(h.modeClicks,2);assert.equal(h.clicks,2);
 });
+test('Nevada reopens the attached search control after an ORION redraw',async()=>{
+ const h=fixture({rows:manyPublicRows(57),exactRows:manyPublicRows(17),initialPageSize:25,requireOpenMode:true});
+ const doc=h.context.document, read=doc.querySelectorAll;
+ const oldControl=read('[role="combobox"]')[0];
+ const replacement=Object.defineProperties({},Object.getOwnPropertyDescriptors(oldControl));
+ let detached=false;
+ oldControl.click=()=>{throw Error('The original combobox is detached');};
+ const options=oldControl.querySelectorAll;
+ oldControl.querySelectorAll=q=>options(q).map(choice=>({...choice,dispatchEvent:event=>{
+   choice.dispatchEvent(event);detached=true;
+ }}));
+ doc.querySelectorAll=q=>{
+   const controls=read(q);
+   return q==='[role="combobox"]'&&detached&&controls[0]===oldControl?[replacement]:controls;
+ };
+ const result=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
+ assert.equal(result.search_mode,'EXACT_MATCH');assert.equal(result.total,17);assert.equal(h.clicks,2);
+});
 test('Nevada refuses a mode option with a changed public label or disabled state',async()=>{
  for(const changed of ['label','disabled']){
   const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25});
