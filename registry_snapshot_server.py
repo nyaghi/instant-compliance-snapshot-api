@@ -22287,6 +22287,8 @@ def search_ma_master(page, org, completed):
         page.get_by_role("button", name="Get Filings", exact=True).click(timeout=5000)
         step = "filings"
         deadline = time.monotonic() + 20
+        conflict = None
+        conflict_polls = 0
         while time.monotonic() < deadline:
             # Playwright event processing is needed for the response observer.
             page.wait_for_timeout(250)
@@ -22309,8 +22311,27 @@ def search_ma_master(page, org, completed):
                 except Exception:
                     pass
                 return result, body
-            conflict = completed.get("tax_id_conflict", {})
-            if conflict.get("record_id") == candidate["value"]:
+            observed_conflict = completed.get("tax_id_conflict", {})
+            if observed_conflict.get("record_id") == candidate["value"]:
+                conflict = observed_conflict
+                account = conflict["ago_account"]
+                if (account in completed.get("filings", {}) and account in completed.get("registration_documents", {})
+                        or conflict_polls >= 12):
+                    break
+                conflict_polls += 1
+                continue
+            record = completed.get("record", {})
+            account = record.get("ago_account")
+            if (record.get("record_id") == candidate["value"] and account and account in completed.get("filings", {})
+                    and account in completed.get("registration_documents", {})):
+                break
+        else:
+            if not conflict:
+                return incomplete("MA_FILING_LIST_UNCONFIRMED", "Massachusetts charity selection was attempted, but the matching record and completed filing list could not be confirmed.")
+        attachment = None
+        if conflict:
+            attachment = ma_confirm_filing_attachment(page, org, completed, conflict)
+            if not attachment:
                 body = registry_page_body(page)
                 return incomplete(
                     "MA_SOURCE_TAX_ID_CONFLICT",
@@ -22318,13 +22339,10 @@ def search_ma_master(page, org, completed):
                     f"{conflict['source_tax_id']}; the search used EIN {format_ein(requested_ein)}. "
                     "The selected state record could not be verified for the entered EIN.",
                 )
-            record = completed.get("record", {})
-            account = record.get("ago_account")
-            if (record.get("record_id") == candidate["value"] and account and account in completed.get("filings", {})
-                    and account in completed.get("registration_documents", {})):
-                break
-        else:
-            return incomplete("MA_FILING_LIST_UNCONFIRMED", "Massachusetts charity selection was attempted, but the matching record and completed filing list could not be confirmed.")
+            record = {"record_id": conflict["record_id"], "ago_account": account,
+                      "ein": requested_ein, "name": conflict["name"],
+                      "registry_status": conflict["registry_status"], "attachment_identity": attachment}
+            completed["record"] = record
         body = ma_detail_body(page)
         account_match = re.search(r"AG\s+Account\s+Number\s*:?\s*(\d+)", re.sub(r"\s+", " ", body), re.I)
         if not account_match or account_match.group(1) != account:
@@ -22341,6 +22359,13 @@ def search_ma_master(page, org, completed):
             # and explicit state statuses never enter this recovery path.
             result.source_attempts = ["Massachusetts completed its filing list; retried the unavailable Form PC detail once."]
             evidence = ma_read_latest_form_pc(page, result, body, completed)
+        if attachment:
+            if (evidence.get("filing_year") != attachment["filing_year"]
+                    or evidence.get("filing_status") != "Submitted"
+                    or evidence.get("ago_account") != account):
+                return incomplete("MA_FORM_PC_DETAIL_UNCONFIRMED",
+                                  "The state filing attachment verified the EIN, but the corresponding submitted Form PC period could not be confirmed.")
+            evidence["attachment_identity"] = attachment
         result = annotate_ma_visible_form_pc_due(result, evidence)
         if (result.status == "Unable to Confirm"
                 and result.status_reason == "MA_FORM_PC_DETAIL_UNCONFIRMED"
@@ -22358,7 +22383,8 @@ def search_ma_master(page, org, completed):
         try:
             from deployment.state_snapshots import CURRENT
             from deployment.ma_view_more_evidence import capture
-            capture(CURRENT.get(), page, record)
+            if not attachment:
+                capture(CURRENT.get(), page, record)
         except Exception:
             pass  # Evidence cannot change the completed status interpretation.
         return result, body
@@ -22558,6 +22584,73 @@ def ma_public_document_collection(rows: list) -> dict:
             "annual_scans": [r for r in documents if re.search(r"Form\s+PC/Annual\s+RPT", r["title"], re.I)]}
 
 
+def ma_confirm_filing_attachment(page, org, completed, conflict):
+    """Verify the exact identity from the selected account's latest electronic filing."""
+    from deployment.state_snapshots import DEADLINE
+
+    account = conflict["ago_account"]
+    filings = completed.get("filings", {}).get(account, {})
+    registration = completed.get("registration_documents", {}).get(account, {})
+    if not PdfReader or not filings.get("complete") or not registration.get("complete"):
+        return None
+    rows = filings.get("documents", [])
+    forms = [row for row in rows if re.fullmatch(r"Form[- ]PC Data", row["title"], re.I)]
+    if not forms or any(not re.fullmatch(r"20\d{2}", row["year"]) for row in forms):
+        return None
+    latest = max(row["year"] for row in forms)
+    if sum(row["year"] == latest for row in forms) != 1:
+        return None
+    attachments = [row["url"] for row in rows if row["year"] == latest
+                   and row["title"].casefold() == "federal revenue support.pdf"]
+    if len(attachments) != 1:
+        return None
+    url, = attachments
+    if not re.fullmatch(
+            r"https://masscharities\.my\.site\.com/FilingSearch/sfc/servlet\.shepherd/document/download/069[A-Za-z0-9]{12,15}",
+            url):
+        return None
+    requested_ein = canonical_ein_digits(org.ein)
+    def legal_name_key(value):
+        return re.sub(r"[\W_]+", " ", canonical_name_punctuation(value).casefold()).strip()
+
+    name_key = legal_name_key(org.organization_name)
+    if len(requested_ein) != 9 or not name_key or name_key != legal_name_key(conflict["name"]):
+        return None
+    stop = min(DEADLINE.get() - 1, time.monotonic() + 4)
+    if stop <= time.monotonic():
+        return None
+    try:
+        response = page.request.get(url, max_redirects=0, timeout=max(1, int((stop-time.monotonic()) * 1000)))
+        if not response.ok:
+            return None
+        raw = response.body()
+        if not raw.startswith(b"%PDF") or len(raw) > 3_000_000:
+            return None
+        reader = PdfReader(io.BytesIO(raw))
+        verified = []
+        for number, sheet in enumerate(reader.pages[:3], 1):
+            if time.monotonic() >= stop:
+                return None
+            text = sheet.extract_text() or ""
+            if not re.match(rf"\s*Form 990 \(20\d{{2}}\)\s+Page\s+{number}\b", text):
+                continue
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            # The filer name and EIN are adjacent standalone fields in the
+            # footer of the electronic return. Exclude EINs in narrative text.
+            footer = lines[-5:]
+            for name, ein in zip(footer, footer[1:]):
+                if (legal_name_key(name) == name_key
+                        and re.fullmatch(r"\d{2}-?\d{7}", ein) and canonical_ein_digits(ein) == requested_ein):
+                    verified.append(number)
+                    break
+        if len(verified) < 2 or verified[-1] != verified[-2] + 1 or time.monotonic() >= stop:
+            return None
+        return {"filing_year": int(latest), "source_url": url, "profile_tax_id": conflict["source_tax_id"]}
+    except Exception as exc:
+        log_event(f"MA Form 990 identity attachment unavailable: {type(exc).__name__}")
+        return None
+
+
 def ma_completed_history_inference(completed: dict, account: str) -> dict:
     """Apply the approved no-annual/stale-history rule only to complete evidence."""
     record = completed.get("record", {})
@@ -22617,6 +22710,7 @@ def ma_capture_completed_response(response, org, evidence: dict) -> None:
                         and source_name and complete_name_identity_key(source_name) == complete_name_identity_key(org.organization_name)):
                     evidence["tax_id_conflict"] = {
                         "record_id": row["Id"], "ago_account": account, "source_tax_id": source_tax_id,
+                        "name": source_name, "registry_status": str(row.get("Charity_Status__c") or ""),
                     }
                 if (row.get("Id") == query["recID"] and identity["decision"] == "accepted"
                         and (not expected_ein or actual_ein == expected_ein)):
@@ -22939,6 +23033,16 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
                 evidence = ma_submitted_form_pc_evidence(text, latest_year, account.group(1))
                 if not evidence:
                     return context
+                if record.get("attachment_identity"):
+                    name_key = complete_name_identity_key(record["name"])
+                    if not any(complete_name_identity_key(line) == name_key for line in text.splitlines()):
+                        return context
+                    from deployment.state_snapshots import CURRENT, capture_ma_formpc
+                    evidence["source_url"] = detail.url
+                    try:
+                        capture_ma_formpc(CURRENT.get(), detail, evidence)
+                    except Exception:
+                        pass
                 evidence["source_url"] = detail.url
                 forms.append(evidence)
             finally:
@@ -31468,6 +31572,10 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         context = (f"Massachusetts also lists {evidence['registry_status']}. That activity description alone does not establish "
                    "formal closure or withdrawal; this result reflects the annual filing deadline. "
                    if evidence.get("registry_status") else "")
+        attachment = evidence.get("attachment_identity")
+        if attachment:
+            context += (f"The Form 990 attached to this Massachusetts filing confirms EIN {format_ein(result.ein)}. "
+                        f"The registry profile displays Tax ID {attachment['profile_tax_id']}. ")
         return (context + f"The latest submitted Form PC covers the fiscal year ending {evidence['period_end']}. "
                 f"The next annual report, for the period ending {result.next_required_period}, has a base deadline "
                 f"of {evidence['base_due']}. Massachusetts provides an automatic six-month extension for registered "

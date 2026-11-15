@@ -320,11 +320,35 @@ class MassachusettsSelectionTests(unittest.TestCase):
              patch.object(cc, "ma_read_latest_form_pc") as read:
             result, body = cc.search_ma_master(page, self.org, completed)
         read.assert_not_called()
-        page.wait_for_timeout.assert_called_once()
+        self.assertEqual(page.wait_for_timeout.call_count, 13)
         self.assertEqual(cc.true_status_from_body(result, body), "Unable to Confirm")
         self.assertEqual(result.status_reason, "MA_SOURCE_TAX_ID_CONFLICT")
         self.assertIn("40428-30242", cc.source_note_for_result(result))
         self.assertIn("12-3456789", cc.source_note_for_result(result))
+
+    def test_mismatch_recovery_requires_same_filing_and_two_return_headers(self):
+        account = "040659"
+        official = "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm000010nqjJIAQ"
+        conflict = {"ago_account": account, "source_tax_id": "40428-30242", "name": "Example Foundation"}
+        attachment = {"title": "Federal Revenue Support.pdf", "year": "2025", "url": official}
+        form = {"title": "Form-PC Data", "year": "2025", "url": ""}
+        completed = {"filings": {account: {"complete": True, "documents": [form, attachment]}},
+                     "registration_documents": {account: {"complete": True}}}
+        page = Mock()
+        page.request.get.return_value.body.return_value = b"%PDF-1.4"
+        header = "Form 990 (2024) Page {}\nOther text\nEXAMPLE FOUNDATION\n  12-3456789\n{} 5/7/2026"
+        pages = [Mock(extract_text=Mock(return_value=header.format(i, i) if i > 1 else "")) for i in (1, 2, 3)]
+        with patch.object(cc, "PdfReader", return_value=Mock(pages=pages)):
+            proof = cc.ma_confirm_filing_attachment(page, self.org, completed, conflict)
+            self.assertEqual(proof, {"filing_year": 2025, "source_url": official, "profile_tax_id": "40428-30242"})
+            pages[2].extract_text.return_value = header.format(3, 3).replace("12-3456789", "98-7654321")
+            self.assertIsNone(cc.ma_confirm_filing_attachment(page, self.org, completed, conflict))
+            pages[2].extract_text.return_value = header.format(3, 3)
+            attachment["year"] = "2024"
+            self.assertIsNone(cc.ma_confirm_filing_attachment(page, self.org, completed, conflict))
+            attachment["year"] = "2025"
+            attachment["url"] = official.replace("masscharities.my.site.com", "example.test")
+            self.assertIsNone(cc.ma_confirm_filing_attachment(page, self.org, completed, conflict))
 
     def test_clean_no_record_and_timeout_are_distinct(self):
         for fail in (False, True):

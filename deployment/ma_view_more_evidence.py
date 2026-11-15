@@ -138,6 +138,10 @@ def select(run, ordered, row):
         return ordered
     if row.get('success') is not True or digits(row.get('ein', '')) != run.ein:
         return []
+    evidence = row.get('ma_filing_evidence') or {}
+    if row.get('status_reason') == 'MA_SUBMITTED_FORM_PC_FISCAL_PERIOD' and evidence.get('attachment_identity'):
+        from deployment.state_snapshots import ma_selected_originals
+        return ma_selected_originals(run, ordered, row, require_bound=True)[:1]
     if row.get('status_reason') == 'MA_FORM_PC_DETAIL_UNCONFIRMED':
         evidence = row.get('ma_filing_evidence', {})
         if (row.get('status') == 'Unable to Confirm'

@@ -501,15 +501,15 @@ def capture_ma_formpc(run, page, evidence):
     if bindings is None:run.ma_formpc_bindings={};bindings=run.ma_formpc_bindings
     bindings[hashlib.sha256(document[1]).hexdigest()]=dict(evidence)
 
-def ma_selected_originals(run, ordered, row):
+def ma_selected_originals(run, ordered, row, *, require_bound=False):
     """Pair the final selected submitted Form PC with the original filing list."""
-    if run.state!='MA':return ordered
+    if run.state!='MA':return [] if require_bound else ordered
     evidence=row.get('ma_filing_evidence') or {}
     url=row.get('source_url','');identifier=str(row.get('matched_registry_identifier') or '')
     if (row.get('state')!='MA' or digits(row.get('ein',''))!=run.ein
         or row.get('success') is not True or row.get('status') in {'Not Registered','Unable to Confirm','Site Not Reachable','Unable to Verify'}
         or evidence.get('filing_status')!='Submitted' or not identifier
-        or evidence.get('ago_account')!=identifier or evidence.get('source_url')!=url):return ordered
+        or evidence.get('ago_account')!=identifier or evidence.get('source_url')!=url):return [] if require_bound else ordered
     bindings=getattr(run,'ma_formpc_bindings',{})
     for detail in ordered:
         binding=bindings.get(hashlib.sha256(detail[1]).hexdigest(),{})
@@ -530,7 +530,7 @@ def ma_selected_originals(run, ordered, row):
             return [paired,*ordered]
         return [detail,*[d for d in ordered if d is not detail]]
     run.errors.append('MA_selected_form_pc_original_unavailable')
-    return ordered
+    return [] if require_bound else ordered
 
 def ak_selected_cycle_matches(binding, ein, name, status_text):
     cycle = re.search(r'\bRegistration Cycle:\s*(20\d{2})\b', str(status_text or ''))
