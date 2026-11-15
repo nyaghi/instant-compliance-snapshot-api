@@ -40,10 +40,14 @@ def retain_exemption_notice(page, run, candidates, name):
             if 'exempt' not in text.lower() or norm(name) not in norm(text):return ''
         elif not list(reader.pages[0].images):return ''
         if time.monotonic()>=stop:return ''
+        # Like the existing renewal-certificate path, retain its original first
+        # page. A long historical attachment must not exceed the archive bound
+        # and suppress the selected main-page snapshot.
+        writer=PdfWriter();writer.add_page(reader.pages[0]);out=io.BytesIO();writer.write(out)
         if not hasattr(run,'ok_original_certificates'):run.ok_original_certificates={}
-        run.ok_original_certificates[(query[0][1],name)]={'pdf':raw,'document_number':number,'url':url,
-            'captured_at':time.time(),'pages':int(count),'historical_exemption':True,'filed':filed}
-        fact.update(outcome='retained',pages=int(count),identifier=query[0][1])
+        run.ok_original_certificates[(query[0][1],name)]={'pdf':out.getvalue(),'document_number':number,'url':url,
+            'captured_at':time.time(),'pages':1,'historical_exemption':True,'filed':filed}
+        fact.update(outcome='retained',pages=1,source_pages=int(count),identifier=query[0][1])
         return number
     except Exception as exc:
         fact['error_type']=type(exc).__name__
@@ -98,7 +102,7 @@ def pair_selected_certificate(run,ordered,row):
             for page in second.pages:writer.add_page(page)
             out=io.BytesIO();writer.write(out)
             if len(out.getvalue())>MAX_BYTES:return ordered
-            label=(' Original historical Notice of Registration Exemption filed '+cert['filed']+' ('+cert['document_number']+') appended in full; not a current renewal certificate.'
+            label=(' Original first page of the historical Notice of Registration Exemption filed '+cert['filed']+' ('+cert['document_number']+') appended; not a current renewal certificate.'
                    if cert.get('historical_exemption') else ' Original issued certificate from selected filing '+cert['document_number']+' appended as page two; no additional source request.')
             combined=(url,out.getvalue(),'source_pdf',text,max(stamp,cert['captured_at']),note+label)
             return [combined]+ordered

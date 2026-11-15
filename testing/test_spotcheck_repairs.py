@@ -108,7 +108,7 @@ class OKHistoricalEvidence(unittest.TestCase):
         return run,page
     def test_original_full_historical_document_is_retained_and_labeled(self):
         run,page=self.setup_source();num=ok.retain_exemption_notice(page,run,['3222200001 Notice of Registration Exemption June 27, 2005 2'],'United Service Organizations Inc.')
-        self.assertEqual(num,'3222200001');self.assertEqual(run.ok_original_certificates[('4312076742','United Service Organizations Inc.')]['pages'],2)
+        self.assertEqual(num,'3222200001');self.assertEqual(run.ok_original_certificates[('4312076742','United Service Organizations Inc.')]['pages'],1)
         self.assertTrue(run.ok_original_certificates[('4312076742','United Service Organizations Inc.')]['historical_exemption'])
     def test_wrong_action_different_name_wrong_page_count_fail_closed(self):
         for kind in ['action','name','pages']:
