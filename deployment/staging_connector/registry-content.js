@@ -370,10 +370,6 @@
     // A subsequent click can reopen that menu after selection and race the
     // next search. Select the labelled option once and verify the rendered
     // value. No Choices instance, application state or private API is used.
-    // Selection is an exact public input value, not an asynchronous result.
-    // The later boundButton guard still checks mode plus all input values
-    // before Search. Do not defer this already-observed value to a hidden-tab
-    // settle timer: an unrelated late mutation could falsely reject it.
     await wfcAwait("content:nvSelectSearchMode:341:4",()=>(wait(()=>nvSearchModeSelected(mode),Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>{
       option.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,view:window}));
     }}).catch(error=>{
@@ -383,9 +379,8 @@
     nvTrace('mode-selected',{mode});
   }
   async function nvInputSettle() {
-    // The extension worker owns this 200 ms input-settle clock; Chrome can
-    // throttle a hidden registry tab's timer to a minute. It does not search,
-    // select a record, or extend the existing form deadline.
+    // Keep the existing 200 ms input stability check off hidden-tab timers.
+    // Only the active owned NV command can obtain this worker clock pulse.
     if(!nvDiagnosticId) return new Promise(resolve=>setTimeout(resolve,200));
     const reply=await chrome.runtime.sendMessage({action:'nv-input-settle',id:nvDiagnosticId});
     if(reply?.ok!==true)throw new Error('REGISTRY_NV_INPUT_SETTLE_UNAVAILABLE');
@@ -1522,7 +1517,7 @@
       const numberless=pending||unsupportedDenied;
       if((unsupportedDenied||unsupportedInactive)&&(fields['Expiration Date']||fields['Extension End Date']))
         throw new Error('REGISTRY_NC_CARD_CHANGED');
-      const header=headerText.match(/^(.+?)\s*â€¢\s*\(((?:SL|EX)\d+)\)$/);
+      const header=headerText.match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
       const displayName=numberless?headerText:header?.[1].trim();
       const names=[...new Set([...legal,...other])];
       if(!legal.length||names.length>32||(!numberless&&(!header||header[2]!==fields.License))||!names.includes(displayName))
@@ -1761,7 +1756,7 @@
           || input('ddl_county')?.value!=='-1' || input('ddl_lictype')?.value!=='-1') throw new Error('REGISTRY_FILTER_CHANGED');
       const alert=document.querySelector('#altdialog');
       if (visible(alert)) {
-        const message=text(alert).replace(/^[â€¢\s]+/,'');
+        const message=text(alert).replace(/^[•\s]+/,'');
         if (message==='No Records Found') return {rows:[],headers:alHeaders,total:0};
         if (/verif|captcha|code/i.test(message)) throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
         throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
