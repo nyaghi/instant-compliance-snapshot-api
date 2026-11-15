@@ -27526,7 +27526,23 @@ def nj_name_exemption_result(data, org, deadline):
            "location": ", ".join(x for x in (city, region) if x), "region": region,
            "street": str(fields.get("crsm_addressline1") or ""),
            "postal_code": str(fields.get("crsm_mailingzip") or ""), "status": "Exempt", "raw_status": "Exempt"}
-    identity = licensed_charity_identity(org, row, "NJ", min(deadline,NJ_NAME_QUERY_DEADLINE.get()))
+    zero_placeholder = canonical_ein_digits(row["ein"]) == "000000000"
+    if zero_placeholder:
+        row["ein"] = ""
+    stop = min(deadline, NJ_NAME_QUERY_DEADLINE.get())
+    identity = licensed_charity_identity(org, row, "NJ", stop)
+    if identity == "rejected" and zero_placeholder and trial_identity():
+        # Some legacy exempt listings replace the legal name's trailing
+        # organization with its initials. This can support review only.
+        legal = re.fullmatch(r"(.+?)[-–—]\s*(.+)", org.organization_name)
+        listed = re.fullmatch(r"(.+?)[-–—]\s*([A-Z]{3,8})", name)
+        if (legal and listed and len(distinctive_match_tokens(legal[1])) >= 2
+                and normalized_match_name(legal[1]) == normalized_match_name(listed[1])):
+            suffix = re.findall(r"[A-Za-z]+", legal[2])
+            initials = "".join(w[0].upper() for w in suffix if w.casefold() not in {"and", "for", "of", "the"})
+            if initials.startswith(listed[2]) and len(initials) - len(listed[2]) <= 1:
+                identity = "possible"
+                row["match"] = {"decision": "possible", "score": 55, "reason": "NJ_LEGACY_SUFFIX_INITIALS"}
     exact_ein = canonical_ein_digits(row["ein"]) == canonical_ein_digits(org.ein)
     if identity != "accepted" or not exact_ein and row.get("address_evidence", {}).get("decision") != "corroborated":
         if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
@@ -27788,7 +27804,10 @@ def nj_name_fallback_queries(org):
         queries = [name for name in queries if normalized_match_name(name) in reviewed
                    or (normalized_match_name(name) not in geography and distinctive_match_tokens(name))]
         queries = focused_generated_name_queries([org.organization_name, *known_names_for_ein(org.ein)], queries)
+        components = {normalized_match_name(part) for part in re.split(r"[-–—/]", org.organization_name)
+                      if len(distinctive_match_tokens(part)) >= 2}
         return sorted(queries,key=lambda name:(normalized_match_name(name) not in reviewed,
+                                             normalized_match_name(name) not in components,
                                              len(distinctive_match_tokens(name)) < 2))
     return queries
 
@@ -28331,7 +28350,11 @@ def search_nj_direct(page, org, identity_org=None):
         if exemption is not None:
             if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
                 from deployment.nj_unnumbered_review import capture
-                try: capture(sys.modules[__name__],page,identity_org or org,getattr(page,"_cc_nj_completed_data",None))
+                review = getattr(exemption, "_cc_identity_review", {})
+                reviewed_rows = review.get("records", []) if isinstance(review, dict) else []
+                bound_candidate = next(iter(reviewed_rows), None)
+                try: capture(sys.modules[__name__],page,identity_org or org,
+                             getattr(page,"_cc_nj_completed_data",None), candidate=bound_candidate)
                 except Exception:
                     from deployment.state_snapshots import CURRENT
                     run = CURRENT.get()
