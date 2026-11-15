@@ -17,6 +17,9 @@
         || result.state === 'NM' && result.status_reason === 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
         || result.state === 'NV' && ['NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE','NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT','NY_CONNECTOR_REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT','NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT','NY_CONNECTOR_REGISTRY_NV_SEARCH_SOURCE_ERROR'].includes(result.status_reason)
         || result.state === 'DC' && result.reason_code === 'DC_LICENSE_SOURCE_UNREACHABLE'
+        || result.state === 'MD' && result.success === false
+           && result.raw_status_text === 'Maryland registry search did not complete'
+           && ['PORTAL_ERROR', 'RUNNER_TIMEOUT'].includes(result.reason_code)
         || result.state === 'WI' && ['WI_SOURCE_UNREACHABLE', 'WI_SOURCE_ALLOWANCE_EXHAUSTED'].includes(result.reason_code)
         || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH'
         || ['ND','CO'].includes(result.state) && result.reason_code === 'RUNNER_TIMEOUT');
