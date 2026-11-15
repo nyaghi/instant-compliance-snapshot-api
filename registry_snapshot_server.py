@@ -35599,6 +35599,14 @@ def ar_reviewed_search_plan(org, generated):
             if query != name and canonical_name_punctuation(name).casefold().startswith(query.casefold()):
                 prefixes.setdefault(query.casefold(), []).append(name)
     for query in planned:
+        # The portal returns its blank form for overlength generated spellings.
+        # Submit a whole-word literal prefix; only an exact, explicitly empty
+        # response covers the longer query. Candidate identity stays unchanged.
+        if (len(query) > 50 and re.fullmatch(r"[A-Za-z0-9 .,()&'-]+", query)
+                and query.casefold() not in {name.casefold() for name in [org.organization_name, *known_names_for_ein(org.ein)]}):
+            prefix = query[:50].rsplit(" ", 1)[0]
+            if len(distinctive_match_tokens(prefix)) >= 2 and query.startswith(prefix + " "):
+                query = prefix
         if query.casefold() not in seen:
             queries.append(query); seen.add(query.casefold())
     # For a display name with an explicit separator, follow the entered full
