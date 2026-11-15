@@ -3,7 +3,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const original=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js'):path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvPages,nvExpandSearchPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady,handle};\n  async function handle(m) {');
+const source=original.replace('  async function handle(m) {','  globalThis.testNV = {wait,nvInputSettle,setNvDiagnosticId:value=>nvDiagnosticId=value,nvSelectSearchMode,nvPage,nvPages,nvExpandSearchPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady,handle};\n  async function handle(m) {');
 
 test('Nevada detail and transitional routes are not ready public search forms',()=>{
  const h=fixture();
@@ -211,7 +211,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   MouseEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}},
   MutationObserver:class{constructor(fn){this.fn=fn;}observe(root,options){this.options=options;observers.add(this);}disconnect(){observers.delete(this);}},
   setTimeout:(fn,ms)=>schedule(fn,Math.max(ms,timerClamp)),clearTimeout:id=>tasks.delete(id),
-  chrome:{runtime:{id:'test-extension',onMessage:{addListener:fn=>listener=fn}}}};
+  chrome:{runtime:{id:'test-extension',sendMessage:message=>new Promise(resolve=>schedule(()=>resolve({ok:message.action==='nv-input-settle'}),200)),onMessage:{addListener:fn=>listener=fn}}}};
  vm.createContext(context);vm.runInContext(source,context);
  async function drive(promise) {
   let done=false,value,error;promise.then(v=>{value=v;done=true;},e=>{error=e;done=true;});
@@ -849,7 +849,7 @@ test('candidate Nevada access remains absent from the approved connector manifes
 
 test('NV streams click and filing checkpoints with real frontend command IDs without altering results',async()=>{
  const h=fixture({rows:observed.slice(0,2)}),messages=[];
- h.context.chrome.runtime.sendMessage=async m=>{messages.push(JSON.parse(JSON.stringify(m)));};
+ const sendPulse=h.context.chrome.runtime.sendMessage; h.context.chrome.runtime.sendMessage=async m=>{if(m.action==='nv-input-settle')return sendPulse(m);messages.push(JSON.parse(JSON.stringify(m)));};
  const diagnosticId='abcdef0123456789abcdef0123456789';
  const result=await h.drive(h.api.handle({action:'registry-nv',diagnosticId,query:{state:'NV',operation:'search',name:'MAKE-A-WISH'},budgetMs:45000}));
  assert.equal(result.ok,true);assert.ok(messages.some(m=>m.nv_diagnostic.phase==='search-returned'));
@@ -884,7 +884,7 @@ test('NV trial blank detail type cannot reuse a stale filing table',async()=>{
 
 test('NV trial detail completes without a filing table or history wait',async()=>{
  const h=fixture({rows:observed.slice(0,2)}),messages=[];
- h.context.chrome.runtime.sendMessage=async m=>messages.push(m);
+ const sendPulse=h.context.chrome.runtime.sendMessage; h.context.chrome.runtime.sendMessage=async m=>m.action==='nv-input-settle'?sendPulse(m):messages.push(m);
  const diagnosticId='abcdef0123456789abcdef0123456789';
  await h.drive(h.api.handle({action:'registry-nv',diagnosticId,query:{state:'NV',operation:'search',name:'MAKE-A-WISH'},budgetMs:45000}));
  const started=h.time;
@@ -1011,4 +1011,28 @@ test('Nevada retains the original shortlist after opening a candidate by busines
  }
  assert.deepEqual(f.opened,rows.map(row=>row[1]));
  assert.deepEqual(f.submitted.slice(1).map(search=>search.id),rows.slice(1).map(row=>row[1]));
+});
+
+// A hidden tab can defer a timer while public DOM mutations still arrive.
+test('Nevada accepts an observed selected mode without waiting for a throttled settle timer',async()=>{
+ const h=fixture({timerClamp:60000,unrelatedMutations:true});
+ await h.drive(h.api.nvSelectSearchMode('EXACT_MATCH',h.time+10000));
+ assert.equal(h.mode,'EXACT_MATCH');assert.equal(h.modeClicks,1);assert.equal(h.clicks,0);
+ assert.ok(h.time<4000,'mode selection must not consume a delayed minute timer');
+});
+test('Nevada still rejects an ignored mode change without submitting a search',async()=>{
+ const h=fixture({ignoreModeChange:true});
+ await assert.rejects(h.drive(h.api.nvSelectSearchMode('EXACT_MATCH',h.time+10000)),/MODE_NOT_SELECTED/);
+ assert.equal(h.clicks,0);assert.equal(h.mode,'STARTS_WITH');
+});
+
+test('Nevada input guard retains 200ms stability using the worker clock in a throttled tab',async()=>{
+ const h=fixture({timerClamp:60000});h.api.setNvDiagnosticId('abcdefghijklmnop');let button={};
+ const began=h.time;
+ const result=await h.drive(h.api.wait(()=>button,3000,{settle:200,settlePulse:h.api.nvInputSettle,sameCandidate:(a,b)=>a===b}));
+ assert.equal(result,button);assert.equal(h.time-began,200);
+});
+test('Nevada worker-clock input guard rejects a changed candidate',async()=>{
+ const h=fixture({timerClamp:60000});h.api.setNvDiagnosticId('abcdefghijklmnop');let reads=0;
+ await assert.rejects(h.drive(h.api.wait(()=>++reads===1?{}:null,3000,{settle:200,settlePulse:h.api.nvInputSettle,sameCandidate:(a,b)=>a===b})),/RESPONSE_INCOMPLETE/);
 });

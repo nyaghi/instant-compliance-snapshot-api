@@ -925,6 +925,16 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     boot.then(()=>registryTnCheckboxMessage(message,sender)).then(respond,()=>respond({allowed:false}));
     return true;
   }
+  if(P.TRIAL_ORIGIN && message?.action==='nv-input-settle') {
+    if(sender.id!==chrome.runtime.id || sender.frameId!==0 || !P.validId(message.id)
+        || !sender.url?.startsWith('https://orion.nv.gov/portal/public/'))return false;
+    const job=allJobs().find(job=>isActive(job)&&!job.closed&&job.registryState==='NV'
+      && job.tab===sender.tab?.id && owned.has(job.tab) && job.pending===message.id);
+    if(!job)return false;
+    setTimeout(()=>respond({ok:isActive(job)&&!job.closed&&owned.has(job.tab)
+      &&job.tab===sender.tab?.id&&job.pending===message.id}),200);
+    return true;
+  }
   if(P.TRIAL_ORIGIN && message?.action==='nv-diagnostic') {
     if(sender.id!==chrome.runtime.id || sender.frameId!==0 || !P.validId(message.id)
         || !sender.url?.startsWith('https://orion.nv.gov/portal/public/'))return false;

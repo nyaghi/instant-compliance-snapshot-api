@@ -14,7 +14,7 @@
   const documentId = crypto.randomUUID();
   const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
   const visible = el => !!el && el.getClientRects().length > 0;
-  function wait(fn, ms = 25000, {root = document.documentElement, action, relevant, settle = 0, sameCandidate = null, trace = () => {}, signal = null} = {}) {
+  function wait(fn, ms = 25000, {root = document.documentElement, action, relevant, settle = 0, sameCandidate = null, trace = () => {}, signal = null, settlePulse = null} = {}) {
     // Observe before acting. Hidden-page timers may wake much later than the
     // DOM update; they are watchdogs, not the sole observers of completion.
     return new Promise((resolve, reject) => {
@@ -51,7 +51,12 @@
           candidate = value; candidateAt = Date.now();
           trace("observed", candidateAt-start);
           if (!settle) return finish(value);
-          settleTimer = setTimeout(settleCandidate, settle);
+          if (settlePulse) {
+            const observedAt=candidateAt;
+            Promise.resolve().then(()=>settlePulse()).then(()=>{
+              if (!done && candidateAt===observedAt) settleCandidate();
+            }, error=>finish(null,error));
+          } else settleTimer = setTimeout(settleCandidate, settle);
         } catch (error) { finish(null, error); }
       };
       const observer = new MutationObserver(list => {
@@ -365,13 +370,25 @@
     // A subsequent click can reopen that menu after selection and race the
     // next search. Select the labelled option once and verify the rendered
     // value. No Choices instance, application state or private API is used.
+    // Selection is an exact public input value, not an asynchronous result.
+    // The later boundButton guard still checks mode plus all input values
+    // before Search. Do not defer this already-observed value to a hidden-tab
+    // settle timer: an unrelated late mutation could falsely reject it.
     await wfcAwait("content:nvSelectSearchMode:341:4",()=>(wait(()=>nvSearchModeSelected(mode),Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>{
       option.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,view:window}));
-    },settle:200,sameCandidate:(prior,current)=>prior===current}).catch(error=>{
+    }}).catch(error=>{
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_NOT_SELECTED');
       throw error;
     })));
     nvTrace('mode-selected',{mode});
+  }
+  async function nvInputSettle() {
+    // The extension worker owns this 200 ms input-settle clock; Chrome can
+    // throttle a hidden registry tab's timer to a minute. It does not search,
+    // select a record, or extend the existing form deadline.
+    if(!nvDiagnosticId) return new Promise(resolve=>setTimeout(resolve,200));
+    const reply=await chrome.runtime.sendMessage({action:'nv-input-settle',id:nvDiagnosticId});
+    if(reply?.ok!==true)throw new Error('REGISTRY_NV_INPUT_SETTLE_UNAVAILABLE');
   }
   function nvPublicRow(cells) {
     const [name,businessId,entity_number,entity_type,,,raw_status] = cells;
@@ -659,7 +676,7 @@
         if(input.value!==value){set(input,value);return false;}
       }
       return boundButton();
-    }, Math.max(1,bindDeadline-Date.now()), {settle:200,sameCandidate:(prior,current)=>prior===current,action:()=>{
+    }, Math.max(1,bindDeadline-Date.now()), {settle:200,settlePulse:nvInputSettle,sameCandidate:(prior,current)=>prior===current,action:()=>{
       for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',businessId],['entityName',searchName]]) {
         const input=field(suffix);if(!input)throw new Error('REGISTRY_NV_FORM_CHANGED');
         if(input.value!==value)set(input,value);
@@ -1505,7 +1522,7 @@
       const numberless=pending||unsupportedDenied;
       if((unsupportedDenied||unsupportedInactive)&&(fields['Expiration Date']||fields['Extension End Date']))
         throw new Error('REGISTRY_NC_CARD_CHANGED');
-      const header=headerText.match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
+      const header=headerText.match(/^(.+?)\s*â€¢\s*\(((?:SL|EX)\d+)\)$/);
       const displayName=numberless?headerText:header?.[1].trim();
       const names=[...new Set([...legal,...other])];
       if(!legal.length||names.length>32||(!numberless&&(!header||header[2]!==fields.License))||!names.includes(displayName))
@@ -1744,7 +1761,7 @@
           || input('ddl_county')?.value!=='-1' || input('ddl_lictype')?.value!=='-1') throw new Error('REGISTRY_FILTER_CHANGED');
       const alert=document.querySelector('#altdialog');
       if (visible(alert)) {
-        const message=text(alert).replace(/^[•\s]+/,'');
+        const message=text(alert).replace(/^[â€¢\s]+/,'');
         if (message==='No Records Found') return {rows:[],headers:alHeaders,total:0};
         if (/verif|captcha|code/i.test(message)) throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
         throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
