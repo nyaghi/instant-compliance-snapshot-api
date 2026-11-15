@@ -22220,34 +22220,49 @@ def search_ma_master(page, org, completed):
 
     try:
         page.goto(result.source_url, wait_until="domcontentloaded", timeout=45000)
-        mode = "Employer Identification Number" if re.sub(r"\D", "", org.ein or "") else "Charity Name Contains"
-        page.get_by_role("combobox").first.select_option(label=mode, timeout=15000)
-        query = re.sub(r"\D", "", org.ein or "") or org.organization_name
-        field = page.get_by_role("textbox").first
-        field.fill("")
-        field.type(query, delay=35)
-        page.get_by_role("button", name="Search", exact=True).click(timeout=5000)
-        page.get_by_text(re.compile(r"^Select a Charity$|^No Charity Found[.!]?$", re.I)).and_(page.locator(":visible")).first.wait_for(timeout=15000)
-        body = registry_page_body(page)
-        # Record the actual submitted field only after its result is displayed.
-        # Passive traffic parsing does not recognize this Salesforce form.
-        try:
-            from deployment.state_snapshots import CURRENT
-            from deployment.search_history import SourceQueryReceipt
-            run = CURRENT.get()
-            if run is not None and run.state == "MA":
-                receipt = SourceQueryReceipt(run, {
-                    "state": "MA", "operation": "search",
-                    "ein" if mode == "Employer Identification Number" else "name": query,
-                    "filter_label": mode, "source_kind": "state_portal", "url": result.source_url,
-                })
-                receipt.complete(0 if re.search(r"\bNo Charity Found\b", body, re.I) else None)
-        except Exception:
-            pass  # History capture cannot change the completed registry result.
-        if re.search(r"\bNo Charity Found\b", body, re.I):
+        requested_ein = re.sub(r"\D", "", org.ein or "")
+        mode = "Employer Identification Number" if requested_ein else "Charity Name Contains"
+        query = requested_ein or org.organization_name
+        empty = re.compile(r"\bNo Charity Found\b", re.I)
+
+        def submit_search(mode, query):
+            page.get_by_role("combobox").first.select_option(label=mode, timeout=15000)
+            field = page.get_by_role("textbox").first
+            field.fill("")
+            field.type(query, delay=35)
+            page.get_by_role("button", name="Search", exact=True).click(timeout=5000)
+            outcome = page.get_by_text(re.compile(r"^Select a Charity$|^No Charity Found[.!]?$", re.I))
+            outcome.and_(page.locator(":visible")).first.wait_for(timeout=15000)
+            response = registry_page_body(page)
+            try:
+                from deployment.state_snapshots import CURRENT
+                from deployment.search_history import SourceQueryReceipt
+                run = CURRENT.get()
+                if run is not None and run.state == "MA":
+                    receipt = SourceQueryReceipt(run, {
+                        "state": "MA", "operation": "search",
+                        "ein" if mode == "Employer Identification Number" else "name": query,
+                        "filter_label": mode, "source_kind": "state_portal", "url": result.source_url,
+                    })
+                    receipt.complete(0 if empty.search(response) else None)
+            except Exception:
+                pass
+            return response
+
+        body = submit_search(mode, query)
+        name_fallback = bool(requested_ein and empty.search(body) and org.organization_name.strip())
+        if name_fallback:
+            # Clear the previous "No Charity Found" before observing a second
+            # search so an old empty response cannot settle the name lookup.
+            page.reload(wait_until="domcontentloaded", timeout=8000)
+            mode = "Charity Name Contains"
+            query = org.organization_name.strip()
+            body = submit_search(mode, query)
+        if empty.search(body):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No record found"
-            result.source_note = "Massachusetts completed the registry search and returned No Charity Found."
+            result.source_note = ("Massachusetts completed the EIN and legal-name searches without a record."
+                                  if name_fallback else "Massachusetts completed the registry search and returned No Charity Found.")
             result.success = True
             return result, body
         step = "selection"
@@ -22259,6 +22274,9 @@ def search_ma_master(page, org, completed):
             options = combo.locator("option").evaluate_all(
                 "nodes => nodes.map(n => ({value:n.value,label:n.textContent.trim()}))")
             candidate = ma_selection_candidate(org, options)
+            if name_fallback and candidate and not registry_name_is_safe_for_org(
+                    candidate['label'], org.organization_name, org.ein):
+                candidate = None
             if candidate:
                 selections.append((combo, candidate))
         if len(selections) != 1:
@@ -22277,6 +22295,9 @@ def search_ma_master(page, org, completed):
             # response without inventing registration or filing currency.
             if page.get_by_text("This Charity is not available for public.", exact=True).is_visible() is True:
                 body = registry_page_body(page)
+                if name_fallback:
+                    return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED",
+                                      "Massachusetts withheld the name-search result, so the EIN could not be verified.")
                 result.matched_registry_name = candidate["label"]
                 result.matched_registry_identifier = candidate["value"]
                 result, _ = incomplete("MA_RECORD_NOT_PUBLIC", "Massachusetts found the selected charity but explicitly withholds its record from public view.")
@@ -22288,6 +22309,15 @@ def search_ma_master(page, org, completed):
                 except Exception:
                     pass
                 return result, body
+            conflict = completed.get("tax_id_conflict", {})
+            if conflict.get("record_id") == candidate["value"]:
+                body = registry_page_body(page)
+                return incomplete(
+                    "MA_SOURCE_TAX_ID_CONFLICT",
+                    f"Massachusetts account {conflict['ago_account']} displays Tax ID "
+                    f"{conflict['source_tax_id']}; the search used EIN {format_ein(requested_ein)}. "
+                    "The selected state record could not be verified for the entered EIN.",
+                )
             record = completed.get("record", {})
             account = record.get("ago_account")
             if (record.get("record_id") == candidate["value"] and account and account in completed.get("filings", {})
@@ -22299,6 +22329,9 @@ def search_ma_master(page, org, completed):
         account_match = re.search(r"AG\s+Account\s+Number\s*:?\s*(\d+)", re.sub(r"\s+", " ", body), re.I)
         if not account_match or account_match.group(1) != account:
             return incomplete("MA_FILING_LIST_UNCONFIRMED", "The displayed Massachusetts filing record could not be tied to the selected charity account.")
+        if name_fallback and record.get("ein") != requested_ein:
+            return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED",
+                              "Massachusetts returned a name-search result without a matching EIN.")
         result.matched_registry_name = record["name"]
         result.matched_registry_identifier = account
         result.success = True
@@ -22309,6 +22342,19 @@ def search_ma_master(page, org, completed):
             result.source_attempts = ["Massachusetts completed its filing list; retried the unavailable Form PC detail once."]
             evidence = ma_read_latest_form_pc(page, result, body, completed)
         result = annotate_ma_visible_form_pc_due(result, evidence)
+        if (result.status == "Unable to Confirm"
+                and result.status_reason == "MA_FORM_PC_DETAIL_UNCONFIRMED"
+                and requested_ein and record.get("ein") == requested_ein
+                and not evidence.get("wrong_filing_year")
+                and not evidence.get("contrary_status")
+                and str(evidence.get("registry_status", "")).strip().casefold() != "not doing business in mass"):
+            result.status = "Delinquent"
+            result.status_reason = "MA_MATCHED_FILING_PERIOD_UNVERIFIED"
+            result.source_note = (
+                "Massachusetts confirmed the charity and EIN, but the latest filing did not establish "
+                "a fiscal period or confirm current filing standing. CharityClarity applies its "
+                "Delinquent rule for insufficient filing information. No overdue date was established."
+            )
         try:
             from deployment.state_snapshots import CURRENT
             from deployment.ma_view_more_evidence import capture
@@ -22561,8 +22607,17 @@ def ma_capture_completed_response(response, org, evidence: dict) -> None:
                 row = rows[0]
                 identity = score_candidate(org.organization_name, org.ein, {
                     "name": row.get("Organization_Name__c"), "ein": row.get("Employer_Idendification_Number_EIN__c")})
-                actual_ein = re.sub(r"\D", "", str(row.get("Employer_Idendification_Number_EIN__c") or ""))
+                source_tax_id = str(row.get("Employer_Idendification_Number_EIN__c") or "").strip()
+                actual_ein = re.sub(r"\D", "", source_tax_id)
                 expected_ein = re.sub(r"\D", "", org.ein or "")
+                source_name = str(row.get("Organization_Name__c") or "")
+                account = str(row.get("AGO_Charity_Number__c") or "")
+                if (row.get("Id") == query["recID"] and expected_ein and actual_ein != expected_ein
+                        and re.fullmatch(r"[0-9-]{9,16}", source_tax_id) and re.fullmatch(r"[0-9]{1,12}", account)
+                        and source_name and complete_name_identity_key(source_name) == complete_name_identity_key(org.organization_name)):
+                    evidence["tax_id_conflict"] = {
+                        "record_id": row["Id"], "ago_account": account, "source_tax_id": source_tax_id,
+                    }
                 if (row.get("Id") == query["recID"] and identity["decision"] == "accepted"
                         and (not expected_ein or actual_ein == expected_ein)):
                     evidence["record"] = {"record_id": row["Id"], "ago_account": str(row.get("AGO_Charity_Number__c") or ""),
@@ -30830,6 +30885,8 @@ def true_status_from_body(result, body: str) -> str:
         return public_status(result)
     if result.state == "HI" and getattr(result, "status_reason", "") == "HI_EXACT_EIN_SOURCE_STATUS":
         return public_status(result)
+    if result.state == "KY" and getattr(result, "status_reason", "") == "KY_MATCHED_FILING_PERIOD_UNVERIFIED":
+        return "Delinquent"
     if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
         return "Unable to Confirm"
     if getattr(result, "reason_code", "") == "FISCAL_PERIOD_UNCONFIRMED":
@@ -30846,7 +30903,7 @@ def true_status_from_body(result, body: str) -> str:
         return base_status
     if state == "MA" and getattr(result, "status_reason", "") == "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD":
         return status_from_calendar_date(parsed_result_date(result.computed_due_date))
-    if state == "MA" and getattr(result, "status_reason", "") in {"MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT"}:
+    if state == "MA" and getattr(result, "status_reason", "") in {"MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT", "MA_MATCHED_FILING_PERIOD_UNVERIFIED"}:
         return "Delinquent"
     if state == "MA" and getattr(result, "status_reason", "") == "MA_PRIMARY_REGISTRATION_PENDING":
         return "Pending"
@@ -31301,6 +31358,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 f"Period evidence: {evidence['period_basis']}. {transition} IRS information is used to interpret the period; the state’s own listing establishes the year on record.")
     if result.state == "HI" and getattr(result, "status_reason", "") == "HI_EXACT_EIN_SOURCE_STATUS":
         return result.source_note
+    if result.state == "KY" and getattr(result, "status_reason", "") == "KY_MATCHED_FILING_PERIOD_UNVERIFIED":
+        return result.source_note
     if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
         state_name = "Kentucky" if result.state == "KY" else "Hawaii"
         if getattr(result, "period_read_failure", ""):
@@ -31365,7 +31424,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
         return note
 
-    if state == "MA" and reason in {"MA_RECORD_NOT_PUBLIC", "MA_PRIMARY_REGISTRATION_PENDING", "MA_LEGACY_URS_NO_LATER_ANNUAL", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT"}:
+    if state == "MA" and reason in {"MA_RECORD_NOT_PUBLIC", "MA_PRIMARY_REGISTRATION_PENDING", "MA_LEGACY_URS_NO_LATER_ANNUAL", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT", "MA_MATCHED_FILING_PERIOD_UNVERIFIED"}:
         return note
 
     if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
@@ -31392,7 +31451,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return ("New York's registry did not complete the request within the available time or returned a temporary service error. "
                 "CharityClarity reports Unable to Confirm because the registry evidence could not be retrieved. "
                 "Retry the state later; this result does not establish delinquency or non-registration.")
-    if state == "MA" and reason in {"MA_CHARITY_SELECTION_UNCONFIRMED", "MA_FILING_LIST_UNCONFIRMED"}:
+    if state == "MA" and reason in {"MA_CHARITY_SELECTION_UNCONFIRMED", "MA_FILING_LIST_UNCONFIRMED", "MA_SOURCE_TAX_ID_CONFLICT"}:
         return result.source_note
     if (state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED"
             and getattr(result, "ma_filing_evidence", {}).get("wrong_filing_year")):
@@ -32219,6 +32278,16 @@ def search_ky_strict_snapshot(org):
                 result.status = "Unable to Confirm"
                 result.status_reason = "KY_TAX_PERIOD_UNCONFIRMED"
                 result.raw_status_text = f"Yr Last Filed: {filed_year} | KY ID: {registry_id} | Corresponding fiscal period not confirmed"
+                if evidence.get("period_unconfirmed") and evidence.get("ein") == canonical_ein_digits(org.ein):
+                    result.status = "Delinquent"
+                    result.status_reason = "KY_MATCHED_FILING_PERIOD_UNVERIFIED"
+                    result.computed_due_date = result.fiscal_year_end = result.next_required_period = ""
+                    result.source_note += (
+                        " The matched state listing shows a filing year. The available filing information "
+                        "could not establish the fiscal period or confirm current filing standing. "
+                        "CharityClarity applies its Delinquent rule for insufficient filing information. "
+                        "No overdue date was established."
+                    )
         return result
 
 
