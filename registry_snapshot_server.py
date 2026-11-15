@@ -8480,6 +8480,19 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         for row in rows:
             if row["identifier"] in seen:
                 continue
+            if (state == "NV" and row.get("entity_type") == "Name Reservation"
+                    and row.get("raw_status", "").strip().casefold() == "expired"
+                    and re.fullmatch(r"(?:NR|C)\d{8}-\d+", row["identifier"])
+                    and row.get("entity_number") == row["identifier"]):
+                # This complete grid explicitly identifies an expired reserved
+                # name, not an issued nonprofit or charity registration. Keep
+                # all issued records, aliases and incomplete-type detail paths.
+                # Opening each expired reservation cannot establish a status
+                # for the requested charity and repeatedly resets ORION's form.
+                excluded_nv_entities.append({"name": row["name"], "identifier": row["identifier"],
+                    "entity_type": row["entity_type"], "basis": "Expired name reservation; not an issued registration"})
+                seen.add(row["identifier"])
+                continue
             if state == "NC" and user_rejected_credential(org.ein, state, row["identifier"]):
                 seen.add(row["identifier"])
                 continue
@@ -8701,7 +8714,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
         result.rejected_candidates = [{**row, "reason": "Confirmed record outside the approved Nevada nonprofit/charity scope"}
                                       for row in excluded_nv_entities[:20]]
         result.source_note += " Same-name records confirmed to be outside the nonprofit/charity scope were excluded."
-        if any(row.get("basis") for row in excluded_nv_entities):
+        if any("withdrawal" in row.get("basis", "").lower() for row in excluded_nv_entities):
             result.source_note += " A withdrawn nonprofit corporation with a complete non-soliciting history and no charitable-solicitation statement was excluded; corporate withdrawal is not classified as a withdrawn charity registration."
     if state == "NV" and result.success and result.matched_registry_identifier and nv_scope_records:
         # Match the master's ordinary partial-name behavior: a merely possible
@@ -13138,7 +13151,10 @@ def sc_reordered_broad_name(original: str, candidate: str, query: str, ein: str)
 
 def sc_result_page_stream(body, post, deadline, expected_query):
     current=1;seen=set();paged=False
-    for _ in range(20):
+    # Large ordinary result sets can exceed 20 pages. Keep the existing whole
+    # lookup deadline and source-bound consecutive-page guards; a page-count
+    # ceiling must not discard page 21 after it has already been retrieved.
+    for _ in range(100):
         if time.monotonic() >= deadline:raise TimeoutError('SC source paging deadline expired')
         decoded=html.unescape(body)
         rows=list(re.finditer(r'CharityInfo\((\d+)\)[^>]*>\s*(.*?)\s*</a>',body,re.I|re.S))
@@ -13395,7 +13411,7 @@ def sc_official_detail_lookup(org) -> object | None:
                     if changed_heading or sc_related_entity_requires_ein(original_name, registry_name, org.ein):
                         filing_ein = sc_detail_filing_ein(detail_html, min(deadline, time.monotonic() + 10), fetch_bytes=fetch_filing_bytes)
                         if filing_ein != canonical_ein_digits(org.ein):
-                            if changed_heading:
+                            if changed_heading and not filing_ein:
                                 identity_unconfirmed = True
                             unrelated_alias = sc_unrelated_alias_prefix(original_name, registry_name, org.ein)
                             if not changed_heading and not scope_review and sc_reordered_broad_name(
@@ -35170,6 +35186,13 @@ def search_ok_precise(page, org, module):
                 "Oklahoma detail page status was found, but filing history could not be parsed. "
                 "The accepted row safely matched the requested organization."
             )
+            if any('Notice of Registration Exemption' in value for value in filing_candidates):
+                from deployment.state_snapshots import CURRENT
+                from deployment.ok_certificate_evidence import retain_exemption_notice
+                number=retain_exemption_notice(page,CURRENT.get(),filing_candidates,matched_name)
+                result.source_note = ("The registry lists a historical Notice of Registration Exemption, but no registration or renewal certificate. "
+                    "The displayed registry status is retained; the historical filing does not establish current registration.")
+                if number: result.raw_status_text += ' | Historical exemption notice '+number
             return ok_attach_foundation_review(result, org, page)
 
         certificate_evidence = ok_fetch_registration_certificate(page, latest_filing, matched_name)

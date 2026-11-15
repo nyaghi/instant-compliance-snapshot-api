@@ -50,10 +50,19 @@ def append_to_asset(asset, document, record, query, evidence):
         # Leave room for the selected-detail page under the viewer's 100-page limit.
         if reader.is_encrypted or not 1 <= len(reader.pages) <= 99: return asset
         text = reader.pages[0].extract_text() or ''
+        heading_matches = bool(key(evidence['name']) and key(evidence['name']) in key(text))
+        requested_name_matches = False
+        if not heading_matches:
+            from registry_snapshot_server import complete_name_identity_key
+            requested = complete_name_identity_key(record.get('organization_name', ''))
+            # A conflicting source heading cannot override an original filing
+            # that explicitly names the requested organization and exact EIN.
+            requested_name_matches = bool(requested and any(
+                complete_name_identity_key(line) == requested for line in text.splitlines()))
         if (not re.search(r'(?<!\d)'+ein[:2]+r'-?'+ein[2:]+r'(?!\d)', text)
                 or not re.search(r'Registration Submitted\s*\('+re.escape(number)+r'\)', text)
                 or not re.search(r'Tax Year\s+'+str(year)+r'\b', text)
-                or not key(evidence['name']) or key(evidence['name']) not in key(text)): return asset
+                or not (heading_matches or requested_name_matches)): return asset
         first = render_pdf({'kind': asset['kind']}, base64.b64decode(asset['content'], validate=True))
         first_reader = PdfReader(io.BytesIO(first))
         if len(first_reader.pages) != 1: return asset
@@ -64,6 +73,7 @@ def append_to_asset(asset, document, record, query, evidence):
         if len(out.getvalue()) > MAX_BYTES: return asset
         return {**asset, 'kind': 'source_pdf', 'operation': 'detail_registration',
                 'content': base64.b64encode(out.getvalue()).decode('ascii'),
-                'capture_note': 'Original latest submitted NM registration '+number+' (tax year '+str(year)+') appended in full after the selected detail. Source: '+document['source_url']}
+                'capture_note': 'Original latest submitted NM registration '+number+' (tax year '+str(year)+') appended in full after the selected detail. Source: '+document['source_url']
+                    + (' The registry heading differs from the requested name; the original filing confirms the requested legal name and EIN.' if not heading_matches else '')}
     except Exception:
         return asset

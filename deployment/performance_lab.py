@@ -173,6 +173,46 @@ def final_four_asset(name, text):
         text = text.replace(old, new)
     if name == 'index.html':
         import re
+        replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
+        replace('      if (nyResultRefresh) return;', '      if (nyResultRefresh || connectorPreflightPending) return;')
+        replace('    let runAlternateNames = [];', '    let runAlternateNames = [];\n    let connectorPreflightPending = false;')
+        replace('    window.addEventListener("cc-identity-change", () => {', '    window.addEventListener("cc-identity-change", () => {\n      if (connectorPreflightPending) return;')
+        replace('      runAlternateNames = Object.freeze', '''      const connectorStates = states.filter(state => ["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(state));
+      if (connectorStates.length) {
+        connectorPreflightPending = true;
+        const submitLabel = submitButton.textContent;
+        submitButton.disabled = true;
+        submitButton.textContent = "Connecting to the registry browser…";
+        let readiness;
+        try {
+          readiness = await window.CCNYConnector?.preflight(connectorStates);
+        } catch {
+          // An interrupted bridge must not start a partially covered run.
+        } finally {
+          connectorPreflightPending = false;
+          submitButton.disabled = namesRequired() && !window.CCIdentity?.ready();
+          submitButton.textContent = submitButton.disabled ? "Review organization names first" : submitLabel;
+        }
+        if (!readiness?.ok) {
+          showError(readiness?.reason === "NY_CONNECTOR_UPDATE_REQUIRED"
+            ? "The registry browser connector needs an update. This check did not start."
+            : "Couldn’t connect to the registry browser connector. This check did not start. Make sure the CharityClarity extension is enabled, then retry.");
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "ml-2 underline font-semibold";
+          retry.textContent = "Retry connectors";
+          retry.addEventListener("click", () => form.requestSubmit());
+          errorBox.append(" ", retry);
+          retry.focus();
+          return;
+        }
+        if (organizationNameValue !== organizationName.value.trim() || einValue !== ein.value.trim()
+          || emailValue !== email.value.trim() || states.join(",") !== selectedStates().join(",")
+          || (namesRequired() && !window.CCIdentity?.ready())) {
+          return showError("The check details changed while connecting. Review them and run again.");
+        }
+      }
+      runAlternateNames = Object.freeze''')
         label = re.search(r'<label[^>]*><input type="checkbox" name="states" value="AK"[^>]* /> <span>Alaska</span></label>', text)
         if not label: raise RuntimeError('Missing approved state selector template')
         # Keep the existing selector's alphabetical display order. Its layout
@@ -346,6 +386,7 @@ def final_four_asset(name, text):
         replace('Staging · Sales Mode ${VERSION}', environment_label+' · Sales Mode ${VERSION}')
         replace('{signal:controller.signal}', '{signal:controller.signal,mode:"sales"}', 2)
     elif name == 'ny-connector.js':
+        import re
         text = bind_il_replies(text)
         diagnostic_source = (Path(__file__).resolve().parents[1]/'browser-connector'/'protocol.js').read_text(encoding='utf-8')
         diagnostic_source = diagnostic_source.split('// BEGIN NY_DIAGNOSTICS:',1)[1].split('\n',1)[1].split('// END NY_DIAGNOSTICS',1)[0]
@@ -441,6 +482,22 @@ def final_four_asset(name, text):
           completed = {...completed, reason:"NY_CONNECTOR_NC_RATE_LIMITED"};
         }
         state = completed.ok''')
+        # Use exactly the same compatibility predicate at run admission and
+        # lookup admission; leave the signed state workflow and queue alone.
+        support = re.search(r'(?m)^    const supported = c => ([^\r\n]+);', text)
+        if not support:
+            raise RuntimeError("Missing registry connector capability predicate")
+        support_test = support[1].replace('!finalFour', '!["AL","NC","NV","TN","NM","MS"].includes(registryState)')
+        replace(support[0], '    const supported = c => supportsRegistry(c, registryState);')
+        replace('  async function setup() {', '''  const supportsRegistry = (c, registryState) => ''' + support_test + ''';
+  async function preflight(states) {
+    const response = await connectorReadiness();
+    return states.every(state => supportsRegistry(response, state))
+      ? {ok:true}
+      : {ok:false, reason:response.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE"};
+  }
+  async function setup() {''')
+        replace('Object.freeze({ setup, lookup, refresh })', 'Object.freeze({ setup, lookup, refresh, preflight })')
     return insight_asset(name, text)
 
 
@@ -480,7 +537,7 @@ def shared_readiness_asset(text):
     helper = '  // Only the read-only connection check is shared. Never cache a settled\n  // reply or share registry requests, lookup IDs, owner bindings or decisions.\n  let pendingReadiness = null;\n  function connectorReadiness(signal) {\n    signal?.throwIfAborted();\n    if (!pendingReadiness) {\n      const pending = (async () => {\n        let response = await bridge("ping", null, null, null, "NY");\n        if (!response.ok && response.reason === "NY_CONNECTOR_UNAVAILABLE")\n          response = await bridge("ping", null, null, null, "NY");\n        return response;\n      })();\n      pendingReadiness = pending;\n      const clear = () => { if (pendingReadiness === pending) pendingReadiness = null; };\n      pending.then(clear, clear);\n    }\n    const pending = pendingReadiness;\n    if (!signal) return pending;\n    // A cancelled state stops waiting without cancelling other consumers.\n    // The read-only operation itself remains bounded by the existing 2x5s cap.\n    return new Promise((resolve, reject) => {\n      const abort = () => { signal.removeEventListener(\'abort\', abort); reject(signal.reason); };\n      signal.addEventListener(\'abort\', abort, {once:true});\n      pending.then(value => { signal.removeEventListener(\'abort\', abort); resolve(value); },\n        error => { signal.removeEventListener(\'abort\', abort); reject(error); });\n    });\n  }\n'
     if text.count(old) != 1:
         old = old.replace('\r\n', '\n')
-    anchor = '  async function setup() {'
+    anchor = '  const supportsRegistry ='
     if text.count(old) != 1 or text.count(anchor) != 1:
         raise RuntimeError('Shared readiness frontend contract mismatch')
     return text.replace(old, replacement, 1).replace(anchor, helper + anchor, 1)
