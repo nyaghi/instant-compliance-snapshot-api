@@ -8483,7 +8483,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             if (state == "NV" and row.get("entity_type") == "Name Reservation"
                     and row.get("raw_status", "").strip().casefold() == "expired"
                     and re.fullmatch(r"(?:NR|C)\d{8}-\d+", row["identifier"])
-                    and row.get("entity_number") == row["identifier"]):
+                    and row.get("entity_number", row["identifier"]) == row["identifier"]):
                 # This complete grid explicitly identifies an expired reserved
                 # name, not an issued nonprofit or charity registration. Keep
                 # all issued records, aliases and incomplete-type detail paths.

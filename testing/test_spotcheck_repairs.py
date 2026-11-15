@@ -80,7 +80,7 @@ class SCChangedHeading(unittest.TestCase):
 class NVExpiredReservations(unittest.TestCase):
     def lookup(self,change=None,complete=True):
         calls=[];name="Children's Hospital Corporation"
-        row={'name':name,'identifier':'NR20210916-12621','entity_number':'NR20210916-12621','entity_type':'Name Reservation','raw_status':'Expired'}
+        row={'name':name,'identifier':'NR20210916-12621','entity_type':'Name Reservation','raw_status':'Expired'}
         row.update(change or {})
         def source(q):
             calls.append(q)
@@ -92,7 +92,7 @@ class NVExpiredReservations(unittest.TestCase):
     def test_complete_expired_explicit_reservation_needs_no_detail(self):
         r,calls=self.lookup();self.assertEqual(r.status,'Not Registered')
         self.assertTrue(all(q['operation']=='search' for q in calls));self.assertIn('Expired name reservation',str(r.rejected_candidates))
-    def test_missing_type_active_or_missing_entity_number_keeps_old_detail_path(self):
+    def test_missing_type_active_or_conflicting_explicit_number_keeps_old_detail_path(self):
         for changes in [{'entity_type':''},{'raw_status':'Active'},{'entity_number':''}]:
             with self.subTest(changes=changes),self.assertRaisesRegex(RuntimeError,'Detail required'):self.lookup(changes)
     def test_incomplete_grid_cannot_be_negative(self):
