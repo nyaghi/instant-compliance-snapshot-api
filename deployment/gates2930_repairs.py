@@ -51,11 +51,18 @@ def tn_historical_prefix(targets, candidate):
     """A complete multiword reviewed prefix permits detail review, never acceptance."""
     def words(value):
         value = re.sub(r"\b(?:incorporated|inc|corporation|corp|limited|ltd)\.?\s*$", "", value.strip(), flags=re.I)
-        return re.findall(r"[a-z0-9]+", value.casefold())
-    actual = words(candidate)
+        # A possessive suffix is not a separate identifying word. Otherwise
+        # "Children's Hospital" incorrectly qualifies as a three-word prefix.
+        lexical = re.sub(r"(?<=\w)['’](?=s\b|\s|$)", "", value.casefold())
+        tokens = re.findall(r"[a-z0-9]+", lexical)
+        identifying_count = len(tokens) - int(bool(tokens and tokens[0] == 'the'))
+        # Retain the existing literal-prefix comparison; only tighten the
+        # minimum number of actual words needed for historical-name review.
+        return re.findall(r"[a-z0-9]+", value.casefold()), identifying_count
+    actual, _ = words(candidate)
     for target in targets:
-        core = words(target)
-        if len(core) >= 3 and len(actual) > len(core) and actual[:len(core)] == core:
+        core, identifying_count = words(target)
+        if identifying_count >= 3 and len(actual) > len(core) and actual[:len(core)] == core:
             return True
     return False
 
