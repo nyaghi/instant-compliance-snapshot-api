@@ -18129,6 +18129,8 @@ def ct_direct_post_query(session, base_fields: dict[str, str], headers: dict[str
     )
     response.raise_for_status()
     source_body = response.text
+    from deployment.ct_budget import check_response
+    check_response(source_body)
     from deployment.completed_response_history import finish as _history_finish
     _history_finish(response,source_body)
     return source_body
@@ -18709,7 +18711,7 @@ def _search_ct_direct(org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
     started = time.perf_counter()
-    from deployment.ct_budget import STOP
+    from deployment.ct_budget import STOP, SourceUnavailable
     deadline = min(started + CT_DIRECT_MAX_SECONDS, STOP.get())
     safe_targets = organization_match_target_variants(original_name, org.ein)
     for target in list(safe_targets):
@@ -18752,6 +18754,7 @@ def _search_ct_direct(org):
     attempted_variants = 0
     completed_variants = 0
     incomplete_results = False
+    source_unavailable = False
     searched_variants: list[str] = []
     session = None
     fields = None
@@ -18776,6 +18779,10 @@ def _search_ct_direct(org):
                     raise TimeoutError("Connecticut search form used the available request budget.")
             body = ct_direct_post_query(session, fields, headers, variant, attempt_timeout)
             body = ct_direct_complete_pages(session, fields, headers, variant, body, query_deadline)
+        except SourceUnavailable as exc:
+            source_unavailable = True
+            last_error = str(exc)
+            break
         except CTIncompleteResults as exc:
             incomplete_results = True
             last_error = str(exc)
@@ -18861,7 +18868,7 @@ def _search_ct_direct(org):
             f"Connecticut attempted prioritized name queries: {', '.join(searched_variants)}."
         ] if searched_variants else []
         return result
-    partial_results = incomplete_results
+    partial_results = incomplete_results and not source_unavailable
     result = checker.StateResult(original_name, org.ein, "CT", "Unable to Confirm" if partial_results else "Site Not Reachable", url)
     result.raw_status_text = "Connecticut returned results, but result-page or record review could not be completed" if partial_results else "Connecticut direct registry lookup could not be completed"
     if partial_results:

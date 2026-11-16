@@ -2,13 +2,31 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import registry_snapshot_server as app
 from deployment import ct_budget
 
 
 class ConnecticutBudget(unittest.TestCase):
+    def test_actual_error_redirect_is_unavailable_not_negative(self):
+        body = '1|#||4|60|pageRedirect||%2fErrorPage.aspx%3fe%3d70d10745-e771-41c6-b76f-128df308311b|'
+        response = Mock(text=body)
+        session = Mock()
+        session.post.return_value = response
+        with (patch.object(app, 'known_names_for_ein', return_value=[]),
+              patch.object(app, 'ct_direct_prepare_session', return_value=(session, {}, {}))):
+            result = app.search_ct_direct(app.checker.Organization('Partnership for Civil Justice Fund', '262851211'))
+        self.assertEqual(result.status, 'Site Not Reachable')
+        self.assertFalse(result.success)
+        self.assertEqual(session.post.call_count, 1)
+        self.assertIn('application error page', result.error)
+
+    def test_completed_empty_and_positive_payloads_are_unchanged(self):
+        for body in ['Showing 0 results', 'Showing 1 result <tr>PARTNERSHIP</tr>',
+                     '1|#||4|20|pageRedirect||/lookup/licenselookup.aspx|']:
+            self.assertIsNone(ct_budget.check_response(body))
+
     def test_complete_source_dispatch_cannot_restart_allowance(self):
         now = [0.0]
         calls = []
