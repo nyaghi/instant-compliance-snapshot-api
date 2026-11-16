@@ -56,7 +56,7 @@
       ...(data && {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})});
     if (!response.ok) {
       let text = response.status === 401 ? 'Open Alerts from your signed-in CharityClarity account.' : 'Alerts are temporarily unavailable.';
-      try { if(response.status!==401) text=(await response.json()).error || text; } catch {}
+      try { const failure=await response.json(); text=failure.code==='ALERTS_SESSION_REQUIRED' ? 'Open Alerts from your signed-in CharityClarity account.' : failure.error || text; } catch {}
       throw Error(text);
     }
     return response.json();

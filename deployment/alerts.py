@@ -399,7 +399,7 @@ class Alerts:
         return self.dashboard(c,account,2**63-1)
 
 
-def handle(alerts, handler, path, *, origin, operator=False, include_body=True):
+def handle(alerts, handler, path, *, origin, operator=False, include_body=True, session_required_status=401):
     headers={'Cache-Control':'no-store'}
     def reply(code, payload, extra=None):
         return (code,payload,headers|(extra or {}))
@@ -430,7 +430,7 @@ def handle(alerts, handler, path, *, origin, operator=False, include_body=True):
                     c.execute('INSERT INTO cc_alert_sessions VALUES (%s,%s,%s,false)',(digest(session),row['account'],now+7*DAY))
                     return reply(200,{'ok':True},{'Set-Cookie':f'{COOKIE}={session}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={7*DAY}'})
                 account=alerts.account(c,handler)
-                if not account:return reply(401,{'error':'An authenticated account session is required.'})
+                if not account:return reply(session_required_status,{'error':'An authenticated account session is required.','code':'ALERTS_SESSION_REQUIRED'})
                 if handler.command=='POST' and alerts.master is not None:
                     from deployment.alerts_browser import claim, enable, lease
                     if parsed.path=='/api/alerts/runner/claim':

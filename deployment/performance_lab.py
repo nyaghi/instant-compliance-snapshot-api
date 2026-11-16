@@ -308,6 +308,9 @@ def final_four_asset(name, text):
         environment_label = 'Staging' if identity.get('permanent_staging') else 'Isolated Trial'
         replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; '+environment_label)
     elif name == 'organization-identity.js':
+        # Discovery uses the same explicit private credential as state checks.
+        replace('headers: {"Content-Type": "application/json"}',
+                'headers: {"Content-Type": "application/json", "Authorization": "Bearer " + config.admin_passcode}')
         # The server returns partial evidence by 28 seconds; stop the browser
         # at 30 seconds so a stalled transport cannot extend discovery.
         replace('setTimeout(() => controller.abort(), 70000)', 'setTimeout(() => controller.abort(), 30000)')
@@ -784,7 +787,7 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
                 return
             if alerts is not None and (urlparse(self.path).path == '/api/alerts' or self.path.startswith('/api/alerts/')):
                 from deployment.alerts import handle
-                return handle(alerts,self,self.path,origin=LAB_ORIGIN,include_body=include_body)
+                return handle(alerts,self,self.path,origin=LAB_ORIGIN,include_body=include_body,session_required_status=403)
             if not self.authorized(): return
             if os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity():
                 target = staging_collector_entry(self.path)
@@ -866,7 +869,7 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
                 from deployment.alerts import handle
                 authorization=self.headers.get('Authorization','')
                 operator=authorization.startswith('Bearer ') and valid_authorization(authorization,key)
-                return handle(alerts,self,self.path,origin=LAB_ORIGIN,operator=operator)
+                return handle(alerts,self,self.path,origin=LAB_ORIGIN,operator=operator,session_required_status=403)
             if not self.authorized(): return
             if trial_access_expired() and self.path in ('/api/workflow', '/api/discover-names',
                     '/api/check', '/api/ny-connector', '/api/final-four-connector'):
