@@ -40296,8 +40296,8 @@ def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, sta
 
 def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
     # Preserve completed searches and original history within a single state run.
-    # Florida receipts are bound to the exact name/EIN/query plan; WI is unchanged.
-    if (state or '').upper() not in {'WI','FL'} or not trial_identity():
+    # MI retries retain first-attempt receipts; all scopes remain name/EIN/state bound.
+    if (state or '').upper() not in {'WI','FL','MI'} or not trial_identity():
         data = _run_single_state_lookup_reliably_source(organization_name,ein,state)
         if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == 'standard':
             from deployment.group_identity_review import recover
@@ -40324,16 +40324,16 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             if os.environ.get('CE_FINAL_FOUR_CHILD')!='1':
                 from deployment.state_snapshots import persist_inline_result
                 data=persist_inline_result(sys.modules[__name__],data)
-            if trial_identity():
-                from deployment.source_availability import apply as apply_source_availability
-                apply_source_availability(data)
-            return data
         except Exception:
             data = {**data,'evidence_capture':'unavailable'}
-            if trial_identity():
-                from deployment.source_availability import apply as apply_source_availability
-                apply_source_availability(data)
-            return data
+
+    # Keep the existing MI group-review fallback outside the completed capture.
+    if state.upper() == 'MI' and LAB_LOOKUP_MODE_CONTEXT.get() == 'standard':
+        from deployment.group_identity_review import recover
+        data = recover(sys.modules[__name__], data, run_state_lookup)
+    from deployment.source_availability import apply as apply_source_availability
+    apply_source_availability(data)
+    return data
 
 
 def apply_batch_state_health(results: list[dict]) -> list[dict]:

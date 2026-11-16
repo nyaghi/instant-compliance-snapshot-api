@@ -10,9 +10,10 @@ def capture(page, selected, fields, lookup_deadline):
     if not name or not re.fullmatch(r'\d{10}',identifier) or not fields.get('Status'):return
     url='https://firststop.sos.nd.gov/search/charitable'
     start=time.monotonic()
-    # Share one visual reserve across all review candidates, inside the existing
-    # lookup and task deadlines. No extra search, navigation or retry.
-    stop=min(start+max(0,lookup_deadline-time.perf_counter()),DEADLINE.get()-1,
+    # An already-open detail may arrive at the end of the search allowance.
+    # Reserve at most three seconds for its pixels, never another search.
+    # All candidates still share the original ten-second visual/task ceiling.
+    stop=min(start+max(3,max(0,lookup_deadline-time.perf_counter())),DEADLINE.get()-1,
              getattr(run,'nd_review_capture_stop',start+10))
     run.nd_review_capture_stop=stop
     fact={'adapter':'ND-existing-review-detail','identifier':identifier,'outcome':'not_started'}
@@ -42,7 +43,7 @@ def capture(page, selected, fields, lookup_deadline):
     }"""
     args={'name':name,'id':identifier,'fields':expected}
     try:
-        if page.url!=url or stop-start<3:fact['outcome']='deadline_or_route';return
+        if page.url!=url or stop-start<2.5:fact['outcome']='deadline_or_route';return
         page.wait_for_function(check,arg=args,timeout=ms(2))
         before=page.evaluate(check,args)
         text=page.inner_text('body',timeout=ms(1))
