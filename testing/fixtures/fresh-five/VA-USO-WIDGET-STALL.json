@@ -1,0 +1,351 @@
+{
+  "phase": "selected_fields_ready",
+  "adapter": "VA-selected-original-registration",
+  "outcome": "source_visual_unavailable",
+  "total_ms": 29100.77,
+  "capture_ms": 0,
+  "error_type": "TimeoutError",
+  "waiting_for": "Registration Information heading",
+  "error_summary": "Locator.wait_for: Timeout 28296ms exceeded.",
+  "navigation_ms": 276.93,
+  "readiness_observation": {
+    "counts": {
+      "dom_ready": 1,
+      "load_ready": 1,
+      "request:xhr": 11,
+      "response:xhr": 11,
+      "request:fetch": 5,
+      "request:script": 52,
+      "response:fetch": 4,
+      "response:script": 51,
+      "request:document": 1,
+      "response:document": 1
+    },
+    "events": [
+      {
+        "event": "request",
+        "seconds": 0.006,
+        "resource": "document"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 0.273,
+        "resource": "document"
+      },
+      {
+        "event": "request",
+        "seconds": 0.283,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 0.383,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 0.388,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 0.388,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 0.389,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 0.389,
+        "resource": "script"
+      },
+      {
+        "event": "dom_ready",
+        "seconds": 0.389
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 0.517,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 0.786,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 0.809,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 0.81,
+        "resource": "script"
+      },
+      {
+        "event": "load_ready",
+        "seconds": 0.885
+      },
+      {
+        "event": "request",
+        "seconds": 0.887,
+        "resource": "fetch"
+      },
+      {
+        "event": "request",
+        "seconds": 0.887,
+        "resource": "fetch"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 1.026,
+        "resource": "fetch"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 1.161,
+        "resource": "fetch"
+      },
+      {
+        "event": "request",
+        "seconds": 2.889,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 3.003,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 3.016,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 3.017,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 3.017,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 3.018,
+        "resource": "script"
+      }
+    ],
+    "last_events": [
+      {
+        "event": "request",
+        "seconds": 7.996,
+        "resource": "xhr"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.055,
+        "resource": "xhr"
+      },
+      {
+        "event": "request",
+        "seconds": 8.066,
+        "resource": "xhr"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.117,
+        "resource": "xhr"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.153,
+        "resource": "xhr"
+      },
+      {
+        "event": "request",
+        "seconds": 8.163,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.239,
+        "resource": "xhr"
+      },
+      {
+        "event": "response",
+        "status": 304,
+        "seconds": 8.316,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 8.32,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 8.321,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 8.321,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 8.321,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 8.322,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 8.322,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 8.323,
+        "resource": "script"
+      },
+      {
+        "event": "request",
+        "seconds": 8.323,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.518,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.539,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.543,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.937,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.945,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.968,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 8.987,
+        "resource": "script"
+      },
+      {
+        "event": "response",
+        "status": 200,
+        "seconds": 9.044,
+        "resource": "script"
+      }
+    ]
+  },
+  "local_visual_budget_ms": 30000,
+  "selected_readiness_observation": {
+    "lane": "server_chromium",
+    "errors": [],
+    "failed": 0,
+    "pending": [
+      {
+        "host": "vdacs.evokeplatform.com",
+        "path": "/api/webContent/logo",
+        "type": "fetch",
+        "age_seconds": 21.366
+      },
+      {
+        "host": "vdacs.evokeplatform.com",
+        "path": "/api/webContent/plugins/out-of-the-box-widgets/files/558.js",
+        "type": "script",
+        "age_seconds": 21.365
+      }
+    ],
+    "failures": [],
+    "finished": 67,
+    "requests": 69,
+    "terminal": {
+      "headings": [],
+      "required": [
+        {
+          "count": 0,
+          "label": "Registration Information",
+          "visible": false
+        },
+        {
+          "count": 0,
+          "label": "Registration ID",
+          "visible": false
+        },
+        {
+          "count": 0,
+          "label": "Initial Registration Date",
+          "visible": false
+        },
+        {
+          "count": 0,
+          "label": "Current Registration Date",
+          "visible": false
+        }
+      ],
+      "form_count": 0,
+      "error_present": false,
+      "document_state": "complete",
+      "body_text_chars": 283,
+      "expected_id_present": true,
+      "verification_present": false,
+      "expected_name_present": true
+    },
+    "pending_count": 2,
+    "route_matches": true,
+    "terminal_read": "completed",
+    "elapsed_seconds": 28.627,
+    "pending_overflow": 0,
+    "remaining_seconds": 0.968,
+    "terminal_read_timeout_ms": 250
+  }
+}

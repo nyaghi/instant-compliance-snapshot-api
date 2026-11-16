@@ -967,6 +967,43 @@ def observe_visual_readiness(page,fact):
    except Exception:pass
  return trace_return('deployment/source_visual_adapters.py:observe_visual_readiness:523:1:return',(detach))
 
+def va_widget_initialization_stalled(fact):
+ """An exact selected VA shell is waiting on an unreturned detail widget."""
+ obs=fact.get('selected_readiness_observation',{});terminal=obs.get('terminal',{})
+ required=terminal.get('required',[])
+ if (fact.get('adapter')!='VA-selected-original-registration' or fact.get('widget_initialization_reload')
+     or obs.get('route_matches') is not True or obs.get('terminal_read')!='completed'
+     or obs.get('failed')!=0 or obs.get('pending_overflow')!=0 or obs.get('observer_error') or obs.get('errors')
+     or terminal.get('document_state')!='complete' or terminal.get('form_count')!=0
+     or terminal.get('expected_name_present') is not True or terminal.get('expected_id_present') is not True
+     or terminal.get('verification_present') is not False or terminal.get('error_present') is not False
+     or not required or any(field.get('visible') is not False for field in required)):return False
+ elapsed=obs.get('elapsed_seconds')
+ return any(p.get('host')=='vdacs.evokeplatform.com' and p.get('type')=='script'
+     and re.fullmatch(r'/api/webContent/plugins/out-of-the-box-widgets/files/[^/?#]+\.js',p.get('path',''))
+     and 'status' not in p and type(p.get('age_seconds')) in (int,float) and type(elapsed) in (int,float)
+     and 5<=p['age_seconds']<=elapsed+.01<float('inf') for p in obs.get('pending',[]))
+
+
+def wait_va_selected_heading(page,fact,finish_readiness,url,stop):
+ """Probe halfway through the existing capture allowance; never extend it."""
+ heading=page.get_by_role('heading',name='Registration Information',exact=True)
+ try:
+  heading.wait_for(state='visible',timeout=max(1,int(min(15,stop-time.monotonic()-1)*1000)))
+  return
+ except Exception as exc:
+  if type(exc).__name__!='TimeoutError':raise
+  if stop-time.monotonic()<=1:raise
+ getattr(finish_readiness,'checkpoint',finish_readiness)()
+ if page.url==url and stop-time.monotonic()>=8 and va_widget_initialization_stalled(fact):
+  fact['widget_initialization_boundary']=json.loads(json.dumps(fact['selected_readiness_observation']))
+  fact['widget_initialization_reload']={'count':1,'same_selected_url':True,'within_existing_stop':True}
+  response=page.reload(wait_until='commit',timeout=max(1,int(min(5,stop-time.monotonic()-5)*1000)))
+  if response is None or response.status!=200 or page.url!=url:
+   raise ValueError('Same-selected VA widget reload was not confirmed')
+ heading.wait_for(state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+
+
 def capture_selected_va_source(master,result,run,deadline):
  """Original selected VA registration: standing, initial/current/expiry dates."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:527:5:get',result.get,locals(), 'state')!='VA' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:527:54:get',result.get,locals(), 'ein','')))!=run.ein
@@ -998,7 +1035,7 @@ def capture_selected_va_source(master,result,run,deadline):
     begin=time.perf_counter();fact['phase']='selected_fields_ready'
     fact['waiting_for']='Registration Information heading'
     try:
-     workflow_call('deployment/source_visual_adapters.py:capture_selected_va_source:553:4:wait_for',page.get_by_role('heading',name='Registration Information',exact=True).wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+     wait_va_selected_heading(page,fact,finish_readiness,hint['url'],stop)
     except Exception as ready_error:
      if type(ready_error).__name__!='TimeoutError':raise
      getattr(finish_readiness,'checkpoint',finish_readiness)()

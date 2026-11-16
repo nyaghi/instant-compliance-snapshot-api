@@ -3826,6 +3826,44 @@ def identity_wa_alias_review(result: dict, ein: str, deadline: float) -> dict:
     return {**result, "names": names}
 
 
+def identity_nm_name_review(result: dict, ein: str, deadline: float) -> dict:
+    """Keep a contradicted NM heading visible, but do not silently search it."""
+    names = [{**item, "evidence": list(item["evidence"])} for item in result.get("names", [])]
+    limit = min(deadline, time.monotonic() + 8.0)
+    key = lambda value: re.sub(r"^the\s+", "", identity_name_key(value))
+    tokens = lambda value: set(key(value).split()) - {"of", "and", "for", "foundation", "institute", "organization", "organizations"}
+    try:
+        profile = PUBLIC_PROFILE_CACHE.get(ein, {}).get("organization") or {}
+        if canonical_ein_digits(str(profile.get("ein", ""))) != ein:
+            profile = json.loads(identity_fetch(f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json", limit)).get("organization") or {}
+        if canonical_ein_digits(str(profile.get("ein", ""))) != ein or not profile.get("city") or not profile.get("state"):
+            return result
+        for item in names[:1]:
+            name_key = key(item["name"])
+            if (len(name_key.split()) < 2 or not tokens(profile.get("name", ""))
+                    or tokens(item["name"]) & tokens(profile.get("name", ""))):continue
+            url = "https://projects.propublica.org/nonprofits/api/v2/search.json?" + urlencode({"q": '"' + name_key + '"'})
+            candidates = json.loads(identity_fetch(url, limit)).get("organizations", [])
+            for other in candidates[:25]:
+                foreign = str(other.get("ein") or "").zfill(9)
+                if (not re.fullmatch(r"\d{9}", foreign) or foreign == ein or key(other.get("name", "")) != name_key
+                        or not other.get("city") or not other.get("state")
+                        or other["city"].casefold() == profile["city"].casefold()
+                        or other["state"].upper() == profile["state"].upper()):continue
+                item.update(verified=False, identity_conflict={
+                    "source": "NM", "reason": "Potentially misattributed state name",
+                    "candidate_name": other["name"], "candidate_ein": format_ein(foreign),
+                    "candidate_location": f"{other['city']}, {other['state']}",
+                    "requested_location": f"{profile['city']}, {profile['state']}",
+                    "source_url": f"https://projects.propublica.org/nonprofits/organizations/{foreign}",
+                    "explanation": "This New Mexico name matches an IRS organization with a different EIN and location. Confirm it before using it as an alternate name."})
+                break
+    except Exception as exc:
+        # Unavailable corroboration is not proof that the name is wrong.
+        log_event(f"NM name cross-check unavailable: ein={ein}; error={type(exc).__name__}")
+    return {**result, "names": names}
+
+
 def identity_source_cache_key(source: str, ein: str) -> tuple:
     fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else ("live-co-addresses-v3" if source == "CO" else "live-v2")
     return (ein, source, fingerprint)
@@ -3854,6 +3892,8 @@ def identity_source_result(source: str, ein: str, deadline: float) -> dict:
     result = {**worker(ein, deadline), "source": source, "cache_hit": False}
     if source == "WA":
         result = identity_wa_alias_review(result, ein, deadline)
+    if source == "NM" and trial_identity():
+        result = identity_nm_name_review(result, ein, deadline)
     if result.get("rejected_name_fields"):
         result.update(complete=False, limitation="Some state name fields were malformed or incomplete and were excluded; usable EIN-confirmed names were retained.")
     # Cache only identity evidence, keyed by weekly revision or a bounded live TTL.
@@ -4561,7 +4601,8 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
                     if proof not in target["evidence"]: target["evidence"].append(proof)
     names = list(merged.values())
     for item in names:
-        if item.get("identity_conflict") and any(proof.get("source") not in {"WA", "Washington"} for proof in item["evidence"]):
+        conflict_source = (item.get("identity_conflict") or {}).get("source", "WA")
+        if item.get("identity_conflict") and any(proof.get("source") not in {conflict_source, identity_source_label(conflict_source)} for proof in item["evidence"]):
             # An independent exact-EIN source supports this very name. Preserve
             # legitimate former names and same-name organizations elsewhere.
             item.pop("identity_conflict", None)

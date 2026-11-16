@@ -8,7 +8,7 @@ from deployment import source_visual_adapters as a,state_snapshots as s
 
 CONTEXTS=json.loads((Path(__file__).parent/'fixtures/selected-initialization-contexts.json').read_text())
 class Borrowed:
-    def __init__(self,browser,route,clock,state):self.browser=browser;self.route=route;self.clock=clock;self.state=state
+    def __init__(self,browser,route,clock,state,widget=False):self.browser=browser;self.route=route;self.clock=clock;self.state=state;self.widget=widget
     def close(self):pass
     def new_context(self,**options):
         context=self.browser.new_context(**options);context.route('**/*',self.route)
@@ -42,7 +42,7 @@ class Borrowed:
                         first[0]=False
                         try:return real_wait(**{**kwargs,'timeout':80})
                         except BrowserTimeout:
-                            self.clock[0]=29;raise
+                            self.clock[0]=15 if self.widget else 29;raise
                     try:return real_wait(**{**kwargs,'timeout':80})
                     except BrowserTimeout:
                         self.clock[0]=40;raise
@@ -52,7 +52,7 @@ class Borrowed:
             return page
         context.new_page=new_page;return context
 
-def replay(browser,pw,state,org,*,wrong_id=False,answered_dependency=False,seconds=100,selected_object=None,blocked=False,other_object=False,stays_pending=False):
+def replay(browser,pw,state,org,*,wrong_id=False,answered_dependency=False,seconds=100,selected_object=None,blocked=False,other_object=False,stays_pending=False,widget=False):
     name=org['name'];ein=s.digits(org['ein']);clock=[0.0];requests=[];documents=[]
     identifier='117962'if state=='CA'else'677523'
     url=('https://ca-rcf.evokeplatform.com/app/publicPortal/registrationDetails/1006488'if state=='CA'else'https://vdacs.evokeplatform.com/app/publicPortal/registration/677523')
@@ -71,12 +71,18 @@ def replay(browser,pw,state,org,*,wrong_id=False,answered_dependency=False,secon
         body='<p>'+html.escape(name)+'</p><p>Registration ID: '+('999999'if wrong_id else identifier)+'</p><div class="formio-form"><h3>Registration Information</h3><p>Registration ID</p>'+''.join('<div class="formio-component-'+key+'"><label>'+label+'</label><p>'+value+'</p></div>'for key,label,value in fields)+'</div>'
         hint={'name':name,'url':url,'source_record_id':identifier,'registration_type':'Charity','source_fields':{key:value for key,label,value in fields}}
     loaded='<h1>LOCAL MODELED FIXTURE — NOT STATE EVIDENCE</h1>'+body
+    if widget:
+        boot=origin+'/api/webContent/plugins/out-of-the-box-widgets/files/558.js'
+        shell='<p>'+html.escape(name)+'</p><p>Registration ID: '+identifier+'</p>'
+        if blocked:shell+='<p>Verify you are human</p>'
     def route(r):
         requests.append(r.request.url)
         if r.request.url==url:
             documents.append(r.request.url)
             raw=(f'<html><head><script>fetch({json.dumps(boot)})</script></head><body>{shell}</body></html>'
                  if len(documents)==1 or stays_pending else loaded)
+            if widget and (len(documents)==1 or stays_pending):
+                raw=f'<html><head><script>addEventListener("load",()=>{{let s=document.createElement("script");s.src={json.dumps(boot)};document.head.append(s)}})</script></head><body>{shell}</body></html>'
             r.fulfill(status=200,content_type='text/html; charset=utf-8',body=raw)
         elif r.request.url==boot:
             if answered_dependency:r.fulfill(status=200,content_type='application/json',body='{}')
@@ -89,7 +95,7 @@ def replay(browser,pw,state,org,*,wrong_id=False,answered_dependency=False,secon
     class PW:
         def __enter__(self):return pw
         def __exit__(self,*args):pass
-    master.checker.sync_playwright=lambda:PW();master.launch_lookup_browser=lambda *args,**kwargs:Borrowed(browser,route,clock,state)
+    master.checker.sync_playwright=lambda:PW();master.launch_lookup_browser=lambda *args,**kwargs:Borrowed(browser,route,clock,state,widget)
     result={'state':state,'ein':ein,'organization_name':name,'status':'Delinquent'if state=='CA'else'Upcoming Filing','success':True,'matched_registry_name':name,'matched_registry_identifier':identifier,'source_url':url}
     original=copy.deepcopy(result);run=s.CaptureRun(name,ein,state);run.source_detail_hints[identifier]=hint
     # Only the adapter clock is modeled. Browser/network/screenshot timing is real.
@@ -104,6 +110,16 @@ class BrowserRecovery(unittest.TestCase):
     def setUpClass(cls):cls.p=sync_playwright().start();cls.browser=cls.p.chromium.launch(headless=True)
     @classmethod
     def tearDownClass(cls):cls.browser.close();cls.p.stop()
+    def test_va_selected_widget_stall_recovers_original_without_extending_budget(self):
+        r=replay(self.browser,self.p,'VA',CONTEXTS[0],widget=True)
+        self.assertEqual(r['fact']['outcome'],'captured',r['fact'])
+        self.assertEqual(len(r['documents']),2);self.assertEqual(len(set(r['documents'])),1)
+        self.assertLess(r['clock'],30);self.assertEqual(len(r['run'].documents),1)
+        self.assertNotIn('initialization_continuation',r['fact'])
+    def test_va_widget_wrong_identity_challenge_and_continued_stall_never_make_evidence(self):
+        for args in [{'wrong_id':True},{'blocked':True},{'stays_pending':True}]:
+            r=replay(self.browser,self.p,'VA',CONTEXTS[0],widget=True,**args)
+            self.assertEqual(r['run'].documents,[],r['fact'])
     def test_same_detail_reload_recovers_two_selected_pages_without_new_search(self):
         for state in ['CA','VA']:
             r=replay(self.browser,self.p,state,CONTEXTS[0]);self.assertEqual(len(r['documents']),2)

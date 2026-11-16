@@ -1,6 +1,7 @@
 (async () => {
   const status=document.getElementById('runner-status');
   const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  let settled=true;
   async function post(action,data) {
     const response=await fetch('/api/alerts/runner/'+action,{method:'POST',
       headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',
@@ -18,9 +19,14 @@
     if(!browser?.ok || browser.quiet !== true)return;
     const deadline=Date.now()+480000;
     while(Date.now()<deadline){
+      // The alarm's idle check is not a lease for the entire roster. Recheck
+      // between organizations so a requested Aurora run takes the next turn.
+      const permission=await window.CCAlertsBrowser('config');
+      if(!permission?.ok)break;
       const job=await post('claim',{profile:browser.profile});
       if(job.retry){await pause(6000);continue;}
       if(!job.lease)break;
+      settled=false;
       status.textContent='Checking '+job.name;
       try {
         const checkDeadline = Math.min(deadline, Date.now() + 310000);
@@ -41,13 +47,21 @@
           }
         }));
       } finally {
-        await post('finish',{lease:job.lease});
+        let result=await post('finish',{lease:job.lease});
+        while(result.pending && Date.now()<deadline) {
+          await pause(1000);
+          result=await post('finish',{lease:job.lease});
+        }
+        settled=!result.pending;
+        if(!settled)throw Error('Scheduled check is still finishing.');
       }
     }
     status.textContent='Scheduled checks finished.';
   } catch {
     status.textContent='Scheduled checks will retry when Chrome is available.';
   } finally {
-    await window.CCAlertsBrowser('done');
+    // Keep the bounded owned-runner reservation if server completion could
+    // not be confirmed. Never tell Aurora the browser is idle prematurely.
+    if(settled)await window.CCAlertsBrowser('done');
   }
 })();

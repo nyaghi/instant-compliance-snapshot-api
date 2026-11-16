@@ -308,7 +308,48 @@ async function registryCreateOwnedTab(job,url,origin) {
       diagnostic('nc-window-fallback',job,`slot=${job.duoSlot} placement=${placement.left},${placement.top},${placement.width},${placement.height} actual=${window.left},${window.top},${window.width},${window.height}`);
     }
   } else tab=await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:270:13:await",()=>(chrome.tabs.create({windowId:origin.windowId,url,active:false})));
-  job.tab=tab.id;owned.add(tab.id);await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:271:35:await",()=>(saveRuntime()));
+  job.tab=tab.id;owned.add(tab.id);
+  await registryNevadaBackgroundBegin(job);
+  await wfAwait(job,"registry-worker.js:registryCreateOwnedTab:271:35:await",()=>(saveRuntime()));
+}
+// Keep only the owned quiet NV document responsive while its public UI loads.
+// This does not activate a tab/window, change source fields or submit a query.
+// Release before the existing independently bound screenshot attachment.
+async function registryNevadaBackgroundBegin(job) {
+  if(!P.TRIAL_ORIGIN || job.registryState!=='NV' || !registryQuietAlerts(job)
+      || job.closed || !owned.has(job.tab) || Date.now()>=job.activeExpiresAt
+      || job.nvBackgroundLease)return;
+  const lease={tabId:job.tab,attached:false,released:false};job.nvBackgroundLease=lease;
+  let timer;
+  const attach=(async()=>{
+    await chrome.debugger.attach({tabId:lease.tabId},'1.3');lease.attached=true;
+    if(lease.released || job.closed || job.tab!==lease.tabId){await chrome.debugger.detach({tabId:lease.tabId}).catch(()=>{});return;}
+    await chrome.debugger.sendCommand({tabId:lease.tabId},'Emulation.setFocusEmulationEnabled',{enabled:true});
+    diagnostic('nv-background-responsive',job,'owned document; no tab or window activation');
+  })();
+  lease.pending=attach;
+  try {await Promise.race([attach,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('NV_BACKGROUND_ATTACH_TIMEOUT')),Math.max(1,Math.min(3000,job.activeExpiresAt-Date.now())));})]);}
+  catch(error) {await registryNevadaBackgroundEnd(job);throw error;}
+  finally {clearTimeout(timer);}
+}
+async function registryNevadaBackgroundEnd(job) {
+  const lease=job.nvBackgroundLease;if(!lease)return;
+  if(lease.cleanupPromise)return lease.cleanupPromise;
+  lease.released=true;
+  // A late attachment cleans itself up. A failed admission ends this command;
+  // it cannot race the screenshot path or create a second attachment.
+  lease.cleanupPromise=(async()=>{if(lease.attached){
+    let timer;
+    const cleanup=(async()=>{
+      try{await chrome.debugger.sendCommand({tabId:lease.tabId},'Emulation.setFocusEmulationEnabled',{enabled:false});}catch{}
+      try{await chrome.debugger.detach({tabId:lease.tabId});}catch{}
+    })();
+    try{await Promise.race([cleanup,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('NV_BACKGROUND_CLEANUP_TIMEOUT')),3000);})]);}
+    finally{clearTimeout(timer);}
+  }
+  if(job.nvBackgroundLease===lease)delete job.nvBackgroundLease;
+  })();
+  return lease.cleanupPromise;
 }
 async function registryTennesseeOwnedWindow(tab,source) {
   if(!owned.has(tab.id) || tab.url!==registryStart('TN'))return false;
@@ -1128,6 +1169,12 @@ function registrySequenceError(job, query, guard) {
   return wfReturn(job,"registry-worker.js:registrySequenceError:949:2:return",(error));
 }
 async function performRegistryQuery(job, query) {
+  try {
+    await registryNevadaBackgroundBegin(job);
+    return await performRegistryQueryInner(job,query);
+  } finally {await registryNevadaBackgroundEnd(job);}
+}
+async function performRegistryQueryInner(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw registrySequenceError(job,query,"registry-query-contract");
   if(query.state==='MS') {
     if(query.operation==='search') {

@@ -178,7 +178,7 @@ def final_four_asset(name, text):
         replace('    let runAlternateNames = [];', '    let runAlternateNames = [];\n    let connectorPreflightPending = false;')
         replace('    window.addEventListener("cc-identity-change", () => {', '    window.addEventListener("cc-identity-change", () => {\n      if (connectorPreflightPending) return;')
         replace('      runAlternateNames = Object.freeze', '''      const connectorStates = states.filter(state => ["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(state));
-      if (connectorStates.length) {
+      if (states.length) {
         connectorPreflightPending = true;
         const submitLabel = submitButton.textContent;
         submitButton.disabled = true;
@@ -194,13 +194,15 @@ def final_four_asset(name, text):
           submitButton.textContent = submitButton.disabled ? "Review organization names first" : submitLabel;
         }
         if (!readiness?.ok) {
-          showError(readiness?.reason === "NY_CONNECTOR_UPDATE_REQUIRED"
+          showError(readiness?.reason === "ALERTS_CHECK_IN_PROGRESS"
+            ? "An automatic Alerts check is finishing. This Aurora check has not started. Retry shortly; the two checks will run separately."
+            : readiness?.reason === "NY_CONNECTOR_UPDATE_REQUIRED"
             ? "The registry browser connector needs an update. This check did not start."
             : "Couldn’t connect to the registry browser connector. This check did not start. Make sure the CharityClarity extension is enabled, then retry.");
           const retry = document.createElement("button");
           retry.type = "button";
           retry.className = "ml-2 underline font-semibold";
-          retry.textContent = "Retry connectors";
+          retry.textContent = readiness?.reason === "ALERTS_CHECK_IN_PROGRESS" ? "Retry check" : "Retry connectors";
           retry.addEventListener("click", () => form.requestSubmit());
           errorBox.append(" ", retry);
           retry.focus();
@@ -209,10 +211,33 @@ def final_four_asset(name, text):
         if (organizationNameValue !== organizationName.value.trim() || einValue !== ein.value.trim()
           || emailValue !== email.value.trim() || states.join(",") !== selectedStates().join(",")
           || (namesRequired() && !window.CCIdentity?.ready())) {
+          await window.CCNYConnector?.release();
           return showError("The check details changed while connecting. Review them and run again.");
         }
       }
       runAlternateNames = Object.freeze''')
+        replace('        runController = null;', '        await window.CCNYConnector?.release();\n        runController = null;')
+        replace('    async function retryStateResult(original) {', '''    async function foregroundResultAction(original, action) {
+      const readiness = await window.CCNYConnector?.preflight([original.state]);
+      if (!readiness?.ok) throw new Error(readiness?.reason === "ALERTS_CHECK_IN_PROGRESS"
+        ? "An automatic Alerts check is finishing. Retry shortly; this state check has not started."
+        : "The registry browser connector is unavailable. This state check has not started.");
+      try { return await action(); } finally { await window.CCNYConnector.release(); }
+    }
+    async function retryStateResult(original) {
+      return foregroundResultAction(original, () => retryStateResultOwned(original));
+    }
+    async function retryStateResultOwned(original) {''')
+        replace('    async function reviewIdentity(original, candidateId, action) {', '''    async function reviewIdentity(original, candidateId, action) {
+      return foregroundResultAction(original, () => reviewIdentityOwned(original, candidateId, action));
+    }
+    async function reviewIdentityOwned(original, candidateId, action) {''')
+        replace('      nyResultRefresh = true;', '      nyResultRefresh = true;\n      let refreshForeground = false;')
+        replace('        const result = await requestSingleState(input.apiBase,', '''        const readiness = await window.CCNYConnector?.preflight(["NY"]);
+        if (!readiness?.ok) return showError("A scheduled check or browser reconnection is still finishing. Retry New York shortly.");
+        refreshForeground = true;
+        const result = await requestSingleState(input.apiBase,''')
+        replace('      } finally { nyResultRefresh = false; submitButton.disabled = false; }', '      } finally { if (refreshForeground) await window.CCNYConnector?.release(); nyResultRefresh = false; submitButton.disabled = false; }')
         label = re.search(r'<label[^>]*><input type="checkbox" name="states" value="AK"[^>]* /> <span>Alaska</span></label>', text)
         if not label: raise RuntimeError('Missing approved state selector template')
         # Keep the existing selector's alphabetical display order. Its layout
@@ -490,14 +515,23 @@ def final_four_asset(name, text):
         support_test = support[1].replace('!finalFour', '!["AL","NC","NV","TN","NM","MS"].includes(registryState)')
         replace(support[0], '    const supported = c => supportsRegistry(c, registryState);')
         replace('  async function setup() {', '''  const supportsRegistry = (c, registryState) => ''' + support_test + ''';
+  let foregroundHolders = 0;
   async function preflight(states) {
     const response = await connectorReadiness();
-    return states.every(state => supportsRegistry(response, state))
-      ? {ok:true}
-      : {ok:false, reason:response.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE"};
+    if (!response.ok || !response.capabilities?.includes("aurora-alerts-exclusive-v1") || !states.every(state => supportsRegistry(response, state)))
+      return {ok:false, reason:response.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE"};
+    const admitted = await bridge("foreground-start");
+    if(admitted.ok)foregroundHolders++;
+    return admitted;
+  }
+  async function release() {
+    if(foregroundHolders<=0)return {ok:true};
+    if(--foregroundHolders>0)return {ok:true};
+    return bridge("foreground-end");
   }
   async function setup() {''')
-        replace('Object.freeze({ setup, lookup, refresh })', 'Object.freeze({ setup, lookup, refresh, preflight })')
+        replace('action === "ping" ? 5000', '["ping","foreground-start","foreground-end"].includes(action) ? 5000')
+        replace('Object.freeze({ setup, lookup, refresh })', 'Object.freeze({ setup, lookup, refresh, preflight, release })')
     return insight_asset(name, text)
 
 

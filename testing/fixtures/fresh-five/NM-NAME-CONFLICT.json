@@ -1,0 +1,74 @@
+{
+  "profile": {
+    "name": "United Service Organizations Inc",
+    "ein": 131610451,
+    "city": "Arlington",
+    "state": "VA"
+  },
+  "candidates": [
+    {
+      "name": "Franklin Institute",
+      "ein": 231370501,
+      "city": "Philadelphia",
+      "state": "PA"
+    },
+    {
+      "name": "Franklin Career Institute",
+      "ein": 113408254,
+      "city": "Staten Island",
+      "state": "NY"
+    },
+    {
+      "name": "Wiseman Franklin Institute Inc",
+      "ein": 424773339,
+      "city": "Columbia",
+      "state": "MD"
+    },
+    {
+      "name": "Franklin Institute Of Wellness Foundation",
+      "ein": 834313029,
+      "city": "Franklin",
+      "state": "TN"
+    },
+    {
+      "name": "Benjamin Franklin Cummings Institute Of Technology",
+      "ein": 42103576,
+      "city": "Boston",
+      "state": "MA"
+    },
+    {
+      "name": "Franklin N Flaschner Judicial Institute Inc",
+      "ein": 42636739,
+      "city": "Boston",
+      "state": "MA"
+    },
+    {
+      "name": "Franklin Mining And Mineral Institu Te",
+      "ein": 422730698,
+      "city": "Alameda",
+      "state": "CA"
+    },
+    {
+      "name": "Viktor Frankl Institute Of Logotherapy",
+      "ein": 810617178,
+      "city": "Abilene",
+      "state": "TX"
+    },
+    {
+      "name": "Franklin International Institute Inc Employee Ben Tr",
+      "ein": 742566283,
+      "city": "W Valley City",
+      "state": "UT"
+    },
+    {
+      "name": "Franklin Furnace Archive Inc",
+      "ein": 132879766,
+      "city": "Long Is City",
+      "state": "NY"
+    }
+  ],
+  "sources": [
+    "https://projects.propublica.org/nonprofits/api/v2/organizations/131610451.json",
+    "https://projects.propublica.org/nonprofits/api/v2/search.json?q=Franklin%20Institute"
+  ]
+}

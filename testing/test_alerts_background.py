@@ -11,6 +11,26 @@ class AlertsBackgroundTests(TestCase):
     setUp = fixtures.AlertsTests.setUp
     check = fixtures.AlertsTests.check
 
+    def test_runner_keeps_browser_reserved_until_backend_is_finished(self):
+        from deployment.alerts import handle
+        from testing.test_alerts_pilot import Handler, ORIGIN
+        self.c.db.executescript(SCHEMA)
+        self.a.master=SimpleNamespace()
+        profile=enable(self.a,self.c,ACCOUNT)['profile']
+        job=claim(self.a,self.c,ACCOUNT,profile)
+        self.c.execute('INSERT INTO cc_lab_workflows VALUES (%s,NULL)',('scheduled',))
+        self.c.db.commit()
+        path='/api/alerts/runner/finish'
+        code,body,_=handle(self.a,Handler(self.session,{'lease':job['lease']}),path,origin=ORIGIN)
+        self.assertEqual(code,200);self.assertTrue(body['pending'])
+        self.assertFalse(self.c.execute('SELECT finished FROM cc_alert_browser_runs').fetchone()['finished'])
+        handle(self.a,Handler(self.other,{'lease':job['lease']}),path,origin=ORIGIN)
+        self.assertFalse(self.c.execute('SELECT finished FROM cc_alert_browser_runs').fetchone()['finished'])
+        self.c.execute('UPDATE cc_lab_workflows SET finished=%s',(NOW+10,));self.c.db.commit()
+        code,body,_=handle(self.a,Handler(self.session,{'lease':job['lease']}),path,origin=ORIGIN)
+        self.assertEqual((code,body),(200,{'ok':True}))
+        self.assertTrue(self.c.execute('SELECT finished FROM cc_alert_browser_runs').fetchone()['finished'])
+
     def test_browser_claim_is_account_bound_and_never_queues_browser_states_on_server(self):
         self.c.db.executescript(SCHEMA)
         self.a.states=frozenset(('CO','AL'))

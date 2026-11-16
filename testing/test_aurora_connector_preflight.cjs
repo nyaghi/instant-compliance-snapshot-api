@@ -27,14 +27,24 @@ caps.push('final-four-public-v1');
 const handlerStart = html.indexOf('    form.addEventListener("submit", async (event) => {');
 const handlerEnd = html.indexOf('      latestResults = [];', handlerStart) + '      latestResults = [];'.length;
 assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+for(const page of [html,alias])for(const match of page.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)) {
+  if(!/src=|application\/(?:json|ld\+json)/.test(match[1]) && match[2].trim())new vm.Script(match[2]);
+}
 
 function fixture(replies = [], picked = ['TN','NV','AL','GA','IL','MS','NC','NM','NY','CA']) {
-  let listener, submit, pings = 0, searches = 0, error = '', retry, focus = false;
+  let listener, submit, pings = 0, searches = 0, error = '', retry, focus = false, releases=0;
   const button = {disabled:false,textContent:'Run CharityClarity Aurora'};
   const org = {value:'Example organization'};
   const callbacks = {preventDefault() {}};
   const window = {addEventListener(kind, fn) { if (kind==='message') listener=fn; },
     postMessage(message) {
+      if (['foreground-start','foreground-end'].includes(message.action)) {
+        if(message.action==='foreground-end')releases++;
+        queueMicrotask(() => listener({source:window,origin,
+          data:{...message,direction:'response',ok:!window.alertsBusy,
+            reason:window.alertsBusy?'ALERTS_CHECK_IN_PROGRESS':undefined}}));
+        return;
+      }
       assert.equal(message.action, 'ping');
       const reply = replies[pings++];
       if (!reply) return;
@@ -60,7 +70,7 @@ function fixture(replies = [], picked = ['TN','NV','AL','GA','IL','MS','NC','NM'
   });
   vm.runInContext(connector,context);
   vm.runInContext(html.slice(handlerStart,handlerEnd) + '\nrecordStart(); });',context);
-  return {run:form.requestSubmit,org,button,window,picked,get pings(){return pings;},
+  return {run:form.requestSubmit,org,button,window,picked,get pings(){return pings;},get releases(){return releases;},
     get searches(){return searches;},get error(){return error;},
     get retry(){return retry;},get focus(){return focus;},get previous(){return context.latestResults;}};
 }
@@ -121,13 +131,29 @@ test('edits during preflight cannot dispatch a check for the previous selection'
   assert.equal(f.searches,0);
   assert.match(f.error,/details changed/);
 });
-test('server-only checks bypass preflight and both Aurora aliases have the warning', async () => {
-  const f = fixture([],['CA','OR']);
+test('server-only checks also reserve the browser against scheduled captures', async () => {
+  const f = fixture([caps],['CA','OR']);
   await f.run();
-  assert.equal(f.pings,0);
+  assert.equal(f.pings,1);
   assert.equal(f.searches,1);
   for (const page of [html,alias]) {
     assert.match(page,/id="errorBox" role="alert"/);
     assert.match(page,/Retry connectors/);
   }
+});
+test('an existing Alerts run produces no registry request and keeps previous results', async () => {
+  const f=fixture([caps,caps]);f.window.alertsBusy=true;
+  await f.run();
+  assert.equal(f.searches,0);assert.equal(f.previous[0],'prior saved result');
+  assert.match(f.error,/automatic Alerts check is finishing/);
+  assert.equal(f.retry.textContent,'Retry check');
+  f.window.alertsBusy=false;await f.retry.click();assert.equal(f.searches,1);
+});
+test('concurrent result actions keep their reservation until the last one finishes',async()=>{
+  const f=fixture([caps,caps]);
+  assert.equal((await f.window.CCNYConnector.preflight(['VA'])).ok,true);
+  assert.equal((await f.window.CCNYConnector.preflight(['NY'])).ok,true);
+  await f.window.CCNYConnector.release();assert.equal(f.releases,0);
+  await f.window.CCNYConnector.release();assert.equal(f.releases,1);
+  await f.window.CCNYConnector.release();assert.equal(f.releases,1);
 });

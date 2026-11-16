@@ -440,6 +440,10 @@ def handle(alerts, handler, path, *, origin, operator=False, include_body=True):
                     if parsed.path=='/api/alerts/runner/finish':
                         row=lease(alerts,c,account,payload.get('lease'))
                         if row:
+                            backend=c.execute('SELECT finished FROM cc_lab_workflows WHERE id=%s',
+                                              (row['workflow'],)).fetchone()
+                            if backend and backend['finished'] is None:
+                                return reply(200,{'ok':True,'pending':True})
                             c.execute('UPDATE cc_alert_browser_runs SET finished=true WHERE workflow=%s',
                                       (row['workflow'],))
                         return reply(200,{'ok':True})

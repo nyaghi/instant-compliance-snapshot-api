@@ -1,5 +1,5 @@
 {
-  "build": "fresh-five-search-capture-20261116",
+  "build": "isolated-aurora-responsive-capture-20261116",
   "version": "0.6.135",
-  "scope": "NV dropdown and same-record recovery; existing quiet collectors and source checks retained."
+  "scope": "Aurora/Alerts browser exclusion, responsive owned Nevada page, and bounded DC capture attachment. Existing query and identity decisions retained."
 }

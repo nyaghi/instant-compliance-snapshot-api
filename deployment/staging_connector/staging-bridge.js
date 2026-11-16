@@ -126,6 +126,12 @@
       return;
     }
     if (m?.channel !== "cc-final-four-trial-v1" || m.direction !== "request" || !P.validId(m.id)) return;
+    if (['foreground-start','foreground-end'].includes(m.action)
+        && ['/', '/instant-compliance-snapshot'].includes(location.pathname)) {
+      const result=await chrome.runtime.sendMessage({type:'cc-alerts-background',action:m.action})
+        .catch(()=>({ok:false,reason:'NY_CONNECTOR_UNAVAILABLE'}));
+      reply(m.id,result);return;
+    }
     const ilRequest = P.TRIAL_ORIGIN === ORIGIN && (['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(m.intent)
       || ['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(m.query?.state) || ilLookups.has(m.lookup_id));
     if (ilRequest) {

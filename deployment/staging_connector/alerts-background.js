@@ -4,7 +4,28 @@
   const ALARM = 'charityclarity-alerts';
   const PROFILE = 'ccAlertsProfile';
   const OWNED = 'ccAlertsRunnerTab';
+  const FOREGROUND = 'ccAuroraForeground';
+  let serial = Promise.resolve();
+  const ordered = task => {
+    const next = serial.then(task, task);
+    serial = next.catch(() => {});
+    return next;
+  };
   let opening = false;
+
+  async function foreground() {
+    const {[FOREGROUND]:saved={}}=await chrome.storage.session.get(FOREGROUND);
+    const live={};
+    for (const [id,record] of Object.entries(saved)) {
+      if (record.expires<=Date.now()) continue;
+      const tab=await chrome.tabs.get(Number(id)).catch(()=>null);
+      if (tab && [tab.url,tab.pendingUrl].some(url=>{
+        try {const u=new globalThis.URL(url);return u.origin===P.TRIAL_ORIGIN && ['/', '/instant-compliance-snapshot'].includes(u.pathname);}catch{return false;}
+      })) live[id]=record;
+    }
+    await chrome.storage.session.set({[FOREGROUND]:live});
+    return live;
+  }
 
   async function closeOwned(record) {
     if (!record) return;
@@ -18,7 +39,7 @@
     opening = true;
     try {
       const {[PROFILE]:profile} = await chrome.storage.local.get(PROFILE);
-      if (!profile || allJobs().some(job => !job.closed)) return;
+      if (!profile || Object.keys(await foreground()).length || allJobs().some(job => !job.closed)) return;
       const {[OWNED]:record} = await chrome.storage.session.get(OWNED);
       if (record && Date.now()-record.started<600000) {
         const tab=await chrome.tabs.get(record.id).catch(() => null);
@@ -40,6 +61,28 @@
 
   async function act(message,sender) {
     const path=new globalThis.URL(sender.url).pathname;
+    if (['/', '/instant-compliance-snapshot'].includes(path)
+        && ['foreground-start','foreground-end'].includes(message.action)) {
+      const live=await foreground(), key=String(sender.tab.id);
+      const document=sender.documentId || '';
+      if(message.action==='foreground-end') {
+        if(live[key]?.document===document) delete live[key];
+        await chrome.storage.session.set({[FOREGROUND]:live});
+        return {ok:true};
+      }
+      // Reserve before testing the runner, under the same serialized gate as
+      // the alarm. A busy reply prevents a new Aurora run and asks the runner
+      // to finish its current organization rather than claim another one.
+      live[key]={document,expires:Date.now()+600000};
+      await chrome.storage.session.set({[FOREGROUND]:live});
+      const {[OWNED]:record}=await chrome.storage.session.get(OWNED);
+      if(record && Date.now()-record.started<600000) {
+        const tab=await chrome.tabs.get(record.id).catch(()=>null);
+        if(tab && [tab.url,tab.pendingUrl].includes(URL))
+          return {ok:false,reason:'ALERTS_CHECK_IN_PROGRESS'};
+      }
+      return {ok:true};
+    }
     if (path==='/alerts/' || path==='/alerts' || path==='/alerts.html') {
       if (message.action==='status') {
         const {[PROFILE]:profile}=await chrome.storage.local.get(PROFILE);
@@ -63,6 +106,7 @@
     const {[OWNED]:record}=await chrome.storage.session.get(OWNED);
     if (record?.id!==sender.tab.id) return {ok:false};
     if (message.action==='config') {
+      if(Object.keys(await foreground()).length)return {ok:false,reason:'AURORA_CHECK_IN_PROGRESS'};
       const {[PROFILE]:profile}=await chrome.storage.local.get(PROFILE);
       return {ok:!!profile,profile,quiet:true};
     }
@@ -75,11 +119,11 @@
 
   chrome.runtime.onMessage.addListener((message,sender,respond) => {
     if (message?.type!=='cc-alerts-background' || !allowedSender(sender)) return false;
-    act(message,sender).then(respond,()=>respond({ok:false}));
+    ordered(()=>act(message,sender)).then(respond,()=>respond({ok:false}));
     return true;
   });
   chrome.alarms.onAlarm.addListener(alarm => {
-    if (alarm.name===ALARM) void openRunner().catch(()=>{});
+    if (alarm.name===ALARM) void ordered(openRunner).catch(()=>{});
   });
   chrome.runtime.onStartup.addListener(()=>{void ensureAlarm().catch(()=>{});});
   chrome.runtime.onInstalled.addListener(()=>{void ensureAlarm().catch(()=>{});});
