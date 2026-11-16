@@ -1,0 +1,1533 @@
+{
+  "alternate_names": [
+    "THE CHILDREN'S HOSPITAL CORPORATION",
+    "BOSTON CHILDREN'S HOSPITAL",
+    "CHILDREN'S HOSPITAL CORPORATION",
+    "Children's Hospital Boston",
+    "Boston Children's Hospital Trust",
+    "BCH Trust",
+    "Children's Hospital Corporation, The"
+  ],
+  "completed": [
+    {
+      "evidence": {
+        "complete": true,
+        "query": {
+          "name": "CHILDREN'S HOSPITAL CORPORATION",
+          "operation": "search",
+          "state": "NC"
+        },
+        "rows": [
+          {
+            "CSL Legal Name": "The Children's Hospital Corporation",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "2/15/2027",
+            "License": "SL017506",
+            "Status": "Current Active",
+            "aliases": [],
+            "display_name": "The Children's Hospital Corporation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/24413570"
+          },
+          {
+            "CSL Legal Name": "The Children's Hospital of Buffalo Foundation",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "5/15/2026",
+            "Extension End Date": "11/15/2026",
+            "License": "SL016390",
+            "Status": "Expired License",
+            "aliases": [],
+            "display_name": "The Children's Hospital of Buffalo Foundation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/22390064"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital Colorado Foundation",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "5/15/2026",
+            "Extension End Date": "11/15/2026",
+            "License": "SL010523",
+            "Status": "Expired License",
+            "aliases": [],
+            "display_name": "Children's Hospital Colorado Foundation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/12564274"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital Foundation",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "11/15/2026",
+            "Extension End Date": "5/15/2027",
+            "License": "SL003991",
+            "Status": "Current Active – Filing Extension Granted",
+            "aliases": [
+              "Miami Children's Health System Foundation, Inc. (Dba Nicklaus Children's Hospital Foundation)"
+            ],
+            "display_name": "Children's Hospital Foundation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/5698032"
+          },
+          {
+            "CSL Legal Name": "The Children's Hospital of Philadelphia Foundation",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "11/15/2023",
+            "Extension End Date": "1/15/2024",
+            "License": "SL004933",
+            "Status": "Expired License",
+            "aliases": [],
+            "display_name": "The Children's Hospital of Philadelphia Foundation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8868153"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital and Healthcare Services Foundation",
+            "CSL Type": "CSL Exempt Organization",
+            "Expiration Date": "",
+            "License": "EX009030",
+            "Status": "CSL Exempt",
+            "aliases": [],
+            "display_name": "Children's Hospital and Healthcare Services Foundation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/16588095"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital of the King's Daughters, Inc.",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "11/15/2026",
+            "Extension End Date": "1/15/2027",
+            "License": "SL005035",
+            "Status": "Current Active",
+            "aliases": [],
+            "display_name": "Children's Hospital of the King's Daughters, Inc.",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8961612"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital Los Angeles",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "11/15/2026",
+            "Extension End Date": "1/15/2027",
+            "License": "SL008766",
+            "Status": "Current Active",
+            "aliases": [],
+            "display_name": "Children's Hospital Los Angeles",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/10513017"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital Medical Center",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "11/15/2025",
+            "Extension End Date": "5/15/2026",
+            "License": "SL012123",
+            "Status": "Expired License",
+            "aliases": [],
+            "display_name": "Children's Hospital Medical Center",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/14811356"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital of Michigan Foundation",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "5/15/2026",
+            "Extension End Date": "11/15/2026",
+            "License": "SL014296",
+            "Status": "Expired License",
+            "aliases": [],
+            "display_name": "Children's Hospital of Michigan Foundation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/18079783"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital of Pittsburgh Foundation",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "11/15/2026",
+            "Extension End Date": "5/15/2027",
+            "License": "SL009671",
+            "Status": "Current Active – Filing Extension Granted",
+            "aliases": [
+              "Children's Hospital of Pittsburgh Foundation"
+            ],
+            "display_name": "UPMC Children's Hospital Foundation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/11826077"
+          },
+          {
+            "CSL Legal Name": "Children's Hospital & Research Center Foundation",
+            "CSL Type": "Charitable Organization",
+            "Expiration Date": "11/15/2026",
+            "Extension End Date": "5/15/2027",
+            "License": "SL001172",
+            "Status": "Current Active – Filing Extension Granted",
+            "aliases": [],
+            "display_name": "Children's Hospital & Research Center Foundation",
+            "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/5698031"
+          }
+        ],
+        "search_mode": "STARTS_WITH",
+        "state": "NC",
+        "total": 12,
+        "verification_pending": false
+      },
+      "query": {
+        "name": "CHILDREN'S HOSPITAL CORPORATION",
+        "operation": "search",
+        "state": "NC"
+      },
+      "search_receipt": {
+        "completed_at": 1794851347.0583024,
+        "issued_at": 1794851344.4663854,
+        "operation": "search",
+        "outcome": "Completed source response",
+        "query_id": "Y7GDrSgjOHdJrXYCH6pKLz4A",
+        "query_sha256": "920859e8501b0ee723afdd87220f24ae425ad00d7c031b33f88de85d6a3d83b6",
+        "returned_records": [
+          {
+            "fields": [
+              [
+                "Status",
+                "Current Active"
+              ],
+              [
+                "Expiration Date",
+                "2/15/2027"
+              ],
+              [
+                "CSL Legal Name",
+                "The Children's Hospital Corporation"
+              ]
+            ],
+            "row_number": 1
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Expired License"
+              ],
+              [
+                "Expiration Date",
+                "5/15/2026"
+              ],
+              [
+                "CSL Legal Name",
+                "The Children's Hospital of Buffalo Foundation"
+              ]
+            ],
+            "row_number": 2
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Expired License"
+              ],
+              [
+                "Expiration Date",
+                "5/15/2026"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital Colorado Foundation"
+              ]
+            ],
+            "row_number": 3
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Current Active – Filing Extension Granted"
+              ],
+              [
+                "Expiration Date",
+                "11/15/2026"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital Foundation"
+              ]
+            ],
+            "row_number": 4
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Expired License"
+              ],
+              [
+                "Expiration Date",
+                "11/15/2023"
+              ],
+              [
+                "CSL Legal Name",
+                "The Children's Hospital of Philadelphia Foundation"
+              ]
+            ],
+            "row_number": 5
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "CSL Exempt"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital and Healthcare Services Foundation"
+              ],
+              [
+                "Expiration Date",
+                ""
+              ]
+            ],
+            "row_number": 6
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Current Active"
+              ],
+              [
+                "Expiration Date",
+                "11/15/2026"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital of the King's Daughters, Inc."
+              ]
+            ],
+            "row_number": 7
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Current Active"
+              ],
+              [
+                "Expiration Date",
+                "11/15/2026"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital Los Angeles"
+              ]
+            ],
+            "row_number": 8
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Expired License"
+              ],
+              [
+                "Expiration Date",
+                "11/15/2025"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital Medical Center"
+              ]
+            ],
+            "row_number": 9
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Expired License"
+              ],
+              [
+                "Expiration Date",
+                "5/15/2026"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital of Michigan Foundation"
+              ]
+            ],
+            "row_number": 10
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Current Active – Filing Extension Granted"
+              ],
+              [
+                "Expiration Date",
+                "11/15/2026"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital of Pittsburgh Foundation"
+              ]
+            ],
+            "row_number": 11
+          },
+          {
+            "fields": [
+              [
+                "Status",
+                "Current Active – Filing Extension Granted"
+              ],
+              [
+                "Expiration Date",
+                "11/15/2026"
+              ],
+              [
+                "CSL Legal Name",
+                "Children's Hospital & Research Center Foundation"
+              ]
+            ],
+            "row_number": 12
+          }
+        ],
+        "returned_records_limit": 100,
+        "returned_records_not_listed": 0,
+        "returned_records_note": "",
+        "returned_rows": 12
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Boston",
+          "Expiration Date": "2/15/2027",
+          "Last Application Date": "3/23/2026",
+          "Name": "The Children's Hospital Corporation",
+          "Registration #": "SL017506",
+          "State": "MA",
+          "Status": "Current Active",
+          "Street": "300 Longwood Ave",
+          "Zip": "02115",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/24413570"
+        },
+        "filings": {
+          "complete": true,
+          "rows": [
+            {
+              "date": "1/14/2026",
+              "type": "Initial Charity"
+            }
+          ],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/24413570"
+        },
+        "query": {
+          "identifier": "SL017506",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/24413570"
+        }
+      },
+      "query": {
+        "identifier": "SL017506",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/24413570"
+      },
+      "search_receipt": {
+        "completed_at": 1794851349.9820204,
+        "issued_at": 1794851347.086901,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "7wU5rWAiNxN3qc74OLQQuAIW",
+        "query_sha256": "14e8b2ad4a398ad608c769f90cfd199692ae32a2bd97f3ff39b8a055ee889bcb",
+        "returned_rows": null
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Buffalo",
+          "Expiration Date": "5/15/2026",
+          "Extension End Date": "11/15/2026",
+          "Last Application Date": "7/1/2026",
+          "Name": "The Children's Hospital of Buffalo Foundation",
+          "Registration #": "SL016390",
+          "State": "NY",
+          "Status": "Expired License",
+          "Street": "1028 Main St Fl 4",
+          "Zip": "14202-1102",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/22390064"
+        },
+        "filings": {
+          "complete": true,
+          "rows": [
+            {
+              "date": "6/28/2024",
+              "type": "Initial Charity"
+            },
+            {
+              "date": "11/21/2025",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "7/1/2026",
+              "type": "Federal Extension"
+            }
+          ],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/22390064"
+        },
+        "query": {
+          "identifier": "SL016390",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/22390064"
+        }
+      },
+      "query": {
+        "identifier": "SL016390",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/22390064"
+      },
+      "search_receipt": {
+        "completed_at": 1794851351.5119884,
+        "issued_at": 1794851350.001499,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "-LxTsuAaVOM1AfYXSmLGoEIg",
+        "query_sha256": "faa48702e373bbabbf8bc2167692d0f7673f743bfa865bcd070381dc3a6a07c7",
+        "returned_rows": null
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Aurora",
+          "Expiration Date": "5/15/2026",
+          "Extension End Date": "11/15/2026",
+          "Last Application Date": "4/16/2026",
+          "Name": "Children's Hospital Colorado Foundation",
+          "Registration #": "SL010523",
+          "State": "CO",
+          "Status": "Expired License",
+          "Street": "13100 E Colfax Ave 2nd Fl N2009",
+          "Zip": "80011",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/12564274"
+        },
+        "filings": {
+          "complete": true,
+          "rows": [
+            {
+              "date": "1/17/2017",
+              "type": "Initial Charity"
+            },
+            {
+              "date": "4/21/2017",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "12/11/2017",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "3/26/2018",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "12/18/2018",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "3/12/2019",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "12/16/2019",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "3/19/2020",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "11/16/2020",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "3/29/2021",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "11/22/2021",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "2/25/2022",
+              "type": "Exemption"
+            },
+            {
+              "date": "4/1/2022",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "12/1/2022",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "2/13/2023",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "12/11/2023",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "2/7/2024",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "12/17/2024",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "4/10/2025",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "12/11/2025",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "4/16/2026",
+              "type": "Federal Extension"
+            }
+          ],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/12564274"
+        },
+        "query": {
+          "identifier": "SL010523",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/12564274"
+        }
+      },
+      "query": {
+        "identifier": "SL010523",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/12564274"
+      },
+      "search_receipt": {
+        "completed_at": 1794851352.9804711,
+        "issued_at": 1794851351.532795,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "VDlV6wF7tqq9L5Si2LAR40tR",
+        "query_sha256": "d876c0b7ad33e0c3e8e6f149eb7f234c81d2b0044074f8f4bf2e7ad67a0f445a",
+        "returned_rows": null
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Washington",
+          "Expiration Date": "11/15/2026",
+          "Extension End Date": "5/15/2027",
+          "Last Application Date": "8/14/2026",
+          "Name": "Children's Hospital Foundation",
+          "Registration #": "SL003991",
+          "State": "DC",
+          "Status": "Current Active – Filing Extension Granted",
+          "Street": "111 Michigan Ave NW",
+          "Zip": "20010-2916",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/5698032"
+        },
+        "filings": {
+          "complete": false,
+          "rows": [],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/5698032"
+        },
+        "query": {
+          "identifier": "SL003991",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/5698032"
+        }
+      },
+      "query": {
+        "identifier": "SL003991",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/5698032"
+      },
+      "search_receipt": {
+        "completed_at": 1794851362.4294713,
+        "issued_at": 1794851353.0025585,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "5MSPxXWLyIu8Iwrn70VVk4Z_",
+        "query_sha256": "a05fa11dfb21a5e06def827ff82108a2f09af2227e55c3ed585dd47d2f281052",
+        "returned_rows": null
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Philadelphia",
+          "Expiration Date": "11/15/2023",
+          "Extension End Date": "1/15/2024",
+          "Last Application Date": "9/3/2026",
+          "Name": "The Children's Hospital of Philadelphia Foundation",
+          "Registration #": "SL004933",
+          "State": "PA",
+          "Status": "Expired License",
+          "Street": "2716 South St, 12th Floor",
+          "Zip": "19146",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/8868153"
+        },
+        "filings": {
+          "complete": false,
+          "rows": [],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/8868153"
+        },
+        "query": {
+          "identifier": "SL004933",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/8868153"
+        }
+      },
+      "query": {
+        "identifier": "SL004933",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/8868153"
+      },
+      "search_receipt": {
+        "completed_at": 1794851372.1161761,
+        "issued_at": 1794851362.4529958,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "FS9-noPimn-MFsTjLzSCPDoz",
+        "query_sha256": "2b8cfc415c62acf348ee8b99bb8305796e76ddb97d1d0caee39b54b1d0c59f32",
+        "returned_rows": null
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Richmond",
+          "Expiration Date": "",
+          "Last Application Date": "10/19/2020",
+          "Name": "Children's Hospital and Healthcare Services Foundation",
+          "Registration #": "EX009030",
+          "State": "VA",
+          "Status": "CSL Exempt",
+          "Street": "2924 Brook Rd",
+          "Zip": "23220-1215",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/16588095"
+        },
+        "filings": {
+          "complete": true,
+          "rows": [
+            {
+              "date": "10/19/2020",
+              "type": "Exemption"
+            }
+          ],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/16588095"
+        },
+        "query": {
+          "identifier": "EX009030",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/16588095"
+        }
+      },
+      "query": {
+        "identifier": "EX009030",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/16588095"
+      },
+      "search_receipt": {
+        "completed_at": 1794851373.6580327,
+        "issued_at": 1794851372.1402106,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "tFIhkCTnMtWuyXouyrNPcBB6",
+        "query_sha256": "9691214c90b4dfce2bf41046a03cb16117ba874c7756dc42a7b39fbadb502759",
+        "returned_rows": null
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Cincinnati",
+          "Expiration Date": "11/15/2025",
+          "Extension End Date": "5/15/2026",
+          "Last Application Date": "9/26/2025",
+          "Name": "Children's Hospital Medical Center",
+          "Registration #": "SL012123",
+          "State": "OH",
+          "Status": "Expired License",
+          "Street": "3333 Burnet Ave",
+          "Zip": "45229-3026",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/14811356"
+        },
+        "filings": {
+          "complete": true,
+          "rows": [
+            {
+              "date": "12/31/2018",
+              "type": "Initial Charity"
+            },
+            {
+              "date": "10/30/2019",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "10/21/2020",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "12/14/2020",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "8/6/2021",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "11/10/2021",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "7/26/2022",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "10/17/2022",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "9/7/2023",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "10/10/2023",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "9/10/2024",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "10/13/2024",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "7/30/2025",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "9/26/2025",
+              "type": "Federal Extension"
+            }
+          ],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/14811356"
+        },
+        "query": {
+          "identifier": "SL012123",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/14811356"
+        }
+      },
+      "query": {
+        "identifier": "SL012123",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/14811356"
+      },
+      "search_receipt": {
+        "completed_at": 1794851375.3885503,
+        "issued_at": 1794851373.6827414,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "EWXHKOjl3GJql4HUuEtW-G_w",
+        "query_sha256": "4a25c9a28cf133c06bbfcb3df00eb431835531d6e6b5b7c01ae62f19d9a4291c",
+        "returned_rows": null
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Detroit",
+          "Expiration Date": "5/15/2026",
+          "Extension End Date": "11/15/2026",
+          "Last Application Date": "4/7/2026",
+          "Name": "Children's Hospital of Michigan Foundation",
+          "Registration #": "SL014296",
+          "State": "MI",
+          "Status": "Expired License",
+          "Street": "3011 W Grand Blvd Ste 218",
+          "Zip": "48202-3042",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/18079783"
+        },
+        "filings": {
+          "complete": true,
+          "rows": [
+            {
+              "date": "9/7/2021",
+              "type": "Initial Charity"
+            },
+            {
+              "date": "3/30/2022",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "12/29/2022",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "3/28/2023",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "1/12/2024",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "3/27/2024",
+              "type": "Extension Denied"
+            },
+            {
+              "date": "5/2/2024",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "2/6/2025",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "4/8/2025",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "4/1/2026",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "4/7/2026",
+              "type": "Federal Extension"
+            }
+          ],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/18079783"
+        },
+        "query": {
+          "identifier": "SL014296",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/18079783"
+        }
+      },
+      "query": {
+        "identifier": "SL014296",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/18079783"
+      },
+      "search_receipt": {
+        "completed_at": 1794851377.2281244,
+        "issued_at": 1794851375.413083,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "bnXASXyHFd2uyscMMEXHZHfB",
+        "query_sha256": "1590121d0eb63bd163a427fb413cbe7baf616d028040c0bbb0cb2e1d375c3c2e",
+        "returned_rows": null
+      }
+    },
+    {
+      "evidence": {
+        "complete": true,
+        "fields": {
+          "City": "Pittsburgh",
+          "Expiration Date": "11/15/2026",
+          "Extension End Date": "5/15/2027",
+          "Last Application Date": "8/14/2026",
+          "Name": "Children's Hospital of Pittsburgh Foundation",
+          "Registration #": "SL009671",
+          "State": "PA",
+          "Status": "Current Active – Filing Extension Granted",
+          "Street": "4401 Penn Ave",
+          "Zip": "15224-1334",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/11826077"
+        },
+        "filings": {
+          "complete": true,
+          "rows": [
+            {
+              "date": "10/6/2015",
+              "type": "Initial Charity"
+            },
+            {
+              "date": "6/13/2016",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "5/16/2017",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "10/30/2017",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "1/29/2018",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "10/29/2018",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "2/12/2019",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "10/30/2019",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "5/12/2020",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "12/14/2020",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "2/10/2021",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "11/10/2021",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "2/8/2022",
+              "type": "Correspondence"
+            },
+            {
+              "date": "7/28/2022",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "11/8/2022",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "7/26/2023",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "10/23/2023",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "7/15/2024",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "10/13/2024",
+              "type": "Federal Extension"
+            },
+            {
+              "date": "1/21/2026",
+              "type": "Denied"
+            },
+            {
+              "date": "4/27/2026",
+              "type": "Renewal Charity"
+            },
+            {
+              "date": "8/14/2026",
+              "type": "Federal Extension"
+            }
+          ],
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/11826077"
+        },
+        "query": {
+          "identifier": "SL009671",
+          "operation": "detail",
+          "state": "NC",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/11826077"
+        }
+      },
+      "query": {
+        "identifier": "SL009671",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/11826077"
+      },
+      "search_receipt": {
+        "completed_at": 1794851385.5557973,
+        "issued_at": 1794851377.252488,
+        "operation": "detail",
+        "outcome": "Completed source response",
+        "query_id": "neBx_AC77-BYgAPS7uRRMvLF",
+        "query_sha256": "e0a3fa9e928591e598183b5a2de2f64ea381d78790a4883ed4acfadb7f8b36ae",
+        "returned_rows": null
+      }
+    },
+    {
+      "query": {
+        "identifier": "SL001172",
+        "operation": "detail",
+        "state": "NC",
+        "url": "https://www.sosnc.gov/online_services/search/charities_profile/5698031"
+      },
+      "evidence": {
+        "query": {
+          "state": "NC",
+          "operation": "detail",
+          "identifier": "SL001172",
+          "url": "https://www.sosnc.gov/online_services/search/charities_profile/5698031"
+        },
+        "complete": true,
+        "fields": {
+          "Name": "Children's Hospital & Research Center Foundation",
+          "Status": "Current Active – Filing Extension Granted",
+          "Registration #": "SL001172",
+          "Expiration Date": "11/15/2026",
+          "Last Application Date": "11/8/2026",
+          "Extension End Date": "5/15/2027",
+          "Street": "1111 Franklin St Fl 9",
+          "City": "Oakland",
+          "State": "CA",
+          "Zip": "94607-5212",
+          "profile_url": "https://www.sosnc.gov/online_services/search/charities_profile/5698031"
+        },
+        "filings": {
+          "url": "https://www.sosnc.gov/online_services/search/charities_filings/5698031",
+          "complete": true,
+          "rows": [
+            {
+              "type": "Renewal Charity",
+              "date": "3/4/2004"
+            },
+            {
+              "type": "Amendment",
+              "date": "3/8/2004"
+            },
+            {
+              "type": "Cancellation",
+              "date": "3/8/2004"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "5/21/2004"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "10/14/2004"
+            },
+            {
+              "type": "Extension",
+              "date": "4/11/2005"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "5/20/2005"
+            },
+            {
+              "type": "Civil Penalty",
+              "date": "1/30/2007"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "1/30/2007"
+            },
+            {
+              "type": "Extension",
+              "date": "4/19/2007"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "6/18/2007"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "2/5/2008"
+            },
+            {
+              "type": "Correspondence",
+              "date": "4/4/2008"
+            },
+            {
+              "type": "Extension",
+              "date": "5/1/2008"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "5/14/2008"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "2/23/2009"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "6/5/2009"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "12/14/2009"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "4/27/2010"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "11/15/2010"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "4/20/2011"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "5/12/2011"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "12/9/2011"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "5/16/2012"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "8/21/2012"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "10/28/2013"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "4/29/2014"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "8/25/2014"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "5/14/2015"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "4/4/2016"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "6/9/2016"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "11/9/2016"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "4/13/2017"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "11/17/2017"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "7/27/2018"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "11/6/2018"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "7/29/2019"
+            },
+            {
+              "type": "Denied",
+              "date": "12/29/2020"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "8/19/2021"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "11/8/2021"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "8/23/2022"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "11/11/2022"
+            },
+            {
+              "type": "Denied",
+              "date": "7/13/2023"
+            },
+            {
+              "type": "Federal Extension Denied",
+              "date": "11/15/2023"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "8/7/2024"
+            },
+            {
+              "type": "Correspondence",
+              "date": "11/14/2024"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "11/14/2024"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "8/29/2025"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "11/11/2025"
+            },
+            {
+              "type": "Renewal Charity",
+              "date": "9/28/2026"
+            },
+            {
+              "type": "Federal Extension",
+              "date": "11/8/2026"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "ein": "04-2774441",
+  "expires": 1794851644.4540958,
+  "issued": 1794851344.4540958,
+  "mode": "standard",
+  "organization_name": "CHILDREN'S HOSPITAL CORPORATION",
+  "protocol": "final-four-public-v1",
+  "purpose": "registration",
+  "recovery_protocol": "nc-fresh-search-v1",
+  "source_archive_ms": 491.16,
+  "source_archive_run_id": "61af35d9527bf349726fac8395ed9589",
+  "source_snapshots": [
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "@completed-search",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "CHILDREN'S HOSPITAL CORPORATION",
+      "state": "NC",
+      "url": "/state-snapshots/3522584807fa4ebcc7edaca2a43ed4400785ce1caf66a4814e7dc812cf70a55b.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL017506",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "The Children's Hospital Corporation",
+      "state": "NC",
+      "url": "/state-snapshots/fb8f6447c1911b03df0aaf35efde21247127bf29fe411795d66be7e1c10a03cf.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL016390",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "The Children's Hospital of Buffalo Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/e480844611ec7ff4ce400dae12bd6c0e0c9ded3f04c97f07202e42174cfa605b.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL010523",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "Children's Hospital Colorado Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/2b66fe7feef31fd7a514a18f196b369d2b5341dcc5179d43f7e091d2aeec4be7.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL003991",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "Children's Hospital Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/94b7e10e5ff19d4d463e54f5ade348e057d88feca4caec95ed64501a3b01e72a.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL004933",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "The Children's Hospital of Philadelphia Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/a95b508bd2421da34d8e25b52f2c902923ecf40497011a1ee6923be70e190da5.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "EX009030",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "Children's Hospital and Healthcare Services Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/7238af780ec5e17d20f785b615a962ff47252a5b0a6cecc5c1712177a92eccf2.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL005035",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "Children's Hospital of the King's Daughters, Inc.",
+      "state": "NC",
+      "url": "/state-snapshots/b35b077a565b7ad437a8298d7125800b2a8738095311b0e7ff7b637c54b53956.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL008766",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "Children's Hospital Los Angeles",
+      "state": "NC",
+      "url": "/state-snapshots/f3fdbc67fc577f69f1159539a27aeffb48aa8ac29cefbabf2449dd4e7d64d215.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL012123",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "Children's Hospital Medical Center",
+      "state": "NC",
+      "url": "/state-snapshots/386dabdf87f48de007098593d3f0e9566665f9e51f357742d9abc6bf4dc50483.pdf"
+    },
+    {
+      "captured_at": 1794851345.827,
+      "ein": "042774441",
+      "identifier": "SL014296",
+      "operation": "search",
+      "provisional": true,
+      "record_name": "Children's Hospital of Michigan Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/7716092c78226eff267c0a9e16127ee763dcee78346829c01e4309c56e9f4635.pdf"
+    },
+    {
+      "captured_at": 1794851348.59,
+      "ein": "042774441",
+      "identifier": "SL017506",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "The Children's Hospital Corporation",
+      "state": "NC",
+      "url": "/state-snapshots/2309891ced4d42549ab43a9a96ea225efe85cd076540fac3d4785d30eb11719e.pdf"
+    },
+    {
+      "captured_at": 1794851350.159,
+      "ein": "042774441",
+      "identifier": "SL016390",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "The Children's Hospital of Buffalo Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/c74ec7a8085b3a20c074fe4bec778e79d9aa77c68a8e6056b02bbcd0279c0ffb.pdf"
+    },
+    {
+      "captured_at": 1794851351.69,
+      "ein": "042774441",
+      "identifier": "SL010523",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "Children's Hospital Colorado Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/ada9879a1e385c6d8f22ac2a8373a86dd410b0bd1405788f8a932a94728048e9.pdf"
+    },
+    {
+      "captured_at": 1794851353.19,
+      "ein": "042774441",
+      "identifier": "SL003991",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "Children's Hospital Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/005df6988bc5c9b166d16757f7757f9d04e6c0d1403ddadb175e76a87c967df3.pdf"
+    },
+    {
+      "captured_at": 1794851363.177,
+      "ein": "042774441",
+      "identifier": "SL004933",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "The Children's Hospital of Philadelphia Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/988d2859128546161bc81d4432cb8f28d76431ab1c8cf87b68b590ea93095c05.pdf"
+    },
+    {
+      "captured_at": 1794851372.32,
+      "ein": "042774441",
+      "identifier": "EX009030",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "Children's Hospital and Healthcare Services Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/b04545b9fca4720c764c8dda851e88df0320a9beef133ccdca4de345b44fd507.pdf"
+    },
+    {
+      "captured_at": 1794851373.868,
+      "ein": "042774441",
+      "identifier": "SL012123",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "Children's Hospital Medical Center",
+      "state": "NC",
+      "url": "/state-snapshots/28e84971f7559d14a49c9c615da67a6048d6601281f3db940750a29f4c1cd799.pdf"
+    },
+    {
+      "captured_at": 1794851375.613,
+      "ein": "042774441",
+      "identifier": "SL014296",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "Children's Hospital of Michigan Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/3b314c22b5f41a97fe1ade3e5794b9433ca39d6281dbb85658ef1530f17df4a0.pdf"
+    },
+    {
+      "captured_at": 1794851377.41,
+      "ein": "042774441",
+      "identifier": "SL009671",
+      "operation": "detail",
+      "provisional": true,
+      "record_name": "Children's Hospital of Pittsburgh Foundation",
+      "state": "NC",
+      "url": "/state-snapshots/0b06d4589b0e7092ef68071f207bc541287b8e5d1df2c5278a141006324a079e.pdf"
+    }
+  ],
+  "state": "NC",
+  "version": "2026.09.29.2-performance-lab"
+}

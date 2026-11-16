@@ -1983,6 +1983,7 @@ def known_names_for_ein(ein: str) -> list[str]:
 REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
 USER_IDENTITY_CONTEXT = ContextVar("user_identity_review", default={})
 AL_FOREIGN_EIN_CONTEXT = ContextVar("al_connector_foreign_ein", default=None)
+NC_FOREIGN_EIN_CONTEXT = ContextVar("nc_connector_foreign_ein", default=None)
 IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
 IDENTITY_CACHE_LOCK = threading.Lock()
 IRS_HISTORY_HEADER_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
@@ -9825,6 +9826,9 @@ def final_four_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     al_identity_context = AL_FOREIGN_EIN_CONTEXT.set(
         record.setdefault("al_foreign_ein_checks", {}) if record["state"] == "AL" else None)
+    nc_identity_context = NC_FOREIGN_EIN_CONTEXT.set(
+        {"checks": record.setdefault("nc_foreign_ein_checks", {}), "pending": None}
+        if record["state"] == "NC" else None)
     try:
         result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ()), ms_recovery=record.get('ms_search_recovery', ''),
                             ms_skip_probe=record.get('ms_skip_probe', False)) if record['state'] == 'MS' else
@@ -9860,6 +9864,7 @@ def final_four_connector_advance(record):
             record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "", diagnostic)}
     finally:
         AL_FOREIGN_EIN_CONTEXT.reset(al_identity_context)
+        NC_FOREIGN_EIN_CONTEXT.reset(nc_identity_context)
     if time.time() >= record["expires"]:
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
     if record.get("ms_search_recovery") and public_status(result) == "Not Registered":
@@ -10802,6 +10807,71 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
         return {}
 
 
+class NCForeignEvidencePending(Exception):
+    """Internal scheduling marker; never a registry result or identity decision."""
+
+
+def nc_connector_foreign_ein(org, row, deadline):
+    context = NC_FOREIGN_EIN_CONTEXT.get()
+    if context is None:
+        return licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+    identity = [canonical_ein_digits(org.ein), row.get("identifier"), row["name"],
+                registry_street_key(row.get("street")), str(row.get("postal_code") or "")[:5],
+                row.get("region", "").upper()]
+    key = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
+    entry = context["checks"].get(key)
+    if entry is None:
+        if context["pending"] is not None:
+            context["pending"].setdefault(key, row)
+            raise NCForeignEvidencePending()
+        return licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+    if entry["failure"]:
+        row["foreign_ein_check"] = entry["failure"]
+    else:
+        row.pop("foreign_ein_check", None)
+    return entry["proof"]
+
+
+def nc_prepare_foreign_evidence(org, rows, deadline):
+    """Reuse exact corroboration results; overlap at most three independent reads.
+
+    The unchanged identity evaluator determines which reads are necessary.
+    Source failure remains unavailable, and every candidate is evaluated again
+    with the same identity rules before selecting any state registration.
+    """
+    context = NC_FOREIGN_EIN_CONTEXT.get()
+    if context is None:
+        return
+    pending = {}
+    context["pending"] = pending
+    try:
+        for row in rows:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Registry candidate evaluation deadline reached")
+            try:
+                licensed_charity_identity(org, row, "NC", deadline)
+            except NCForeignEvidencePending:
+                pass
+    finally:
+        context["pending"] = None
+    if not pending:
+        return
+    def retrieve(row):
+        local = dict(row)
+        local.pop("foreign_ein_check", None)
+        proof = licensed_charity_foreign_ein(org, local, deadline, exact_name=True)
+        if proof.get("records"):
+            proof = {**proof, "records": proof["records"][:1]}
+        return {"proof": proof, "failure": local.get("foreign_ein_check", {})}
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="nc-identity") as executor:
+        futures = [(key, submit_with_identity(executor, retrieve, row)) for key, row in pending.items()]
+        for key, future in futures:
+            entry = future.result()
+            # Bound optional signed evidence; full state search records remain primary.
+            if len(context["checks"]) < 24 and len(json.dumps(entry)) <= 2048:
+                context["checks"][key] = entry
+
+
 def al_connector_foreign_ein(org, row, deadline):
     """Reuse the Colorado decision for the same Alabama credential in this check."""
     checks = AL_FOREIGN_EIN_CONTEXT.get()
@@ -11133,6 +11203,7 @@ def licensed_charity_identity(org, row, state, deadline):
     if decision.get("reason") in {"REVIEW_SEPARATOR_ENTITY_SCOPE", "REVIEW_INSTITUTIONAL_ENTITY"}:
         foreign = address if address.get("decision") == "different_ein" else (
             al_connector_foreign_ein(org, row, deadline) if state == "AL" else
+            nc_connector_foreign_ein(org, row, deadline) if state == "NC" else
             licensed_charity_foreign_ein(org, row, deadline, exact_name=True))
         if foreign:
             row["address_evidence"] = foreign
@@ -11255,6 +11326,8 @@ def select_licensed_charity(org, rows, state, deadline):
     A date can break a duplicate-record tie only after identity is established.
     The return's review text keeps identity failures distinct from no records.
     """
+    if state == "NC":
+        nc_prepare_foreign_evidence(org, rows, deadline)
     accepted, conflicts, possible = [], [], []
     for row in rows:
         if time.monotonic() >= deadline:
@@ -30206,6 +30279,8 @@ NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
 def ny_connector_pack(record):
     # Public search evidence and check binding only; no passcode or state credential.
     body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 320000 and record.pop("nc_foreign_ein_checks", None):
+        body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     if len(body) > 320000 and record.pop("al_foreign_ein_checks", None):
         # Preserve the completed searches before any optional identity memo.
         body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
