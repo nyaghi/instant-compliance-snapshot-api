@@ -6869,7 +6869,7 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     required, generated = licensed_charity_names(org, literal_name_priority=state == "GA")
     queries = ([{"state": state, "ein": canonical_ein_digits(org.ein)}] if state == "IL" else [])
     if purpose != "identity":
-        names = il_browser_name_queries(required, generated) if state == "IL" else required + generated
+        names = list(dict.fromkeys(required)) if state == "IL" else required + generated
         if state == "GA":
             from deployment.gate28_repairs import ga_article_queries
             names = ga_article_queries(sys.modules[__name__], required, generated)
@@ -6893,6 +6893,10 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         if state == "IL" and any(r.get("ein") == canonical_ein_digits(org.ein) for r in records):
             break
         planned_name = query.get("orgName", "")
+        # EIN is the primary completed search. Reviewed names are a secondary,
+        # bounded supplement; do not generate dozens of extra spellings.
+        if state == "IL" and planned_name and getattr(evidence, "name_budget_exhausted", lambda q: False)(query):
+            break
         if state == "GA" and planned_name.casefold() in covered_ga_names:
             continue
         probe = query
@@ -7002,7 +7006,7 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         # deliberately does not choose between never registered and noncompliant.
         if not records:
             result.status = "Not Registered / Non-Compliant"; result.success = True
-            result.source_note = "The Illinois compliant-charity directory search completed for the EIN and applicable organization-name variants without a confirmed listing. CharityClarity reports Not Registered / Non-Compliant.\n\nIllinois note: Illinois lists compliant charities. An absent listing does not distinguish between an organization that is not registered and one that is non-compliant."
+            result.source_note = "The Illinois compliant-charity directory returned no confirmed listing from the completed EIN search and bounded reviewed-name fallback. The search history lists the names actually checked. CharityClarity reports Not Registered / Non-Compliant.\n\nIllinois note: Illinois lists compliant charities. An absent listing does not distinguish between an organization that is not registered and one that is non-compliant."
         else:
             selected = getattr(result, "_cc_license_record", {})
             if selected:
@@ -7091,6 +7095,15 @@ def il_ga_connector_advance(record):
         for item in record["completed"]:
             if item["query"] == query: return item["rows"]
         raise NYConnectorQueryNeeded(query)
+    if record.get("state") == "IL" and record.get("purpose") == "registration":
+        def name_budget_exhausted(query):
+            # Completed evidence is replayed regardless of elapsed time. Only
+            # stop NEW optional searches; a pending/failed response is never empty.
+            if any(item["query"] == query for item in record["completed"]):
+                return False
+            stop = record.get("il_name_stop")
+            return stop is not None and time.time() >= stop
+        evidence.name_budget_exhausted = name_budget_exhausted
     org = checker.Organization(record["organization_name"], record["ein"])
     try:
         result = il_ga_browser_lookup(org, record["state"], evidence, record["purpose"])
@@ -7102,6 +7115,8 @@ def il_ga_connector_advance(record):
         command_limit = len(required) + len(generated) + 101
         if len(record["completed"]) >= command_limit:
             return {"phase": "complete", "result": il_ga_connector_failure(record, "NY_CONNECTOR_QUERY_LIMIT")}
+        if record.get("state") == "IL" and "orgName" in pending.params:
+            record.setdefault("il_name_stop", time.time() + 20.0)
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
     except (ValueError, TimeoutError) as exc:
@@ -8362,7 +8377,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 continue
             # After a candidate is found, keep reviewed names ahead of any
             # optional prefix. It remains available in the original fallback list.
-            if nv_covering_probe and (records or unreviewed_scope):
+            if nv_covering_probe and unreviewed_scope:
                 continue
         completed_all_words = (next((phrase for phrase in nc_completed_all_words
                                      if nc_all_words_covers(phrase, name)), None)
@@ -8396,7 +8411,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             ranked_records = al_prioritize_plausible_office(org, records) if state == "AL" and trial_identity() else records
             selected, review = select_licensed_charity(org, ranked_records, state, deadline)
             if selected and not review and ((state == "TN" and selected["status"] in {
-                    "Current", "Upcoming Filing", "Exempt"}) or (state != "TN" and (state == "NV" or selected["status"] in {
+                    "Current", "Upcoming Filing", "Exempt", "Delinquent", "Suspended",
+                    "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",
+                    "Closed / Withdrawn / Canceled / Inactive", "Pending"}) or (state != "TN" and (state == "NV" or selected["status"] in {
                     "Current", "Upcoming Filing", "Exempt", "Pending", "Delinquent",
                     "Closed / Withdrawn / Canceled", "Suspended", "Revoked", "Failed to Renew"}))):
                 break
@@ -9077,6 +9094,16 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
         if key not in seen_queries:
             planned.append(query)
             seen_queries.add(key)
+    if trial_identity():
+        literal = {ascii_dash_search_name(name).casefold() for name in reviewed}
+        required_queries = [name for name in planned if name.casefold() in literal]
+        fallback = [name for name in planned if name.casefold() not in literal]
+        # A completed literal phrase search covers longer phrases containing
+        # it. Promote existing specific phrases, never invent a generic word.
+        promoted = sorted([name for name in fallback
+                           if re.fullmatch(r'[A-Za-z ]+', name)
+                           and len(distinctive_match_tokens(name)) >= 2], key=len)
+        planned = required_queries + promoted + [name for name in fallback if name not in promoted]
     if not planned:
         raise ValueError('No safe Mississippi name search')
     from deployment.casey_state_repairs import ms_personal_foundation_probe
@@ -9089,9 +9116,14 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
         planned = [ms_recovery]
     elif probe:
         planned.insert(0, probe)
+    completed_phrases = []
     for name in planned:
+        if trial_identity() and any(phrase.casefold() in name.casefold() for phrase in completed_phrases):
+            continue
         query = {'state': 'MS', 'operation': 'search', 'name': name}
         source_rows = ms_browser_clean_evidence(evidence(query), query)['rows']
+        if (re.fullmatch(r'[A-Za-z ]+', name) and len(distinctive_match_tokens(name)) >= 2):
+            completed_phrases.append(name)
         # Complete source rows remain intact in evidence. Identical repeated
         # filings are one candidate, not competing identity matches.
         rows = list({row['identifier']: row for row in source_rows}.values())
@@ -38698,7 +38730,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             elif state == "MD":
                 result = checker.search_md(page, org)
                 result = ensure_state_result(result, org, "MD", source_note="Maryland checker returned a non-structured result.")
-                md_body = registry_page_body(page)
+                md_body = registry_page_body(page) if result.success and not result.error else ""
                 if result.error or not result.success:
                     # Failed navigation is not a completed empty EIN search.
                     # Preserve the exception and avoid additional empty-result
@@ -39741,8 +39773,8 @@ def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, sta
         attempts = max(attempts, 3)
     if state == "AK":
         attempts = max(attempts, 3)
-    if state in {"WA", "NY", "PA", "CT"}:
-        # CT already performs bounded source recovery inside its single allowance.
+    if state in {"WA", "NY", "PA", "CT", "MD"}:
+        # CT and MD perform bounded source recovery inside one shared allowance.
         attempts = 1
     if state == "ME":
         attempts = 2

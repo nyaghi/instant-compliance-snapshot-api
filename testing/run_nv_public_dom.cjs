@@ -118,7 +118,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const staleButton={...searchButton,click:()=>staleClicks++};
  const textEl=innerText=>({innerText});
  const labels={STARTS_WITH:'Starts With',EXACT_MATCH:'Exact Match',CONTAINS:'Contains'};
- const searchCombo={get innerText(){return labels[searchMode];},
+ const searchCombo={isConnected:true,get innerText(){return labels[searchMode];},
   querySelector:q=>q==='select[name="data[searchType]"]'?{}:null,
   click:()=>{modeMenu=true;mutate();},querySelectorAll:q=>q==='[role="option"]'?Object.keys(labels).map(mode=>({
     textContent:labels[mode],

@@ -183,8 +183,14 @@ const CCDCSource=(()=>{
    try {rail=await CCSourceRail.acquire(sender,'DC',d.deadline_schema===1?d.expires_at*1000-30000:Math.min(start+60000,d.expires_at*1000)-5000,d.run_id,signal);check();}
    finally {steps.push({phase:'queue',seconds:(Date.now()-queued)/1000});}
    end=Math.min(d.deadline_schema===1?d.expires_at*1000:start+60000,Date.now()+activeBudgetMs,d.expires_at*1000);if(rail)rail.job.activeExpiresAt=end;
-   owned=await limited(CCSourceRail.create(rail,{url:SEARCH,...(rail?.options||{type:'popup',focused:false,width:1280,height:1000})}),'create',w=>chrome.windows.remove(w.id).catch(()=>{}));tab=owned?.tabs?.[0];if(rail)rail.windowId=owned.id;
+   if(auroraBackgroundTrial(sender)){
+      tab=await limited(chrome.tabs.create({windowId:sender.tab.windowId,url:SEARCH,active:false}),
+        'create',v=>chrome.tabs.remove(v.id).catch(()=>{}));
+      if(!Number.isInteger(tab?.id))throw Error('owned_tab_unavailable');
+    }else{
+      owned=await limited(CCSourceRail.create(rail,{url:SEARCH,...(rail?.options||{type:'popup',focused:false,width:1280,height:1000})}),'create',w=>chrome.windows.remove(w.id).catch(()=>{}));tab=owned?.tabs?.[0];if(rail)rail.windowId=owned.id;
    if(!Number.isInteger(owned?.id)||!Number.isInteger(tab?.id))throw Error('owned_window_unavailable');
+    }
    await limited(chrome.debugger.attach({tabId:tab.id},'1.3'),'attach',()=>chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));attached=true;
    // Initialization may finish after Chrome's generic three-second timer.
    // Spend only this capture's remaining allowance, reserving twenty seconds
@@ -255,7 +261,7 @@ const CCDCSource=(()=>{
    if(!finalCorporate?.fit||JSON.stringify(corporateFields(finalCorporate.url,finalCorporate.text))!==JSON.stringify(entity)||done>=end)throw Error('corporate_profile_changed');
    return {...license,corporate_detail:{url:finalCorporate.url,public_text:finalCorporate.text,image:corporateShot.data,captured_at:done/1000,linked_identifier:linkedIdentifier},timing:captureTiming(done)};
   }catch(e){return {ok:false,reason:String(e.message||'source_capture_failed').slice(0,150),timing:captureTiming(Date.now())};}
-  finally{closed=true;signal?.removeEventListener("abort",onCancel);const cleanup=[];if(attached&&tab)cleanup.push(chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));if(owned)cleanup.push(chrome.windows.remove(owned.id).catch(()=>{}));let timer;await Promise.race([Promise.allSettled(cleanup),new Promise(r=>{timer=setTimeout(r,500);})]);clearTimeout(timer);if(rail)await CCSourceRail.release(rail);}
+  finally{closed=true;signal?.removeEventListener("abort",onCancel);const cleanup=[];if(attached&&tab)cleanup.push(chrome.debugger.detach({tabId:tab.id}).catch(()=>{}));if(owned)cleanup.push(chrome.windows.remove(owned.id).catch(()=>{}));else if(tab)cleanup.push(chrome.tabs.remove(tab.id).catch(()=>{}));let timer;await Promise.race([Promise.allSettled(cleanup),new Promise(r=>{timer=setTimeout(r,500);})]);clearTimeout(timer);if(rail)await CCSourceRail.release(rail);}
  }
  function continuityRequest(d){
   const c=d.corporate_continuity_candidate;

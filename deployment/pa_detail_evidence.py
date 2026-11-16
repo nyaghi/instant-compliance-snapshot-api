@@ -13,12 +13,33 @@ PROBE="""()=>Object.fromEntries([...document.querySelectorAll('#panelEntityInfo 
 SETTLED="""()=>![...document.querySelectorAll('.cg-busy')].some(el=>el.getClientRects().length && getComputedStyle(el).visibility!=='hidden' && getComputedStyle(el).display!=='none')"""
 
 
-def bound(fields, row):
+def bound(fields, row, *, exempt=False):
     return (key(fields.get('EntityName'))==key(row[0])
         and str(fields.get('RegNum') or '').strip()==row[3].strip()
         and digits(fields.get('FederalID'))==digits(row[5])
         and str(fields.get('Expdt') or '').strip()==row[4].strip()
-        and bool(row[0]) and bool(row[3]))
+        and bool(row[0]) and (bool(row[3]) or exempt and len(digits(row[5])) == 9))
+
+
+def selected_row(rows, ein, result):
+    """Select the same EIN/filing shown in the result, not an empty duplicate."""
+    identifier = str(getattr(result, 'matched_registry_identifier', '') or '')
+    name = getattr(result, 'matched_registry_name', '')
+    hits = [r for r in rows if len(r['cells']) >= 12 and (
+        digits(r['cells'][5]) == ein or identifier and name
+        and r['cells'][3] == identifier and key(r['cells'][0]) == key(name)
+        and not digits(r['cells'][5]))]
+    if len(hits) == 1:
+        return hits[0]
+    raw = str(getattr(result, 'raw_status_text', '') or '').strip()
+    # A unique, numbered row with the exact expiration used for the status
+    # can coexist with a same-EIN profile having no registration at all.
+    # Do not rank conflicting dated registrations or choose the first row.
+    matching = [r for r in hits if r['cells'][3] and r['cells'][4]
+                and r['cells'][4].strip() == raw
+                and (not identifier or r['cells'][3] == identifier)
+                and (not name or key(r['cells'][0]) == key(name))]
+    return matching[0] if len(matching) == 1 else None
 
 
 def capture(page, org, result):
@@ -37,14 +58,12 @@ def capture(page, org, result):
     try:
         timeout()
         rows=page.locator('tr#SearchResults').evaluate_all("nodes=>nodes.map((el,index)=>({index,cells:[...el.querySelectorAll('td')].map(x=>x.innerText.trim())}))")
-        identifier=str(getattr(result,'matched_registry_identifier','') or '')
-        name=getattr(result,'matched_registry_name','')
-        hits=[r for r in rows if len(r['cells'])>=12 and (
-            digits(r['cells'][5])==run.ein or identifier and name
-            and r['cells'][3]==identifier and key(r['cells'][0])==key(name) and not digits(r['cells'][5]))]
-        if len(hits)!=1:return
-        chosen=hits[0];cells=chosen['cells']
-        if not cells[3] or not cells[4]:return
+        chosen=selected_row(rows,run.ein,result)
+        if chosen is None:return
+        cells=chosen['cells']
+        exempt = (str(result.status).strip().casefold() == 'exempt'
+                  and any('exempt from registration' in str(value).casefold() for value in cells))
+        if (not cells[3] or not cells[4]) and not exempt:return
         page.wait_for_function(SETTLED,timeout=timeout())
         grid=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(timeout(),2000))
         with page.expect_popup(timeout=timeout()) as opened:
@@ -54,14 +73,16 @@ def capture(page, org, result):
         popup.wait_for_function("() => !!document.querySelector('#panelEntityInfo input[name=FederalID]')?.value",timeout=timeout())
         popup.wait_for_function(SETTLED,timeout=timeout())
         fields=popup.evaluate(PROBE)
-        if not bound(fields,cells):return
+        if not bound(fields,cells,exempt=exempt):return
+        if exempt and not (any('exempt from registration' in str(value).casefold() for value in fields.values())
+                           or popup.get_by_text(re.compile('EXEMPT FROM REGISTRATION',re.I)).first.is_visible()):return
         raw=popup.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(timeout(),3000))
         if popup.url!=DETAIL or not popup.evaluate(SETTLED) or popup.evaluate(PROBE)!=fields or time.monotonic()>=stop:return
         packed=json.dumps([base64.b64encode(v).decode('ascii') for v in (grid,raw)]).encode()
         if len(packed)>MAX_BYTES:return
         # Metadata describes the actual disabled input values visible in pixels.
         text=' | '.join(cells[:11])+'\n'+'\n'.join(k+': '+str(v) for k,v in fields.items())
-        run.document(DETAIL,packed,'image_pages',text,note='Original Pennsylvania search result and selected detail page; same name, EIN, certificate and expiration verified before and after capture.')
+        run.document(DETAIL,packed,'image_pages',text,note='Original Pennsylvania search result and selected detail page; same identity and applicable registration fields verified before and after capture.')
         run.pa_detail_hash=hashlib.sha256(packed).hexdigest()
         fact.update(outcome='captured',pages=2)
     except Exception as exc:

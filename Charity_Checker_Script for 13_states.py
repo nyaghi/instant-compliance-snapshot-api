@@ -2628,6 +2628,14 @@ def search_va(page, org: Organization) -> StateResult:
 def search_md(page, org: Organization) -> StateResult:
     url = "https://onestop.md.gov/list_views/62f3e1797f7e3200016a3dab"
     result = StateResult(org.organization_name, org.ein, "MD", STATUS_UNKNOWN, url)
+    # One allowance covers exact EIN and one normal-form recovery. It is
+    # deliberately longer than observed successful transient recoveries.
+    md_stop = min(getattr(org, 'md_lookup_deadline', float('inf')), time.monotonic() + 60)
+    def md_timeout(cap):
+        remaining = int((md_stop - time.monotonic()) * 1000)
+        if remaining <= 0:
+            raise TimeoutError('Maryland source lookup deadline reached')
+        return max(1, min(cap, remaining))
     try:
         ein = digits_only(org.ein)
         if len(ein) != 9:
@@ -2648,8 +2656,8 @@ def search_md(page, org: Organization) -> StateResult:
                 "X-Requested-With": "XMLHttpRequest",
                 "Accept": "text/html, */*; q=0.01",
             })
-            page.goto(entries_url, wait_until="domcontentloaded", timeout=20000)
-            body = page.locator("body").inner_text(timeout=5000)
+            page.goto(entries_url, wait_until="domcontentloaded", timeout=md_timeout(20000))
+            body = page.locator("body").inner_text(timeout=md_timeout(5000))
             body = globals().get("md_prefer_active_entry_body", lambda body, org: body)(body, org)
             body_digits = digits_only(body)
             if ein in body_digits:
@@ -2680,8 +2688,9 @@ def search_md(page, org: Organization) -> StateResult:
         except Exception:
             pass
 
-        page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        safe_wait_for_network_idle(page, timeout=750)
+        md_timeout(1)
+        page.goto(url, wait_until="domcontentloaded", timeout=md_timeout(15000))
+        safe_wait_for_network_idle(page, timeout=md_timeout(750))
         fast_sleep(0.25)
 
         ein_input = None
@@ -2692,7 +2701,7 @@ def search_md(page, org: Organization) -> StateResult:
                 for i in range(count):
                     item = loc.nth(i)
                     try:
-                        if item.is_visible(timeout=750):
+                        if item.is_visible(timeout=md_timeout(750)):
                             ein_input = item
                             break
                     except Exception:
@@ -2729,8 +2738,8 @@ def search_md(page, org: Organization) -> StateResult:
                     count = min(buttons.count(), 10)
                     for i in range(count):
                         btn = buttons.nth(i)
-                        if btn.is_visible(timeout=500):
-                            btn.click(timeout=3000)
+                        if btn.is_visible(timeout=md_timeout(500)):
+                            btn.click(timeout=md_timeout(3000))
                             clicked_search = True
                             break
                     if clicked_search:
@@ -2739,20 +2748,20 @@ def search_md(page, org: Organization) -> StateResult:
                     continue
             if not clicked_search:
                 try:
-                    page.get_by_role("button", name=re.compile("Search", re.I)).click(timeout=3000)
+                    page.get_by_role("button", name=re.compile("Search", re.I)).click(timeout=md_timeout(3000))
                     clicked_search = True
                 except Exception:
                     pass
             if not clicked_search and active_input is not None:
                 try:
-                    active_input.press("Enter")
+                    active_input.press("Enter", timeout=md_timeout(3000))
                 except Exception:
                     pass
-            safe_wait_for_network_idle(page, timeout=500)
+            safe_wait_for_network_idle(page, timeout=md_timeout(500))
 
         def submit_md_search(search_value: str) -> None:
-            ein_input.fill("")
-            ein_input.fill(search_value)
+            ein_input.fill("", timeout=md_timeout(3000))
+            ein_input.fill(search_value, timeout=md_timeout(3000))
             fast_sleep(0.25)
             click_md_search(ein_input)
 
@@ -2764,7 +2773,7 @@ def search_md(page, org: Organization) -> StateResult:
                     for i in range(count):
                         item = loc.nth(i)
                         try:
-                            if item.is_visible(timeout=500):
+                            if item.is_visible(timeout=md_timeout(500)):
                                 return item
                         except Exception:
                             continue
@@ -2784,7 +2793,7 @@ def search_md(page, org: Organization) -> StateResult:
                     for i in range(count):
                         item = inputs.nth(i)
                         try:
-                            if not item.is_visible(timeout=500):
+                            if not item.is_visible(timeout=md_timeout(500)):
                                 continue
                             placeholder = (item.get_attribute("placeholder") or "").lower()
                             aria = (item.get_attribute("aria-label") or "").lower()
@@ -2802,15 +2811,15 @@ def search_md(page, org: Organization) -> StateResult:
             if not name_input:
                 return
             try:
-                ein_input.fill("")
+                ein_input.fill("", timeout=md_timeout(3000))
             except Exception:
                 pass
-            name_input.fill("")
-            name_input.fill(search_value)
+            name_input.fill("", timeout=md_timeout(3000))
+            name_input.fill(search_value, timeout=md_timeout(3000))
             fast_sleep(0.25)
             click_md_search(name_input)
             try:
-                name_input.press("Enter")
+                name_input.press("Enter", timeout=md_timeout(3000))
             except Exception:
                 pass
 
@@ -2818,16 +2827,17 @@ def search_md(page, org: Organization) -> StateResult:
             local_body = ""
             wait_seconds = STATE_RESULT_WAIT_SECONDS if org.evidence_mode else MD_FAST_RESULT_WAIT_SECONDS
             deadline = time.time() + min(wait_seconds, 6)
-            while time.time() < deadline:
-                local_body = page.locator("body").inner_text(timeout=2500)
+            while time.time() < deadline and time.monotonic() < md_stop:
+                local_body = page.locator("body").inner_text(timeout=md_timeout(2500))
                 if md_body_has_match(local_body):
                     break
                 if md_body_has_record(local_body):
                     fast_sleep(0.25)
-                    local_body = page.locator("body").inner_text(timeout=2500)
+                    local_body = page.locator("body").inner_text(timeout=md_timeout(2500))
                     if md_body_has_match(local_body):
                         break
                 fast_sleep(0.25)
+            md_timeout(1)
             return local_body
 
         def body_says_no_results(text: str) -> bool:
@@ -2960,14 +2970,14 @@ def search_md(page, org: Organization) -> StateResult:
             for selector in fast_result_selectors:
                 try:
                     candidate = page.locator(selector).first
-                    if candidate.count() > 0 and candidate.is_visible(timeout=500):
+                    if candidate.count() > 0 and candidate.is_visible(timeout=md_timeout(500)):
                         try:
-                            candidate_text = re.sub(r"\s+", " ", candidate.inner_text(timeout=750)).strip()
+                            candidate_text = re.sub(r"\s+", " ", candidate.inner_text(timeout=md_timeout(750))).strip()
                         except Exception:
                             candidate_text = ""
                         if candidate_text and not md_row_is_candidate(candidate_text):
                             continue
-                        candidate.click(timeout=3000)
+                        candidate.click(timeout=md_timeout(3000))
                         clicked_result = True
                         break
                 except Exception:
@@ -2991,21 +3001,21 @@ def search_md(page, org: Organization) -> StateResult:
                 for i in range(count):
                     row = rows.nth(i)
                     try:
-                        if not row.is_visible(timeout=250):
+                        if not row.is_visible(timeout=md_timeout(250)):
                             continue
-                        row_text = re.sub(r"\s+", " ", row.inner_text(timeout=750)).strip()
+                        row_text = re.sub(r"\s+", " ", row.inner_text(timeout=md_timeout(750))).strip()
                         if not md_row_is_candidate(row_text):
                             continue
                         if selector == "a[href]":
-                            row.click(timeout=3000)
+                            row.click(timeout=md_timeout(3000))
                             clicked_result = True
                         else:
                             links = row.locator("a[href]")
                             if links.count() > 0:
-                                links.first.click(timeout=3000)
+                                links.first.click(timeout=md_timeout(3000))
                                 clicked_result = True
                             else:
-                                row.click(timeout=3000)
+                                row.click(timeout=md_timeout(3000))
                                 clicked_result = True
                         break
                     except Exception:
@@ -3022,18 +3032,18 @@ def search_md(page, org: Organization) -> StateResult:
                     for i in range(count):
                         item = items.nth(i)
                         try:
-                            if not item.is_visible(timeout=250):
+                            if not item.is_visible(timeout=md_timeout(250)):
                                 continue
-                            text = re.sub(r"\s+", " ", item.inner_text(timeout=750)).strip()
+                            text = re.sub(r"\s+", " ", item.inner_text(timeout=md_timeout(750))).strip()
                             if not md_row_is_candidate(text):
                                 continue
                             links = item.locator("a[href]")
                             if selector == "a[href]":
-                                item.click(timeout=3000)
+                                item.click(timeout=md_timeout(3000))
                             elif links.count() > 0:
-                                links.first.click(timeout=3000)
+                                links.first.click(timeout=md_timeout(3000))
                             else:
-                                item.click(timeout=3000)
+                                item.click(timeout=md_timeout(3000))
                             clicked_result = True
                             break
                         except Exception:
@@ -3061,13 +3071,13 @@ def search_md(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        safe_wait_for_network_idle(page, timeout=1500)
-        detail_text = page.locator("body").inner_text(timeout=5000)
+        safe_wait_for_network_idle(page, timeout=md_timeout(1500))
+        detail_text = page.locator("body").inner_text(timeout=md_timeout(5000))
         if text_has_wrong_ein_match(detail_text, org.ein):
             return reject_wrong_ein_result(result, "Maryland")
         registration_status = ""
         deadline = time.time() + min(STATE_RESULT_WAIT_SECONDS, 5)
-        while time.time() < deadline:
+        while time.time() < deadline and time.monotonic() < md_stop:
             registration_status = extract_labeled_value(page, ["Registration Status"])
             if registration_status:
                 break

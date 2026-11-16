@@ -84,10 +84,17 @@ async function registryTnAfterCommand(response){
   }
   await saveRuntime();
 }
+function auroraBackgroundTrial(sender) {
+  try {
+    const page=new URL(sender.url);
+    return page.origin===P.TRIAL_ORIGIN && page.pathname==='/' &&
+      page.searchParams.get('aurora_connector_test')==='background';
+  } catch { return false; }
+}
 function registryQuietAlerts(job) {
   try {
     const source=new URL(job.sender.url);
-    return source.origin===P.TRIAL_ORIGIN && source.pathname==='/alerts-runner.html';
+    return auroraBackgroundTrial(job.sender) || (source.origin===P.TRIAL_ORIGIN && source.pathname==='/alerts-runner.html');
   } catch { return false; }
 }
 function registryTrialLayout(origin) {
@@ -1283,15 +1290,16 @@ async function performRegistryQuery(job, query) {
     if(query.state==='TN'){
       const blocked=await wfAwait(job,"registry-worker.js:performRegistryQuery:1104:20:await",()=>(registryTnBeforeCommand(job)));if(blocked)return wfReturn(job,"registry-worker.js:performRegistryQuery:1104:66:return",(blocked));
     }
-    let response = await wfAwait(job,"registry-worker.js:performRegistryQuery:1106:19:await",()=>(registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))})));
+    let response = await wfAwait(job,"registry-worker.js:performRegistryQuery:1106:19:await",()=>(registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now())),
+      ...(query.state==='TN'&&query.operation==='detail'&&auroraBackgroundTrial(job.sender)?{quietDetail:true}:{})})));
     if(query.state==='TN')await wfAwait(job,"registry-worker.js:performRegistryQuery:1107:26:await",()=>(registryTnAfterCommand(response)));
     if(P.TRIAL_ORIGIN && query.state==='TN') {
-      const phases=['detail-start','prior-closed','detail-click','detail-retry','detail-incomplete','detail-ready','public-error','request-started','request-finished'];
+      const phases=['detail-start','prior-closed','detail-click','detail-retry','detail-incomplete','detail-ready','public-error','request-started','request-finished','opening-configured'];
       for(const entry of Array.isArray(response?.tn_diagnostics)?response.tn_diagnostics.slice(0,16):[]) {
         if(!phases.includes(entry?.phase)||!Number.isFinite(entry.elapsed_ms)||entry.elapsed_ms<0)continue;
         const sample={phase:entry.phase,ms:Math.round(entry.elapsed_ms),
           visibility:['visible','hidden'].includes(entry.visibility)?entry.visibility:'unknown'};
-        for(const key of ['dialog_visible','loading_visible','request_observed','retried','watch_ready'])
+        for(const key of ['dialog_visible','loading_visible','request_observed','retried','watch_ready','opening_hook_ready'])
           if(typeof entry[key]==='boolean')sample[key]=entry[key];
         if(['grid-binding','details-handler','type-error','other'].includes(entry.category))sample.category=entry.category;
         if(Number.isInteger(entry.http_status)&&entry.http_status>=0&&entry.http_status<=599)sample.http_status=entry.http_status;
@@ -1325,6 +1333,16 @@ async function performRegistryQuery(job, query) {
       await wfAwait(job,"registry-worker.js:performRegistryQuery:1145:6:await",()=>(registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true)));
       response=await wfAwait(job,"registry-worker.js:performRegistryQuery:1146:15:await",()=>(registryMessage(job,{action:'registry-nv',query,
         budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))})));
+    }
+    if(P.TRIAL_ORIGIN && query.state==='NV' && query.operation==='detail'
+        && /^NV\d+$/.test(query.identifier)
+        && response?.reason==='NY_CONNECTOR_REGISTRY_NV_DETAIL_RESPONSE_PENDING'
+        && !job.nvDetailPendingRecoveryUsed && job.activeExpiresAt-Date.now()>1000) {
+      job.nvDetailPendingRecoveryUsed=true;
+      diagnostic('nv-detail-pending-recovery',job,'same observed record; no click or new search');
+      response=await wfAwait(job,'registry-worker.js:nv-detail-pending-recovery',()=>registryMessage(job,{
+        action:'registry-nv',query,resumeDetail:true,
+        budgetMs:Math.max(1,Math.min(8000,job.activeExpiresAt-Date.now()))}));
     }
     if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
     if (query.state==='NV' && response?.ok===true) {

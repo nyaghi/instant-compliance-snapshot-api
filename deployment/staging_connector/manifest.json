@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity — Quiet Alerts",
+  "name": "CharityClarity — Focused Search & Capture",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
-  "description": "Staging: explicit New Mexico HTTP outage reporting; prior evidence and identity repairs preserved.",
+  "description": "Bounded source recovery and record-bound evidence capture; existing quiet collectors retained.",
   "permissions": [
     "storage",
     "browsingData",
@@ -107,8 +107,12 @@
       "world": "MAIN"
     },
     {
-      "matches": ["https://orion.nv.gov/portal/public/*"],
-      "js": ["registry-nv-startup.js"],
+      "matches": [
+        "https://orion.nv.gov/portal/public/*"
+      ],
+      "js": [
+        "registry-nv-startup.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },

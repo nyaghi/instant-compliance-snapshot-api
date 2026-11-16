@@ -1,4 +1,4 @@
-/* Public TN request lifecycle only. Never submit, alter, or read a response. */
+/* Observe public TN request timing and configure the owned detail dialog. */
 (() => {
   'use strict';
   const origin='https://tncab.tnsos.gov',channel='cc-final-four-tn-phase-v1';
@@ -33,18 +33,57 @@
     const id=text(rows[0].children[ids[0]]);
     return /^\d{1,15}$/.test(id)?id:null;
   }
+  function quietOpening(job) {
+    if(!document.hidden) return null;
+    const prototype=window.kendo?.ui?.Window?.fn;
+    const open=prototype?.open;
+    if(typeof open!=='function')return null;
+    const restore=()=>{if(prototype.open===openQuietDetail)prototype.open=open;};
+    function openQuietDetail(...args) {
+      const element=document.getElementById('KendoWindowLevel1');
+      if(!element || this.element?.[0]!==element || active!==job || !document.hidden
+          || Date.now()>job.expires)return open.apply(this,args);
+      restore();
+      const options=this.options;
+      const original=options?.animation;
+      if(!original || typeof original!=='object' || !original.open)return open.apply(this,args);
+      const quiet={...original,open:false};
+      options.animation=quiet;
+      try {
+        emit(job,'opening-configured');
+        return open.apply(this,args);
+      } finally {
+        if(this.options===options&&options.animation===quiet)options.animation=original;
+      }
+    }
+    prototype.open=openQuietDetail;
+    return restore;
+  }
+  function stop() {
+    const job=active;
+    active=null;
+    if(!job) return;
+    if(job.timer!==undefined)clearTimeout(job.timer);
+    job.restoreOpening?.();
+  }
   window.addEventListener('message',event=>{
     const m=event.data;
     if(event.source!==window||event.origin!==origin||m?.channel!==channel||m.direction!=='request'
       ||typeof m.id!=='string'||! /^[a-f0-9-]{36}$/.test(m.id))return;
-    if(m.operation==='stop'){if(active?.id===m.id)active=null;return;}
+    if(m.operation==='stop'){if(active?.id===m.id)stop();return;}
     if(m.operation!=='watch'||typeof m.identifier!=='string'||!/^CO\d+$/.test(m.identifier)
       ||!Number.isFinite(m.budget_ms)||m.budget_ms<=0)return;
     if(active&&active.expires>Date.now()){emit({id:m.id},'unavailable');return;}
     const id=observedId(m.identifier);
     if(!id){emit({id:m.id},'unavailable');return;}
-    active={id:m.id,recordId:id,expires:Date.now()+Math.min(25000,m.budget_ms),xhr:null};
-    emit(active,'ready');
+    stop();
+    const budget=Math.min(25000,m.budget_ms);
+    active={id:m.id,recordId:id,expires:Date.now()+budget,xhr:null};
+    if(m.quiet_detail===true) {
+      try { active.restoreOpening=quietOpening(active); } catch { /* Preserve normal behavior if the widget changed. */ }
+    }
+    if(active.restoreOpening)active.timer=setTimeout(stop,budget);
+    emit(active,'ready',active.restoreOpening?{opening_hook_ready:true}:{});
   });
   const open=XMLHttpRequest.prototype.open,send=XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open=function(method,url,...args){

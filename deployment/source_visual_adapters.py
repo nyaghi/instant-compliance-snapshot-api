@@ -3112,7 +3112,14 @@ def capture_va_unregistered_entity(master,result,run,deadline):
     if remaining_capture<.25:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2239:63:return',None)
     fact['phase']='capture';begin=time.perf_counter();raw=workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2240:58:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=max(1,int((stop-time.monotonic()-1)*1000)) if selected_restriction else min(1000,max(1,int(remaining_capture*1000))))
     after=read_bound()
-    if after is None or after!=before:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2242:86:return',None)
+    if after is None and stop-time.monotonic()>3:
+     # A transient render may invalidate a capture. Revalidate the same
+     # original record, once, inside this adapter's existing allowance.
+     fresh=read_bound()
+     if fresh is not None and fresh[0]==before[0]:
+      raw=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(1500,max(1,int((stop-time.monotonic()-1)*1000))))
+      before=fresh;after=read_bound();fact['capture_recovery']='same_record_once'
+    if after is None or after[0]!=before[0]:fact['outcome']='source_changed_during_capture';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2242:86:return',None)
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return trace_return('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2243:78:return',None)
     count=len(run.documents);workflow_call('deployment/source_visual_adapters.py:capture_va_unregistered_entity:2244:29:document',run.document,locals(), url,raw,'image',before[1],note='Original selected Virginia entity page: explicit '+proof['status']+' standing and empty Registrations table. Same-run exact-EIN lookup confirmed zero registrations; this is not an empty organization search.')
     if len(run.documents)>count:

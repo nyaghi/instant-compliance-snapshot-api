@@ -1,5 +1,5 @@
 {
-  "build": "gate40-staging-20261110",
+  "build": "fresh-five-search-capture-20261116",
   "version": "0.6.135",
-  "scope": "Gate 40 collector placement and source evidence. Existing passive Illinois Alerts verification retained."
+  "scope": "NV dropdown and same-record recovery; existing quiet collectors and source checks retained."
 }

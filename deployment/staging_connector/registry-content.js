@@ -334,10 +334,8 @@
       throw new Error('REGISTRY_NV_COLUMNS_CHANGED');
     return headers;
   }
-  const nvSearchModes = {STARTS_WITH:'Starts With', EXACT_MATCH:'Exact Match', CONTAINS:'Contains'};
   function nvSearchModeSelected(mode) {
-    const label = nvSearchModes[mode];
-    if (!label) return false;
+    const label = mode === 'EXACT_MATCH' ? 'Exact Match' : 'Starts With';
     return [...document.querySelectorAll('[role="combobox"]')].some(el => {
       if (text(el).startsWith(label)) return true;
       // ORION can restore the selected public choice using its enum label.
@@ -351,16 +349,20 @@
   }
   const nvStartsWithSelected = () => nvSearchModeSelected('STARTS_WITH');
   async function nvSelectSearchMode(mode, deadline) {
-    if (!Object.hasOwn(nvSearchModes, mode)) throw new Error('REGISTRY_COMMAND_INVALID');
+    if (!['STARTS_WITH','EXACT_MATCH'].includes(mode)) throw new Error('REGISTRY_COMMAND_INVALID');
     if (nvSearchModeSelected(mode)) return;
     const combos=[...document.querySelectorAll('[role="combobox"]')].filter(el=>el.querySelector('select[name="data[searchType]"]'));
     if (combos.length!==1) throw new Error('REGISTRY_NV_FORM_CHANGED');
-    const combo=combos[0];
-    const option=await wfcAwait("content:nvSelectSearchMode:327:17",()=>(wait(()=>{
-      const label=nvSearchModes[mode];
-      const options=[...combo.querySelectorAll('[role="option"]')].filter(el=>el.getAttribute('data-value')===mode
+    const currentOption=()=>{
+      const current=[...document.querySelectorAll('[role="combobox"]')].filter(el=>el.isConnected && el.querySelector('select[name="data[searchType]"]'));
+      if(current.length!==1)return null;
+      const label=mode==='EXACT_MATCH'?'Exact Match':'Starts With';
+      const options=[...current[0].querySelectorAll('[role="option"]')].filter(el=>el.getAttribute('data-value')===mode
         && (el.textContent||'').replace(/\s+/g,' ').trim()===label && el.getAttribute('aria-disabled')!=='true');
-      return options.length===1&&options[0];
+      return options.length===1?options[0]:null;
+    };
+    const option=await wfcAwait("content:nvSelectSearchMode:327:17",()=>(wait(()=>{
+      return currentOption();
     },Math.max(1,Math.min(3000,deadline-Date.now()))).catch(error=>{
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_MENU_INCOMPLETE');
       throw error;
@@ -371,7 +373,9 @@
     // next search. Select the labelled option once and verify the rendered
     // value. No Choices instance, application state or private API is used.
     await wfcAwait("content:nvSelectSearchMode:341:4",()=>(wait(()=>nvSearchModeSelected(mode),Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>{
-      option.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,view:window}));
+      const fresh=currentOption();
+      if(!fresh)return;
+      fresh.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,view:window}));
     }}).catch(error=>{
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_NOT_SELECTED');
       throw error;
@@ -622,10 +626,8 @@
     await ready;if(!state.ready)state.stop();return state;
   }
   async function nvSearch(query, deadline, replay = null) {
-    const keys=Object.keys(query || {}).sort().join(',');
-    const contains=keys==='name,operation,search_mode,state' && query.search_mode==='CONTAINS';
     if (query?.state !== 'NV' || query.operation !== 'search' || typeof query.name !== 'string' || !query.name.trim() || query.name.length > 500
-        || !contains && !['name,operation,state','exact_above,name,operation,state'].includes(keys)
+        || !(['name,operation,state','exact_above,name,operation,state'].includes(Object.keys(query).sort().join(',')))
         || Object.hasOwn(query,'exact_above')&&query.exact_above!==20) throw new Error("REGISTRY_COMMAND_INVALID");
     nvTrace('search-started',{name:query.name});
     const business = [...document.querySelectorAll('[role="tab"]')].find(el => text(el) === 'Business');
@@ -635,22 +637,12 @@
     // Refuse unrecognized filters instead of guessing a potentially narrower query.
     const field = suffix => document.querySelector(`input[id$="-${suffix}"]`);
     const name = field('entityName'), number = field('entityNumber'), id = field('nvBusinessId');
-    if (!name || !number || !id || !Object.keys(nvSearchModes).some(nvSearchModeSelected))
+    if (!name || !number || !id || !(nvStartsWithSelected()||nvSearchModeSelected('EXACT_MATCH')))
       throw new Error("REGISTRY_NV_FORM_CHANGED");
     const businessId = replay?.target?.identifier || '';
     const searchName = businessId ? '' : query.name;
-    let searchMode=replay?.mode ?? (contains?'CONTAINS':'STARTS_WITH'), broadTotal=null;
-    const probeReply = (count, unavailable=false) => ({
-      query,state:'NV',complete:true,verification_pending:false,total:0,rows:[],
-      search_mode:'CONTAINS',broad_total:count||null,...(unavailable?{probe_unavailable:true}:{})
-    });
-    if (contains) deadline=Math.min(deadline, Date.now()+10000);
-    try {
-      await wfcAwait("content:nvSearch:556:4",()=>(nvSelectSearchMode(searchMode,deadline)));
-    } catch (error) {
-      if (contains) return probeReply(0,true);
-      throw error;
-    }
+    let searchMode=replay?.mode ?? 'STARTS_WITH', broadTotal=null;
+    await wfcAwait("content:nvSearch:556:4",()=>(nvSelectSearchMode(searchMode,deadline)));
     // Form.io redraws Search when filter inputs change. Resolve the current
     // button after that render settles, rather than clicking the old node in
     // the same turn as input/change. Unrelated mask/chat animations must not
@@ -694,7 +686,7 @@
           throw new Error('REGISTRY_NV_FORM_NOT_SETTLED');
         const readGrid = () => {
           if(!request.finished||request.http_status!==200)return false;
-          if ((contains || businessId) && (field('entityName')?.value !== searchName
+          if (businessId && (field('entityName')?.value !== searchName
               || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== businessId
               || !nvSearchModeSelected(searchMode))) {
             throw new Error('REGISTRY_NV_FORM_CHANGED');
@@ -732,15 +724,7 @@
         request.stop();
       }
     };
-    let first;
-    try {
-      first=await wfcAwait("content:nvSearch:601:14",()=>(submit()));
-    } catch (error) {
-      if (contains && error.message!=='REGISTRY_NV_SEARCH_SOURCE_ERROR') return probeReply(0,true);
-      throw error;
-    }
-    // A positive count triggers the original plan without paging.
-    if (contains) return probeReply(first.total);
+    let first=await wfcAwait("content:nvSearch:601:14",()=>(submit()));
     if (businessId) {
       if (first.total !== 1 || first.page !== 1 || first.pages !== 1
           || first.values.length !== 1 || JSON.stringify(first.values[0]) !== replay.target.signature
@@ -834,6 +818,18 @@
     }
     if(!wanted.every(k=>Object.hasOwn(fields,k))||fields['Entity Number']!==identifier||!fields['Reserved Name']||!fields.Status||!fields['Linked Entity Information'])return null;
     return fields;
+  }
+  async function nvResumeDetail(query, deadline) {
+    // Continue only the already-clicked, observed corporate detail. No new
+    // search, navigation, identity choice or filing-history substitution.
+    if(query?.state!=='NV'||query.operation!=='detail'||!/^NV\d+$/.test(query.identifier)
+        ||Object.keys(query).sort().join(',')!=='identifier,operation,state')throw new Error('REGISTRY_COMMAND_INVALID');
+    const target=nvObserved.get(query.identifier);
+    if(!target || !nvLastSearch)throw new Error('REGISTRY_NV_DETAIL_NOT_OBSERVED');
+    const fields=await wait(()=>nvFields(query.identifier),Math.max(1,deadline-Date.now()));
+    if(fields['NV Business ID']!==query.identifier || fields['Entity Name']!==target.name)
+      throw new Error('REGISTRY_NV_DETAIL_CHANGED');
+    return {query,complete:true,source_url:location.href,fields};
   }
   async function nvDetail(query, deadline, {skipHistory=false, returnDiagnostic={replay_clicks:0}}={}) {
     if (query?.state !== 'NV' || query.operation !== 'detail' || !/^(?:NV\d+|(?:NR|C)\d{8}-\d+|E\d{7,14}-\d)$/.test(query.identifier)
@@ -1085,8 +1081,8 @@
   const tnObserved = new Map();
   let tnAbsentDetailProof=null;
   let tnLastDiagnostics=[];
-  async function tnRequestWatch(identifier,deadline,onPhase) {
-    const state={ready:false,started:false,finished:false,http_status:null,retry_after_ms:null,stop:()=>{}};
+  async function tnRequestWatch(identifier,deadline,onPhase,quietDetail=false) {
+    const state={ready:false,started:false,finished:false,http_status:null,retry_after_ms:null,openingHookReady:false,stop:()=>{}};
     if(typeof window.postMessage!=='function')return state;
     const id=crypto.randomUUID(),channel='cc-final-four-tn-phase-v1';
     let timer,resolveReady;
@@ -1094,8 +1090,9 @@
     const receive=event=>{
       const m=event.data;
       if(event.source!==window||event.origin!==location.origin||m?.channel!==channel||m.direction!=='response'||m.id!==id)return;
-      if(m.phase==='ready'){state.ready=true;clearTimeout(timer);resolveReady();}
+      if(m.phase==='ready'){state.ready=true;state.openingHookReady=m.opening_hook_ready===true;clearTimeout(timer);resolveReady();}
       else if(m.phase==='unavailable'){clearTimeout(timer);resolveReady();}
+      else if(state.ready&&m.phase==='opening-configured')onPhase('opening-configured');
       else if(state.ready&&m.phase==='started'){state.started=true;onPhase('request-started');}
       else if(state.ready&&state.started&&m.phase==='finished'&&Number.isInteger(m.http_status)&&m.http_status>=0&&m.http_status<=599){
         state.finished=true;state.http_status=m.http_status;
@@ -1107,7 +1104,7 @@
     state.stop=()=>{clearTimeout(timer);window.removeEventListener('message',receive);
       try{window.postMessage({channel,direction:'request',id,operation:'stop'},location.origin);}catch{}};
     timer=setTimeout(resolveReady,Math.max(1,Math.min(1000,deadline-Date.now())));
-    try{window.postMessage({channel,direction:'request',id,operation:'watch',identifier,budget_ms:Math.max(1,deadline-Date.now())},location.origin);}
+    try{window.postMessage({channel,direction:'request',id,operation:'watch',identifier,budget_ms:Math.max(1,deadline-Date.now()),...(quietDetail?{quiet_detail:true}:{})},location.origin);}
     catch{state.stop();return state;}
     await wfcAwait("content:tnRequestWatch:901:4",()=>(ready));
     if(!state.ready)state.stop();
@@ -1282,7 +1279,7 @@
     return !!strip && strip.children.length===0 && !text(strip)
       && !dialog.querySelector('[aria-busy="true"],.k-loading-mask,.k-loading-image');
   }
-  async function tnDetail(query,deadline) {
+  async function tnDetail(query,deadline,quietDetail=false) {
     if(query?.state!=='TN'||query.operation!=='detail'||!/^CO\d+$/.test(query.identifier)
         ||Object.keys(query).sort().join(',')!=='identifier,operation,state')throw new Error('REGISTRY_COMMAND_INVALID');
     tnAbsentDetailProof=null;
@@ -1304,7 +1301,7 @@
     const buttons=[...page.rows[indexes[0].index].querySelectorAll('button')].filter(el=>text(el)==='Details');
     if(buttons.length!==1)throw new Error('REGISTRY_TN_DETAIL_NOT_OBSERVED');
     const detailEnd=Math.min(deadline,Date.now()+25000);
-    const request=await wfcAwait("content:tnDetail:1071:18",()=>(tnRequestWatch(selected.identifier,detailEnd,(phase,extra)=>tnTrace(phase,started,extra))));
+    const request=await wfcAwait("content:tnDetail:1071:18",()=>(tnRequestWatch(selected.identifier,detailEnd,(phase,extra)=>tnTrace(phase,started,extra),quietDetail)));
     if(Date.now()>=detailEnd){request.stop();throw new Error('REGISTRY_RESPONSE_INCOMPLETE');}
     let retryTimer,detailStarted=false,retryUsed=false;
     const loading=()=>[...document.querySelectorAll('.k-loading-mask')].some(visible);
@@ -1328,7 +1325,7 @@
     window.addEventListener?.('error',publicError);
     try {
       fields=await wfcAwait("content:tnDetail:1094:13",()=>(wait(readDetail,Math.max(1,detailEnd-Date.now()),{signal:{target:window,type:'message'},action:()=>{
-        tnTrace('detail-click',started,{watch_ready:request.ready});
+        tnTrace('detail-click',started,{watch_ready:request.ready,opening_hook_ready:request.openingHookReady});
         buttons[0].click();
         // Kendo can hide the prior modal before binding the next Details
         // action. Repeat only an unstarted click against the unchanged,
@@ -1813,7 +1810,7 @@
       business_selected:tab?.getAttribute('aria-selected')==='true',
       loader_clear:![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible),
       inputs_present:['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`)),
-      search_mode_selected:Object.keys(nvSearchModes).some(nvSearchModeSelected),
+      search_mode_selected:nvStartsWithSelected()||nvSearchModeSelected('EXACT_MATCH'),
       search_enabled:[...document.querySelectorAll('button')].some(el=>text(el)==='Search'&&visible(el)&&!el.disabled)
     };
   }
@@ -2209,7 +2206,7 @@
     if (TN && m.action === 'registry-tn') {
       const deadline=Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000);
       tnLastDiagnostics=[];
-      const evidence=m.query?.operation==='search'?await wfcAwait("content:handle:1902:51",()=>(tnSearch(m.query,deadline))):await wfcAwait("content:handle:1902:84",()=>(tnDetail(m.query,deadline)));
+      const evidence=m.query?.operation==='search'?await wfcAwait("content:handle:1902:51",()=>(tnSearch(m.query,deadline))):await wfcAwait("content:handle:1902:84",()=>(tnDetail(m.query,deadline,m.quietDetail===true)));
       return {ok:true,evidence,tn_diagnostics:tnLastDiagnostics};
     }
     if (NV && m.action === 'registry-nv') {
@@ -2218,7 +2215,7 @@
       nvDiagnosticId=typeof m.diagnosticId==='string' && /^[a-zA-Z0-9_-]{16,80}$/.test(m.diagnosticId)?m.diagnosticId:null;
       const returnDiagnostic = {replay_clicks:0};
       try {
-        const evidence = m.query?.operation === 'search' ? await wfcAwait("content:handle:1910:59",()=>(nvSearch(m.query,deadline))) : await wfcAwait("content:handle:1910:94",()=>(nvDetail(m.query,deadline,{skipHistory:m.skipHistory===true,returnDiagnostic})));
+        const evidence = m.query?.operation === 'search' ? await wfcAwait("content:handle:1910:59",()=>(nvSearch(m.query,deadline))) : m.resumeDetail===true && m.skipHistory===true ? await wfcAwait("content:nvResumeDetail",()=>nvResumeDetail(m.query,deadline)) : await wfcAwait("content:handle:1910:94",()=>(nvDetail(m.query,deadline,{skipHistory:m.skipHistory===true,returnDiagnostic})));
         // Piggyback only this completed detail's metadata. Failure to collect
         // optional pixels must never change the successful registry evidence.
         let nv_snapshot_metadata;
