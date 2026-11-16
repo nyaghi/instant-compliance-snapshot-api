@@ -20814,6 +20814,20 @@ def nd_search_queries(org) -> list[str]:
     return planned
 
 
+def nd_full_legal_key(name):
+    """Keep the complete FirstStop legal identity before its explicit DBA."""
+    legal = nd_entered_legal_name(name) or name
+    return re.sub(r"^the\s+|\s+the$", "", complete_name_identity_key(legal)).strip()
+
+
+def nd_added_medical_entity_review(original, registry, ein):
+    """A hospital brand alone cannot establish an added Medical Center entity."""
+    left, right = nd_full_legal_key(original), nd_full_legal_key(registry)
+    if right in {nd_full_legal_key(n) for n in known_names_for_ein(ein)}:
+        return False
+    return bool(left and right == left + ' medical center')
+
+
 def search_nd_completed(page, org):
     """Read the same public JSON as FirstStop, after the search has completed.
 
@@ -20827,8 +20841,7 @@ def search_nd_completed(page, org):
     deadline = time.perf_counter() + 35.0
     targets = organization_match_target_variants(org.organization_name, org.ein)
     queries = nd_search_queries(org)
-    entered_legal_name = nd_entered_legal_name(org.organization_name)
-    entered_legal_key = complete_name_identity_key(entered_legal_name)
+    entered_legal_key = nd_full_legal_key(org.organization_name)
     scope_candidates, review_truncated = {}, False
     try:
         # One recovery navigation, sharing the original 35-second budget.
@@ -20878,10 +20891,11 @@ def search_nd_completed(page, org):
                     if not isinstance(row, dict) or not isinstance(row.get("TITLE"), list) or not row["TITLE"] or not row.get("ID"):
                         raise ValueError("North Dakota returned an incomplete search row")
                     name = str(row["TITLE"][0]).strip()
-                    exact_entered_legal = bool(entered_legal_key and complete_name_identity_key(name) == entered_legal_key)
+                    exact_entered_legal = bool(entered_legal_key and nd_full_legal_key(name) == entered_legal_key)
                     scope_review = not exact_entered_legal and (
                         separator_entity_scope_gap(org.organization_name, name, org.ein)
-                        or institutional_entity_extension_requires_review(org.organization_name, name, org.ein))
+                        or institutional_entity_extension_requires_review(org.organization_name, name, org.ein)
+                        or nd_added_medical_entity_review(org.organization_name, name, org.ein))
                     if exact_entered_legal or scope_review or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein):
                         rank = checker.candidate_selection_score_for_targets(name, targets, str(row.get("STATUS", "")))
                         candidates.append(((not scope_review, exact_entered_legal, rank), dict(row, _scope_review=scope_review)))
