@@ -1868,7 +1868,10 @@ def or_confirm_snapshot_delinquency(org, result):
             'charity_id': str(row[0]), 'url': url,
         }
     if not evidence and source_application_error:
-        result.status = 'Site Not Reachable'
+        # Keep the source result's original uncertainty label for retry policy.
+        # The public formatter maps the explicit access failure to SNR. Setting
+        # SNR here would accidentally opt Oregon into another whole lookup.
+        result.status = 'Unable to Confirm'
         result.success = False
         result.status_reason = result.reason_code = 'OR_SOURCE_ACCESS_REFUSED'
         result.source_note = ('Oregon returned its own application error page. '

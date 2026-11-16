@@ -165,8 +165,18 @@ class Availability(unittest.TestCase):
                   patch.object(app,'or_live_period_evidence',return_value={}),
                   patch.object(app.urllib.request,'urlopen',side_effect=responses) as request):
                 got=app.or_confirm_snapshot_delinquency(org,result)
-            self.assertEqual(got.status,expected)
+                public=app.response_data_for_lookup(got,'',org,org.organization_name,org.ein,'OR',time.perf_counter())
+            self.assertEqual(public['status'],expected)
+            self.assertEqual(got.status,'Unable to Confirm')
             self.assertEqual(request.call_count,2)
+
+    def test_oregon_error_does_not_add_outer_retry(self):
+        import registry_snapshot_server as app
+        original=failure('OR',status_reason='OR_SOURCE_ACCESS_REFUSED',reason_code='OR_SOURCE_ACCESS_REFUSED')
+        with (patch.object(app,'trial_identity',return_value=True),
+              patch.object(app,'run_state_lookup',side_effect=lambda *a,**k:apply(copy.deepcopy(original))) as lookup):
+            app._run_single_state_lookup_reliably_core('Daffy','863177440','OR')
+        self.assertEqual(lookup.call_count,1)
 
     def test_rate_limit_keeps_existing_recovery_policy(self):
         for state in STATES:
