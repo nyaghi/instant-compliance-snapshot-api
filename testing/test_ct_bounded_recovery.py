@@ -9,6 +9,29 @@ from deployment import ct_budget
 
 
 class ConnecticutBudget(unittest.TestCase):
+    def test_complete_source_dispatch_cannot_restart_allowance(self):
+        now = [0.0]
+        calls = []
+
+        def stalled_form(cap):
+            duration = ct_budget.timeout(cap)
+            calls.append(duration)
+            now[0] += duration
+            raise TimeoutError('source did not respond')
+
+        with (patch.object(time, 'perf_counter', side_effect=lambda: now[0]),
+              patch.object(app, 'CT_DIRECT_MAX_SECONDS', 30),
+              patch.object(app, 'trial_identity', return_value=False),
+              patch.object(app, 'known_names_for_ein', return_value=[]),
+              patch.object(app, 'response_data_for_lookup', side_effect=lambda result, *args: vars(result)),
+              patch.object(app, 'ct_direct_prepare_session', side_effect=stalled_form)):
+            result = app._run_single_state_lookup_reliably_core('Partnership for Civil Justice Fund', '262851211', 'CT')
+        self.assertEqual(result['status'], 'Site Not Reachable')
+        self.assertFalse(result['success'])
+        self.assertEqual(result['semantic_attempts'], 1)
+        self.assertLessEqual(now[0], 30)
+        self.assertLessEqual(len(calls), 2)
+
     def test_repeated_stalled_forms_share_existing_allowance(self):
         now = [0.0]
         calls = []

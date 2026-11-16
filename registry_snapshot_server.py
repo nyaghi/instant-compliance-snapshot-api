@@ -38564,14 +38564,6 @@ def _run_state_lookup_source(organization_name: str, ein: str, state: str, captu
     if state == "CT":
         lookup_started = time.perf_counter()
         result = search_ct_direct(org)
-        if public_status(result) == "Site Not Reachable":
-            retried_result = search_ct_direct(org)
-            if public_status(retried_result) != "Site Not Reachable":
-                retried_result.source_note = " ".join(part for part in [
-                    retried_result.source_note or "",
-                    "A quick retry replaced an initial Connecticut direct lookup failure.",
-                ]).strip()
-                result = retried_result
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
