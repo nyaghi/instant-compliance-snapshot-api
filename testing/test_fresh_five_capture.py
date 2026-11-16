@@ -1,5 +1,6 @@
 import base64,json,threading,time,unittest
 from types import SimpleNamespace as NS
+from pathlib import Path
 from unittest.mock import MagicMock
 from deployment import source_visual_adapters as va,pa_detail_evidence as pa
 class CaptureRepair(unittest.TestCase):
@@ -43,11 +44,15 @@ class CaptureRepair(unittest.TestCase):
   for exempt in [False,True]:
    for changed in [False,True]:
     with self.subTest(exempt=exempt,changed=changed):
-     cells=['Community Foundation','','','123'if not exempt else'','11/15/2026'if not exempt else'','22-2281783']+['EXEMPT FROM REGISTRATION REQUIREMENTS - E1'if exempt else'']+['']*5
+     cells=['Community Foundation','','','123'if not exempt else'','11/15/2026'if not exempt else'Exempt','22-2281783']+['']+['']*5
      fields=dict(EntityName=cells[0],FederalID=cells[5],RegNum=cells[3],Expdt=cells[4],Status=cells[6])
      rows=[dict(index=0,cells=cells)]
      if not exempt:rows.append(dict(index=1,cells=[cells[0],'','','','',cells[5]]+['']*6))
-     run=NS(state='PA',ein='222281783',visual_adapter_facts=[],documents=[]);run.document=lambda *a,**kw:run.documents.append(a)
+     if exempt:
+      fixture=Path(__file__).parent/'fixtures/fresh-five'
+      rows=json.loads((fixture/'PA-EXEMPT-REAL-ROWS.json').read_text());cells=rows[0]['cells']
+      fields=json.loads((fixture/'PA-EXEMPT-REAL-FIELDS.json').read_text())
+     run=NS(state='PA',ein=pa.digits(cells[5]),visual_adapter_facts=[],documents=[]);run.document=lambda *a,**kw:run.documents.append(a)
      page=MagicMock(url=pa.SEARCH);page.locator.return_value.evaluate_all.return_value=rows
      popup=MagicMock(url=pa.DETAIL);page.expect_popup.return_value.__enter__.return_value.value=popup
      page.screenshot.return_value=b'original-list';popup.screenshot.return_value=b'original-detail'

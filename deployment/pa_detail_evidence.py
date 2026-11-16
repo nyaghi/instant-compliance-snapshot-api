@@ -62,7 +62,7 @@ def capture(page, org, result):
         if chosen is None:return
         cells=chosen['cells']
         exempt = (str(result.status).strip().casefold() == 'exempt'
-                  and any('exempt from registration' in str(value).casefold() for value in cells))
+                  and str(cells[4]).strip().casefold() == 'exempt')
         if (not cells[3] or not cells[4]) and not exempt:return
         page.wait_for_function(SETTLED,timeout=timeout())
         grid=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(timeout(),2000))
@@ -74,8 +74,7 @@ def capture(page, org, result):
         popup.wait_for_function(SETTLED,timeout=timeout())
         fields=popup.evaluate(PROBE)
         if not bound(fields,cells,exempt=exempt):return
-        if exempt and not (any('exempt from registration' in str(value).casefold() for value in fields.values())
-                           or popup.get_by_text(re.compile('EXEMPT FROM REGISTRATION',re.I)).first.is_visible()):return
+        if exempt and str(fields.get('Expdt') or '').strip().casefold() != 'exempt':return
         raw=popup.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(timeout(),3000))
         if popup.url!=DETAIL or not popup.evaluate(SETTLED) or popup.evaluate(PROBE)!=fields or time.monotonic()>=stop:return
         packed=json.dumps([base64.b64encode(v).decode('ascii') for v in (grid,raw)]).encode()
