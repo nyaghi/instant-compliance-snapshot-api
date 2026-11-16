@@ -350,14 +350,14 @@ def final_four_asset(name, text):
       onResult(result);''')
         replace('      connectorStarted=true;', '''      connectorStarted=true;
       const tnFirst=mode==='standard';
-      const nvEarly=tnFirst && location.pathname==='/' &&
-        new URLSearchParams(location.search).get('aurora_connector_test')==='background';
+      const nvEarly=tnFirst && ['/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/'].includes(location.pathname) &&
+        new URLSearchParams(location.search).get('aurora_connector_test')!=='popup';
       const priority=nvEarly?['TN','NV']:tnFirst?['TN']:[];
       const dispatchOrder=[...priority.filter(state=>external.includes(state)),...external.filter(state=>!priority.includes(state))];
       trace("browser collectors dispatched",{states:[...dispatchOrder],collector_order:nvEarly?'tn-nv-first':tnFirst?'tn-first':'default'});''')
         replace('connector=Promise.all(external.map(async state=>{', 'connector=Promise.all(dispatchOrder.map(async state=>{')
-        replace('    let connector=Promise.resolve(),connectorStarted=false;', '''    const quietTennessee = mode==='standard' && location.pathname==='/' &&
-      new URLSearchParams(location.search).get('aurora_connector_test')==='background';
+        replace('    let connector=Promise.resolve(),connectorStarted=false;', '''    const quietTennessee = mode==='standard' && ['/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/'].includes(location.pathname) &&
+      new URLSearchParams(location.search).get('aurora_connector_test')!=='popup';
     const tennesseeRetryDeadline = quietTennessee ? performance.now()+120000 : 0;
     let connector=Promise.resolve(),connectorStarted=false;''')
         replace('          let result=await externalLookup(state,names,signal);', '''          let result=await externalLookup(state,names,signal);
@@ -661,8 +661,8 @@ def lab_asset(path):
             text = text.replace(origin, LAB_ORIGIN)
         if file.name == 'index.html':
             text=alerts_navigation(text,'<!-- Aurora product navigation -->',aurora=True)
-            if (os.environ.get('CE_PERMANENT_STAGING') == '1' and entry.path == '/'
-                    and dict(parse_qsl(entry.query, keep_blank_values=True)).get('aurora_connector_test') == 'background'):
+            if (os.environ.get('CE_PERMANENT_STAGING') == '1' and entry.path in {'/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/'}
+                    and dict(parse_qsl(entry.query, keep_blank_values=True)).get('aurora_connector_test') != 'popup'):
                 # The installed connector still supplies the optional duo layout.
                 # Drop its presentation stylesheet while retaining collector routing.
                 text = text.replace('</head>', """<script id="cc-quiet-aurora-layout">

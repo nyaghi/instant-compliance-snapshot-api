@@ -32,7 +32,7 @@ async function run({first=pending,second=snapshot,quiet=true,mode='standard',ela
  const window={},calls=[],delays=[],published=[],controller=new AbortController();
  let now=0;
  const location={origin:'https://fixture-final-four.onrender.com',pathname:'/',
-  search:quiet?'?collector_layout=duo&aurora_connector_test=background':'?collector_layout=duo'};
+  search:quiet?'?collector_layout=duo':'?collector_layout=duo&aurora_connector_test=popup'};
  vm.runInNewContext(source,{window,location,URLSearchParams,crypto,AbortSignal,performance:{now:()=>now},
   setTimeout:(callback,ms)=>setImmediate(()=>{delays.push(ms);now+=ms; if(stop)controller.abort();else callback();}),
   clearTimeout:clearImmediate,fetch:()=>{throw Error('Connector-only run must not start a worker workflow');}});
@@ -61,7 +61,7 @@ async function run({first=pending,second=snapshot,quiet=true,mode='standard',ela
   code:'NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'}}});
  assert.equal(formPending.calls.length,2);
  for(const opts of [
-  {first:snapshot}, {quiet:false}, {mode:'sales'}, {elapsed:58000},
+  {first:snapshot}, {quiet:false}, {mode:'sales'}, {elapsed:78000},
   {first:{...pending,lab_diagnostic:{...pending.lab_diagnostic,completed_count:1}}},
   {first:{...pending,lab_diagnostic:{...pending.lab_diagnostic,pending_operation:'detail'}}},
   {first:{...pending,lab_diagnostic:{...pending.lab_diagnostic,code:'NY_CONNECTOR_TAB_READY_TIMEOUT'}}},

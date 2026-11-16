@@ -87,8 +87,8 @@ async function registryTnAfterCommand(response){
 function auroraBackgroundTrial(sender) {
   try {
     const page=new URL(sender.url);
-    return page.origin===P.TRIAL_ORIGIN && page.pathname==='/' &&
-      page.searchParams.get('aurora_connector_test')==='background';
+    return page.origin===P.TRIAL_ORIGIN && ['/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/'].includes(page.pathname) &&
+      page.searchParams.get('aurora_connector_test')!=='popup';
   } catch { return false; }
 }
 function registryQuietAlerts(job) {
