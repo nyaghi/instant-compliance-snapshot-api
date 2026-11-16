@@ -8,7 +8,12 @@ from testing.test_alerts_pilot import ACCOUNT, OTHER, EIN, NOW, URL, run
 
 
 class AlertsBackgroundTests(TestCase):
-    setUp = fixtures.AlertsTests.setUp
+    def setUp(self):
+        fixtures.AlertsTests.setUp(self)
+        from unittest.mock import patch
+        clock = patch('deployment.alerts_browser.overnight', return_value=True)
+        clock.start()
+        self.addCleanup(clock.stop)
     check = fixtures.AlertsTests.check
 
     def test_runner_keeps_browser_reserved_until_backend_is_finished(self):

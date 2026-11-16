@@ -434,7 +434,7 @@ def handle(alerts, handler, path, *, origin, operator=False, include_body=True, 
                 if handler.command=='POST' and alerts.master is not None:
                     from deployment.alerts_browser import claim, enable, lease
                     if parsed.path=='/api/alerts/runner/claim':
-                        return reply(200,claim(alerts,c,account,payload.get('profile')))
+                        return reply(200,claim(alerts,c,account,payload.get('profile'),payload.get('time_zone','America/New_York')))
                     if parsed.path=='/api/alerts/runner/enable':
                         return reply(200,enable(alerts,c,account))
                     if parsed.path=='/api/alerts/runner/finish':

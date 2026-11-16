@@ -216,7 +216,7 @@
     const ready=setting.ok && setting.quiet === true;
     background.hidden=!ready;
     $('background-status').textContent=!ready?'Update the CharityClarity Chrome connector to enable background checks.':
-      setting.enabled?'Automatic checks use background tabs while this Chrome profile is open.':
+      setting.enabled?'Automatic checks run from 10 p.m. to 5 a.m. in this computer’s local time while Chrome is open. A check already underway finishes safely; no further organization starts after 5 a.m.':
       'Enable automatic checks on this computer.';
     if(!ready)return;
     background.textContent=setting.enabled?'Pause automatic checks in this browser':'Enable automatic checks in this browser';

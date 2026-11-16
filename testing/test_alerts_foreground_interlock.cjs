@@ -1,6 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
 const source=fs.readFileSync('deployment/staging_connector/alerts-background.js','utf8');
-function fixture(){
+function fixture(hour=23){
  const origin='https://example.test',session={},local={ccAlertsProfile:'p'.repeat(43)},tabs=new Map([[1,{id:1,url:origin+'/'}]]);
  let listener,alarm,created=0,clock=1000000,jobs=[];
  const storage=data=>({get:async key=>({[key]:structuredClone(data[key])}),set:async value=>Object.assign(data,structuredClone(value)),remove:async key=>{delete data[key];}});
@@ -9,7 +9,7 @@ function fixture(){
   storage:{session:storage(session),local:storage(local)},
   tabs:{get:async id=>{if(!tabs.has(id))throw Error('closed');return tabs.get(id);},remove:async id=>tabs.delete(id),
    create:async options=>{assert.equal(options.active,false);const id=100+(++created);const tab={id,...options};tabs.set(id,tab);return tab;}}};
- class Clock extends Date{static now(){return clock;}}
+ class Clock extends Date{static now(){return clock;}getHours(){return hour;}}
  vm.runInNewContext(source,{chrome,P:{TRIAL_ORIGIN:origin},URL,Date:Clock,allJobs:()=>jobs,
   allowedSender:s=>s.url?.startsWith(origin+'/')&&s.frameId===0});
  const sender=(id=1,documentId='doc1')=>({tab:{id},documentId,url:tabs.get(id)?.url,frameId:0});
@@ -17,8 +17,20 @@ function fixture(){
   const accepted=listener({type:'cc-alerts-background',action},sender(id,documentId),resolve);
   if(!accepted)resolve({ok:false});});
  const tick=async()=>{alarm({name:'charityclarity-alerts'});for(let i=0;i<6;i++)await new Promise(setImmediate);};
- return {call,tick,session,tabs,origin,get created(){return created;},advance:ms=>clock+=ms,setJobs:value=>jobs=value};
+ return {call,tick,session,tabs,origin,get created(){return created;},advance:ms=>clock+=ms,setJobs:value=>jobs=value,setHour:value=>hour=value};
 }
+
+test('automatic runner only opens from 22:00 through 04:59 local time',async()=>{
+ for(const hour of [5,9,17,21]){const f=fixture(hour);await f.tick();assert.equal(f.created,0);assert.equal((await f.call('foreground-start')).ok,true);}
+ for(const hour of [22,23,0,4]){const f=fixture(hour);await f.tick();assert.equal(f.created,1);}
+});
+
+test('five a.m. prevents the next organization but preserves the in-progress runner until done',async()=>{
+ const f=fixture(4);await f.tick();const id=f.session.ccAlertsRunnerTab.id;f.setHour(5);
+ assert.equal((await f.call('config',id)).reason,'OUTSIDE_OVERNIGHT_WINDOW');assert.ok(f.tabs.has(id));
+ await f.call('done',id);assert.ok(!f.tabs.has(id));await f.tick();assert.equal(f.created,1);
+ assert.equal((await f.call('foreground-start')).ok,true);
+});
 test('Aurora reservation blocks alarms until its explicit completion',async()=>{
  const f=fixture();assert.equal((await f.call('foreground-start')).ok,true);
  await f.tick();assert.equal(f.created,0);await f.call('foreground-end');await f.tick();assert.equal(f.created,1);

@@ -23,7 +23,7 @@
       // between organizations so a requested Aurora run takes the next turn.
       const permission=await window.CCAlertsBrowser('config');
       if(!permission?.ok)break;
-      const job=await post('claim',{profile:browser.profile});
+      const job=await post('claim',{profile:browser.profile,time_zone:Intl.DateTimeFormat().resolvedOptions().timeZone});
       if(job.retry){await pause(6000);continue;}
       if(!job.lease)break;
       settled=false;

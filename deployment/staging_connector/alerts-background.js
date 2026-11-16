@@ -12,6 +12,10 @@
     return next;
   };
   let opening = false;
+  const overnight = () => {
+    const hour = new Date(Date.now()).getHours();
+    return hour >= 22 || hour < 5;
+  };
 
   async function foreground() {
     const {[FOREGROUND]:saved={}}=await chrome.storage.session.get(FOREGROUND);
@@ -35,7 +39,7 @@
   }
 
   async function openRunner() {
-    if (opening) return;
+    if (opening || !overnight()) return;
     opening = true;
     try {
       const {[PROFILE]:profile} = await chrome.storage.local.get(PROFILE);
@@ -106,6 +110,7 @@
     const {[OWNED]:record}=await chrome.storage.session.get(OWNED);
     if (record?.id!==sender.tab.id) return {ok:false};
     if (message.action==='config') {
+      if(!overnight())return {ok:false,reason:'OUTSIDE_OVERNIGHT_WINDOW'};
       if(Object.keys(await foreground()).length)return {ok:false,reason:'AURORA_CHECK_IN_PROGRESS'};
       const {[PROFILE]:profile}=await chrome.storage.local.get(PROFILE);
       return {ok:!!profile,profile,quiet:true};

@@ -2,6 +2,8 @@
 import json
 import re
 import secrets
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from psycopg.types.json import Jsonb
 
@@ -36,11 +38,22 @@ def enable(alerts,c,account):
     return {'profile':secret}
 
 
-def claim(alerts, c, account, profile):
+def overnight(now, time_zone):
+    try:
+        zone = ZoneInfo(time_zone if isinstance(time_zone, str) else 'America/New_York')
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        return False
+    hour = datetime.fromtimestamp(now, zone).hour
+    return hour >= 22 or hour < 5
+
+
+def claim(alerts, c, account, profile, time_zone='America/New_York'):
     if (not isinstance(profile,str) or not TOKEN.fullmatch(profile)
             or not c.execute('SELECT 1 FROM cc_alert_browser_profiles WHERE account=%s AND secret=%s AND created>=%s',
                              (account,digest(profile),alerts.now(c)-90*86400)).fetchone()):
         raise ValueError('This Chrome profile is not connected to Alerts.')
+    if not overnight(alerts.now(c), time_zone):
+        return {'scheduled': True, 'window': '22:00-05:00'}
     from deployment.durable_queue import normalize_submission
     if not c.execute('SELECT pg_try_advisory_xact_lock(824527332) AS ok').fetchone()['ok']:
         return {'retry': True}

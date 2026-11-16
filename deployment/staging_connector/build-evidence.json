@@ -1,5 +1,5 @@
 {
-  "build": "ein-first-bounded-names-20261116",
+  "build": "ein-first-overnight-alerts-20261116",
   "version": "0.6.135",
-  "scope": "One 20-second optional name allowance after completed EIN searches; retained identity guards and selected detail capture. Includes validated Nevada nonblocking focus setup."
+  "scope": "One 20-second optional name allowance after completed EIN searches; retained identity guards and selected detail capture. Includes validated Nevada nonblocking focus setup. Automatic Alerts starts restricted to 22:00-05:00 local time."
 }
