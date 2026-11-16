@@ -518,7 +518,7 @@ def final_four_asset(name, text):
   let foregroundHolders = 0;
   async function preflight(states) {
     const response = await connectorReadiness();
-    if (!response.ok || !response.capabilities?.includes("aurora-alerts-exclusive-v1") || !states.every(state => supportsRegistry(response, state)))
+    if (!response.ok || !response.capabilities?.includes("aurora-alerts-exclusive-v1") || !response.capabilities?.includes("ein-light-name-20s-v1") || !states.every(state => supportsRegistry(response, state)))
       return {ok:false, reason:response.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE"};
     const admitted = await bridge("foreground-start");
     if(admitted.ok)foregroundHolders++;

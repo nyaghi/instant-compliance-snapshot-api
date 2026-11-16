@@ -90,7 +90,7 @@ function collectNyDiagnostics(job, response) {
   if(P.TRIAL_ORIGIN && job.registryState === "NY")
     job.nyDiagnostics=P.nyDiagnostics([...(job.nyDiagnostics||[]),...P.nyDiagnostics(response?.ny_diagnostics)]);
 }
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true,tnRetryAttempt:j.tnRetryAttempt===true,tnSearchCompleted:j.tnSearchCompleted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : withoutSourcePixels(j.lastResponse), snapshotCaptures: j.snapshotCaptures || 0, ...(P.TRIAL_ORIGIN?{ilSnapshotSpentMs:j.ilSnapshotSpentMs,tnSnapshotSpentMs:j.tnSnapshotSpentMs,nmSnapshotSpentMs:j.nmSnapshotSpentMs,ncSnapshotSpentMs:j.ncSnapshotSpentMs,nySnapshotSpentMs:j.nySnapshotSpentMs,msSnapshotSpentMs:j.msSnapshotSpentMs,gaDetailSnapshotSpentByRecord:j.gaDetailSnapshotSpentByRecord,requiredCaptureSpentByState:j.requiredCaptureSpentByState}:{}), ...(P.TRIAL_ORIGIN&&j.registryState==='AL'?{alEmptySnapshotSaved:j.alEmptySnapshotSaved===true}:{}), queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, nvPrimaryCaptureUsed: j.nvPrimaryCaptureUsed===true, ...(P.TRIAL_ORIGIN && j.registryState === "AL" ? {alFinalEmptyProtocol:j.alFinalEmptyProtocol,alFinalEmptyUsed:j.alFinalEmptyUsed,alSnapshotSpentMs:j.alSnapshotSpentMs,snapshotCaptures:j.snapshotCaptures}:{}), ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ...(P.TRIAL_ORIGIN?{tnTraffic:registryTnTrafficSnapshot()}:{}), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, trialDisplay: j.trialDisplay, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, duoSlot: j.duoSlot, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, einLightNameStop: j.einLightNameStop, ...(P.TRIAL_ORIGIN && j.registryState === "TN" ? {tnCheckboxAttempted:j.tnCheckboxAttempted===true,tnRetryAttempt:j.tnRetryAttempt===true,tnSearchCompleted:j.tnSearchCompleted===true} : {}), detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : withoutSourcePixels(j.lastResponse), snapshotCaptures: j.snapshotCaptures || 0, ...(P.TRIAL_ORIGIN?{ilSnapshotSpentMs:j.ilSnapshotSpentMs,tnSnapshotSpentMs:j.tnSnapshotSpentMs,nmSnapshotSpentMs:j.nmSnapshotSpentMs,ncSnapshotSpentMs:j.ncSnapshotSpentMs,nySnapshotSpentMs:j.nySnapshotSpentMs,msSnapshotSpentMs:j.msSnapshotSpentMs,gaDetailSnapshotSpentByRecord:j.gaDetailSnapshotSpentByRecord,requiredCaptureSpentByState:j.requiredCaptureSpentByState}:{}), ...(P.TRIAL_ORIGIN&&j.registryState==='AL'?{alEmptySnapshotSaved:j.alEmptySnapshotSaved===true}:{}), queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, nvPrimaryCaptureUsed: j.nvPrimaryCaptureUsed===true, ...(P.TRIAL_ORIGIN && j.registryState === "AL" ? {alFinalEmptyProtocol:j.alFinalEmptyProtocol,alFinalEmptyUsed:j.alFinalEmptyUsed,alSnapshotSpentMs:j.alSnapshotSpentMs,snapshotCaptures:j.snapshotCaptures}:{}), ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 /* Capture the last completed empty AL page in place; no search or verification. */
 async function performAlFinalEmpty(job,query,id) {
   const admitted=P.TRIAL_ORIGIN&&job.registryState==='AL'&&job.alFinalEmptyProtocol===true
@@ -349,6 +349,7 @@ async function close(job, reason, finishId) {
   if (job.closed) return wfReturn(job,"worker.js:close:283:18:return",undefined);
   job.closed = true;
   clearTimeout(job.timer);
+  clearTimeout(job.einLightNameTimer);
   clearTimeout(job.reconnectTimer);
   const index = queue.indexOf(job);
   if (index >= 0) queue.splice(index, 1);
@@ -547,6 +548,24 @@ async function awaitSnapshotCleanup(job,id) {
     ||Date.now()>=deadline||job.snapshotCleanupBusy)
     throw new Error('NY_CONNECTOR_INCOMPLETE');
 }
+function armEinLightNameLimit(job, query, id) {
+  clearTimeout(job.einLightNameTimer);
+  if (!P.TRIAL_ORIGIN || !['IL','NY','NM'].includes(job.registryState)) return true;
+  const nameSearch = job.registryState === 'NM'
+    ? query.operation === 'search' && Boolean(query.name)
+    : Boolean(query.orgName) && !query.ein && !query.identifier && !query.orgID;
+  if (!nameSearch) return true;
+  if (!Number.isFinite(job.einLightNameStop)) job.einLightNameStop = Date.now() + 20000;
+  const expire = () => {
+    if (!job.closed && isActive(job) && job.pending === id && job.command?.id === id
+        && P.sameQuery(job.command.query,query))
+      close(job,'NY_CONNECTOR_EIN_LIGHT_NAME_LIMIT').catch(()=>{});
+  };
+  const remaining = job.einLightNameStop - Date.now();
+  if (remaining <= 0) { expire(); return false; }
+  job.einLightNameTimer = setTimeout(expire,remaining);
+  return true;
+}
 async function performSearch(job, query, id) {
   if (job.closed) return wfReturn(job,"worker.js:performSearch:477:18:return",undefined);
   if (job.command?.id === id && !P.sameQuery(job.command.query, query)) { post(job, { id, ...registryNvSequenceFailure(job,query,"worker-command-changed") }); return wfReturn(job,"worker.js:performSearch:478:159:return",undefined); }
@@ -556,6 +575,7 @@ async function performSearch(job, query, id) {
   if (job.command?.id !== id) { job.queryRepaired = false; job.lastResponse = null; }
   job.command = { id, query };
   job.pending = id;
+  if (!armEinLightNameLimit(job,query,id)) return;
   let response;
   try {
     await wfAwait(job,"worker.js:performSearch:487:4:await",()=>(saveRuntime()));
@@ -723,6 +743,7 @@ async function performSearch(job, query, id) {
     if (repair.phase === "repairing") await wfAwait(job,"worker.js:performSearch:640:38:await",()=>(saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_FAILED" })));
     response = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : "NY_CONNECTOR_INCOMPLETE", ...(error.nvSequence?{nv_readiness:error.nvSequence}:{}) };
   }
+  clearTimeout(job.einLightNameTimer);
   if (job.closed) return wfReturn(job,"worker.js:performSearch:643:18:return",undefined);
   // This optional local metadata is never forwarded or persisted as a reply
   // field; capture independently validates its command, age, URL and document.
@@ -963,7 +984,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return false;
   }
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", "aurora-alerts-exclusive-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1","al-final-empty-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", "aurora-alerts-exclusive-v1", "ein-light-name-20s-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1","al-final-empty-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {

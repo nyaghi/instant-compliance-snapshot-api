@@ -33,6 +33,9 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
       || job.activeExpiresAt-Date.now()<4000){observed.phase='entry-rejected';trace();return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:34:86:return",(null));}
 
+  // A late rendering attachment must finish its own cleanup before the
+  // screenshot debugger can attach. Preserve the status if Chrome is stalled.
+  if(job.registryState==='NV' && job.nvBackgroundLease){observed.phase='background-cleanup-pending';trace();return null;}
   const state=job.registryState;
   if(state==='AL')job.alSnapshotCaptureBusy=true;
 

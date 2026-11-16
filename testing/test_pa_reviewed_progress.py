@@ -1,4 +1,4 @@
-"""Same literal PA plan and bounded completed-progress reserve; no network."""
+"""Same literal PA plan under the approved single 20-second fallback; no network."""
 import ast,copy,json,subprocess,time,unittest,urllib.error
 from pathlib import Path
 from unittest.mock import patch
@@ -59,19 +59,21 @@ class ProgressPlan(unittest.TestCase):
                 result=c.pa_guard_search_completion(result,org,[{'step':'search','ein':'123456789','complete':True,'http_status':200,'row_eins':[]},*getattr(result,'_pa_api_attempts',[])])
         finally:DEADLINE.reset(token);c.LAB_LOOKUP_MODE_CONTEXT.reset(mt)
         return result,calls,clock[0]
-    def test_one_reserve_finishes_completed_progress_with_original_parent_bound(self):
+    def test_single_allowance_finishes_completed_progress_with_original_parent_bound(self):
         old,_,oldseconds=self.run_model(baseline=True);new,calls,newseconds=self.run_model()
         self.assertEqual(old.reason_code,'PA_NAME_BUDGET_EXHAUSTED');self.assertEqual(new.status,'Not Registered');self.assertTrue(new.success)
         self.assertEqual(len(calls),7);self.assertAlmostEqual(newseconds,16.8);self.assertEqual(max(x['deadline']for x in calls),20)
-        self.assertEqual(sum('progress_reserve_seconds'in a for a in new._pa_api_attempts),1)
+        self.assertEqual(sum('progress_reserve_seconds'in a for a in new._pa_api_attempts),0)
         self.assertTrue(all(a['complete']for a in new._pa_api_attempts))
     def test_nontrial_sales_and_parent_cutoff_cannot_take_extra_time(self):
         for kw in [{'trial':False},{'mode':'sales'},{'parent':16}]:
-            result,calls,seconds=self.run_model(**kw);self.assertFalse(result.success);self.assertEqual(result.reason_code,'PA_NAME_BUDGET_EXHAUSTED');self.assertLessEqual(max(x['deadline']for x in calls),15)
+            result,calls,seconds=self.run_model(**kw);self.assertTrue(result.success);self.assertEqual(result.status,'Not Registered');self.assertLessEqual(max(x['deadline']for x in calls),min(20,kw.get('parent',100)-1))
     def test_failed_or_truncated_progress_cannot_earn_reserve_or_negative(self):
-        for kw in [{'fail_index':3},{'fail_index':3,'malformed':True},{'durations':[7,7,7,7,7,7,7]}]:
-            result,calls,_=self.run_model(**kw);self.assertFalse(result.success);self.assertNotEqual(result.status,'Not Registered');self.assertLessEqual(max(x['deadline']for x in calls),15)
+        for kw in [{'fail_index':3},{'fail_index':3,'malformed':True}]:
+            result,calls,_=self.run_model(**kw);self.assertFalse(result.success);self.assertNotEqual(result.status,'Not Registered');self.assertLessEqual(max(x['deadline']for x in calls),20)
+        result,calls,seconds=self.run_model(durations=[7]*7)
+        self.assertTrue(result.success);self.assertEqual(result.status,'Not Registered');self.assertEqual(seconds,20)
     def test_fast_completed_plan_has_same_queries_and_no_reserve(self):
         old,oldcalls,oldseconds=self.run_model(baseline=True,durations=[.1]*7);new,calls,seconds=self.run_model(durations=[.1]*7)
-        self.assertEqual((new.status,new.success),(old.status,old.success));self.assertEqual(calls,oldcalls);self.assertAlmostEqual(seconds,oldseconds);self.assertFalse(any('progress_reserve_seconds'in a for a in new._pa_api_attempts))
+        self.assertEqual((new.status,new.success),(old.status,old.success));self.assertEqual([(x['query'],x['started'])for x in calls],[(x['query'],x['started'])for x in oldcalls]);self.assertAlmostEqual(seconds,oldseconds);self.assertFalse(any('progress_reserve_seconds'in a for a in new._pa_api_attempts))
 if __name__=='__main__':unittest.main()

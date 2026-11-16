@@ -123,6 +123,11 @@ test('missing connector script has the same actionable message', async () => {
   assert.match(f.error,/did not start/);
   assert.equal(f.retry.textContent,'Retry connectors');
 });
+
+test('previous supported version without the bounded-name capability cannot start', async () => {
+  const f=fixture([caps.filter(cap=>cap!=='ein-light-name-20s-v1')]);
+  await f.run();assert.equal(f.searches,0);assert.match(f.error,/needs an update/);
+});
 test('edits during preflight cannot dispatch a check for the previous selection', async () => {
   const f = fixture([caps]);
   const pending = f.run();

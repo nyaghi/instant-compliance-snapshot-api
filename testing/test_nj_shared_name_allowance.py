@@ -26,8 +26,8 @@ class SharedNameAllowance(unittest.TestCase):
             return self.source()
         with patch.object(c,'nj_name_fallback_queries',return_value=['First full name','Second name','Third name','Fourth name']),patch.object(c,'search_nj_direct',side_effect=query)as source:
             r=c.search_nj_with_name_fallback(None,self.org)
-        self.assertEqual(caps,[32000,21000,10000]);self.assertEqual(source.call_count,3)
-        self.assertEqual(r.reason_code,'NJ_NAME_PLAN_INCOMPLETE');self.assertFalse(r.success)
+        self.assertEqual(caps,[20000,9000]);self.assertEqual(source.call_count,2)
+        self.assertEqual(r.reason_code,'NJ_EIN_EMPTY_LIGHT_NAME_LIMIT');self.assertTrue(r.success)
         self.assertEqual(c.NJ_NAME_QUERY_DEADLINE.get(),float('inf'))
     def test_parent_deadline_and_late_positive_are_enforced_without_extending_either(self):
         token=DEADLINE.set(106)

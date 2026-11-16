@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity â€” Focused Search & Capture",
+  "name": "CharityClarity - EIN First & Bounded Names",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
   "description": "Bounded source recovery and record-bound evidence capture; existing quiet collectors retained.",

@@ -319,37 +319,36 @@ async function registryNevadaBackgroundBegin(job) {
   if(!P.TRIAL_ORIGIN || job.registryState!=='NV' || !registryQuietAlerts(job)
       || job.closed || !owned.has(job.tab) || Date.now()>=job.activeExpiresAt
       || job.nvBackgroundLease)return;
-  const lease={tabId:job.tab,attached:false,released:false};job.nvBackgroundLease=lease;
-  let timer;
+  const lease={tabId:job.tab,attached:false,released:false,started:Date.now()};job.nvBackgroundLease=lease;
+  // Rendering assistance runs alongside the ordinary source readiness check.
+  // A delayed debugger acknowledgement is not a failed registry search.
   const attach=(async()=>{
     await chrome.debugger.attach({tabId:lease.tabId},'1.3');lease.attached=true;
-    if(lease.released || job.closed || job.tab!==lease.tabId){await chrome.debugger.detach({tabId:lease.tabId}).catch(()=>{});return;}
+    if(lease.released || job.closed || job.tab!==lease.tabId)return;
     await chrome.debugger.sendCommand({tabId:lease.tabId},'Emulation.setFocusEmulationEnabled',{enabled:true});
-    diagnostic('nv-background-responsive',job,'owned document; no tab or window activation');
+    diagnostic('nv-background-responsive',job,`owned document; setup_ms=${Date.now()-lease.started}; no tab or window activation`);
   })();
-  lease.pending=attach;
-  try {await Promise.race([attach,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('NV_BACKGROUND_ATTACH_TIMEOUT')),Math.max(1,Math.min(3000,job.activeExpiresAt-Date.now())));})]);}
-  catch(error) {await registryNevadaBackgroundEnd(job);throw error;}
-  finally {clearTimeout(timer);}
+  lease.pending=attach.catch(error=>{
+    const category=/another debugger|already attached/i.test(error?.message||'')?'debugger-busy':/closed|No tab/i.test(error?.message||'')?'tab-unavailable':'browser-error';
+    diagnostic('nv-background-unavailable',job,`${lease.attached?'focus-command':'attachment'}; ${category}; ms=${Date.now()-lease.started}; ordinary source checks retained`);
+  });
 }
 async function registryNevadaBackgroundEnd(job) {
   const lease=job.nvBackgroundLease;if(!lease)return;
-  if(lease.cleanupPromise)return lease.cleanupPromise;
   lease.released=true;
-  // A late attachment cleans itself up. A failed admission ends this command;
-  // it cannot race the screenshot path or create a second attachment.
-  lease.cleanupPromise=(async()=>{if(lease.attached){
-    let timer;
-    const cleanup=(async()=>{
+  // Retain the lease until attachment AND cleanup settle. A late attachment
+  // must never detach a newer screenshot session on this same owned tab.
+  if(!lease.cleanupPromise)lease.cleanupPromise=(async()=>{
+    await lease.pending;
+    if(lease.attached){
       try{await chrome.debugger.sendCommand({tabId:lease.tabId},'Emulation.setFocusEmulationEnabled',{enabled:false});}catch{}
-      try{await chrome.debugger.detach({tabId:lease.tabId});}catch{}
-    })();
-    try{await Promise.race([cleanup,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('NV_BACKGROUND_CLEANUP_TIMEOUT')),3000);})]);}
-    finally{clearTimeout(timer);}
-  }
-  if(job.nvBackgroundLease===lease)delete job.nvBackgroundLease;
+      await chrome.debugger.detach({tabId:lease.tabId});
+    }
+    if(job.nvBackgroundLease===lease)delete job.nvBackgroundLease;
   })();
-  return lease.cleanupPromise;
+  let timer;
+  try {await Promise.race([lease.cleanupPromise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('NV_BACKGROUND_CLEANUP_TIMEOUT')),Math.max(1,Math.min(3000,job.activeExpiresAt-Date.now())));})]);}
+  finally {clearTimeout(timer);}
 }
 async function registryTennesseeOwnedWindow(tab,source) {
   if(!owned.has(tab.id) || tab.url!==registryStart('TN'))return false;
@@ -1172,7 +1171,10 @@ async function performRegistryQuery(job, query) {
   try {
     await registryNevadaBackgroundBegin(job);
     return await performRegistryQueryInner(job,query);
-  } finally {await registryNevadaBackgroundEnd(job);}
+  } finally {
+    try {await registryNevadaBackgroundEnd(job);}
+    catch {diagnostic('nv-background-cleanup-pending',job,'status response retained; screenshot waits for owned attachment cleanup');}
+  }
 }
 async function performRegistryQueryInner(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw registrySequenceError(job,query,"registry-query-contract");

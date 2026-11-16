@@ -287,7 +287,7 @@ def fill_fein_and_search(page, ein: str, *, readiness_waits_only: bool = False) 
     return False
 
 
-def switch_to_name_mode(page) -> None:
+def switch_to_name_mode(page, *, timeout_ms=None) -> None:
     for candidate in [
         page.get_by_text(re.compile(r"Organization\s+Name|Charity\s+Name|Business\s+Name|Name", re.I)).first,
         page.locator("label").filter(has_text=re.compile(r"Organization\s+Name|Charity\s+Name|Business\s+Name|Name", re.I)).first,
@@ -296,10 +296,12 @@ def switch_to_name_mode(page) -> None:
         page.locator("input[value='Name']").first,
     ]:
         try:
-            candidate.click(timeout=3000, force=True)
+            candidate.click(timeout=timeout_ms(3000) if timeout_ms else 3000, force=True)
             time.sleep(1)
             return
         except Exception:
+            if timeout_ms:
+                timeout_ms(1)
             continue
 
     page.evaluate(
@@ -737,6 +739,8 @@ def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_
                     result.status = STATUS_NOT_REGISTERED
                     result.raw_status_text = "No matching FEIN in completed searches."
                     result.source_note = "Washington's completed FEIN search returned no rows; its complete name fallback returned no record with the requested FEIN. Related records with different FEINs were excluded."
+                    if getattr(page, '_cc_wa_light_name_limit', False) is True:
+                        result.source_note = "Washington's FEIN search completed without a matching record. The light name fallback reached its 20-second maximum without a verified match."
                     result.success = True
                     return result
                 result.source_note = (

@@ -684,7 +684,7 @@ CA_EVOKE_API_ROOT = os.environ.get("CE_CA_EVOKE_API_ROOT", "https://ca-rcf.evoke
 CA_EVOKE_TIMEOUT_SECONDS = max(6.0, min(float(os.environ.get("CE_CA_EVOKE_TIMEOUT_SECONDS", "18")), 30.0))
 
 
-def ca_evoke_api_get(path: str, filter_payload: dict | None = None):
+def ca_evoke_api_get(path: str, filter_payload: dict | None = None, *, deadline=None):
     url = f"{CA_EVOKE_API_ROOT}{path}"
     if filter_payload is not None:
         url = f"{url}?{urllib.parse.urlencode({'filter': json.dumps(filter_payload, separators=(',', ':'))})}"
@@ -696,9 +696,15 @@ def ca_evoke_api_get(path: str, filter_payload: dict | None = None):
             "Referer": CA_EVOKE_PUBLIC_PORTAL_URL,
         },
     )
-    with urllib.request.urlopen(request, timeout=CA_EVOKE_TIMEOUT_SECONDS) as response:
+    remaining = CA_EVOKE_TIMEOUT_SECONDS if deadline is None else deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("California light name-search allowance exhausted")
+    with urllib.request.urlopen(request, timeout=min(CA_EVOKE_TIMEOUT_SECONDS, remaining)) as response:
         charset = response.headers.get_content_charset() or "utf-8"
-        return json.loads(response.read().decode(charset, errors="replace"))
+        payload = json.loads(response.read().decode(charset, errors="replace"))
+        if deadline is not None and time.monotonic() > deadline:
+            raise TimeoutError("California light name-search allowance exhausted")
+        return payload
 
 
 def ca_evoke_entity_search_by_ein(ein: str) -> list[dict]:
@@ -719,7 +725,7 @@ def ca_evoke_entity_search_by_ein(ein: str) -> list[dict]:
     )
 
 
-def ca_evoke_entity_search_by_name(name: str) -> list[dict]:
+def ca_evoke_entity_search_by_name(name: str, *, deadline=None) -> list[dict]:
     query = re.sub(r"\s+", " ", (name or "").strip())
     if not query:
         return []
@@ -741,6 +747,7 @@ def ca_evoke_entity_search_by_name(name: str) -> list[dict]:
             },
             "limit": 50,
         },
+        deadline=deadline,
     )
 
 

@@ -257,7 +257,7 @@ CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VAR
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 12)
 CT_DIRECT_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "15"))), 20.0)
 CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "30"))), 38.0)
-MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "23"))), 38.0)
+MN_NAME_FALLBACK_MAX_SECONDS = 20.0
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_CHECK_A_CHARITY_URL = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
 FL_PREFLIGHT_TIMEOUT_SECONDS = min(max(2.0, float(os.environ.get("CE_FL_PREFLIGHT_TIMEOUT_SECONDS", "15"))), 20.0)
@@ -683,6 +683,7 @@ def load_wa_nm_module():
         module.read_wa_detail = wa_read_completed_detail
         module.switch_to_fein_mode = wa_select_ready_fein_mode
         module.fill_name_and_search = wa_fill_ready_name_and_search
+        module.wa_name_fallback_result_link = wa_light_name_fallback
         module.original_nm_apply_status_history = module.apply_nm_rows_to_result
         module.apply_nm_rows_to_result = lambda result, rows, fye_text="", context=None: nm_apply_status_history_master(
             module, result, rows, fye_text=fye_text, context=context
@@ -2629,11 +2630,14 @@ def search_ca_master(page, org):
         return result
     if not result.success or result.status != checker.STATUS_NOT_REGISTERED or len(canonical_ein_digits(org.ein)) != 9:
         return result
+    ca_name_stop = time.monotonic() + 20.0
     try:
         from deployment.gates3133_repairs import ca_name_queries
         entities = []
         for query in ca_name_queries(org.organization_name):
-            found = __import__('deployment.search_observation',fromlist=['observed_named_call']).observed_named_call('CA',query,'Public entity-name API lookup (source matching rule retained)','https://ca-rcf.evokeplatform.com/',checker.ca_evoke_entity_search_by_name,query)
+            if time.monotonic() >= ca_name_stop:
+                raise TimeoutError("California light name-search allowance exhausted")
+            found = __import__('deployment.search_observation',fromlist=['observed_named_call']).observed_named_call('CA',query,'Public entity-name API lookup (source matching rule retained)','https://ca-rcf.evokeplatform.com/',checker.ca_evoke_entity_search_by_name,query,deadline=ca_name_stop)
             if not isinstance(found, list) or len(found) >= 50:
                 raise ValueError("California name response reached its completeness limit")
             entities.extend(found)
@@ -2692,6 +2696,12 @@ def search_ca_master(page, org):
         result._cc_selected_entity = name_sources[chosen["identifier"]]["entity"]
         result.source_note = "California's completed empty EIN search was followed by a legal-name search. Identity was corroborated by the source EIN or retained same-EIN organization street and ZIP; status comes from that selected record."
     except Exception as exc:
+        if (isinstance(exc, TimeoutError) and time.monotonic() >= ca_name_stop
+                and not any(ca_master_name_identity(org, candidate) != 'rejected' for candidate in entities)):
+            result.reason_code = "CA_EIN_EMPTY_LIGHT_NAME_LIMIT"
+            result.source_note = ("California's EIN search completed with no matching record. "
+                                  "No verified match was found within the light name fallback's 20-second maximum.")
+            return result
         result.status = "Unable to Confirm" if isinstance(exc, ValueError) else checker.STATUS_UNKNOWN
         result.success = False
         result.source_note = "California name fallback remained incomplete or identity-conflicting; no registration conclusion was inferred."
@@ -5457,7 +5467,11 @@ def md_no_results_body(page) -> str:
     return "\n".join(pieces)
 
 
-def registry_page_body(page) -> str:
+def registry_page_body(page, *, timeout=None) -> str:
+    if timeout is not None:
+        # Optional search phases must not follow a bounded text read with an
+        # unbounded second browser command. Preserve the legacy path otherwise.
+        return page.locator("body").inner_text(timeout=timeout)
     pieces = []
     try:
         pieces.append(page.locator("body").inner_text(timeout=8000))
@@ -7132,6 +7146,42 @@ def il_ga_connector_failure(record, reason=""):
     return data
 
 
+def ein_light_connector_result(record, payload):
+    """Finish from signed completed EIN evidence; never invent an empty reply."""
+    state = record.get("state", "NY")
+    pending = record.get("pending") or {}
+    query = pending.get("query") or {}
+    name = query.get("name") if state == "NM" else query.get("orgName")
+    start = record.get("ein_light_name_started")
+    if (state not in {"IL", "NY", "NM"}
+            or payload.get("reason") != "NY_CONNECTOR_EIN_LIGHT_NAME_LIMIT"
+            or payload.get("query_id") != pending.get("query_id") or not name
+            or not isinstance(start, (int, float)) or time.time() < start + 20):
+        return None
+    ein = canonical_ein_digits(record.get("ein", ""))
+    expected = ({"state": "NM", "operation": "search", "ein": ein, "name": ""} if state == "NM" else
+                {"state": "IL", "ein": ein} if state == "IL" else {"ein": ein})
+    if len(ein) != 9 or not any(item.get("query") == expected for item in record.get("completed", [])):
+        return None
+    record["ein_light_name_limit"] = True
+    names = REVIEWED_NAME_CONTEXT.set({ein: tuple(record.get("alternate_names", ()))})
+    from deployment.state_snapshots import REFERENCES
+    references = REFERENCES.set(record.get("source_snapshots", []))
+    try:
+        response = final_four_connector_advance(record) if state == "NM" else ny_connector_advance(record)
+    finally:
+        REFERENCES.reset(references)
+        REVIEWED_NAME_CONTEXT.reset(names)
+    if response.get("phase") != "complete":
+        return None
+    result = response.get("result", {})
+    result["light_name_fallback"] = {"limit_seconds": 20, "limit_reached": True}
+    if str(result.get("status", "")).casefold() in {"not registered", "not registered / non-compliant"}:
+        result["comments"] = (str(result.get("comments", "")).rstrip() +
+            " The EIN search completed without a matching record; the light name fallback reached its 20-second maximum without a verified match.").strip()
+    return response
+
+
 def il_ga_connector_advance(record):
     def evidence(query):
         for item in record["completed"]:
@@ -7144,7 +7194,7 @@ def il_ga_connector_advance(record):
             if any(item["query"] == query for item in record["completed"]):
                 return False
             stop = record.get("il_name_stop")
-            return stop is not None and time.time() >= stop
+            return record.get("ein_light_name_limit") is True or stop is not None and time.time() >= stop
         evidence.name_budget_exhausted = name_budget_exhausted
     org = checker.Organization(record["organization_name"], record["ein"])
     try:
@@ -7159,6 +7209,7 @@ def il_ga_connector_advance(record):
             return {"phase": "complete", "result": il_ga_connector_failure(record, "NY_CONNECTOR_QUERY_LIMIT")}
         if record.get("state") == "IL" and "orgName" in pending.params:
             record.setdefault("il_name_stop", time.time() + 20.0)
+            record.setdefault("ein_light_name_started", time.time())
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
     except (ValueError, TimeoutError) as exc:
@@ -8962,6 +9013,8 @@ def nm_browser_lookup(org, evidence):
     attempts = []
     for name in names:
         query = {'state': 'NM', 'operation': 'search', 'ein': ein, 'name': name}
+        if name and getattr(evidence, "name_budget_exhausted", lambda q: False)(query):
+            break
         data = nm_browser_clean_evidence(evidence(query), query)
         attempts.append({'query': query, 'completed': True})
         selected = next((row for row in data['rows'] if row['ein'] == ein), None)
@@ -9864,6 +9917,8 @@ def final_four_connector_advance(record):
         for item in record["completed"]:
             if item["query"] == query: return item["evidence"]
         raise NYConnectorQueryNeeded(query)
+    evidence.name_budget_exhausted = lambda query: (record.get("ein_light_name_limit") is True
+        and not any(item["query"] == query for item in record["completed"]))
     org = checker.Organization(record["organization_name"], record["ein"])
     al_identity_context = AL_FOREIGN_EIN_CONTEXT.set(
         record.setdefault("al_foreign_ein_checks", {}) if record["state"] == "AL" else None)
@@ -9883,6 +9938,8 @@ def final_four_connector_advance(record):
             return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_QUERY_LIMIT")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         response = {"phase": "search", **record["pending"]}
+        if record.get("state") == "NM" and pending.params.get("name") and pending.params.get("operation") == "search":
+            record.setdefault("ein_light_name_started", time.time())
         followup_ms = nv_followup_detail_budget(record)
         if followup_ms is not None:
             response["nv_followup_ms"] = followup_ms
@@ -10128,6 +10185,13 @@ def final_four_connector_request(payload, origin):
             failed_receipt(record,payload,time.time())
             reason = payload.get("reason")
             pending = record.get("pending")
+            limited = ein_light_connector_result(record, payload)
+            if limited is not None:
+                from deployment.state_snapshots import attach_links
+                from deployment.search_history import attach as attach_search_history
+                limited['result'] = attach_search_history(record,
+                    attach_links(limited['result'], record.get('source_snapshots', [])))
+                return 200, limited
             # One failed ordinary NC search may resume in a fresh owned tab.
             # Preserve the signed evidence and deadline; never restart a
             # verification challenge, detail lookup, or completed search.
@@ -16486,6 +16550,21 @@ def search_co_with_name_fallback_core(page, org):
             return result
     if public_status(result) != "Not Registered":
         return result
+    from deployment.co_budget import STOP
+    token = STOP.set(min(STOP.get(), time.monotonic() + 20.0))
+    try:
+        return co_light_name_fallback(page, org, result, requested_ein)
+    finally:
+        STOP.reset(token)
+
+
+def co_light_name_fallback(page, org, result, requested_ein):
+    from deployment.co_budget import STOP
+    def limited():
+        result.reason_code = "CO_EIN_EMPTY_LIGHT_NAME_LIMIT"
+        result.source_note = ("Colorado's EIN search completed with no matching record. "
+                              "No verified match was found within the light name fallback's 20-second maximum.")
+        return result
     possible_match = False
     for variant in organization_name_variants(
         org.organization_name,
@@ -16496,9 +16575,21 @@ def search_co_with_name_fallback_core(page, org):
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
     )[:8]:
+        if time.monotonic() >= STOP.get():
+            if possible_match:
+                return co_unverified_browser_result(org, result.source_url, "A returned name candidate still needs identity confirmation.")
+            return limited()
         variant_org = SimpleNamespace(organization_name=variant, ein="")
-        fallback = checker.search_co(page, variant_org)
+        try:
+            fallback = checker.search_co(page, variant_org)
+        except TimeoutError:
+            if time.monotonic() < STOP.get() or possible_match:
+                raise
+            return limited()
         if public_status(fallback) == "Site Not Reachable":
+            if (time.monotonic() >= STOP.get() and not possible_match
+                    and "Colorado lookup allowance exhausted" in str(getattr(fallback, "error", ""))):
+                return limited()
             return copy_name_fallback_result(org, fallback)
         if public_status(fallback) == "Not Registered":
             continue
@@ -16955,7 +17046,7 @@ def mi_name_http_empty_queries(session, org, headers, lookup_deadline, *, unmatc
     from deployment.search_observation import observed_http_call as _history_http_call
     url = "https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx"
     results_url = "https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx"
-    deadline = time.monotonic() + min(24.0, max(0.0, lookup_deadline - time.perf_counter()))
+    deadline = time.monotonic() + min(20.0, max(0.0, lookup_deadline - time.perf_counter()))
     completed = []
     def read(method, data=None):
         remaining = deadline - time.monotonic()
@@ -17035,7 +17126,7 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
     result = checker.StateResult(org.organization_name, org.ein, "MI", "Unable to Verify", module.MI_SEARCH_URL)
     safe_targets = organization_match_target_variants(org.organization_name, org.ein)
     started = time.perf_counter()
-    deadline = started + (20.0 if confirm_ein else MI_LOOKUP_MAX_SECONDS)
+    deadline = started + 20.0
     lookup_deadline = getattr(page, "_cc_mi_lookup_deadline", None)
     if isinstance(lookup_deadline, (int, float)):
         deadline = min(deadline, lookup_deadline)
@@ -17044,6 +17135,18 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
     result.queries_attempted = []
     result.source_attempts = []
     def incomplete(message, stage):
+        progress = getattr(page, "_cc_mi_search_progress", None)
+        if (not confirm_ein and stage in {"budget", "form", "search_response", "results_frame"}
+                and isinstance(progress, dict)
+                and progress.get("completed_ein_identity") == (org.organization_name, canonical_ein_digits(org.ein))
+                and time.perf_counter() >= deadline):
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.success = True
+            result.error = ""
+            result.reason_code = "MI_EIN_EMPTY_LIGHT_NAME_LIMIT"
+            result.source_note = ("Michigan's EIN search completed with no matching record. "
+                                  "No verified match was found within the light name fallback's 20-second maximum.")
+            return result
         result.mi_name_failure_stage = stage
         result.status = "Unable to Verify"
         result.raw_status_text = ("Michigan EIN retry did not complete" if confirm_ein
@@ -17063,6 +17166,10 @@ def search_mi_name_fallback(page, org, *, confirm_ein=False):
     identity = (org.organization_name, canonical_ein_digits(org.ein))
     if confirm_ein or not isinstance(progress, dict) or progress.get("identity") != identity:
         progress = {}
+    elif not confirm_ein:
+        # Semantic retries retain the same optional-name allowance.
+        progress.setdefault('light_name_deadline', deadline)
+        deadline = min(deadline, progress['light_name_deadline'])
     completed_empty_queries = list(progress.get("completed_empty_name_queries", []))
     completed_unmatched_queries = set(progress.get("http_completed_unmatched_name_queries", [])) if trial_identity() else set()
     result.source_attempts.extend(f"Completed Michigan name query via the same-session public form: {query}"
@@ -17443,12 +17550,13 @@ def search_mi_http_completion_probe(org, lookup_deadline=None, *, retry_empty_ei
             submitted_text = sc_html_to_text(submitted.text or "")
             if (retry_empty_ein is None and mi_http_names_enabled(org) and lookup_deadline is not None
                     and re.search(r"\b0\s+record\(s\)\s+found\b|\bno\s+records?\s+found\b|\bno\s+results?\s+found\b", submitted_text, re.I)):
+                result._cc_mi_light_name_deadline = min(lookup_deadline, time.perf_counter() + 20.0)
                 if trial_identity():
                     unmatched=[]
-                    result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, lookup_deadline, unmatched_queries=unmatched)
+                    result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, result._cc_mi_light_name_deadline, unmatched_queries=unmatched)
                     result._cc_mi_completed_unmatched_names = unmatched
                 else:
-                    result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, lookup_deadline)
+                    result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, result._cc_mi_light_name_deadline)
             break
         except Exception as exc:
             last_exception = exc
@@ -20435,6 +20543,13 @@ def search_mn(page, org):
 
         from deployment.mn_empty_response import complete as mn_completed_empty_response
         name_fallback_started = time.perf_counter()
+        mn_name_stop = name_fallback_started + 20.0
+        mn_light_search_active = True
+        def mn_name_timeout(cap):
+            remaining = int((mn_name_stop - time.perf_counter()) * 1000)
+            if remaining <= 0:
+                raise TimeoutError("Minnesota light name-search allowance exhausted")
+            return max(1, min(cap, remaining))
         result.queries_attempted = []
         name_plan_complete = True
         name_plan_failure = ''
@@ -20448,23 +20563,24 @@ def search_mn(page, org):
             include_leading_article_variants=True,
             max_queries=MN_NAME_FALLBACK_MAX_VARIANTS,
         )[:MN_NAME_FALLBACK_MAX_VARIANTS]):
-            if index > 0 and (time.perf_counter() - name_fallback_started) >= MN_NAME_FALLBACK_MAX_SECONDS:
-                name_plan_complete = False
-                name_plan_failure = "Minnesota's name search reached its existing time allowance before completing every planned query."
+            mn_light_search_active = True
+            if time.perf_counter() >= mn_name_stop:
+                if name_plan_complete:
+                    result.reason_code = "MN_EIN_EMPTY_LIGHT_NAME_LIMIT"
                 break
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.goto(url, wait_until="domcontentloaded", timeout=mn_name_timeout(30000))
             org_box = checker.find_visible_input(page, ["#txtOrg", 'input[name="txtOrg"]'])
             if not org_box:
-                checker.safe_wait_for_network_idle(page, timeout=5000)
+                checker.safe_wait_for_network_idle(page, timeout=mn_name_timeout(5000))
                 org_box = checker.find_visible_input(page, ["#txtOrg", 'input[name="txtOrg"]'])
             if not org_box:
                 name_plan_complete = False
                 name_plan_failure = "Minnesota's organization-name search form was unavailable."
                 break
-            org_box.fill("")
-            org_box.fill(variant)
+            org_box.fill("", timeout=mn_name_timeout(5000))
+            org_box.fill(variant, timeout=mn_name_timeout(5000))
             try:
-                with page.expect_navigation(wait_until="domcontentloaded", timeout=7000) as submission:
+                with page.expect_navigation(wait_until="domcontentloaded", timeout=mn_name_timeout(7000)) as submission:
                     submitted = org_box.evaluate('''(input) => {
                         const form = input.form;
                         const button = form?.querySelector('input[type="submit"][name="cmdSearch"]');
@@ -20473,13 +20589,17 @@ def search_mn(page, org):
                             || form.action !== 'https://www.ag.state.mn.us/Charity/Search/Results.asp') return false;
                         form.requestSubmit(button);
                         return true;
-                    }''', timeout=2000)
+                    }''', timeout=mn_name_timeout(2000))
                     if not submitted:
-                        page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=5000)
+                        page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=mn_name_timeout(5000))
                 response = submission.value
                 if response is None or response.status != 200:
                     raise ValueError("Minnesota name response did not complete")
-            except Exception:
+            except Exception as exc:
+                if (name_plan_complete and time.perf_counter() >= mn_name_stop
+                        and isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError))):
+                    result.reason_code = "MN_EIN_EMPTY_LIGHT_NAME_LIMIT"
+                    break
                 name_plan_complete = False
                 name_plan_failure = "Minnesota's submitted organization-name response could not be verified."
                 continue
@@ -20488,9 +20608,9 @@ def search_mn(page, org):
             # validator confirms the submitted query, no idle wait is needed.
             if mn_completed_empty_response(page, variant, allow_fundraisers=True):
                 continue
-            checker.safe_wait_for_network_idle(page, timeout=7000)
-            time.sleep(0.5)
-            text = readable_page_text(page)
+            checker.safe_wait_for_network_idle(page, timeout=mn_name_timeout(7000))
+            time.sleep(min(0.5, max(0, mn_name_stop-time.perf_counter())))
+            text = page.locator("body").inner_text(timeout=mn_name_timeout(10000))
             if no_registry_results_seen(text) or mn_completed_empty_response(page, variant, allow_fundraisers=True):
                 continue
             try:
@@ -20567,6 +20687,7 @@ def search_mn(page, org):
                     best_href = candidate.get("href") or ""
             if best_index is None or best_score < 450:
                 continue
+            mn_light_search_active = False
             link = page.locator(f'a[href={json.dumps(best_href)}]').first
             try:
                 link.click(timeout=5000)
@@ -20634,9 +20755,18 @@ def search_mn(page, org):
             if not name_plan_complete:
                 return mn_unconfirmed_alias_result(result, name_plan_failure + " The empty EIN search alone does not establish absence.")
             result.raw_status_text = "No qualifying Minnesota EIN or organization-name registration found"
-            result.source_note = "Minnesota EIN-first searches and the completed bounded name searches found no qualifying registration or confirmed exact alternate-name listing."
+            result.source_note = ("Minnesota's EIN search completed with no matching record. No verified match was found within the light name fallback's 20-second maximum."
+                                  if getattr(result, "reason_code", "") == "MN_EIN_EMPTY_LIGHT_NAME_LIMIT" else
+                                  "Minnesota EIN-first searches and the completed bounded name searches found no qualifying registration or confirmed exact alternate-name listing.")
         return result
     except Exception as exc:
+        if (locals().get("mn_light_search_active") and locals().get("name_plan_complete")
+                and result.success and public_status(result) == "Not Registered"
+                and time.perf_counter() >= mn_name_stop
+                and isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError))):
+            result.reason_code = "MN_EIN_EMPTY_LIGHT_NAME_LIMIT"
+            result.source_note = "Minnesota's EIN search completed with no matching record. No verified match was found within the light name fallback's 20-second maximum."
+            return result
         result.error = f"MN error: {exc}"
         return result
 
@@ -22116,8 +22246,10 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     break
                 page_body = ""
                 try:
+                    ak_page._ak_search_deadline = name_deadline
                     fill_ak_search_form_name_only(ak_page, lookup_org, year, search_name)
-                    page_body = registry_page_body(ak_page)
+                    page_body = registry_page_body(ak_page, timeout=ak_remaining_action_ms(ak_page, 8000))
+                    ak_page._ak_search_deadline = ak_deadline
                     print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
                         if remember_ak_result_row(
@@ -22189,6 +22321,10 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     )
                     return result, page_body
                 except Exception as e:
+                    if (time.perf_counter() >= name_deadline
+                            and isinstance(e, (TimeoutError, checker.PlaywrightTimeoutError))):
+                        ak_name_fallback_stopped = True
+                        break
                     ak_confirmation_incomplete = True
                     result.error = f"AK name fallback error: {e}"
                     try:
@@ -22204,7 +22340,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         result.source_attempts = [f"AK completed EIN search years: {', '.join(map(str, completed_ein_years)) or 'none'}"]
         ak_context.close()
     checked_years = ", ".join(str(year) for year in completed_ein_years) or "none"
-    if set(completed_ein_years) != set(ak_negative_checked_years) or locals().get("ak_name_fallback_stopped"):
+    if set(completed_ein_years) != set(ak_negative_checked_years):
         ak_confirmation_incomplete = True
     if locals().get("ak_confirmation_incomplete"):
         if apply_ak_status_from_confirmed_year():
@@ -22221,7 +22357,10 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         return result, ""
     if apply_ak_status_from_confirmed_year():
         return result, ""
-    return apply_ak_not_registered_after_completed_search(), ""
+    result = apply_ak_not_registered_after_completed_search()
+    if locals().get("ak_name_fallback_stopped"):
+        result.source_note += " The optional name fallback reached its 20-second maximum without a verified match."
+    return result, ""
 
 
 def ca_detail_body(page, org) -> str:
@@ -22417,6 +22556,15 @@ def search_ma_master(page, org, completed):
     result.ma_filing_evidence = {}
     body = ""
     step = "search"
+    ma_name_stop = None
+    name_fallback = False
+    def name_timeout(cap):
+        if ma_name_stop is None:
+            return cap
+        remaining = int((ma_name_stop - time.monotonic()) * 1000)
+        if remaining <= 0:
+            raise TimeoutError("Massachusetts light name-search allowance exhausted")
+        return max(1, min(cap, remaining))
 
     def incomplete(reason, note):
         result.status = "Unable to Confirm"
@@ -22434,14 +22582,15 @@ def search_ma_master(page, org, completed):
         empty = re.compile(r"\bNo Charity Found\b", re.I)
 
         def submit_search(mode, query):
-            page.get_by_role("combobox").first.select_option(label=mode, timeout=15000)
+            page.get_by_role("combobox").first.select_option(label=mode, timeout=name_timeout(15000))
             field = page.get_by_role("textbox").first
-            field.fill("")
-            field.type(query, delay=35)
-            page.get_by_role("button", name="Search", exact=True).click(timeout=5000)
+            field.fill("", timeout=name_timeout(30000))
+            field.type(query, delay=35, timeout=name_timeout(30000))
+            page.get_by_role("button", name="Search", exact=True).click(timeout=name_timeout(5000))
             outcome = page.get_by_text(re.compile(r"^Select a Charity$|^No Charity Found[.!]?$", re.I))
-            outcome.and_(page.locator(":visible")).first.wait_for(timeout=15000)
-            response = registry_page_body(page)
+            outcome.and_(page.locator(":visible")).first.wait_for(timeout=name_timeout(15000))
+            response = (registry_page_body(page, timeout=name_timeout(8000))
+                        if ma_name_stop is not None else registry_page_body(page))
             try:
                 from deployment.state_snapshots import CURRENT
                 from deployment.search_history import SourceQueryReceipt
@@ -22462,10 +22611,12 @@ def search_ma_master(page, org, completed):
         if name_fallback:
             # Clear the previous "No Charity Found" before observing a second
             # search so an old empty response cannot settle the name lookup.
-            page.reload(wait_until="domcontentloaded", timeout=8000)
+            ma_name_stop = time.monotonic() + 20.0
+            page.reload(wait_until="domcontentloaded", timeout=name_timeout(8000))
             mode = "Charity Name Contains"
             query = org.organization_name.strip()
             body = submit_search(mode, query)
+            ma_name_stop = None
         if empty.search(body):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No record found"
@@ -22597,6 +22748,15 @@ def search_ma_master(page, org, completed):
             pass  # Evidence cannot change the completed status interpretation.
         return result, body
     except Exception as exc:
+        if (name_fallback and step == "search" and ma_name_stop is not None
+                and time.monotonic() >= ma_name_stop
+                and isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError))):
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.success = True
+            result.status_reason = "MA_EIN_EMPTY_LIGHT_NAME_LIMIT"
+            result.source_note = ("Massachusetts' EIN search completed with no matching record. "
+                                  "No verified match was found within the light name fallback's 20-second maximum.")
+            return result, body
         log_event(f"MA {step} unavailable: {type(exc).__name__}")
         return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED" if step == "selection" else "MA_FILING_LIST_UNCONFIRMED",
                           f"Massachusetts did not complete the {step} step; registry evidence could not be confirmed.")
@@ -23639,15 +23799,32 @@ def search_hi_precise(page, org):
         clicked_result_name = ""
         clicked_result_identifier = ""
         deadline = time.perf_counter() + 80
+        lookup_stop = deadline
+        name_stop = None
+        ein_completed_empty = False
         completed_queries = []
         confirmed_ein_row = False
         for variant, ein_value in attempts[:4]:
+            if variant and ein_completed_empty:
+                if name_stop is None:
+                    name_stop = min(lookup_stop, time.perf_counter() + 20.0)
+                deadline = name_stop
             attempted_queries.append(
                 f"{variant or '[blank name]'} / FEIN {ein_value}" if ein_value else variant
             )
             try:
                 response_rows = hi_submit_completed_search(page, variant, ein_value, deadline)
             except Exception as exc:
+                if (ein_completed_empty and name_stop is not None and not confirmed_ein_row
+                        and time.perf_counter() >= name_stop
+                        and isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError))):
+                    result.status = checker.STATUS_NOT_REGISTERED
+                    result.success = True
+                    result.reason_code = "HI_EIN_EMPTY_LIGHT_NAME_LIMIT"
+                    result.queries_attempted = list(attempted_queries)
+                    result.source_note = ("Hawaii's EIN search completed with no matching record. "
+                                          "No verified match was found within the light name fallback's 20-second maximum.")
+                    return result
                 result.status = "Unable to Verify"
                 result.error = f"Hawaii search completion failed: {type(exc).__name__}"
                 result.source_note = "Hawaii did not finish returning the submitted search results after a bounded retry. No negative registration conclusion was drawn."
@@ -23659,7 +23836,13 @@ def search_hi_precise(page, org):
             confirmed_ein_row = confirmed_ein_row or bool(ein_digits and any(
                 canonical_ein_digits(row.get("fein", "")) == ein_digits for row in response_rows))
             if not response_rows:
+                if not variant and ein_value:
+                    ein_completed_empty = True
                 continue
+            # Once the source returns the requested EIN, the name search is
+            # finished. Preserve the original detail/evidence allowance.
+            if confirmed_ein_row:
+                deadline = lookup_stop
             wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name, org.ein)]
             for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
                 try:
@@ -28794,11 +28977,7 @@ def search_nj_with_name_fallback(page, org):
         return result
     fallback_started = time.monotonic()
     bounded_trial = trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard"
-    default_fallback_seconds = 48.0 if bounded_trial else 32.0
-    try:
-        fallback_budget_seconds = float(os.environ.get("CE_NJ_NAME_FALLBACK_SECONDS", default_fallback_seconds))
-    except Exception:
-        fallback_budget_seconds = default_fallback_seconds
+    fallback_budget_seconds = 20.0
     from deployment.state_snapshots import DEADLINE
     fallback_deadline = (min(fallback_started+fallback_budget_seconds,DEADLINE.get()-1.0) if bounded_trial
                          else fallback_started+fallback_budget_seconds)
@@ -28806,12 +28985,16 @@ def search_nj_with_name_fallback(page, org):
         if variant in completed:
             continue
         if time.monotonic() >= fallback_deadline:
-            return incomplete(result, "the remaining name searches exceeded their existing allowance")
+            if unresolved or time.monotonic() < fallback_started + 20.0:
+                return incomplete(result, "a returned name result could not be verified")
+            result.reason_code = "NJ_EIN_EMPTY_LIGHT_NAME_LIMIT"
+            result.source_note = ("New Jersey's EIN search completed with no matching record. "
+                                  "No verified match was found within the light name fallback's 20-second maximum.")
+            return retain(result)
         fallback_org = SimpleNamespace(organization_name=variant, ein="")
         query_started = time.monotonic()
         try:
-            fallback = (nj_bounded_name_query(page,fallback_org,org,fallback_deadline) if bounded_trial
-                        else search_nj_direct(page,fallback_org,identity_org=org))
+            fallback = nj_bounded_name_query(page,fallback_org,org,fallback_deadline)
         except TimeoutError:
             observations.append({'query':variant,'status':'Unable to Confirm','reason_code':'NJ_NAME_PLAN_INCOMPLETE',
                                  'seconds':round(time.monotonic()-query_started,2),
@@ -28819,7 +29002,12 @@ def search_nj_with_name_fallback(page, org):
                                  'query_observation':{key:value for key,value in getattr(page,'_cc_nj_query_diagnostic',{}).items()
                                      if key in {'accepted_pages','accepted_rows','expected_rows','matching_responses'}
                                      and type(value) is int and 0<=value<=100000}})
-            return incomplete(result,"a name search reached the existing shared allowance")
+            if unresolved or time.monotonic() < fallback_started + 20.0:
+                return incomplete(result,"a returned name result could not be verified")
+            result.reason_code = "NJ_EIN_EMPTY_LIGHT_NAME_LIMIT"
+            result.source_note = ("New Jersey's EIN search completed with no matching record. "
+                                  "No verified match was found within the light name fallback's 20-second maximum.")
+            return retain(result)
         observations.append({'query': variant, 'status': public_status(fallback),
             'reason_code': getattr(fallback, 'reason_code', '') or '',
             'seconds': round(time.monotonic() - query_started, 2),
@@ -28905,6 +29093,25 @@ def pa_guard_search_completion(result, org, observations):
     # A parsed response containing the requested EIN cannot support a negative,
     # even when the DOM reader has not seen its row yet.
     missed_ein_row = any(ein in row.get("row_eins", []) for row in exact)
+    # The optional name pass has one shared 20-second allowance. Exhausting
+    # that allowance does not invalidate a completed, empty EIN search. Keep
+    # real transport/response failures and returned EIN records separate.
+    bounded_empty = (status == "Not Registered" and exact
+                     and all(row.get("complete") for row in exact)
+                     and not missed_ein_row
+                     and getattr(result, "_cc_pa_light_name_identity", None)
+                         == (org.organization_name, ein)
+                     and failures and all(row.get("failure_kind") == "budget" for row in failures)
+                     and all(row.get("complete") or row.get("failure_kind") == "budget"
+                             for row in searches))
+    if bounded_empty:
+        result.success = True
+        result.reason_code = "PA_EIN_EMPTY_LIGHT_NAME_LIMIT"
+        result.source_note = ("Pennsylvania's EIN search completed with no matching record. "
+                              "The light name fallback found no verified match within its "
+                              "20-second maximum; CharityClarity reports Not Registered.")
+        result._cc_pa_completed_negative = (org.organization_name, ein)
+        return result
     negative_complete = (exact and all(row.get("complete") for row in searches)
                          and names_completed and not missed_ein_row and not failures)
     if status == "Not Registered" and negative_complete:
@@ -29224,30 +29431,19 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     # One PA name fallback, bounded by its allowance and the parent state deadline.
     # A completed negative is different from a request which did not finish.
-    try: budget = min(15.0, max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "15"))))
-    except (ValueError, TypeError): budget = 15.0
+    budget = 20.0
     from deployment.state_snapshots import DEADLINE
     base_deadline = time.monotonic() + budget
     deadline = min(base_deadline, DEADLINE.get() - 1.0)
-    progress_reserve_used = False
+    result._cc_pa_light_name_identity = (org.organization_name, canonical_ein_digits(org.ein))
     attempts, attempted, collected = [], [], []
     for variant in pa_name_search_plan(org):
         # Only a completed contains response can cover a later literal extension.
         # A truncated broad response must never prune a more specific query.
         if any(entry.get("complete") and entry["name"].casefold() in variant.casefold() for entry in attempts):
             continue
-        reserve_added = 0.0
-        if (not progress_reserve_used and trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard"
-                and deadline-time.monotonic() <= 5 and len(attempts) >= 3
-                and all(entry.get("complete") and entry.get("row_count") == 0 for entry in attempts)):
-            extended = min(base_deadline+5.0, DEADLINE.get()-1.0)
-            if extended > deadline and time.monotonic() < extended:
-                reserve_added = extended-deadline
-                deadline = extended
-                progress_reserve_used = True
         attempted.append(variant)
         entry = {"step": "search", "ein": "", "name": variant, "complete": False}
-        if reserve_added: entry["progress_reserve_seconds"] = round(reserve_added,3)
         attempts.append(entry)
         started = time.monotonic()
         try:
@@ -29298,8 +29494,10 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
         except Exception as exc:
             entry["failure"] = ("HTTP " + str(exc.code) if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__)
             exhausted = time.monotonic() >= deadline
-            entry["failure_kind"] = "budget" if exhausted else "transport" if isinstance(exc, (urllib.error.URLError, OSError)) else "response"
-            if exhausted: entry["failure"] = "Name fallback time limit reached"
+            entry["failure_kind"] = ("transport" if isinstance(exc, urllib.error.HTTPError) else
+                                     "budget" if exhausted else
+                                     "transport" if isinstance(exc, (urllib.error.URLError, OSError)) else "response")
+            if entry["failure_kind"] == "budget": entry["failure"] = "Name fallback time limit reached"
             if isinstance(exc, urllib.error.HTTPError): entry["http_status"] = exc.code
             # A result limit can be avoided by another name; repeating the entire
             # lookup cannot repair it. Transport failures retain the master retry.
@@ -30071,6 +30269,7 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
     result.success = False
     result.source_attempts = []
     deadline = time.perf_counter() + NY_LOOKUP_TIMEOUT_SECONDS
+    name_stop = None
     retry_used = False
     requested_ein = re.sub(r"\D", "", org.ein or "")
     if requested_ein and (len(requested_ein) != 9 or requested_ein == "000000000"):
@@ -30081,7 +30280,8 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
     def request_data(session, operation, params, expected_type):
         nonlocal retry_used
         while True:
-            remaining = deadline - time.perf_counter()
+            request_stop = min(deadline, name_stop) if operation == 'RegistrySearch' and 'orgName' in params and name_stop is not None else deadline
+            remaining = request_stop - time.perf_counter()
             if remaining <= 0:
                 raise TimeoutError("New York lookup time limit reached")
             started = time.perf_counter()
@@ -30107,7 +30307,7 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                 result.source_attempts.append(f"{attempt}: {label} in {time.perf_counter() - started:.2f}s")
                 # One retry for the entire lookup, inside the original deadline.
                 # Identity, schema and parsing failures below are never retried.
-                if transient and not retry_used and deadline - time.perf_counter() >= 5.0:
+                if transient and not retry_used and request_stop - time.perf_counter() >= 5.0:
                     retry_used = True
                     result.source_attempts.append(f"{attempt}: retrying transient failure within lookup budget")
                     time.sleep(1.0)
@@ -30144,7 +30344,20 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
             plausible_details = {}
             selected_for_review = False
             for query in queries:
-                rows = request_data(session, "RegistrySearch", query, list)
+                if ("orgName" in query and getattr(registry_search_provider, "name_budget_exhausted", lambda q: False)(query)):
+                    break
+                if 'orgName' in query and requested_ein and registry_search_provider is None:
+                    if name_stop is None:
+                        name_stop = time.perf_counter() + 20.0
+                    if time.perf_counter() >= name_stop:
+                        break
+                try:
+                    rows = request_data(session, "RegistrySearch", query, list)
+                except (TimeoutError, checker.PlaywrightTimeoutError):
+                    if name_stop is not None and time.perf_counter() >= name_stop:
+                        result.source_attempts.append('Optional name search reached its 20-second maximum after the completed EIN search')
+                        break
+                    raise
                 candidates = {}
                 possible = False
                 unrelated_malformed_eins = 0
@@ -30511,6 +30724,8 @@ def ny_connector_advance(record):
             if completed["query"] == params:
                 return NYConnectorResponse(completed["rows"])
         raise NYConnectorQueryNeeded(params)
+    search_response.name_budget_exhausted = lambda query: (record.get("ein_light_name_limit") is True
+        and not any(item["query"] == query for item in record["completed"]))
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
@@ -30531,6 +30746,8 @@ def ny_connector_advance(record):
                                   registry_detail_provider=search_response if supports_browser_detail else None)
     except NYConnectorQueryNeeded as pending:
         limit = 5
+        if "orgName" in pending.params:
+            record.setdefault("ein_light_name_started", time.time())
         is_detail = "orgID" in pending.params
         if sum(("orgID" in item["query"]) == is_detail for item in record["completed"]) >= limit:
             return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
@@ -30642,7 +30859,8 @@ def ny_connector_request(payload, origin):
     from deployment.state_snapshots import REFERENCES
     snapshot_context_token = REFERENCES.set(record.get('source_snapshots', []))
     try:
-        response = ((il_verification_recovery(record, payload, now)
+        response = ((ein_light_connector_result(record, payload)
+                     or il_verification_recovery(record, payload, now)
                      or {"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))})
                     if action == "fail" else ny_connector_advance(record))
     finally:
@@ -37528,6 +37746,58 @@ def wa_select_ready_fein_mode(page, timeout_seconds: float = 24.0) -> None:
     raise TimeoutError("Washington EIN search mode did not become ready; no EIN search was submitted. " + last_error)
 
 
+def wa_name_timeout(page, cap):
+    stop = getattr(page, '_cc_wa_light_name_stop', None)
+    if not isinstance(stop, (int, float)):
+        return cap
+    remaining = int((stop - time.monotonic()) * 1000)
+    if remaining <= 0:
+        raise TimeoutError('Washington light name allowance exhausted')
+    return min(cap, remaining)
+
+
+def wa_light_name_fallback(page, org):
+    """One legal-name search after the caller's completed empty FEIN reply."""
+    module = load_wa_nm_module()
+    tokens = re.findall(r'[A-Za-z0-9]+', org.organization_name or '')
+    if len(tokens) == 1 and 2 <= len(tokens[0]) <= 3:
+        return 'NO_VALUE'
+    page._cc_wa_light_name_stop = time.monotonic() + 20.0
+    candidate_seen = False
+    try:
+        module.switch_to_name_mode(page, timeout_ms=lambda cap: wa_name_timeout(page, cap))
+        prior_completed = module.wa_search_tracker_state(page).get('completed', 0)
+        if not wa_fill_ready_name_and_search(page, org.organization_name):
+            return None
+        while time.monotonic() < page._cc_wa_light_name_stop:
+            tracker = module.wa_search_tracker_state(page)
+            if tracker.get('failed') or int(tracker.get('lastStatus') or 0) >= 400:
+                return None
+            if tracker.get('completed', 0) > prior_completed and not tracker.get('pending'):
+                decision = module.wa_name_response_identity(tracker, org.ein, org.organization_name)
+                if decision == 'NO_VALUE':
+                    return decision
+                if not isinstance(decision, dict):
+                    return None
+                candidate_seen = True
+                if decision.get('_cc_ein_conflict') is True:
+                    page._cc_wa_name_conflict = decision
+                name = module.normalize_spaces(decision['EntityName'])
+                links = page.locator('#tblCFSearch tbody a').filter(has_text=re.compile(r'^\s*'+re.escape(name)+r'\s*$'))
+                links.wait_for(state='visible', timeout=wa_name_timeout(page, 5000))
+                return links if links.count() == 1 else None
+            time.sleep(min(.2, max(0, page._cc_wa_light_name_stop-time.monotonic())))
+        page._cc_wa_light_name_limit = True
+        return 'NO_VALUE'
+    except (TimeoutError, checker.PlaywrightTimeoutError):
+        if not candidate_seen and time.monotonic() >= page._cc_wa_light_name_stop:
+            page._cc_wa_light_name_limit = True
+            return 'NO_VALUE'
+        raise
+    finally:
+        page._cc_wa_light_name_stop = None
+
+
 def wa_fill_ready_name_and_search(page, org_name: str) -> bool:
     from deployment.search_observation import observe_existing_page
     observe_existing_page(page)
@@ -37535,15 +37805,15 @@ def wa_fill_ready_name_and_search(page, org_name: str) -> bool:
     try:
         ein_box = page.locator("#FEINNoSearchField").first
         if ein_box.is_visible():
-            ein_box.fill("")
+            ein_box.fill("", timeout=wa_name_timeout(page, 5000))
     except Exception:
         pass
     name_box = page.locator("#txtKeywordSearch").first
-    name_box.wait_for(state="visible", timeout=10000)
-    name_box.click(timeout=5000, force=True)
+    name_box.wait_for(state="visible", timeout=wa_name_timeout(page, 10000))
+    name_box.click(timeout=wa_name_timeout(page, 5000), force=True)
     time.sleep(1)
-    name_box.fill("")
-    name_box.type(org_name, delay=35)
+    name_box.fill("", timeout=wa_name_timeout(page, 5000))
+    name_box.type(org_name, delay=35, timeout=wa_name_timeout(page, 10000))
     page.evaluate("""() => {
         const nameBox = document.querySelector('#txtKeywordSearch');
         if (nameBox) {
@@ -37558,7 +37828,7 @@ def wa_fill_ready_name_and_search(page, org_name: str) -> bool:
         page.locator("input[value='Search']").first,
     ]:
         try:
-            candidate.click(timeout=5000, force=True)
+            candidate.click(timeout=wa_name_timeout(page, 5000), force=True)
             return True
         except Exception:
             continue
@@ -39072,6 +39342,11 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 ):
                     page._cc_mi_lookup_deadline = mi_deadline
                     completed_names = getattr(mi_probe_result, "_cc_mi_completed_empty_names", [])
+                    progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
+                    progress["completed_ein_identity"] = progress["identity"]
+                    transport_stop = getattr(mi_probe_result, '_cc_mi_light_name_deadline', None)
+                    if isinstance(transport_stop, (int, float)):
+                        progress['light_name_deadline'] = min(progress.get('light_name_deadline', transport_stop), transport_stop)
                     if completed_names:
                         progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
                         progress["http_completed_empty_name_queries"] = list(completed_names)
