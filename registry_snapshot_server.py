@@ -1805,6 +1805,7 @@ def or_confirm_snapshot_delinquency(org, result):
         return result
     row = or_snapshot_row_for_ein(org.ein)
     evidence = {}
+    source_application_error = False
     url = ''
     try:
         if row and re.fullmatch(r'\d+', row[0]):
@@ -1832,6 +1833,15 @@ def or_confirm_snapshot_delinquency(org, result):
                         if len(content) > 2_000_000:
                             raise ValueError('Oregon detail exceeded the document size limit')
                         source = content.decode('utf-8', errors='replace')
+                        # An HTTP-200 application error is not a charity record.
+                        # Preserve the existing bounded second attempt: it may
+                        # recover. Only classify the final unresolved response.
+                        source_application_error = bool(trial_identity()
+                            and urlparse(response.url).path.casefold() == '/charities/error/errormessage'
+                            and 'The provided anti-forgery token is not valid.' in source)
+                        if source_application_error:
+                            attempts.append('Oregon returned its official application error page; no live charity record was supplied.')
+                            continue
                         evidence = or_live_period_evidence(source, row)
                         info_present = bool(re.search(r'<table\b[^>]*\bid="info"', source, re.I))
                         note = (f'Oregon live detail attempt {attempt + 1}: response received; '
@@ -1857,6 +1867,16 @@ def or_confirm_snapshot_delinquency(org, result):
             'ein': canonical_ein_digits(row[4]), 'registration': row[1].strip(),
             'charity_id': str(row[0]), 'url': url,
         }
+    if not evidence and source_application_error:
+        result.status = 'Site Not Reachable'
+        result.success = False
+        result.status_reason = result.reason_code = 'OR_SOURCE_ACCESS_REFUSED'
+        result.source_note = ('Oregon returned its own application error page. '
+                              'The live filing record was unavailable after the existing bounded recovery; '
+                              'no filing-status conclusion was made from the older export.')
+        result.raw_status_text = 'Oregon public application error; live record unavailable'
+        result.computed_due_date = ''
+        return result
     if not evidence:
         result.status = 'Unable to Confirm'
         result.status_reason = 'OR_LIVE_PERIOD_UNCONFIRMED'
@@ -7007,6 +7027,8 @@ def il_ga_connector_failure(record, reason=""):
     state = record["state"]
     org = checker.Organization(record["organization_name"], record["ein"])
     result = licensed_charity_failure(org, state, IL_GA_SOURCES[state], ValueError("Browser search incomplete"))
+    if trial_identity():
+        result.status_reason = reason
     result.source_note = f"The {state} browser search did not return complete, confirmed public records. Keep Chrome open with the updated CharityClarity connector enabled and retry. This does not establish non-registration or delinquency."
     if reason == "NY_CONNECTOR_QUERY_LIMIT":
         result.source_note = f"The {state} search reached its candidate-review limit before every required record was evaluated. CharityClarity reports Unable to Confirm; an incomplete search does not establish non-registration or delinquency."
@@ -9716,7 +9738,11 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     elif state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" and record.get("search_failed_receipts"):
         from deployment.search_history import attach as attach_search_history
         data = attach_search_history(record, data)
-    return preserve_nc_identity_retry(data, record)
+    data = preserve_nc_identity_retry(data, record)
+    if trial_identity():
+        from deployment.source_availability import apply as apply_source_availability
+        apply_source_availability(data)
+    return data
 
 
 def preserve_nc_identity_retry(data, record):
@@ -26922,6 +26948,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     if state == "FL":
         from deployment.fl_response_evidence import seal_public_result as seal_fl_response
         seal_fl_response(result, public_data)
+    if trial_identity():
+        from deployment.source_availability import apply as apply_source_availability
+        apply_source_availability(public_data)
     return public_data
 
 
@@ -39735,6 +39764,17 @@ def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, sta
                   if state == "ME" else run_state_lookup(organization_name, ein, state, wi_progress=wi_progress)
                   if state == "WI" else run_state_lookup(organization_name, ein, state))
         result["semantic_attempts"] = attempt
+        if trial_identity():
+            from deployment.source_availability import classify, apply as apply_source_availability
+            availability = classify(result)
+            if availability and availability['terminal']:
+                # An exhausted source deadline is already terminal. Do not start
+                # another whole lookup with a fresh allowance.
+                return apply_source_availability(result)
+            if result.get('source_availability'):
+                # Recovery helpers inspect status as well as reason codes. Keep
+                # their original input; normalize again at the public boundary.
+                result['status'] = result['source_availability']['prior_status']
         if state == "AR" and lab_sales_ar_access_block_is_terminal(result):
             return result
         if state == "ME":
@@ -39836,6 +39876,9 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == 'standard':
             from deployment.group_identity_review import recover
             data = recover(sys.modules[__name__], data, run_state_lookup)
+        if trial_identity():
+            from deployment.source_availability import apply as apply_source_availability
+            apply_source_availability(data)
         return data
     from deployment.state_snapshots import CaptureRun
     with CaptureRun(organization_name,ein,(state or '').upper()) as capture:
@@ -39855,9 +39898,16 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             if os.environ.get('CE_FINAL_FOUR_CHILD')!='1':
                 from deployment.state_snapshots import persist_inline_result
                 data=persist_inline_result(sys.modules[__name__],data)
+            if trial_identity():
+                from deployment.source_availability import apply as apply_source_availability
+                apply_source_availability(data)
             return data
         except Exception:
-            return {**data,'evidence_capture':'unavailable'}
+            data = {**data,'evidence_capture':'unavailable'}
+            if trial_identity():
+                from deployment.source_availability import apply as apply_source_availability
+                apply_source_availability(data)
+            return data
 
 
 def apply_batch_state_health(results: list[dict]) -> list[dict]:
