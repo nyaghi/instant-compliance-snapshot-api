@@ -20,6 +20,9 @@
         || result.state === 'MD' && result.success === false
            && result.raw_status_text === 'Maryland registry search did not complete'
            && ['PORTAL_ERROR', 'RUNNER_TIMEOUT'].includes(result.reason_code)
+        || result.state === 'CT' && result.success === false
+           && result.raw_status_text === 'Connecticut direct registry lookup could not be completed'
+           && ['PORTAL_ERROR', 'RUNNER_TIMEOUT'].includes(result.reason_code)
         || result.state === 'WI' && ['WI_SOURCE_UNREACHABLE', 'WI_SOURCE_ALLOWANCE_EXHAUSTED'].includes(result.reason_code)
         || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH'
         || ['ND','CO'].includes(result.state) && result.reason_code === 'RUNNER_TIMEOUT');

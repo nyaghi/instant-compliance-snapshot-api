@@ -18086,7 +18086,8 @@ def ct_direct_form_fields(page_html: str) -> dict[str, str]:
 
 def ct_direct_prepare_session(timeout_seconds: float | None = None):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
-    timeout = max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS))
+    from deployment.ct_budget import timeout as ct_timeout
+    timeout = ct_timeout(max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS)))
     headers = {
         "User-Agent": BROWSER_USER_AGENT,
         "Referer": url,
@@ -18095,7 +18096,7 @@ def ct_direct_prepare_session(timeout_seconds: float | None = None):
     from curl_cffi import requests as curl_requests
 
     session = curl_requests.Session(impersonate="chrome")
-    response = session.get(url, headers=headers, timeout=(min(3.0, timeout), timeout))
+    response = session.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
     return session, ct_direct_form_fields(response.text), headers
 
@@ -18103,7 +18104,8 @@ def ct_direct_prepare_session(timeout_seconds: float | None = None):
 def ct_direct_post_query(session, base_fields: dict[str, str], headers: dict[str, str], search_name: str, timeout_seconds: float | None = None) -> str:
     from deployment.search_observation import observed_http_call as _history_http_call
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
-    timeout = max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS))
+    from deployment.ct_budget import timeout as ct_timeout
+    timeout = ct_timeout(max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS)))
     fields = dict(base_fields)
     fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$ddCredPrefix"] = "CHR"
     fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$tbDBA_Contact"] = search_name
@@ -18123,7 +18125,7 @@ def ct_direct_post_query(session, base_fields: dict[str, str], headers: dict[str
             "X-MicrosoftAjax": "Delta=true",
             "X-Requested-With": "XMLHttpRequest",
         },
-        timeout=(min(3.0, timeout), timeout),
+        timeout=timeout,
     )
     response.raise_for_status()
     source_body = response.text
@@ -18185,12 +18187,13 @@ def ct_direct_complete_pages(session, base_fields, headers, search_name, body, d
         fields.update({prefix + "ddCredPrefix": "CHR", prefix + "tbDBA_Contact": search_name,
                        "__EVENTTARGET": grid, "__EVENTARGUMENT": f"Page${next_page}",
                        "ctl00$ScriptManager1": panel + "|" + grid, "__ASYNCPOST": "true"})
-        timeout = min(CT_DIRECT_TIMEOUT_SECONDS, remaining)
+        from deployment.ct_budget import timeout as ct_timeout
+        timeout = ct_timeout(min(CT_DIRECT_TIMEOUT_SECONDS, remaining))
         try:
             response = observed_http_call(session.post, url, data=fields,
                 headers={**headers, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                          "X-MicrosoftAjax": "Delta=true", "X-Requested-With": "XMLHttpRequest"},
-                timeout=(min(3.0, timeout), timeout))
+                timeout=timeout)
             response.raise_for_status(); body = response.text; finish(response, body)
         except Exception as exc:
             raise CTIncompleteResults("Connecticut responded initially, but a later result page could not be read.") from exc
@@ -18221,7 +18224,8 @@ def ct_direct_detail_text(row_html: str, timeout_seconds: float | None = None, s
     detail_id = html.unescape(match.group(1)).strip()
     if not detail_id:
         return ""
-    timeout = max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS))
+    from deployment.ct_budget import timeout as ct_timeout
+    timeout = ct_timeout(max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS)))
     url = "https://www.elicense.ct.gov/lookup/licensedetail.aspx?id=" + quote(detail_id, safe="")
     try:
         request = urllib.request.Request(
@@ -18697,10 +18701,16 @@ def reviewed_identity_queries_completed(completed_queries, required_queries) -> 
 
 
 def search_ct_direct(org):
+    from deployment.ct_budget import run
+    return run(_search_ct_direct, org, CT_DIRECT_MAX_SECONDS)
+
+
+def _search_ct_direct(org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
     started = time.perf_counter()
-    deadline = started + CT_DIRECT_MAX_SECONDS
+    from deployment.ct_budget import STOP
+    deadline = min(started + CT_DIRECT_MAX_SECONDS, STOP.get())
     safe_targets = organization_match_target_variants(original_name, org.ein)
     for target in list(safe_targets):
         if not re.search(r"^\s*(the|a)\s+", target, re.I):
@@ -39700,7 +39710,8 @@ def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, sta
         attempts = max(attempts, 3)
     if state == "AK":
         attempts = max(attempts, 3)
-    if state in {"WA", "NY", "PA"}:
+    if state in {"WA", "NY", "PA", "CT"}:
+        # CT already performs bounded source recovery inside its single allowance.
         attempts = 1
     if state == "ME":
         attempts = 2
