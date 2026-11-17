@@ -1,5 +1,5 @@
 {
-  "build": "quiet-default-overnight-20261116",
+  "build": "gate51-ownership-evidence-20261117",
   "version": "0.6.135",
-  "scope": "One 20-second optional name allowance after completed EIN searches; retained identity guards and selected detail capture. Includes validated Nevada nonblocking focus setup. Automatic Alerts starts restricted to 22:00-05:00 local time. Quiet collectors are the default on regular Aurora URLs, including legacy duo links."
+  "scope": "One 20-second optional name allowance after completed EIN searches; retained identity guards and selected detail capture. Includes validated Nevada nonblocking focus setup. Automatic Alerts starts restricted to 22:00-05:00 local time. Quiet collectors are the default on regular Aurora URLs, including legacy duo links. Gate 51: same-detail Mississippi public address for legal-entity description corroboration; alias ownership and record-bound evidence fixes on matching server."
 }
