@@ -50,6 +50,30 @@ function nvFixture(options={}) {
  const h=fixture({url:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=local',text:'LOCAL NV19951158753 Permanently Revoked',nvViews:['nv-0'],...options});
  Object.assign(h.query,{state:'NV',identifier:'NV19951158753'});h.job.registryState='NV';h.ctx.registryOrigin=()=> 'https://orion.nv.gov';return h;
 }
+test('NC selected fitted profile requests unclipped pixels and rejects a changed source',async()=>{
+ for(const changed of [false,true]) {
+  const h=fixture({text:'Dana-Farber Cancer Institute, Inc. SL001850 Current Active'});
+  Object.assign(h.query,{url:h.state.url,identifier:'SL001850'});
+  let captured=false;
+  h.ctx.chrome.tabs.sendMessage=async()=>({url:h.state.url,public_text:h.state.text,source_detail:true,
+    source_binding:changed&&captured?'other-license':'SL001850',document_id:'original',
+    source_viewport_width:640,source_page_fits:true});
+  const send=h.ctx.chrome.debugger.sendCommand;
+  h.ctx.chrome.debugger.sendCommand=async(t,c,p)=>{
+    if(c==='Page.captureScreenshot'){
+      assert.equal(p.captureBeyondViewport,false);assert.equal(Object.hasOwn(p,'clip'),false);
+      captured=true;
+    }
+    return send(t,c,p);
+  };
+  const prior=h.job.activeExpiresAt,out=await h.run();
+  assert.equal(captured,true);
+  assert.equal(h.job.activeExpiresAt,prior);
+  assert.equal(h.calls.at(-1)[0],'detach');
+  if(changed)assert.equal(out,null);
+  else {assert.equal(out.source_url,h.state.url);assert.equal(out.image,'AA==');}
+ }
+});
 test('30 Nevada workflows use proven source sections, restore scroll and preserve budget',async()=>{
  const orgs=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/oct19-cohort.json'))).slice(0,30);
  for(const org of orgs){const h=nvFixture({text:org.name+' NV19951158753'}),deadline=h.job.activeExpiresAt,out=await h.run();
