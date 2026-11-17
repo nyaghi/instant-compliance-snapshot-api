@@ -233,7 +233,8 @@ class Gate51Local(unittest.TestCase):
                     result=c.checker.StateResult(case['name'],case['ein'],state,'Current',url)
                     result.success=True;result.matched_registry_name=name;result.matched_registry_identifier=identifier
                     result._cc_selected_source_identity=(state,name,identifier,url)
-                    with baseline('normalize_registry_match_fields') if before else ExitStack():
+                    with baseline('fill_registry_match_from_text','normalize_registry_match_fields') if before else ExitStack():
+                        c.fill_registry_match_from_text(result,'',org)
                         c.normalize_registry_match_fields(result,org)
                     data=dict(state=state,ein=case['ein'],status=result.status,success=True,
                               matched_registry_name=result.matched_registry_name,matched_registry_identifier=identifier)
@@ -280,7 +281,8 @@ class Gate51Local(unittest.TestCase):
                 locator.nth.return_value.locator.return_value.evaluate.return_value=str(record['PersonId'])
                 page.screenshot.return_value=b'fixture-original-grid'
                 popup=Mock();popup.url=pa.DETAIL
-                fields=dict(EntityName=case['name'],RegNum='',Expdt='',FederalID='')
+                fields=dict(EntityName=case['name'],RegNum='',Expdt='',FederalID='',account_SecondaryAddressLine1=record['AddressLine'],account_SecondaryCity='Boston, MA, 02115')
+                if fault=='different-office':fields['account_SecondaryAddressLine1']='20 Other Street'
                 if fault=='different-EIN':fields['FederalID']='990434313'
                 if fault=='different-name':fields['EntityName']='A Different Institution'
                 def evaluate(script):
@@ -309,7 +311,7 @@ class Gate51Local(unittest.TestCase):
             before,after=run_adapter(True),run_adapter()
             save('PA',case,'blank-PersonId-selected-detail',before,after,
                  before['grid'] and not before['detail'] and after['grid'] and after['detail'] and after['detail_closed']==1)
-            for fault in ['busy-grid','busy-after','stale-ID','missing-ID','different-EIN','different-name']:
+            for fault in ['busy-grid','busy-after','stale-ID','missing-ID','different-EIN','different-name','different-office']:
                 checked=run_adapter(False,fault)
                 self.assertFalse(checked['detail'],(case,fault,checked))
                 if fault.startswith('busy'):self.assertFalse(checked['grid'])
@@ -377,14 +379,14 @@ class Gate51Local(unittest.TestCase):
         # Node evaluates the exact DOM probes against small object fixtures.
         # This checks the predicates, not the real site's Angular layout.
         script=r'''const assert=require('node:assert');const probes=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
-        let row={PersonId:3604297}, busy=[];
+        let row={PersonId:3604297}, parentId=3604297, busy=[];
         const panel={querySelectorAll:()=>[]};
         global.document={querySelector:()=>panel,querySelectorAll:()=>busy};
-        global.window={angular:{element:()=>({scope:()=>({entity:row}),isolateScope:()=>null})}};
+        global.window={angular:{element:()=>({scope:()=>undefined,controller:()=>({PersonId:parentId,EntityDetails:row})})}};
         global.getComputedStyle=x=>x.style;
         const ids=eval('('+probes.id+')'),settled=eval('('+probes.settled+')');
         assert.deepStrictEqual(ids(),['3604297']);row={};assert.deepStrictEqual(ids(),[]);
-        row={PersonId:3604297,other:{PersonId:123}};assert.strictEqual(ids().length,2);
+        row={PersonId:123};assert.strictEqual(ids().length,2);
         assert.strictEqual(settled(),true);busy=[{getClientRects:()=>[1],style:{visibility:'visible',display:'block'}}];
         assert.strictEqual(settled(),false);busy[0].style.display='none';assert.strictEqual(settled(),true);
         console.log('PA ID and loading predicates passed; no browser launched');'''
@@ -435,6 +437,42 @@ class Gate51Local(unittest.TestCase):
             sources += [dict(source='CO',names=[],organization_records=[office]),dict(source='OH',names=[alias],organization_records=[])]
             own.discovery_conflicts(c,sources,case['name'],case['ein'],time.monotonic()+3)
             self.assertEqual(proof.call_count,1)
+
+    def test_70_each_tn_nm_complete_response_to_original_reference(self):
+        for state in ['TN','NM']:
+            for i,case in enumerate(ROSTER):
+                org=c.checker.Organization(case['name'],case['ein']);name=case['name']+' d/b/a Community Learning'
+                identifier='CO'+str(4000+i) if state=='TN' else c.format_ein(case['ein'])
+                url='https://source.example/detail/'+identifier
+                result=c.checker.StateResult(case['name'],case['ein'],state,'Current',url)
+                result.success=True;result.matched_registry_name=name;result.matched_registry_identifier=identifier
+                result._cc_selected_source_identity=(state,name,identifier,url)
+                with names_for(case),ExitStack() as stack:
+                    for fn,value in [('apply_confirmed_feedback_correction',''),('true_status_from_body','Current'),('comments_for_result','Control'),('enrich_registration_date_sources',None),('registration_date_metadata',{}),('renewal_filing_metadata',{})]:
+                        stack.enter_context(patch.object(c,fn,return_value=value))
+                    data=c.response_data_for_lookup(result,'',org,case['name'],case['ein'],state,time.perf_counter())
+                ref=dict(state=state,ein=case['ein'],identifier=identifier,record_name=name,operation='detail')
+                self.assertEqual(data['matched_registry_name'],name)
+                self.assertIs(matching_reference(data,[ref]),ref)
+
+    def test_pa_real_controller_shape_without_debug_scope(self):
+        fixture=json.loads((ROOT/'testing/fixtures/gate51/PA-BLANK-CONTROLLER.json').read_text(encoding='utf-8'))
+        script=r'''const assert=require('node:assert'),p=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+        const row=p.fixture.grid, detail=p.fixture.detail;
+        const values=[row.EntityName,'','',row.CertificateNumber||'','',row.EIN||'','',row.AddressLine,row.City,row.StateName,row.Zip,''];
+        const panel={},el={closest:()=>({querySelectorAll:()=>values.map(innerText=>({innerText}))})};
+        let rows=[row];
+        global.document={querySelector:()=>panel};
+        global.window={angular:{element:node=>({scope:()=>undefined,controller:()=>node===panel?detail:{searchResults:rows}})}};
+        const ids=eval('('+p.id+')'),grid=eval('('+p.grid+')');
+        assert.deepStrictEqual(ids(),['3604297']);assert.strictEqual(grid(el),'3604297');
+        detail.EntityDetails.PersonId=123;assert.deepStrictEqual(ids(),['3604297','123']);
+        rows=[{...row,EIN:'12-3456789'}];assert.strictEqual(grid(el),'');
+        rows=[row,{...row,PersonId:123}];assert.strictEqual(grid(el),'');
+        rows=[{...row,AddressLine:'Different office'}];assert.strictEqual(grid(el),'');
+        console.log('Recorded Pennsylvania production-controller shape passed');'''
+        result=subprocess.run(['node','-e',script],input=json.dumps(dict(fixture=fixture,id=pa.DETAIL_ID,grid=pa.GRID_ID)),text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -11,25 +11,18 @@ DETAIL='https://www.charities.pa.gov/#/page/charitiesEntityDetails'
 PROBE="""()=>Object.fromEntries([...document.querySelectorAll('#panelEntityInfo input')]
  .filter(el=>el.getClientRects().length).map(el=>[el.name,el.value]))"""
 DETAIL_ID=r"""()=>{
- const ids=new Set(), seen=new WeakSet();
- const visit=(obj,depth)=>{
-   if(!obj||typeof obj!=='object'||seen.has(obj)||depth<0)return;
-   seen.add(obj);
-   for(const [k,v] of Object.entries(obj)){
-     if(/^personid$/i.test(k)&&/^\d+$/.test(String(v)))ids.add(String(v));
-     else if(!k.startsWith('$')&&v&&typeof v==='object')visit(v,depth-1);
-   }
- };
- const panel=document.querySelector('#panelEntityInfo');
- if(panel){
-   for(const el of [panel,...panel.querySelectorAll('[ng-model]')]){
-     const scope=window.angular?.element(el).scope();
-     visit(scope,2);visit(window.angular?.element(el).isolateScope?.(),2);
-   }
-   for(const el of panel.querySelectorAll('input[name]'))
-     if(/^personid$/i.test(el.name)&&/^\d+$/.test(el.value))ids.add(el.value);
- }
- return [...ids];
+ const c=window.angular?.element(document.querySelector('#panelEntityInfo')).controller('ngController');
+ const selected=String(c?.PersonId||''), loaded=String(c?.EntityDetails?.PersonId||'');
+ return /^\d+$/.test(selected)&&/^\d+$/.test(loaded)?[...new Set([selected,loaded])]:[];
+}"""
+GRID_ID=r"""el=>{
+ const c=window.angular?.element(el).controller('ngController');
+ const cells=[...el.closest('tr').querySelectorAll('td')].map(td=>td.innerText);
+ const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+ const columns={0:'EntityName',3:'CertificateNumber',5:'EIN',7:'AddressLine',8:'City',9:'StateName',10:'Zip'};
+ const hits=(Array.isArray(c?.searchResults)?c.searchResults:[])
+   .filter(row=>Object.entries(columns).every(([i,k])=>norm(row[k])===norm(cells[Number(i)])));
+ return hits.length===1?String(hits[0].PersonId||''):'';
 }"""
 SETTLED="""()=>![...document.querySelectorAll('.cg-busy')].some(el=>el.getClientRects().length && getComputedStyle(el).visibility!=='hidden' && getComputedStyle(el).display!=='none')"""
 
@@ -113,11 +106,13 @@ def capture(page, org, result):
             # when PA omits its public certificate and EIN. The clicked row
             # must still carry that exact ID, and the detail must identify it.
             binding = page.locator('tr#SearchResults').nth(chosen['index']).locator('i[ng-click="search.redirectEntityDetails(row)"]').evaluate(
-                "el => { const s=window.angular?.element(el).scope(); return s?.row?.PersonId == null ? '' : String(s.row.PersonId); }")
+                GRID_ID)
             requested_id = str(blank_record.get('PersonId') or '')
             if (binding != requested_id or not requested_id
                     or popup.evaluate(DETAIL_ID) != [requested_id]
                     or key(fields.get('EntityName')) != key(cells[0])
+                    or key(fields.get('account_SecondaryAddressLine1')) != key(cells[7])
+                    or key(fields.get('account_SecondaryCity')) != key(' '.join(cells[8:11]))
                     or digits(fields.get('FederalID')) not in {'', run.ein}
                     or str(fields.get('RegNum') or '').strip() != cells[3].strip()
                     or str(fields.get('Expdt') or '').strip() != cells[4].strip()):

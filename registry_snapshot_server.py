@@ -18264,6 +18264,8 @@ def apply_confirmed_feedback_correction(result) -> str:
 
 
 def fill_registry_match_from_text(result, body: str, org) -> None:
+    if preserves_selected_source_identity(result):
+        return  # Retain the selected TN/NM source label before free-text cleanup.
     from deployment.ny_confirmed_evidence import preserves_confirmed_detail as preserves_ny_detail
     if preserves_ny_detail(result):
         return  # Keep the original accepted detail name for exact evidence binding.
@@ -18367,13 +18369,17 @@ def md_registry_match_from_entries(result, body: str, org) -> None:
         return
 
 
-def normalize_registry_match_fields(result, org) -> None:
+def preserves_selected_source_identity(result):
     source_identity = getattr(result, '_cc_selected_source_identity', None)
-    if (result.state in {'TN', 'NM'} and result.success and isinstance(source_identity, tuple)
+    return bool(result.state in {'TN', 'NM'} and result.success and isinstance(source_identity, tuple)
             and len(source_identity) == 4 and source_identity == (
                 result.state, getattr(result, 'matched_registry_name', ''),
                 getattr(result, 'matched_registry_identifier', ''), result.source_url)
-            and source_identity[1] and source_identity[2]):
+            and source_identity[1] and source_identity[2])
+
+
+def normalize_registry_match_fields(result, org) -> None:
+    if preserves_selected_source_identity(result):
         return
     from deployment.ca_nonregistration import preserves_selected_record as preserves_ca_nonregistration
     if preserves_ca_nonregistration(result):

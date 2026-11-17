@@ -1,0 +1,28 @@
+{
+  "grid": {
+    "AddressLine": "600 South Clyde Morris Blvd. ",
+    "CertificateNumber": null,
+    "City": "Daytona Beach",
+    "EIN": null,
+    "EntityName": "EMBRY-RIDDLE AERONAUTICAL UNIVERSITY",
+    "ExpDate": null,
+    "PersonId": 3604297,
+    "StateName": "FL",
+    "Zip": "32114"
+  },
+  "detail": {
+    "PersonId": "3604297",
+    "EntityDetails": {
+      "PersonId": 3604297
+    },
+    "fields": {
+      "EntityName": "EMBRY-RIDDLE AERONAUTICAL UNIVERSITY",
+      "Expdt": "",
+      "FederalID": "",
+      "RegNum": "",
+      "account_SecondaryAddressLine1": "600 South Clyde Morris Blvd., ",
+      "account_SecondaryCity": "Daytona Beach, FL, 32114"
+    }
+  },
+  "provenance": "Official Pennsylvania grid and opened detail, independently observed November 17. Angular debug scope is unavailable; normal controllers retain matching PersonId."
+}
