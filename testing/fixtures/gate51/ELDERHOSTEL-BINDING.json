@@ -1,0 +1,26 @@
+[
+  {
+    "state": "TN",
+    "selected_name": "ELDERHOSTEL, INC.",
+    "source_name": "ELDERHOSTEL, INC. D/B/A ROAD SCHOLAR",
+    "identifier": "CO4020",
+    "before_match": false,
+    "source_name_match": true,
+    "archive_ids": [
+      "8f24e473c41b83411abc444977eb1a101105d2eb0044b038c486a353830c5d8f"
+    ],
+    "ein": "042632526"
+  },
+  {
+    "state": "NM",
+    "selected_name": "Elderhostel, Inc.",
+    "source_name": "Elderhostel, Inc. d/b/a Road Scholar",
+    "identifier": "04-2632526",
+    "before_match": false,
+    "source_name_match": true,
+    "archive_ids": [
+      "e49760ac63144d618a85c298bf997c8a91f0186d7aa8f9be1d0f681a6a7479fa"
+    ],
+    "ein": "042632526"
+  }
+]

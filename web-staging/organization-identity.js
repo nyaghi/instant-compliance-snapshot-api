@@ -76,7 +76,7 @@
           const conflict = row.identity_conflict;
           proof.append(text("span", `${conflict.explanation} ${conflict.candidate_name} · EIN ${conflict.candidate_ein} · ${conflict.candidate_location}. `));
           if (/^https:\/\//.test(conflict.source_url || "")) {
-            const link = text("a", "Review the IRS record", "underline"); link.href = conflict.source_url;
+            const link = text("a", "Review source record", "underline"); link.href = conflict.source_url;
             link.target = "_blank"; link.rel = "noopener noreferrer"; proof.append(link);
           }
           return;

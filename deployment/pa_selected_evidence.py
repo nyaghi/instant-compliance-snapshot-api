@@ -87,15 +87,18 @@ def capture(page, org, result, rows, query, deadline):
           return hits.length===1?JSON.stringify(hits[0]):false;
         }'''
         page.wait_for_function(probe,arg=expected,timeout=timeout())
+        from .pa_detail_evidence import SETTLED
+        page.wait_for_function(SETTLED, timeout=timeout())
         before=page.evaluate(probe,expected)
         timeout();run.page(page);timeout()
-        if page.url!=URL or not before or page.evaluate(probe,expected)!=before:
+        if page.url!=URL or not before or page.evaluate(probe,expected)!=before or not page.evaluate(SETTLED):
             del run.documents[start:];return
         bindings=getattr(run,'pa_selected_images',None)
         if bindings is None:run.pa_selected_images={}
         for doc in run.documents[start:]:
             if doc[0]==URL and doc[2]=='image':
                 run.pa_selected_images[hashlib.sha256(doc[1]).hexdigest()]=(run.ein,result.matched_registry_name,str(result.matched_registry_identifier))
+        run.pa_selected_record = dict(chosen)
         fact['outcome']='captured' if len(run.documents)>start else 'capture_unavailable'
     except Exception as exc:
         del run.documents[start:]

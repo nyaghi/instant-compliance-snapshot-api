@@ -1,0 +1,36 @@
+{
+  "url": "https://data.colorado.gov/resource/37wu-kn3g.json?%24limit=100&%24where=upper%28name%29%3D%27K-LOVE+INC%27+OR+upper%28name%29%3D%27K-LOVE%2C+INC.%27+OR+upper%28name%29%3D%27K-LOVE+INC.%27&%24order=registrationapproveddate+DESC",
+  "records": [
+    {
+      "name": "K-LOVE, INC.",
+      "fein": "99-0434313",
+      "principaladdress": "2000 REAMS FLEMING BLVD.",
+      "principalcity": "FRANKLIN",
+      "principalstate": "TN",
+      "principalzipcode": "37064",
+      "registrationapproveddate": "2026-11-16T00:00:00.000",
+      "documentid": "20263034147"
+    },
+    {
+      "name": "K-LOVE, INC.",
+      "fein": "99-0434313",
+      "principaladdress": "2000 REAMS FLEMING BLVD.",
+      "principalcity": "FRANKLIN",
+      "principalstate": "TN",
+      "principalzipcode": "37064",
+      "registrationapproveddate": "2025-08-13T00:00:00.000",
+      "documentid": "20253023657"
+    },
+    {
+      "name": "K-LOVE, INC.",
+      "fein": "99-0434313",
+      "principaladdress": "2000 REAMS FLEMING BLVD.",
+      "principalcity": "FRANKLIN",
+      "principalstate": "TN",
+      "principalzipcode": "37064",
+      "registrationapproveddate": "2024-12-31T00:00:00.000",
+      "documentid": "20243039203"
+    }
+  ],
+  "provenance": "Retained official Colorado response from the Gate 51 investigation; unrelated public contact and financial fields omitted."
+}

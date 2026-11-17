@@ -4552,6 +4552,17 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
     if not re.fullmatch(r"\d{9}", ein) or ein == "000000000" or not organization_name.strip():
         raise ValueError("Enter the organization name and a valid nine-digit EIN.")
     futures, results = {}, []
+    ownership_conflicts, ownership_seconds = {}, 0.0
+    def review_completed_alias_sources():
+        nonlocal ownership_seconds
+        remaining = min(deadline - time.monotonic(), 3.0 - ownership_seconds)
+        if remaining <= 0:
+            return
+        from deployment.alias_ownership import discovery_conflicts
+        started = time.monotonic()
+        ownership_conflicts.update(discovery_conflicts(sys.modules[__name__], results,
+            organization_name, ein, min(deadline, started + remaining)))
+        ownership_seconds += time.monotonic() - started
     def run(source, queued):
         started = time.monotonic()
         trace = []
@@ -4584,12 +4595,14 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
                 raise
         else:
             results.append({"source": source, "complete": False, "names": [], "limitation": "Source capacity is busy. You can continue with the names shown."})
+    review_completed_alias_sources()
     try:
         for future in as_completed(futures, timeout=max(0.001, deadline - time.monotonic())):
             try:
                 results.append(future.result())
             except Exception:
                 results.append({"source": futures[future], "complete": False, "names": [], "limitation": "This source could not be confirmed during name discovery."})
+            review_completed_alias_sources()
     except FuturesTimeoutError:
         pass
     finished = {result["source"] for result in results}
@@ -4619,6 +4632,10 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
             item["verified"] = True
         if any(proof.get("type") == "Form 990 filer legal name" for proof in item["evidence"]):
             item["historical"] = False
+    for item in names:
+        if proof := ownership_conflicts.get(identity_name_key(item['name'])):
+            item['verified'] = False
+            item['identity_conflict'] = proof
     selected_names = prioritized_discovery_names(organization_name, names)
     answer = {"organization_name": organization_name.strip(), "ein": format_ein(ein),
             "names": selected_names, "addresses": discovered_organization_addresses(ein, results),
@@ -9091,6 +9108,9 @@ def nm_browser_lookup(org, evidence):
         result.source_note = ('The public browser search and detail heading both match the requested EIN. '
                               + getattr(result, 'source_note', ''))
         copied = copy_external_result(org, 'NM', result)
+        if copied.success:
+            copied.matched_registry_name = selected['name']
+            copied._cc_selected_source_identity = ('NM', selected['name'], format_ein(ein), copied.source_url)
         if other_periods:
             other_ends = ", ".join(format_date(end) for end in other_periods)
             copied.nm_additional_period_note = (
@@ -9152,8 +9172,10 @@ def ms_browser_clean_evidence(payload, query):
     elif query.get('operation') == 'detail':
         if (set(payload) != {'query', 'complete', 'fields', 'source_url'}
                 or not isinstance(payload['fields'], dict)
-                or set(payload['fields']) != {'Name', 'Filing Number', 'Filing Status', 'Expiration Date', 'Registered Name'}
-                or not all(isinstance(v, str) and len(v) <= 1000 for v in payload['fields'].values())
+                or not {'Name', 'Filing Number', 'Filing Status', 'Expiration Date', 'Registered Name'} <= set(payload['fields'])
+                or set(payload['fields']) - {'Name', 'Filing Number', 'Filing Status', 'Expiration Date', 'Registered Name', 'Public Text'}
+                or not all(isinstance(v, str) and len(v) <= (12000 if k == 'Public Text' else 1000)
+                           for k, v in payload['fields'].items())
                 or payload['fields']['Filing Number'] != query.get('identifier')
                 or not payload['fields']['Name'].strip()
                 or payload['source_url'] != MS_BROWSER_SOURCE):
@@ -9256,6 +9278,7 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
     attempted = []
     possible = []
     review_details = {}
+    descriptor_proofs = {}
     excluded_foundations = set()
     if ms_recovery:
         planned = [ms_recovery]
@@ -9277,12 +9300,20 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
         for row in rows:
             # This public result has no EIN. Match only against names signed
             # into this workflow, never an EIN-keyed discovery cache.
+            from deployment.alias_ownership import candidate_conflict
+            if candidate_conflict(sys.modules[__name__], org, row['name'], time.monotonic() + 3, state='MS'):
+                continue
             scores = [score_candidate(target, '', {'name': row['name'], 'ein': ''})
                       for target in reviewed if target]
             best = max(scores, key=lambda item: item['score']) if scores else None
             if generic_hospital and row['identifier'] in excluded_foundations:
                 continue
-            if (best and best['decision'] == 'accepted'
+            if (ms_described_legal_name(row['name'])
+                    and normalized_match_name(ms_described_legal_name(row['name'])) == normalized_match_name(org.organization_name)):
+                # This exact legal-name expansion is only a detail candidate.
+                # The independent full-office proof below still controls acceptance.
+                possible_on_page.append(row)
+            elif (best and best['decision'] == 'accepted'
                     and any(ms_registry_name_is_safe(row['name'], target, '') for target in reviewed)):
                 accepted.append(row)
             elif (best and best['decision'] in {'accepted', 'possible'}
@@ -9333,6 +9364,28 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
                     raise ValueError('Mississippi review expiration date is malformed')
                 review_details[row['identifier']] = fields
                 attempted.append({'query': detail_query, 'completed': True})
+                legal_name = ms_described_legal_name(row['name'])
+                if (legal_name and len(rows) == 1
+                        and normalized_match_name(legal_name) == normalized_match_name(org.organization_name)):
+                    external = SimpleNamespace(matched_registry_name=row['name'],
+                        ms_detail_identity=ms_detail_identity_fields(fields.get('Public Text', ''), row['name']))
+                    proof = ms_legal_description_identity(org, external, time.perf_counter() + 3)
+                    if proof:
+                        descriptor_proofs[row['identifier']] = proof
+                        accepted.append(row)
+                        break
+                    result = checker.StateResult(org.organization_name, org.ein, 'MS', 'Needs Review', MS_BROWSER_SOURCE)
+                    result.success = False
+                    result.reason_code = 'MS_LEGAL_DESCRIPTION_IDENTITY_REVIEW'
+                    result.source_note = ('Mississippi returned the complete organization name with an appended legal-entity description. '
+                        'Confirm or reject this source identity before applying its filing status.')
+                    expiry = module.parse_mmddyyyy_date(fields['Expiration Date']) if fields['Expiration Date'] else None
+                    result.queries_attempted = attempted
+                    result._cc_identity_review = {'records': [dict(name=row['name'], identifier=row['identifier'],
+                        ein='', location='', url=MS_BROWSER_SOURCE, raw_status=fields['Filing Status'].strip(),
+                        expiration=expiry.isoformat() if expiry else '', _identity_outcome='possible')],
+                        'search_complete': False, 'freshness': ''}
+                    return result
         # Two plausible filing numbers need a user identity decision. Read each
         # detail now so later confirmation can apply only signed state evidence.
         if len(accepted) > 1:
@@ -9372,7 +9425,7 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
             continue
         selected = accepted[0]
         detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': selected['identifier']}
-        fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
+        fields = review_details.get(selected['identifier']) or ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
         if (normalized_match_name(fields['Name']) != normalized_match_name(selected['name'])
                 or not fields['Filing Status'].strip()):
             raise ValueError('Mississippi detail identity or status changed')
@@ -9384,7 +9437,8 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
         result.success = True
         result.matched_registry_name = selected['name']
         result.matched_registry_identifier = selected['identifier']
-        result.queries_attempted = attempted + [{'query': detail_query, 'completed': True}]
+        result.queries_attempted = (attempted if attempted and attempted[-1]['query'] == detail_query
+                                    else attempted + [{'query': detail_query, 'completed': True}])
         if re.search(r'\bexempt(?:ed|ion)?\b', filing, re.I):
             result.status = 'Exempt'
         elif not expiration and re.search(r'\bcurrent\b|\bregistered\b', filing, re.I):
@@ -9399,6 +9453,9 @@ def ms_browser_lookup(org, evidence, alternate_names=(), *, ms_recovery='', ms_s
         if expiration: result.raw_status_text += ' | Expiration Date: ' + format_date(expiration)
         result.source_note = (result.source_note + ' ' if getattr(result, 'source_note', '') else '') + \
             'The public Mississippi search row and detail filing number matched; status uses the displayed Filing Status and Expiration Date.'
+        if selected['identifier'] in descriptor_proofs:
+            result.identity_evidence = descriptor_proofs[selected['identifier']]
+            result.source_note += ' The full legal name and street, state and ZIP were corroborated against the entered EIN; the registry appends a corporate description to that name.'
         return result
     candidates = []
     for row in possible[:10]:
@@ -11140,6 +11197,13 @@ def licensed_charity_identity(org, row, state, deadline):
                  for name in names if name]
     decision, matched_name = max(decisions, key=lambda item: item[0]["score"])
     row["match"] = decision
+    if decision.get("reason") == "MATCH_REVIEWED_ALTERNATE_NAME":
+        from deployment.alias_ownership import candidate_conflict
+        ownership = candidate_conflict(sys.modules[__name__], org, matched_name, deadline, row, state=state)
+        if ownership:
+            row["address_evidence"] = ownership
+            row["match"] = {"score": 0, "decision": "rejected", "reason": "DIFFERENT_EIN_CORROBORATED"}
+            return "rejected"
     if state == "DC" and row.get("_dc_generic_office_conflict"):
         row["address_evidence"] = row["_dc_generic_office_conflict"]
         row["match"] = {"score": 0, "decision": "rejected", "reason": "DIFFERENT_EIN_CORROBORATED"}
@@ -11606,6 +11670,8 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="",
         result.matched_registry_name = selected["name"]
         result.matched_registry_identifier = selected["identifier"]
         result.source_url = selected.get("url") or source
+        if state == 'TN' and result.success:
+            result._cc_selected_source_identity = ('TN', selected['name'], selected['identifier'], result.source_url)
         result.raw_status_text = selected["raw_status"]
         result._cc_license_record = selected
         result.identity_evidence = {"name": selected.get("match", {}), "address": selected.get("address_evidence", {})}
@@ -18302,6 +18368,13 @@ def md_registry_match_from_entries(result, body: str, org) -> None:
 
 
 def normalize_registry_match_fields(result, org) -> None:
+    source_identity = getattr(result, '_cc_selected_source_identity', None)
+    if (result.state in {'TN', 'NM'} and result.success and isinstance(source_identity, tuple)
+            and len(source_identity) == 4 and source_identity == (
+                result.state, getattr(result, 'matched_registry_name', ''),
+                getattr(result, 'matched_registry_identifier', ''), result.source_url)
+            and source_identity[1] and source_identity[2]):
+        return
     from deployment.ca_nonregistration import preserves_selected_record as preserves_ca_nonregistration
     if preserves_ca_nonregistration(result):
         return
@@ -18674,6 +18747,10 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     result = checker.StateResult(org.organization_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
     result._cc_registration_date_detail = detail_text
     result.matched_registry_name = row_name
+    if is_reviewed_alias(org.ein, row_name):
+        from deployment.alias_ownership import candidate_conflict
+        if candidate_conflict(sys.modules[__name__], org, row_name, time.monotonic() + min(detail_timeout, 3.0), state='CT'):
+            return None, -10000
     credential_ids = set(re.findall(r"\bCHR\.\d{7}(?:-EXEMPT)?(?![\w.-])", combined, re.I))
     valid_credential = credential.upper() if re.fullmatch(r"CHR\.\d{7}(?:-EXEMPT)?", credential, re.I) else ""
     result.matched_registry_identifier = valid_credential or (next(iter(credential_ids)).upper() if len(credential_ids) == 1 else "")
@@ -33306,6 +33383,9 @@ def search_nh_live_pdf(org):
                 continue
             if not safe_match:
                 continue
+            from deployment.alias_ownership import candidate_conflict
+            if candidate_conflict(sys.modules[__name__], org, registry_name, time.monotonic() + 3, state='NH'):
+                continue
             composite = (max(score, 450), registry_identity_preference(registry_name, original_name, org.ein), registry_exact_active_tiebreak(registry_name, targets, "Good Standing" if record.get("status_code") == "G" else ""))
             if composite > best_score:
                 best_score = composite
@@ -34098,6 +34178,12 @@ def ms_wait_for_search_results(page):
         return None, False, f"Mississippi search results remained incomplete within the bounded readiness wait ({type(exc).__name__})."
 
 
+def ms_described_legal_name(name):
+    match = re.fullmatch(r"(.+?),\s+an?\s+[A-Za-z ]{2,30}\s+(?:nonprofit|non-profit|not-for-profit)"
+                        r"(?:\s+(?:religious|public benefit|mutual benefit))?\s+corporation\.?", name, re.I)
+    return match[1].strip() if match else ''
+
+
 def ms_detail_identity_fields(detail_text, matched_name):
     """Read only the selected detail's name and organization address sections."""
     text = str(detail_text or "").replace("\xa0", " ")
@@ -34110,7 +34196,9 @@ def ms_detail_identity_fields(detail_text, matched_name):
     lines = [line.strip() for line in blocks[0].splitlines() if line.strip()]
     if len(lines) != 2 or not re.fullmatch(r".+?,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?", lines[-1]):
         return {}
-    return {"name": registered[0].strip(), "street": lines[0], "location": lines[-1]}
+    location = re.fullmatch(r"(.+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?", lines[-1])
+    return {"name": registered[0].strip(), "street": lines[0], "location": lines[-1],
+            "region": location[2], "postal_code": location[3]}
 
 
 def ms_legal_description_identity(org, external_result, deadline):
@@ -34124,12 +34212,9 @@ def ms_legal_description_identity(org, external_result, deadline):
     raw_name = getattr(external_result, "matched_registry_name", "") or ""
     if fields.get("name") != raw_name or time.perf_counter() >= deadline:
         return {}
-    descriptor = re.fullmatch(
-        r"(.+?),\s+an?\s+[A-Za-z ]{2,30}\s+(?:nonprofit|non-profit|not-for-profit)"
-        r"(?:\s+(?:religious|public benefit|mutual benefit))?\s+corporation\.?", raw_name, re.I)
-    if not descriptor:
+    base_name = ms_described_legal_name(raw_name)
+    if not base_name:
         return {}
-    base_name = descriptor[1].strip()
     targets = [org.organization_name, *known_names_for_ein(org.ein)]
     if not any(normalized_match_name(base_name) == normalized_match_name(target) for target in targets):
         return {}
@@ -34141,6 +34226,13 @@ def ms_legal_description_identity(org, external_result, deadline):
     if (time.perf_counter() >= deadline or decision != "accepted"
             or row.get("address_evidence", {}).get("decision") != "corroborated"):
         return {}
+    remaining = max(0.0, deadline - time.perf_counter())
+    if not remaining:
+        return {}
+    street_proof = licensed_charity_street_evidence(org, row, time.monotonic() + min(remaining, 3.0))
+    if street_proof.get('decision') != 'corroborated':
+        return {}
+    row['address_evidence'] = street_proof
     return {"name": row.get("match", {}), "address": row["address_evidence"],
             "source_name": raw_name, "parsed_legal_name": base_name}
 
@@ -35683,7 +35775,7 @@ def search_ok_precise(page, org, module):
         result.matched_registry_identifier = filing_number
         if ok_terminal_closed_text(status_text, latest_filing, detail_text):
             result.status = "Closed / Withdrawn / Canceled"
-            result.raw_status_text = latest_filing or status_text
+            result.raw_status_text = " | ".join(value for value in (status_text, latest_filing) if value)
             result.success = True
             result.source_note = (
                 "Oklahoma detail page or filing history shows a terminal closed/canceled status. "

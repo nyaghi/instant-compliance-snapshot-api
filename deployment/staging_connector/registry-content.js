@@ -2030,7 +2030,8 @@
       observation.phase='ready';
       return {query,complete:true,fields:{Name:name,'Filing Number':fields['Filing Number'],
         'Filing Status':fields['Filing Status'],'Expiration Date':fields['Expiration Date']||'',
-        'Registered Name':fields['Registered Name']||''},
+        'Registered Name':fields['Registered Name']||'',
+        'Public Text':String(panel.innerText||'').slice(0,12000)},
         source_url:'https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx'};
     },Math.max(1,deadline-Date.now()),{action:()=>{observation.click_dispatched=true;link.click();}})));
     return result;
