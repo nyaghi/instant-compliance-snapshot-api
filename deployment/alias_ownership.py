@@ -9,21 +9,26 @@ RECORD_CACHE = {}
 CACHE_LOCK = threading.Lock()
 
 
-def records(master, name, deadline):
+def records(master, name, deadline, offices=()):
     key = master.normalized_match_name(name)
     compact = re.sub(r"[^A-Z0-9]", "", key.upper())
     words = list(compact)
     if len("".join(words)) < 3 or not words:
         return []
-    cache_key = ("alias-legal-owner", compact)
+    locations = sorted({(region, postal) for _, region, postal in offices})
+    if not locations or len(locations) > 12:
+        return []
+    cache_key = ("alias-legal-owner", compact, tuple(locations))
     with CACHE_LOCK:
         saved = RECORD_CACHE.get(cache_key)
     if saved and saved[0] > time.time():
         return saved[1]
     if deadline <= time.monotonic():
         return []
+    location_where = " OR ".join("(upper(principalstate) = '" + region +
+        "' AND principalzipcode like '" + postal + "%')" for region, postal in locations)
     url = "https://data.colorado.gov/resource/37wu-kn3g.json?" + urlencode({
-        "$limit": "100", "$where": "upper(name) like '%" + "%".join(words) + "%'",
+        "$limit": "100", "$where": "upper(name) like '%" + "%".join(words) + "%' AND (" + location_where + ")",
         "$order": "registrationapproveddate DESC",
     })
     data = json.loads(master.identity_fetch(url, deadline, request_timeout=2.0))
@@ -42,7 +47,7 @@ def office(master, street, region, postal):
     street = master.registry_street_key(street)
     region = str(region or "").upper()
     postal = str(postal or "")[:5]
-    if not re.match(r"^\d+\s", street) or len(region) != 2 or not re.fullmatch(r"\d{5}", postal):
+    if not re.match(r"^\d+\s", street) or not re.fullmatch(r"[A-Z]{2}", region) or not re.fullmatch(r"\d{5}", postal):
         return None
     return street, region, postal
 
@@ -53,7 +58,7 @@ def conflict(master, name, ein, offices, deadline):
     if len(requested) != 9 or not valid_offices:
         return {}
     try:
-        matched = [row for row in records(master, name, deadline)
+        matched = [row for row in records(master, name, deadline, valid_offices)
                    if office(master, row.get("principaladdress"), row.get("principalstate"),
                              row.get("principalzipcode")) in valid_offices]
     except (OSError, ValueError, TypeError, TimeoutError, RuntimeError):
@@ -135,8 +140,21 @@ def review_discovery(master, names, sources, organization_name, ein, deadline):
 
 def discovery_conflicts(master, sources, organization_name, ein, deadline):
     """Review completed sources while slower discovery sources are still running."""
-    names = [{**item, 'evidence': list(item.get('evidence', []))}
-             for source in sources for item in source.get('names', [])]
+    # The reverse lookup uses Colorado's offices, including older locations.
+    # Do not spend its small allowance before that same-EIN source completes.
+    if not any(source.get('source') == 'CO' and source.get('organization_records') for source in sources):
+        return {}
+    merged = {}
+    for source in sources:
+        for item in source.get('names', []):
+            key = master.identity_name_key(item['name'])
+            if key not in merged:
+                merged[key] = {**item, 'evidence': list(item.get('evidence', []))}
+            else:
+                for proof in item.get('evidence', []):
+                    if proof not in merged[key]['evidence']:
+                        merged[key]['evidence'].append(proof)
+    names = list(merged.values())
     review_discovery(master, names, sources, organization_name, ein, deadline)
     return {master.identity_name_key(item['name']): item['identity_conflict']
             for item in names if item.get('identity_conflict', {}).get('reason') ==

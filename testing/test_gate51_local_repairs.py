@@ -92,7 +92,7 @@ class Gate51Local(unittest.TestCase):
                  principalstate='TN',principalzipcode='37064')
         office=own.office(c,row['principaladdress'],'TN','37064')
         key=('alias-legal-owner',re.sub('[^A-Z0-9]','',c.normalized_match_name(row['name']).upper()))
-        own.RECORD_CACHE.pop(key,None)
+        own.RECORD_CACHE.clear()
         with patch.object(c,'identity_fetch',return_value=json.dumps([row]).encode()) as fetch:
             for _ in range(8):self.assertEqual(own.conflict(c,row['name'],org.ein,[office],time.monotonic()+3)['decision'],'different_ein')
             self.assertEqual(fetch.call_count,1)
@@ -100,7 +100,7 @@ class Gate51Local(unittest.TestCase):
                      [{**row,'principaladdress':'100 Different Road'}]]:
             with patch.object(own,'records',return_value=rows):self.assertFalse(own.conflict(c,row['name'],org.ein,[office],time.monotonic()+3))
         with patch.object(c,'identity_fetch',side_effect=TimeoutError):
-            own.RECORD_CACHE.pop(key,None)
+            own.RECORD_CACHE.clear()
             self.assertFalse(own.conflict(c,row['name'],org.ein,[office],time.monotonic()+3))
         with patch.object(c,'identity_fetch') as fetch:
             self.assertEqual(own.records(c,'K-LOVE',time.monotonic()-1),[]);fetch.assert_not_called()
@@ -405,6 +405,36 @@ class Gate51Local(unittest.TestCase):
             result=c.ms_browser_lookup(org,evidence)
         self.assertFalse(result.success);self.assertEqual(len(result._cc_identity_review['records']),2)
         proof.assert_not_called()
+
+    def test_live_capped_ownership_query_is_narrowed_before_interpretation(self):
+        from urllib.parse import parse_qs,urlsplit
+        owners=json.loads((ROOT/'testing/fixtures/gate51/KLOVE-OWNERS.json').read_text(encoding='utf-8'))['records']
+        def fetch(url,deadline,**kwargs):
+            where=parse_qs(urlsplit(url).query)['$where'][0]
+            self.assertIn("upper(principalstate) = 'TN'",where)
+            self.assertIn("principalzipcode like '37064%'",where)
+            self.assertEqual(kwargs['request_timeout'],2.0)
+            return json.dumps(owners).encode()
+        own.RECORD_CACHE.clear()
+        office=own.office(c,'2000 Reams Fleming Blvd','TN','37064')
+        with patch.object(c,'identity_fetch',side_effect=fetch) as request:
+            proof=own.conflict(c,'K-LOVE','942816342',[office],time.monotonic()+3)
+        self.assertEqual(proof['ein'],'990434313');self.assertEqual(request.call_count,1)
+        with patch.object(c,'identity_fetch',return_value=json.dumps(owners*34).encode()):
+            own.RECORD_CACHE.clear()
+            self.assertFalse(own.conflict(c,'K-LOVE','942816342',[office],time.monotonic()+3))
+
+    def test_discovery_waits_for_owner_offices_and_merges_duplicate_aliases(self):
+        case=dict(name='Educational Media Foundation',ein='942816342')
+        alias=c.identity_candidate('K-LOVE','NM','Other Name','https://source.example/alias')
+        office=dict(ein=case['ein'],address_role='organization',street='2000 Reams Fleming Blvd',state='TN',postal_code='37064')
+        sources=[dict(source='NM',names=[alias],organization_records=[])]
+        with patch.object(own,'conflict',return_value={}) as proof:
+            self.assertFalse(own.discovery_conflicts(c,sources,case['name'],case['ein'],time.monotonic()+3))
+            proof.assert_not_called()
+            sources += [dict(source='CO',names=[],organization_records=[office]),dict(source='OH',names=[alias],organization_records=[])]
+            own.discovery_conflicts(c,sources,case['name'],case['ein'],time.monotonic()+3)
+            self.assertEqual(proof.call_count,1)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
