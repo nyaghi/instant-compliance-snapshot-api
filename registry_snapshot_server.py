@@ -7515,6 +7515,17 @@ def nc_application_detail_allowed(card):
         and card.get("license_category") == "In-Process" and card.get("status") == "Pending"))
 
 
+def nc_short_historical_cancellation(card, primary_name):
+    """Recognize a dated, canceled, shorter-name card; never infer identity."""
+    shorter = normalized_match_name(card["name"])
+    expiration = card.get("expiration")
+    return (card.get("license_category") == "Charitable Organization"
+            and re.fullmatch(r"SL\d+", card["identifier"]) is not None
+            and card.get("raw_status", "").casefold() in {"cancelled", "canceled"}
+            and expiration is not None and expiration < date.today()
+            and len(shorter.split()) >= 2 and primary_name.startswith(shorter + " "))
+
+
 def nc_charity_profile_evidence(card, profile, filings=None):
     """Bind NC profile and renewal history to the selected charity record."""
     required = {"Name", "Registration #", "Status", "Expiration Date", "Last Application Date",
@@ -8436,6 +8447,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
     scope_reviews = []
     excluded_nc_entities = []
     nc_deferred_applications = []
+    nc_historical_cancellations = []
+    nc_primary_name = normalized_match_name(org.organization_name) if state == "NC" else ""
     nv_scope_records = {}
     excluded_nv_entities = []
     def collect(query):
@@ -8586,6 +8599,13 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             rows = prioritized_registry_candidates(org.organization_name, org.ein, state, rows)
         if state == "NC" and trial_identity() and len(distinctive_match_tokens(org.organization_name)) < 2:
             rows = prioritized_registry_candidates(org.organization_name, org.ein, state, rows)
+        if state == "NC" and trial_identity() and any(
+                nc_short_historical_cancellation(row, nc_primary_name) for row in rows):
+            # The registry can list a much older canceled short name first.
+            # Read the current exact legal identity before those histories.
+            rows = sorted(rows, key=lambda row: not (
+                normalized_match_name(row["name"]) == nc_primary_name
+                and row.get("status") in {"Current", "Upcoming Filing"}))
         if state == "NV" and trial_identity():
             # Capture exact primary records before affiliates can consume the
             # browser's evidence allowance. Selection still evaluates all rows.
@@ -8736,6 +8756,20 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     continue
                 detail_query = {"state": state, "operation": "detail", "identifier": row["identifier"]}
                 if state == "NC": detail_query["url"] = row["url"]
+                if (state == "NC" and trial_identity()
+                        and nc_short_historical_cancellation(row, nc_primary_name)):
+                    primary = next((known for known in records
+                        if normalized_match_name(known["name"]) == nc_primary_name
+                        and known.get("license_category") == "Charitable Organization"
+                        and known.get("status") in {"Current", "Upcoming Filing"}
+                        and known.get("expiration") and known["expiration"] >= date.today()
+                        and known.get("street") and known.get("location")
+                        and licensed_charity_identity(org, known, "NC", deadline) == "accepted"
+                        and known.get("address_evidence", {}).get("decision") == "corroborated"), None)
+                    if primary:
+                        nc_historical_cancellations.append((row, primary["identifier"]))
+                        seen.add(row["identifier"])
+                        continue
                 detail = collect(detail_query)
                 if not isinstance(detail, dict) or detail.get("query") != detail_query or detail.get("complete") is not True:
                     raise ValueError(f"{state} selected detail did not finish or belongs to another query")
@@ -8831,6 +8865,17 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state],
                                       selection=nc_confirmed_selection)
+    if nc_historical_cancellations:
+        if (not result.success or any(
+                expected != result.matched_registry_identifier
+                for _, expected in nc_historical_cancellations)):
+            raise ValueError("North Carolina historical cancellation did not resolve to the corroborated primary license")
+        result.source_attempts = list(getattr(result, "source_attempts", [])) + [
+            {"historical_cancellation": {k: row[k] for k in ("name", "identifier", "raw_status", "url")},
+             "selected_current_license": expected}
+            for row, expected in nc_historical_cancellations]
+        ids = ", ".join(row["identifier"] for row, _ in nc_historical_cancellations[:8])
+        result.source_note += f" The registry also lists a separate older, canceled shorter-name license ({ids}). It does not supersede this verified current license."
     if nc_deferred_applications:
         selected = getattr(result, "_cc_license_record", {})
         from deployment.nc_pending_precedence import confirmed_pending
