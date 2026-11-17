@@ -1518,7 +1518,19 @@ async function registryNorthCarolinaQuery(job,query) {
     return wfReturn(job,"registry-worker.js:registryNorthCarolinaQuery:1248:4:return",(result));
   }
   if(job.ncProfiles?.[query.identifier]!==query.url)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
-  await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1251:2:await",()=>(registryNavigate(job,query.url)));
+  try {
+    await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1251:2:await",()=>(registryNavigate(job,query.url)));
+  } catch(error) {
+    if(!P.TRIAL_ORIGIN || error?.message!=='NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR'
+        || job.ncProfileErrorRetried || job.closed || !owned.has(job.tab)
+        || job.activeExpiresAt-Date.now()<9000) throw error;
+    const tab=await wfAwait(job,"registry-worker.js:ncProfileRecovery:tab",()=>(chrome.tabs.get(job.tab)));
+    if(tab.url!==query.url || job.closed || !owned.has(job.tab)
+        || job.ncProfiles?.[query.identifier]!==query.url || job.activeExpiresAt-Date.now()<9000) throw error;
+    job.ncProfileErrorRetried=true;
+    phase('profile-source-warning-reload');
+    await wfAwait(job,"registry-worker.js:ncProfileRecovery:reload",()=>(registryNavigate(job,query.url,6000)));
+  }
   phase('profile-navigate');
   const profile=await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1253:16:await",()=>(registryMessage(job,{action:'registry-nc-profile',query})));
   phase(`profile-${profile?.ok?'complete':profile?.reason||'incomplete'}`);

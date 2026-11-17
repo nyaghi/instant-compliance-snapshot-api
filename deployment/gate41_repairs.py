@@ -74,7 +74,7 @@ def or_filing_identity(raw, name, identifier, ein, period):
     if len(raw) > 8_000_000 or not raw.startswith(b'%PDF'):
         return False
     pdf = PdfReader(io.BytesIO(raw))
-    if not 2 <= len(pdf.pages) <= 140:
+    if not 2 <= len(pdf.pages) <= 160:
         return False
     cover = pdf.pages[0].extract_text() or ''
     if not re.search(r'\bOregon Department of Justice\b', cover, re.I):
@@ -88,26 +88,44 @@ def or_filing_identity(raw, name, identifier, ein, period):
         return False
     for index, page in enumerate(pdf.pages[1:7], 1):
         head = ' '.join((page.extract_text(extraction_mode='layout') or '')[:4200].split())
+        words = re.findall(r'[a-z0-9]+', legal_core(name).lower())
+        label = r'\b' + r'[^a-z0-9]+'.join(map(re.escape, words)) + r'\b'
         if ('Return of Organization Exempt From Income Tax' not in head
                 or 'Employer identification number' not in head):
-            continue
+            # Some filed returns layer the filled values over the form. The
+            # layout extractor drops that layer; read only the C/D box areas.
+            plain = ' '.join((page.extract_text() or '')[:1600].split())
+            if not re.search(r'\bForm\s+990\b', plain) or 'Return of Organization Exempt From Income Tax' not in plain:
+                continue
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(raw), pages=[index + 1]) as document:
+                filing = document.pages[0]
+                if not (611 <= filing.width <= 613 and 791 <= filing.height <= 793):
+                    return False
+                name_box = ' '.join((filing.crop((122, 107, 453, 134)).extract_text() or '').split())
+                ein_box = ' '.join((filing.crop((454, 108, 580, 134)).extract_text() or '').split())
+            name_value = re.fullmatch(r'C Name of organization (.+) Doing business as', name_box)
+            ein_value = re.fullmatch(r'D Employer identification number (\d{2}-\d{7})', ein_box)
+            if not name_value or not ein_value or ein_value[1].replace('-', '') != ein or plain_key(name_value[1]) != plain_key(name):
+                return False
+            break
         # Read only boxes C/D on the first Form 990 page.
         m = re.search(r'Employer identification number(.*?)Number and street', head, re.I | re.S)
         if not m:
             return False
         ein_values = {v.replace('-', '') for v in re.findall(r'\b\d{2}-\d{7}\b', m[1])}
-        words = re.findall(r'[a-z0-9]+', legal_core(name).lower())
-        label = r'\b' + r'[^a-z0-9]+'.join(map(re.escape, words)) + r'\b'
         if ein_values != {ein} or not re.search(label, m[1], re.I):
             return False
-        from pypdf import PdfWriter
-        output = io.BytesIO()
-        writer = PdfWriter()
-        writer.add_page(pdf.pages[0])
-        writer.add_page(pdf.pages[index])
-        writer.write(output)
-        return output.getvalue()
-    return False
+        break
+    else:
+        return False
+    from pypdf import PdfWriter
+    output = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_page(pdf.pages[0])
+    writer.add_page(pdf.pages[index])
+    writer.write(output)
+    return output.getvalue()
 
 def fetch_or_filing(url, deadline):
     remaining = deadline - time.monotonic()

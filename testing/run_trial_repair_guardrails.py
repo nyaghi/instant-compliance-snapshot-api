@@ -92,7 +92,7 @@ class Repairs(unittest.TestCase):
         fields['Expiration Date']=''
         self.assertEqual(cc.tn_charity_detail_evidence(fields,'CO3674',TN_ROW)['status'],'Unable to Confirm')
     def test_tn_loaded_absent_financial_section_is_delinquent_but_broken_table_is_not(self):
-        empty={**TN,'Expiration Date':'','financial_periods':[],'financial_count':0,'financial_history_absent':True}
+        empty={**TN,'Registration Date':'','Expiration Date':'','financial_periods':[],'financial_count':0,'financial_history_absent':True}
         record=cc.tn_charity_detail_evidence(empty,'CO3674',TN_ROW)
         self.assertEqual(record['status'],'Delinquent')
         self.assertIn('no Financials section',record['date_evidence_note'])
@@ -101,6 +101,18 @@ class Repairs(unittest.TestCase):
             cc.tn_charity_detail_evidence({**empty,'financial_count':-1,'financial_history_absent':False},'CO3674',TN_ROW)
         exempt=cc.tn_charity_detail_evidence({**empty,'Status':'Exempt'},'CO3674',TN_ROW)
         self.assertEqual(exempt['status'],'Exempt')
+    def test_tn_six_month_estimate_keeps_official_expiration_blank(self):
+        current=cc.date.today()
+        start=cc.add_months(current,-2)
+        empty={**TN,'Registration Date':start.strftime('%m/%d/%Y'),'Expiration Date':'',
+               'financial_periods':[],'financial_count':0,'financial_history_absent':True}
+        record=cc.tn_charity_detail_evidence(empty,'CO3674',TN_ROW)
+        self.assertEqual(record['status'],cc.status_from_calendar_date(cc.add_months(start,6)))
+        self.assertIn(record['status'],{'Current','Upcoming Filing'})
+        self.assertIsNone(record['expiration'])
+        self.assertIn(cc.add_months(start,6).isoformat(),record['date_evidence_note'])
+        old={**empty,'Registration Date':cc.add_months(current,-8).strftime('%m/%d/%Y')}
+        self.assertEqual(cc.tn_charity_detail_evidence(old,'CO3674',TN_ROW)['status'],'Delinquent')
     def test_tn_absent_financial_section_survives_signed_evidence_validation(self):
         query={'state':'TN','operation':'detail','identifier':'CO3674'}
         fields={**TN,'Expiration Date':'','financial_periods':[],

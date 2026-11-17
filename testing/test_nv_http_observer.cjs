@@ -5,13 +5,13 @@ function fixture(){
  const win={};win.top=win;win.addEventListener=(t,f)=>listeners.push(f);
  win.postMessage=(m,origin)=>messages.push({m,origin});
  class XHR{constructor(){this.events={};this.status=0;}open(...args){this.openArgs=args;return 'opened';}send(...args){this.sendArgs=args;return 'sent';}addEventListener(t,f){(this.events[t]??=[]).push(f);}removeEventListener(t,f){this.events[t]=(this.events[t]||[]).filter(x=>x!==f);}finish(status){this.status=status;for(const f of this.events.loadend||[])f();}}
- const ctx={window:win,location:{origin:'https://orion.nv.gov',pathname:'/portal/public/',href:'https://orion.nv.gov/portal/public/'},XMLHttpRequest:XHR,URL,Date:{now:()=>now},document:{documentElement:{setAttribute:k=>attributes.add(k),removeAttribute:k=>attributes.delete(k)}}};vm.runInNewContext(source,ctx);
+ const ctx={window:win,location:{origin:'https://orion.nv.gov',pathname:'/portal/public/',href:'https://orion.nv.gov/portal/public/'},XMLHttpRequest:XHR,URL,URLSearchParams,Date:{now:()=>now},document:{documentElement:{setAttribute:k=>attributes.add(k),removeAttribute:k=>attributes.delete(k)}}};vm.runInNewContext(source,ctx);
  const id='11111111-1111-4111-8111-111111111111',channel='cc-nv-search-http-v1';
  const send=(m,origin=ctx.location.origin,from=win)=>listeners.forEach(f=>f({source:from,origin,data:{channel,direction:'request',id,...m}}));
  const watch=(extra={})=>send({operation:'watch',name:'Casey',mode:'STARTS_WITH',budget_ms:75000,...extra});
  const body=(extra={})=>{const parameters={tabRoute:'business.Miss',entityName:'Casey',searchType:'STARTS_WITH',entityNumber:'',nvBusinessId:'',...extra};return JSON.stringify({pageNo:1,parameters,gridInput:{params:{parameters}}});};
  const request=(payload=body(),url='/core/api/_q/v1/nv-sos/public/business/getEntities')=>{const x=new XHR();assert.equal(x.open('POST',url),'opened');assert.equal(x.send(payload),'sent');assert.equal(x.sendArgs[0],payload);return x;};
- return {watch,send,body,request,messages,id,attributes,XHR,setTime:v=>{now=v;}};
+ return {watch,send,body,request,messages,id,attributes,XHR,location:ctx.location,setTime:v=>{now=v;}};
 }
 test('bound search exposes HTTP outcome without changing request or reading response',()=>{for(const status of [200,500,503,429,0]){const h=fixture();h.watch();const x=h.request();x.finish(status);assert.deepEqual(h.messages.map(x=>x.m.phase),['ready','started','finished']);assert.equal(h.messages.at(-1).m.http_status,status);assert.equal(Object.keys(h.messages.at(-1).m).sort().join(','),'channel,direction,http_status,id,phase');}});
 test('different name, mode, filters, page and endpoint cannot satisfy the watch',()=>{for(const change of [{entityName:'Other'},{searchType:'CONTAINS'},{entityNumber:'123'},{nvBusinessId:'NV1'}]){const h=fixture();h.watch();h.request(h.body(change)).finish(500);assert.equal(h.messages.length,1);}for(const variant of ['page','endpoint','foreign']){const h=fixture();h.watch();const b=JSON.parse(h.body());if(variant==='page')b.pageNo=2;h.request(JSON.stringify(b),variant==='endpoint'?'/other':variant==='foreign'?'https://example.org/core/api/_q/v1/nv-sos/public/business/getEntities':undefined).finish(500);assert.equal(h.messages.length,1);}});
@@ -20,6 +20,23 @@ test('expired request and wrong-origin messages cannot report a result',()=>{con
 test('existing startup configuration observation is preserved',()=>{const h=fixture();for(let i=0;i<2;i++){const x=new h.XHR();x.open('GET','https://content.orion.nv.gov/api/tenants');x.send();x.finish(500);}assert.equal(h.attributes.has('data-cc-nv-config-unavailable'),true);});
 test('both observed Nevada business routes report outcomes',()=>{for(const route of ['business','business.Miss'])for(const status of [200,500]){const h=fixture();h.watch();h.request(h.body({tabRoute:route})).finish(status);assert.deepEqual(h.messages.map(x=>x.m.phase),['ready','started','finished']);assert.equal(h.messages.at(-1).m.http_status,status);}});
 test('unrelated or conflicting routes cannot satisfy a watch',()=>{for(const route of ['notary','mark','business.Other','']){const h=fixture();h.watch();h.request(h.body({tabRoute:route})).finish(200);assert.equal(h.messages.length,1);}const h=fixture();h.watch();const b=JSON.parse(h.body());b.parameters.tabRoute='business';h.request(JSON.stringify(b)).finish(200);assert.equal(h.messages.length,1);});
+
+test('omitted routes bind only to the exact live Business search and unchanged query',()=>{
+ const prefix='#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=';
+ for(const [hash,change,expected] of [
+  [prefix+'business',null,true],[prefix+'business.Miss',null,true],
+  [prefix+'notary',null,false],[prefix+'business&tabRoute=notary',null,false],
+  [prefix.replace('GenericFilingsSearch','BusinessDetails')+'business',null,false],
+  [prefix+'business','half',false],[prefix+'business','wrong-name',false],
+ ]) {
+  const h=fixture();h.location.hash=hash;h.watch();
+  const body=JSON.parse(h.body({tabRoute:undefined}));
+  if(change==='half')body.parameters.tabRoute='business';
+  if(change==='wrong-name')body.parameters.entityName='Other';
+  h.request(JSON.stringify(body)).finish(200);
+  assert.equal(h.messages.length,expected?3:1);
+ }
+});
 
 test('business ID replay observes only the exact public ID search with empty name',()=>{
  for(const change of [{},{nvBusinessId:'NV2'},{entityName:'Casey'},{entityNumber:'E123'},{searchType:'EXACT_MATCH'}]){

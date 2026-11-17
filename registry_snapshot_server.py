@@ -7811,8 +7811,13 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
             status = "Unable to Confirm"
             date_note = "Tennessee displays no expiration date and its complete financial history was not obtained; filing currency remains unconfirmed."
         elif latest_period is None:
-            status = "Delinquent"
-            date_note = ("The loaded Tennessee detail displays no Financials section or expiration date; no annual filing is shown. "
+            inferred_due = add_months(initial, 6) if initial else None
+            status = status_from_calendar_date(inferred_due) if inferred_due else "Delinquent"
+            date_note = (f"Tennessee displays Active but provides no expiration date or annual filing. "
+                         f"CharityClarity estimates a due date of {inferred_due.isoformat()} (six months from the "
+                         f"registration date {initial.isoformat()}); this is not a state-published expiration."
+                         if inferred_due else
+                         "The loaded Tennessee detail displays no Financials section or expiration date; no annual filing is shown. "
                          "CharityClarity infers Delinquent under its no-filing-history rule; the state displays Active, not Delinquent."
                          if fields.get("financial_history_absent") is True else
                          "The confirmed Tennessee registration has a complete but empty financial history; no annual filing is on record.")
@@ -9759,6 +9764,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
            "Alabama's verification image could not be read with sufficient confidence; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_IMAGE_UNCERTAIN" else
            "Alabama's verification reader was unavailable or ran out of time; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_READER_UNAVAILABLE" else
            "North Carolina temporarily limited requests (HTTP 429) before all required searches finished. Completed records were retained, but the remaining search could not be completed. Retry after North Carolina allows requests again, or review its official lookup." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
+           "North Carolina returned a registry error on the selected license profile after returning search results. The license status could not be verified." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR" else
            "Tennessee temporarily limited registry requests (HTTP 429). CharityClarity stopped further Tennessee requests during the source cooldown; retry after the registry permits requests again." if state == "TN" and reason == "NY_CONNECTOR_REGISTRY_TN_RATE_LIMITED" else
            "New Mexico returned its public unexpected-error page for the submitted search." if state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR' else
            "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
@@ -16259,9 +16265,17 @@ def search_bundled_extension_state(page, org, state: str):
             stop = min(DEADLINE.get()-1, time.monotonic()+7.0)
             report = re.findall(r'\bFiscal Year Beginning\s+(\d{1,2}/\d{1,2}/\d{4})\s+and Ending\s+(\d{1,2}/\d{1,2}/\d{4})', body, re.I)
             try:
-                ends = [parse_ce_date(end) for _, end in report]
-                latest = max(end for end in ends if end and end <= date.today())
-                links = page.locator('a').filter(has_text=re.compile(r'^'+str(latest.year)+r' Charity Report$'))
+                periods = [(parse_ce_date(start), parse_ce_date(end)) for start, end in report]
+                latest = max(end for start, end in periods if start and end and start <= end <= date.today())
+                years = {start.year for start, end in periods if start and start <= end == latest}
+                if len(years) != 1:
+                    raise ValueError("Oregon report start year is ambiguous")
+                start_year = years.pop()
+                links = page.locator('a').filter(has_text=re.compile(r'^'+str(start_year)+r' Charity Report$'))
+                if not links.count() and start_year != latest.year:
+                    # Retain support for registries labeling the link by its
+                    # end year, but still require the exact period on the PDF.
+                    links = page.locator('a').filter(has_text=re.compile(r'^'+str(latest.year)+r' Charity Report$'))
                 if links.count() == 1 and time.monotonic() < stop:
                     url = or_filing_link(links.first.get_attribute('href', timeout=700) or '')
                     period = f'{latest.month}/{latest.day}/{latest.year}'

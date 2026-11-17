@@ -67,8 +67,17 @@
     const job=active;let bound=false;
     if(job&&Date.now()<job.expires&&!job.xhr&&requests.get(this))try{
       const body=JSON.parse(args[0]),p=body.parameters,g=body.gridInput?.params?.parameters;
-      bound=body.pageNo===1&&p?.tabRoute===g?.tabRoute&&[p,g].every(v=>v&&v.entityName===job.name&&v.searchType===job.mode
-        &&v.entityNumber===''&&v.nvBusinessId===job.businessId&&['business','business.Miss'].includes(v.tabRoute));
+      const routes=['business','business.Miss'];
+      const hash=location.hash||'';
+      const searchRoute='#/public/nvsos/en/CaseXscreen?';
+      const routeParams=new URLSearchParams(hash.slice(searchRoute.length));
+      const liveBusinessRoute=hash.startsWith(searchRoute)
+        &&routeParams.getAll('screen').length===1&&routeParams.get('screen')==='external-GenericFilingsSearch'
+        &&routeParams.getAll('tabRoute').length===1&&routes.includes(routeParams.get('tabRoute'));
+      const routeBound=(p?.tabRoute===g?.tabRoute&&routes.includes(p?.tabRoute))
+        ||(p&&g&&!Object.hasOwn(p,'tabRoute')&&!Object.hasOwn(g,'tabRoute')&&liveBusinessRoute);
+      bound=body.pageNo===1&&routeBound&&[p,g].every(v=>v&&v.entityName===job.name&&v.searchType===job.mode
+        &&v.entityNumber===''&&v.nvBusinessId===job.businessId);
     }catch{}
     if(bound){
       job.xhr=this;emit(job,'started');
