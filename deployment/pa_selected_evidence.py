@@ -28,6 +28,9 @@ def visible_values(row):
 
 
 def image_bound(run, result, url, raw, kind):
+    from .pa_detail_evidence import image_bound as detail_bound
+    if detail_bound(run,result,url,raw,kind):
+        return True
     if (run.state != 'PA' or result.get('state') != 'PA' or digits(result.get('ein')) != run.ein
             or kind != 'image' or url != URL or result.get('success') is not True):
         return False

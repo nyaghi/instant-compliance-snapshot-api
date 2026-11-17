@@ -127,6 +127,7 @@ def capture(page, org, result):
         text=' | '.join(cells[:11])+'\n'+'\n'.join(k+': '+str(v) for k,v in fields.items())
         run.document(DETAIL,packed,'image_pages',text,note='Original Pennsylvania search result and selected detail page; same identity and applicable registration fields verified before and after capture.')
         run.pa_detail_hash=hashlib.sha256(packed).hexdigest()
+        run.pa_detail_identity=(run.ein,result.matched_registry_name,str(result.matched_registry_identifier or ''))
         fact.update(outcome='captured',pages=2)
     except Exception as exc:
         fact.update(outcome='unavailable',error_type=type(exc).__name__)
@@ -142,3 +143,12 @@ def select(run,ordered):
     proof=getattr(run,'pa_detail_hash',None)
     paired=[d for d in ordered if d[0]==DETAIL and d[2]=='image_pages' and hashlib.sha256(d[1]).hexdigest()==proof]
     return paired+ordered
+
+
+def image_bound(run,result,url,raw,kind):
+    return bool(run.state=='PA' and result.get('state')=='PA'
+        and digits(result.get('ein'))==run.ein and result.get('success') is True
+        and url==DETAIL and kind=='image_pages'
+        and getattr(run,'pa_detail_hash',None)==hashlib.sha256(raw).hexdigest()
+        and getattr(run,'pa_detail_identity',None)==(run.ein,
+            result.get('matched_registry_name'),str(result.get('matched_registry_identifier') or '')))

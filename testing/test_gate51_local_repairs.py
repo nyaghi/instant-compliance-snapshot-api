@@ -303,14 +303,23 @@ class Gate51Local(unittest.TestCase):
                     grid.capture(page,org,result,[record],case['name'],time.monotonic()+10)
                     if before:old_capture(page,org,result)
                     else:pa.capture(page,org,result)
+                    data=dict(vars(result),ein=case['ein'])
+                    paired=next((d for d in run.documents if d[2]=='image_pages'),None)
+                    linked=bool(paired and grid.image_bound(run,data,*paired[:3]))
+                    if paired and not before:
+                        self.assertTrue(linked)
+                        for field,value in [('ein','990434313'),('matched_registry_name','Other'),('matched_registry_identifier','other'),('state','TN'),('success',False)]:
+                            self.assertFalse(grid.image_bound(run,{**data,field:value},*paired[:3]))
+                        self.assertFalse(grid.image_bound(run,data,paired[0],paired[1]+b'stale',paired[2]))
                     return dict(grid=any(d[2]=='image' for d in run.documents),
                         detail=any(d[2]=='image_pages' for d in run.documents),
+                        linked=linked,
                         waits=len(page.wait_for_function.call_args_list),
                         detail_closed=page.expect_popup.return_value.value.close.call_count)
                 finally:pa.CURRENT.reset(token);pa.DEADLINE.reset(stop)
             before,after=run_adapter(True),run_adapter()
             save('PA',case,'blank-PersonId-selected-detail',before,after,
-                 before['grid'] and not before['detail'] and after['grid'] and after['detail'] and after['detail_closed']==1)
+                 before['grid'] and not before['detail'] and after['grid'] and after['detail'] and after['linked'] and after['detail_closed']==1)
             for fault in ['busy-grid','busy-after','stale-ID','missing-ID','different-EIN','different-name','different-office']:
                 checked=run_adapter(False,fault)
                 self.assertFalse(checked['detail'],(case,fault,checked))
@@ -473,6 +482,22 @@ class Gate51Local(unittest.TestCase):
         console.log('Recorded Pennsylvania production-controller shape passed');'''
         result=subprocess.run(['node','-e',script],input=json.dumps(dict(fixture=fixture,id=pa.DETAIL_ID,grid=pa.GRID_ID)),text=True,capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_70_pa_pair_survives_final_archive_selection_without_printed_id(self):
+        import hashlib
+        from deployment import state_snapshots as snapshots
+        for i,case in enumerate(ROSTER):
+            run=snapshots.CaptureRun(case['name'],case['ein'],'PA')
+            ident=str(3604297+i);raw=b'actual-pair-contract-'+str(i).encode()
+            run.pa_detail_hash=hashlib.sha256(raw).hexdigest()
+            run.pa_detail_identity=(case['ein'],case['name'],ident)
+            run.documents=[(pa.DETAIL,raw,'image_pages',case['name']+'\nBoston MA',time.time(),'original pair')]
+            data=dict(state='PA',ein=case['ein'],status='Delinquent',success=True,
+                      matched_registry_name=case['name'],matched_registry_identifier=ident)
+            with patch.object(snapshots,'asset_for',side_effect=lambda raw,**kw:dict(kind=kw['kind'])):
+                result=run.finish(data)
+            self.assertEqual(result['_worker_source_archives'][0]['kind'],'image_pages')
+            self.assertNotIn(ident,run.documents[0][3])
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
