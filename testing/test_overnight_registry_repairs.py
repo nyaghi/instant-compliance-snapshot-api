@@ -62,6 +62,43 @@ class OvernightRegistryRepairs(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, "recency is incomplete"):
                 c.ok_open_latest_equivalent_detail(page, org, module, (None, None, name, older))
 
+    def test_ok_current_exemption_beats_older_same_identity_in_either_row_order(self):
+        name = "DUKE UNIVERSITY"
+        older, newer = "4312292524", "4313930620"
+        org = c.checker.Organization(name, "560532129")
+        page, module = Mock(), c.state_batch_modules(["OK"])[c.load_state_batch_bundle().STATE_TO_MODULE["OK"]]
+        histories = {
+            older: ("Expired", "15737520001 Notice of Registration Exemption November 10, 2010 1"),
+            newer: ("In Existence", "75525410001 Notice of Registration Exemption March 16, 2026 161"),
+        }
+
+        def goto(url, **kwargs):
+            page.url = url
+            page.locator.return_value.nth.return_value.inner_text.return_value = histories[url.rsplit("=", 1)[-1]][1]
+            return Mock(status=200)
+
+        def body_text(page, **kwargs):
+            status, _ = histories[page.url.rsplit("=", 1)[-1]]
+            return f"Entity Name\n{name}\nStatus\n{status}\nFiling History\n"
+
+        page.goto.side_effect = goto
+        page.locator.return_value.count.return_value = 1
+        with (patch.object(c, "trial_identity", return_value=True), patch.object(module, "body_text", body_text)):
+            for order in [(older, newer), (newer, older)]:
+                org.ok_equivalent_records = [(name, identifier) for identifier in order]
+                self.assertEqual(c.ok_open_latest_equivalent_detail(page, org, module, (None, None, name, order[0])),
+                                 (name, newer))
+                proof = next(row for row in org.ok_compared_records if row["identifier"] == newer)
+                self.assertEqual(proof["latest_identity_event_date"], "2026-03-16")
+                self.assertEqual(proof["recency_basis"], "exemption_notice_filing")
+        self.assertNotEqual(c.complete_name_identity_key(name), c.complete_name_identity_key(name + " HEALTH SYSTEM"))
+        _, notice = histories[newer]
+        for status, renewal in [("Expired", ""), ("Canceled", ""),
+                                ("In Existence", "123 Renewal Registration March 16, 2026 1"),
+                                ("In Existence", "123 Renewal Registration April 30, 2026 1")]:
+            with self.subTest(status=status, renewal=renewal):
+                self.assertIsNone(c.ok_current_exemption_notice(status, renewal, [notice], module))
+
     def test_sc_queries_complete_suffix_free_primary_before_historical_alias(self):
         name = "Crohn's & Colitis Foundation Inc."
         primary = "Crohn's & Colitis Foundation"

@@ -31944,6 +31944,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return result.source_note
     if result.state == "FL" and getattr(result, "reason_code", "") == "FL_CERTIFICATE_ERROR":
         return result.source_note
+    if result.state == "OK" and getattr(result, "reason_code", "") == "OK_NEWER_INDEXED_EXEMPTION_NOTICE":
+        return result.source_note
     if result.state in {"DC", "RI", "IL", "GA"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
         return result.source_note
     if result.state == "ND" and getattr(result, "status_reason", "") == "ND_MATCHING_RECORDS_INACTIVE":
@@ -34976,6 +34978,28 @@ def ok_latest_filing_from_candidates(candidates: list[str], module) -> str:
     return undated[0] if undated else ""
 
 
+def ok_latest_exemption_notice(candidates: list[str], module) -> tuple[date, str] | None:
+    dated = []
+    for candidate in candidates:
+        row = ok_filing_row_text(candidate or "")
+        if not re.fullmatch(r"\d+\s+Notice of Registration Exemption\s+[A-Za-z]+ \d{1,2}, \d{4}\s+\d+", row, re.I):
+            continue
+        filed = module.parse_ok_filing_date(row)
+        if filed and filed <= date.today():
+            dated.append((filed, row))
+    return max(dated, key=lambda item: item[0]) if dated else None
+
+
+def ok_current_exemption_notice(status: str, latest_filing: str, candidates: list[str], module) -> tuple[date, str] | None:
+    if status.strip().casefold() != "in existence":
+        return None
+    notice = ok_latest_exemption_notice(candidates, module)
+    registration_date = module.parse_ok_filing_date(latest_filing) if latest_filing else None
+    # An undated competing registration cannot be ordered safely. Prefer the
+    # existing registration path if it is equally recent or newer.
+    return notice if notice and (not latest_filing or registration_date and notice[0] > registration_date) else None
+
+
 def ok_detail_record_text(text: str) -> str:
     # The replacement portal prints office hours below the record, including
     # "Closed on all legal holidays". That is not entity status evidence.
@@ -35461,13 +35485,14 @@ def ok_open_latest_equivalent_detail(page, org, module, selected):
             terminal_dates = [value for value in terminal_dates if value and value <= date.today()]
             filed = max(terminal_dates) if terminal_dates else None
             event_basis = "terminal_status_filing"
-        elif filed is None and status.strip().casefold() == "expired":
-            # An exemption notice dates the record; it does not change the
-            # current portal status or supply a renewal date.
-            notice_dates = [module.parse_ok_filing_date(line) for line in lines
-                            if re.match(r"^\d+\s+Notice of Registration Exemption\s+", line, re.I)]
-            filed = max((value for value in notice_dates if value and value <= date.today()), default=None)
-            event_basis = "exemption_notice_filing"
+        else:
+            notice = ok_current_exemption_notice(status, latest, lines, module)
+            if notice is None and filed is None and status.strip().casefold() == "expired":
+                # A historical notice can date the record without making it current.
+                notice = ok_latest_exemption_notice(lines, module)
+            if notice is not None:
+                filed = notice[0]
+                event_basis = "exemption_notice_filing"
         if filed is None or filed > date.today():
             raise TimeoutError("Oklahoma equivalent record recency is incomplete")
         collected.append((filed, name, identifier, target, event_basis))
@@ -35666,6 +35691,27 @@ def search_ok_precise(page, org, module):
                 "The accepted row safely matched the requested organization."
             )
             return ok_attach_foundation_review(result, org, page)
+        # This rule resolves a comparison, not every historical notice. The
+        # selected exact-identity record must be strictly newer than its peers.
+        compared = getattr(org, "ok_compared_records", ())
+        if (trial_identity() and page.url == OK_DETAIL_URL + filing_number
+                and any(record["identifier"] == filing_number and record["recency_basis"] == "exemption_notice_filing"
+                        for record in compared)
+                and complete_name_identity_key(matched_name)
+                == complete_name_identity_key(getattr(org, "original_organization_name", org.organization_name))):
+            notice = ok_current_exemption_notice(status_text, latest_filing, filing_candidates, module)
+            if notice and all(notice[0].isoformat() > record["latest_identity_event_date"]
+                              for record in compared if record["identifier"] != filing_number):
+                result.status = "Exempt"
+                result.raw_status_text = f"{status_text} | {notice[1]}"
+                result.source_url = page.url
+                result.reason_code = "OK_NEWER_INDEXED_EXEMPTION_NOTICE"
+                result.source_note = (
+                    f"The newer matching Oklahoma record lists a Notice of Registration Exemption filed {format_date(notice[0])}. "
+                    "Exempt is based on that registry entry. The notice and its attachments should be checked separately for any conflicting identifiers."
+                )
+                result.success = True
+                return ok_attach_foundation_review(result, org, page)
         if not latest_filing:
             result.status = status_text
             result.raw_status_text = status_text
