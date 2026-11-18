@@ -22,7 +22,7 @@
     if(!context||!context.cell.isConnected)return;
     let box=context.cell.querySelector('.tn-extension-row');
     if(!box){box=document.createElement('div');box.className='tn-extension-row';context.cell.append(box);}
-    const r=data.requests?.[0];
+    const r=data.requests?.find(x=>['Extension submitted','Receipt acknowledged','Submission unconfirmed'].includes(x.status))||data.requests?.[0];
     box.innerHTML=`<strong>Tennessee extension pilot</strong><br><button type="button" disabled>File Extension</button>
       <span>${esc(data.eligibility.reasons.join(' '))}</span>
       ${r?`<div class="tn-demo-saved"><strong>Demo only — ${esc(r.status)}</strong><br>${links(r)}
