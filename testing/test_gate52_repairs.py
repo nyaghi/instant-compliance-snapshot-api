@@ -12,7 +12,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace as NS
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import registry_snapshot_server as c
 from deployment import gate52_repairs as fix, source_visual_adapters as ca
@@ -97,6 +97,12 @@ class Gate52(unittest.TestCase):
             self.assertIsNone(c.ok_certificate_expiration(raw,'UNRELATED ORGANIZATION',first_page_only=True)[0])
             self.assertIsNone(c.ok_certificate_expiration(certificate(case['name'],case['ein'],adverse=True),case['name'],first_page_only=True)[0])
             self.assertIsNone(c.ok_certificate_expiration(raw,case['name'],deadline=0,first_page_only=True)[0])
+            selected='78643640002 Renewal Registration September 23, 2026 5'
+            duplicate='78643650002 Renewal Registration September 23, 2026 5'
+            module=NS(parse_ok_filing_date=lambda text:date(2026,9,23))
+            unreadable=c.OklahomaCertificateResult(None,'Unreadable certificate','unreadable')
+            self.assertEqual(c.ok_calculated_registration_expiration(selected,unreadable,'In Existence',[selected],module),date(2027,9,23))
+            self.assertIsNone(c.ok_calculated_registration_expiration(selected,unreadable,'In Existence',[selected,duplicate],module))
             record('OK',case,'original certificate text, wrong identity, adverse evidence and exhausted budget')
 
     def test_MA_70_primary_header_identity_not_narrative(self):
@@ -114,7 +120,9 @@ class Gate52(unittest.TestCase):
             primary=dict(name=case['name'],verified=True,evidence=[dict(source='New Jersey',type='Registered name')])
             other=dict(name='Unrelated Distinctive Enterprise',verified=True,evidence=[dict(source='New Jersey',type='Registered name')])
             sources=[dict(source='NJ',complete=True,names=[primary,other]),dict(source='IRS',complete=True,names=[primary])]
-            self.assertIn(c.identity_name_key(other['name']),fix.nj_discovery_discrepancies(c,[primary,other],sources,case['name']))
+            discrepancy=fix.nj_discovery_discrepancies(c,[primary,other],sources,case['name'],case['ein'])
+            self.assertIn(c.identity_name_key(other['name']),discrepancy)
+            self.assertTrue(all(discrepancy[c.identity_name_key(other['name'])][field] for field in ['candidate_name','candidate_ein','candidate_location']))
             for safe in [dict(other,historical=True),dict(other,evidence=other['evidence']+[dict(source='IRS',type='Former name')]),
                          dict(other,evidence=[dict(source='New Jersey',type='AKA / DBA')])]:
                 self.assertFalse(fix.nj_discovery_discrepancies(c,[primary,safe],sources,case['name']))
@@ -133,8 +141,36 @@ class Gate52(unittest.TestCase):
             self.assertEqual(value['filing_year'],2025)
         finally:DEADLINE.reset(token)
         for doc in ['78643640002.pdf','78643650002.pdf']:
-            t=time.monotonic();due,text=c.ok_certificate_expiration((P/doc).read_bytes(),'FOOD BANK FOR NEW YORK CITY',deadline=t+10,first_page_only=True)
-            self.assertEqual(due,date(2027,9,23));self.assertLess(time.monotonic()-t,10)
+            t=time.monotonic();due,text=c.ok_certificate_expiration((P/doc).read_bytes(),'FOOD BANK FOR NEW YORK CITY',deadline=t+15,first_page_only=True)
+            self.assertEqual(due,date(2027,9,23),text);self.assertLess(time.monotonic()-t,15)
+
+    def test_OK_one_download_text_first_optional_scan_separate_clock(self):
+        for allow in [False,True]:
+            page=MagicMock();page.url='https://www.sos.ok.gov/corp/corpInformation.aspx?id=4312428005'
+            # The archived official postback form is still a supported source.
+            page.get_by_role.return_value.get_attribute.return_value="javascript:__doPostBack('ctl00$DefaultContent$grdFilingList$ctl03$lnkAction','')"
+            page.locator.return_value.first.evaluate.return_value={}
+            response=NS(ok=True,body=lambda:b'%PDF fixture',status=200,headers={})
+            clock=[0.0]
+            def post(*args,**kwargs):clock[0]=5.0;return response
+            page.request.post.side_effect=post
+            calls=[]
+            def read(raw,name,**kwargs):
+                calls.append(kwargs)
+                if kwargs['allow_ocr']:
+                    self.assertEqual(kwargs['deadline'],20.0)
+                    clock[0]=12.0
+                    return date(2027,9,23),'explicit certificate expiration'
+                return None,"The certificate's identity and stated expiration could not both be confirmed."
+            token=DEADLINE.set(40.0)
+            try:
+                with patch.object(c.time,'monotonic',side_effect=lambda:clock[0]),patch.object(c,'ok_certificate_expiration',side_effect=read), \
+                     patch('deployment.ok_certificate_evidence.retain_certificate'):
+                    value=c.ok_fetch_registration_certificate(page,'78643640002 Renewal Registration September 23, 2026 5','FOOD BANK FOR NEW YORK CITY',allow_scan=allow)
+                self.assertEqual(page.request.post.call_count,1)
+                self.assertEqual(len(calls),2 if allow else 1)
+                self.assertEqual(value.expiration,date(2027,9,23) if allow else None)
+            finally:DEADLINE.reset(token)
 
 
 if __name__=='__main__':

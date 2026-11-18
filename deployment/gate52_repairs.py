@@ -61,7 +61,7 @@ def ma_primary_return_identity(raw, name, ein, stop):
     return False
 
 
-def nj_discovery_discrepancies(master, names, sources, organization_name):
+def nj_discovery_discrepancies(master, names, sources, organization_name, ein=''):
     """Quarantine a sole-source unrelated registered name, not a proven alias."""
     key = master.identity_name_key
     primary = key(organization_name)
@@ -80,6 +80,10 @@ def nj_discovery_discrepancies(master, names, sources, organization_name):
             continue
         result[key(item['name'])] = {
             'source': 'NJ', 'reason': 'Conflicting registered name in one source',
+            'candidate_name': item['name'],
+            'candidate_ein': master.format_ein(ein) if ein else 'not independently verified',
+            'candidate_location': 'New Jersey source discrepancy',
+            'source_url': proofs[0].get('url', ''),
             'explanation': 'New Jersey returned this unrelated registered name under the entered EIN. '
                            'Other completed sources corroborate the entered name, but do not establish '
                            'this alternate name. It is unchecked until you confirm the relationship.',

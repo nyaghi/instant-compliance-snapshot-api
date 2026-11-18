@@ -4637,7 +4637,7 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
             item['verified'] = False
             item['identity_conflict'] = proof
     from deployment.gate52_repairs import nj_discovery_discrepancies
-    nj_conflicts = nj_discovery_discrepancies(sys.modules[__name__], names, results, organization_name)
+    nj_conflicts = nj_discovery_discrepancies(sys.modules[__name__], names, results, organization_name, ein)
     for item in names:
         if proof := nj_conflicts.get(identity_name_key(item['name'])):
             item['verified'] = False
@@ -35278,7 +35278,7 @@ def ok_document_delivery_error(text: str) -> bool:
                           r"|internal\s+server\s+error|service\s+unavailable|an\s+error\s+(?:has\s+)?occurred", text, re.I))
 
 
-def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str) -> OklahomaCertificateResult:
+def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str, *, allow_scan=False) -> OklahomaCertificateResult:
     """Recover an early transport failure once within the original action budget."""
     from deployment.state_snapshots import DEADLINE
     started = time.monotonic()
@@ -35294,13 +35294,29 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
     live_action_confirmed = False
 
     def read_certificate(pdf_bytes):
+        interpretation_started = time.monotonic()
         try:
-            # The original delivery path already has this ten-second ceiling.
-            # Share it with one scan interpretation, never another request.
-            due, note = ok_certificate_expiration(pdf_bytes, registry_name, allow_ocr=True,
-                deadline=min(state_stop, started + 10.0), first_page_only=True)
+            # Delivery and one optional scan interpretation share the existing
+            # state deadline. Do not charge transport/archiving to OCR time.
+            # Ordinary, safely interpretable filing histories never run OCR.
+            due, note = ok_certificate_expiration(pdf_bytes, registry_name, allow_ocr=False)
+            if (allow_scan and due is None
+                    and note == "The certificate's identity and stated expiration could not both be confirmed."):
+                due, note = ok_certificate_expiration(pdf_bytes, registry_name, allow_ocr=True,
+                    deadline=min(state_stop, interpretation_started + 15.0), first_page_only=True)
         except Exception as exc:
             due, note = None, f"The returned certificate could not be read ({type(exc).__name__}); its expiration was not inferred."
+        try:
+            from deployment.state_snapshots import CURRENT
+            observed_run=CURRENT.get()
+            if observed_run is not None:
+                observed_run.visual_adapter_facts.append(dict(adapter='OK-certificate-interpretation',
+                    scan_allowed=allow_scan,elapsed_ms=round((time.monotonic()-interpretation_started)*1000),
+                    action_elapsed_ms=round((time.monotonic()-started)*1000),
+                    state_seconds_remaining=round(max(0,state_stop-time.monotonic())),
+                    outcome='confirmed' if due else note[:180]))
+        except Exception:
+            pass
         with _ok_certificate_cache_lock:
             _ok_certificate_cache.pop(cache_key, None)
             if due:
@@ -35874,7 +35890,11 @@ def search_ok_precise(page, org, module):
                 if number: result.raw_status_text += ' | Historical exemption notice '+number
             return ok_attach_foundation_review(result, org, page)
 
-        certificate_evidence = ok_fetch_registration_certificate(page, latest_filing, matched_name)
+        ordinary_date = ok_calculated_registration_expiration(latest_filing,
+            OklahomaCertificateResult(None, 'Unreadable certificate', 'unreadable'),
+            detail_text, filing_candidates, module)
+        certificate_evidence = ok_fetch_registration_certificate(page, latest_filing, matched_name,
+            allow_scan=ordinary_date is None)
         certificate_due, certificate_note = certificate_evidence
         result.source_attempts = [certificate_note]
         if certificate_due:
