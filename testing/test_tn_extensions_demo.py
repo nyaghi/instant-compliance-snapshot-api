@@ -184,6 +184,16 @@ class Tests(unittest.TestCase):
     def test_no_separate_synthetic_create_through_http(self):
         h=Handler(dict(action='create',ein='012345678',name='Example',scenario='open'))
         self.assertEqual(t.handle(self.a,h,origin='https://staging.example')[0],400)
+    def test_suggested_reason_is_editable_and_requires_review(self):
+        r=self.create();self.assertEqual(r['fields']['reason'],t.SUGGESTED_REASON)
+        with self.assertRaises(t.Invalid):self.submit(r,reviewed=False)
+        p=self.payload(r);p['fields']['reason']='Filer supplied different reason.'
+        d=self.s.submit(self.c,ACCOUNT,self.s.load(self.c,ACCOUNT,r['id']),p,NOW)
+        self.assertEqual(d['fields']['reason'],'Filer supplied different reason.')
+        old=self.create(identifier='012345679');stored=self.s.load(self.c,ACCOUNT,old['id']);stored['fields']['reason']=''
+        self.assertEqual(self.s.public(stored)['fields']['reason'],t.SUGGESTED_REASON)
+        stored['fields']['reason']='Keep my existing wording.'
+        self.assertEqual(self.s.public(stored)['fields']['reason'],'Keep my existing wording.')
     def test_no_outbound_client_or_submission_endpoint(self):
         tree=ast.parse(Path(t.__file__).read_text())
         imported=[n.names[0].name if isinstance(n,ast.Import) else n.module for n in ast.walk(tree) if isinstance(n,(ast.Import,ast.ImportFrom))]

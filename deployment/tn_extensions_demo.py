@@ -22,6 +22,7 @@ PORTAL='https://tncab.tnsos.gov/portal/portal-login-page'
 SOURCE='https://tncab.tnsos.gov/portal/registered-charities-search'
 FORM='https://sos-prod.tnsosgovfiles.com/s3fs-public/document/SS-6074.pdf?VersionId=z7ugMK57NV30ABCiNbBXqaU7pb4TWLHK'
 AS_OF='2026-11-18'
+SUGGESTED_REASON='Additional time is requested to complete and review the annual renewal and supporting financial information.'
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS cc_tn_extension_demo_requests (
  id text PRIMARY KEY, account text NOT NULL, ein text NOT NULL,
@@ -149,7 +150,9 @@ class Service:
         rows=c.execute('SELECT data FROM cc_tn_extension_demo_requests WHERE account=%s AND ein=%s ORDER BY created DESC LIMIT 30',(account,identifier)).fetchall()
         return [x['data'] for x in rows]
     def public(self,r):
-        return {k:v for k,v in r.items() if k!='gateway'} | {'eligibility':eligibility(r['facts'],day(r['as_of'])),
+        fields=dict(r['fields'])
+        if r['status'] in {'Draft','Submission failed'} and not fields.get('reason','').strip():fields['reason']=SUGGESTED_REASON
+        return {k:v for k,v in r.items() if k!='gateway'} | {'fields':fields,'eligibility':eligibility(r['facts'],day(r['as_of'])),
             'portal_verified':False,'production_ready':False,'portal':PORTAL,'form_source':FORM}
     def checked_facts(self,c,account,identifier,now):
         f=public_facts(identifier,local_day(now))
@@ -180,7 +183,7 @@ class Service:
         r=dict(id=uuid.uuid4().hex,ein=identifier,scenario=scenario,demo_only=True,as_of=AS_OF,facts=f,
             status='Draft',approval='Not approved - demo only',documents={},gateway={},state_sends=0,
             fields=dict(name=name,coid=f['coid'],address=f['address'],phone=f['phone'],website=f['website'],
-                contact='',contact_email='',title='',reason='',requested_days='90'),
+                contact='',contact_email='',title='',reason=SUGGESTED_REASON,requested_days='90'),
             prior_filing='no' if scenario=='verified' else 'unknown',reviewed=False,authorized=False)
         if scenario=='verified':r['as_of']=local_day(now).isoformat()
         c.execute('INSERT INTO cc_tn_extension_demo_requests VALUES (%s,%s,%s,%s,%s,%s)',(r['id'],account,identifier,now,now,Jsonb(r)))

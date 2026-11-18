@@ -30,7 +30,7 @@
       <span>${esc(!context.checked?'Click Check for extensions to assess Tennessee.':pending?'The public registration and deadline checks passed. Confirm prior filings in the workflow before preparing the request.':data.eligibility.eligible?'Ready to prepare a first-extension request. Submission is test-only.':data.eligibility.reasons.join(' '))}</span>
       ${r?`<div class="tn-demo-saved"><strong>Demo only — ${esc(r.status)}</strong><br>${links(r)}
       ${r.confirmation?`<small>${esc(r.confirmation)} · ${esc(new Date((r.acknowledged_at||r.submitted_at)*1000).toLocaleString())}</small>`:''}
-      <button type="button" class="tn-resume">${r.status==='Draft'?'Resume demo draft':'View demo filing'}</button></div>`:''}`;
+      ${['Draft','Submission failed'].includes(r.status)?'':'<button type="button" class="tn-resume">View submitted filing</button>'}</div>`:''}`;
     box.querySelector('.tn-resume')?.addEventListener('click',()=>{current=r;unknownSend=false;openDialog();});
     box.querySelector('#tnFileExtension')?.addEventListener('click',()=>{current=r?.scenario==='verified'&&['Draft','Submission failed'].includes(r.status)?r:null;unknownSend=false;openDialog();});
   }
@@ -66,7 +66,7 @@
     if(!dialog){dialog=document.createElement('dialog');dialog.id='tnExtensionDialog';document.body.append(dialog);dialog.addEventListener('cancel',e=>{if(working)e.preventDefault();});}
     draw();if(!dialog.open)dialog.showModal();
   }
-  const labels={name:'Organization legal name',coid:'Tennessee CO number',address:'Mailing address',phone:'Phone',website:'Website',contact:'Authorized filer name',contact_email:'Filer email',title:'Filer title',reason:'Reason for extension',requested_days:'Days requested (1–90)'};
+  const labels={name:'Organization legal name',coid:'Tennessee CO number',address:'Mailing address',phone:'Phone',website:'Website',contact:'Authorized filer name',contact_email:'Filer email',title:'Filer title',reason:'Reason for extension — suggested; confirm or edit',requested_days:'Days requested (1–90)'};
   function draw(message='') {
     const locked=current&&!['Draft','Submission failed'].includes(current.status);
     dialog.innerHTML=`<div class="tn-dialog-heading"><h2>Tennessee File Extension</h2><button type="button" id="tnClose" aria-label="Close extension demo">×</button></div>
@@ -80,11 +80,11 @@
        <label>Has a renewal or extension already been submitted for this filing period?<select id="tnInitialPrior"><option value="unknown">Select an answer</option><option value="yes">Yes — do not prepare another filing</option><option value="no">No — nothing has been submitted</option></select></label>
        <p id="tnPriorExplanation" role="status"></p><button type="button" id="tnPrepareExtension" disabled>Continue to application</button>`:
       `<h3>${esc(current.fields.name)} — ${esc(current.status)}</h3>
-       <p class="tn-small">Filing period ${esc(current.facts.period_start)} to ${esc(current.facts.period_end)} · Registration expiration ${esc(current.facts.expiration)}</p>
+       <p class="tn-small">EIN ${esc(current.ein.slice(0,2)+'-'+current.ein.slice(2))}<br>Filing period ${esc(current.facts.period_start)} to ${esc(current.facts.period_end)} · Registration expiration ${esc(current.facts.expiration)}</p>
        ${!current.eligibility.eligible?`<p class="tn-disabled-reason">${esc(current.eligibility.reasons.join(' '))}</p>`:''}
-       <form id="tnExtensionForm"><div class="tn-field-grid">${Object.entries(labels).map(([k,label])=>`<label>${label}${!['phone','website'].includes(k)?' *':''}<input name="${k}" value="${esc(current.fields[k])}" ${locked?'disabled':''} ${k==='contact_email'?'type="email"':k==='requested_days'?'type="number" min="1" max="90"':'type="text"'} maxlength="600"></label>`).join('')}</div>
+       <form id="tnExtensionForm"><div class="tn-field-grid">${Object.entries(labels).map(([k,label])=>`<label>${label}${!['phone','website'].includes(k)?' *':''}${k==='reason'?`<textarea name="reason" rows="3" maxlength="600" ${locked?'disabled':''}>${esc(current.fields.reason)}</textarea>`:`<input name="${k}" value="${esc(current.fields[k])}" ${locked?'disabled':''} ${k==='contact_email'?'type="email"':k==='requested_days'?'type="number" min="1" max="90"':'type="text"'} maxlength="600">`}</label>`).join('')}</div>
        <label>Has a renewal or extension already been submitted for this filing period?<select id="tnPriorFiling" ${locked?'disabled':''}><option value="unknown" ${current.prior_filing==='unknown'?'selected':''}>Select an answer</option><option value="yes" ${current.prior_filing==='yes'?'selected':''}>Yes — do not prepare another filing</option><option value="no" ${current.prior_filing==='no'?'selected':''}>No — confirmed by authorized user</option></select></label>
-       <label class="tn-check"><input id="tnReviewed" type="checkbox" ${current.reviewed?'checked':''} ${locked?'disabled':''}> I reviewed the organization, period, deadline and request.</label>
+       <label class="tn-check"><input id="tnReviewed" type="checkbox" ${current.reviewed?'checked':''} ${locked?'disabled':''}> I reviewed the organization, period, deadline and reason for this request.</label>
        <label class="tn-check"><input id="tnAuthorized" type="checkbox" ${current.authorized?'checked':''} ${locked?'disabled':''}> I am the authorized filer for this test application.</label>
        <div class="tn-form-actions">${!locked?`<button type="button" id="tnSaveDraft">Save draft</button><button type="button" id="tnSubmitDemo" ${!current.eligibility.eligible||current.prior_filing!=='no'||unknownSend?'disabled':''}>Submit test extension</button>`:''}
        <button type="button" id="tnCheckReceipt">Check for acknowledgment</button></div></form>
