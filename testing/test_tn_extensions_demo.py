@@ -4,6 +4,7 @@ These are local offline tests, not 70 live state searches or independent legal
 adjudications. Existing state adapters and registry search plans are unchanged.
 """
 import ast
+import base64
 import copy
 from contextlib import contextmanager
 from datetime import date
@@ -173,6 +174,9 @@ class Tests(unittest.TestCase):
         r=self.s.dispatch(self.c,ACCOUNT,dict(action='prepare',ein='521273585'),NOW)
         self.assertEqual(r['fields']['coid'],'CO901');self.assertEqual(r['fields']['name'],'Global Impact');self.assertEqual(r['scenario'],'verified');self.assertEqual(r['prior_filing'],'no')
         self.assertFalse(self.s.checked_facts(self.c,OTHER,'521273585',NOW)['existing_filing'] is False)
+        packet=self.s.dispatch(self.c,ACCOUNT,dict(action='test-document',id=r['id'],kind='8868'),NOW)
+        body=self.c.execute('SELECT body FROM cc_tn_extension_demo_documents WHERE id=%s',(packet['url'].rsplit('/',1)[-1],)).fetchone()['body']
+        r=self.s.dispatch(self.c,ACCOUNT,dict(action='upload-support',id=r['id'],body=base64.b64encode(body).decode()),NOW)
         d=self.submit(r,test_response='immediate');self.assertEqual(d['status'],'Receipt acknowledged')
         after=self.s.dispatch(self.c,ACCOUNT,dict(action='check',ein='521273585'),NOW+1)
         self.assertFalse(after['eligibility']['eligible']);self.assertTrue(after['facts']['existing_filing'])

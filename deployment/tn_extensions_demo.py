@@ -6,6 +6,7 @@ changed. Nonpublic artifacts and all gateway outcomes are explicitly Demo only.
 """
 from datetime import date, datetime, timedelta, timezone
 import calendar
+import base64
 import hashlib
 import io
 import json
@@ -16,6 +17,7 @@ import uuid
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 from psycopg.types.json import Jsonb
+from deployment import tn_extension_documents as federal
 
 PREFIX='/api/tn-extension-demo'
 PORTAL='https://tncab.tnsos.gov/portal/portal-login-page'
@@ -77,10 +79,10 @@ def reference_facts(record,today):
     a candidate. A filer declaration is still needed about pending submissions.
     Nonstandard/extended dates, stale references and gaps stay disabled.
     """
-    f={k:record.get(k,'') for k in ['ein','name','coid','address','phone','website','expiration','checked_at','source','identity_source']}
+    f={k:record.get(k,'') for k in ['ein','name','coid','address','phone','website','expiration','checked_at','source','identity_source','return_type','irs_street','irs_city_state_zip','irs_source']}
     f.update(identity_verified=False,current_verified=False,period_verified=False,expiration_verified=False,
         first_extension_verified=False,period_start='',period_end='',existing_filing=None,
-        limitation='A dated public-source check cannot establish absence of pending filings. The authorized filer must confirm existing submissions. Portal-specific filing steps remain unverified.')
+        limitation='A dated public-source check cannot establish absence of pending filings. The authorized filer must confirm existing submissions. CO entry and required upload were inspected; later portal review, submission and receipts remain unverified.')
     try:
         expires=day(f['expiration']);reported=day(record.get('last_reported_period'));checked=day(f['checked_at'])
         fresh=0<=(today-checked).days<=1
@@ -143,17 +145,23 @@ class Service:
         if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9]{32}',identifier):raise Invalid('Invalid draft.')
         row=c.execute('SELECT * FROM cc_tn_extension_demo_requests WHERE id=%s AND account=%s FOR UPDATE',(identifier,account)).fetchone()
         if not row:raise Invalid('Draft not found for this account.')
-        return row['data']
+        r=row['data']
+        if r.get('scenario')=='verified' and r['status'] in {'Draft','Submission failed'}:r['workflow_version']=2
+        return r
     def save(self,c,account,r,now):
         c.execute('UPDATE cc_tn_extension_demo_requests SET data=%s,updated=%s WHERE id=%s AND account=%s',(Jsonb(r),now,r['id'],account))
     def existing(self,c,account,identifier):
         rows=c.execute('SELECT data FROM cc_tn_extension_demo_requests WHERE account=%s AND ein=%s ORDER BY created DESC LIMIT 30',(account,identifier)).fetchall()
         return [x['data'] for x in rows]
     def public(self,r):
+        if r.get('scenario')=='verified' and r['status'] in {'Draft','Submission failed'}:r['workflow_version']=2
         fields=dict(r['fields'])
         if r['status'] in {'Draft','Submission failed'} and not fields.get('reason','').strip():fields['reason']=SUGGESTED_REASON
         return {k:v for k,v in r.items() if k!='gateway'} | {'fields':fields,'eligibility':eligibility(r['facts'],day(r['as_of'])),
-            'portal_verified':False,'production_ready':False,'portal':PORTAL,'form_source':FORM}
+            'portal_verified':False,'production_ready':False,'portal':PORTAL,'form_source':FORM,
+            'federal_check':federal.federal_status(r['facts'],day(r['as_of'])),
+            'federal_fields':r.get('federal_fields') or federal.prefill(r['facts']),
+            'support':r.get('support'),'portal_schema':'CO number; IRS Form 8868 or Other Documentation upload. Later steps unverified.'}
     def checked_facts(self,c,account,identifier,now):
         f=public_facts(identifier,local_day(now))
         row=c.execute('SELECT data FROM cc_tn_extension_demo_checks WHERE account=%s AND ein=%s',(account,identifier)).fetchone()
@@ -184,10 +192,11 @@ class Service:
             status='Draft',approval='Not approved - demo only',documents={},gateway={},state_sends=0,
             fields=dict(name=name,coid=f['coid'],address=f['address'],phone=f['phone'],website=f['website'],
                 contact='',contact_email='',title='',reason=SUGGESTED_REASON,requested_days='90'),
-            prior_filing='no' if scenario=='verified' else 'unknown',reviewed=False,authorized=False)
+            prior_filing='no' if scenario=='verified' else 'unknown',reviewed=False,authorized=False,
+            workflow_version=2 if scenario=='verified' else 1)
         if scenario=='verified':r['as_of']=local_day(now).isoformat()
         c.execute('INSERT INTO cc_tn_extension_demo_requests VALUES (%s,%s,%s,%s,%s,%s)',(r['id'],account,identifier,now,now,Jsonb(r)))
-        return self.public(r)
+        return self.find_federal(c,account,r,now) if scenario=='verified' else self.public(r)
     def edit(self,r,p):
         if r['status'] not in {'Draft','Submission failed'}:raise Conflict('The submitted application is immutable. Check its receipt before retrying.')
         fields=p.get('fields')
@@ -202,12 +211,25 @@ class Service:
         if not eligibility(r['facts'],local_day(now) if r['scenario']=='verified' else day(r['as_of']))['eligible']:raise Invalid('The extension window or eligibility is not verified for this case.')
         if r['prior_filing']!='no':raise Invalid('Confirm that no renewal or extension is already submitted for this period.')
         if not r['reviewed'] or not r['authorized']:raise Invalid('Review the application and confirm that you are the authorized filer.')
+        if r.get('workflow_version')==2:
+            if r['fields']['coid']!=r['facts']['coid']:raise Invalid('The CO number must match the verified Tennessee record.')
+            support=r.get('support')
+            if not support or support.get('tuple')!=self.filing_tuple(r):raise Invalid('Attach a validated matching supporting document before submitting.')
+            if support['kind']=='8868' and not support.get('accepted'):raise Invalid('IRS acceptance must be verified before carrying Form 8868 forward.')
+            return
         for k in ['name','coid','address','contact','contact_email','title','reason']:
             if not r['fields'][k]:raise Invalid('Complete the highlighted organization, contact, title and reason fields.')
         if r['fields']['coid']!=r['facts']['coid'] or r['fields']['name']!=r['facts']['name']:raise Invalid('Changing the registered identity requires reverification.')
         if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',r['fields']['contact_email']):raise Invalid('Confirm the filer email address.')
         if not re.fullmatch(r'\d{1,2}',r['fields']['requested_days']) or not 1<=int(r['fields']['requested_days'])<=90:raise Invalid('A first extension request must be between 1 and 90 days.')
     def fields(self,r):
+        if r.get('workflow_version')==2:
+            support=r.get('support',{})
+            return {'Tennessee CO number':r['facts']['coid'],'Organization context (not an additional portal field)':r['facts']['name'],
+                'EIN':r['ein'],'Applicable period beginning':r['facts']['period_start'],'Applicable period ending':r['facts']['period_end'],
+                'Registration expiration':r['facts']['expiration'],'Supporting document kind':support.get('kind',''),
+                'Exact attachment SHA256':support.get('sha256',''),'Source':r['facts']['source'],
+                'Form basis':'Observed online CO entry and required supporting-document upload; later native portal steps unverified'}
         labels={'name':'Organization legal name','coid':'Tennessee CO number','address':'Mailing address','phone':'Phone','website':'Website',
             'contact':'Authorized filer','contact_email':'Filer email','title':'Filer title','reason':'Reason for extension','requested_days':'Days requested'}
         return {'Request':'FIRST extension; request only, not approval','EIN':r['ein'],
@@ -219,6 +241,76 @@ class Service:
         identifier=uuid.uuid4().hex
         c.execute('INSERT INTO cc_tn_extension_demo_documents VALUES (%s,%s,%s,%s,%s,%s,%s)',(identifier,account,r['id'],kind,now,hashlib.sha256(body).hexdigest(),body))
         return PREFIX+'/documents/'+identifier
+    def filing_tuple(self,r):return [r['ein'],r['facts']['coid'],r['facts']['period_start'],r['facts']['period_end'],r['facts'].get('return_type','')]
+    def editable(self,r):
+        if r['status'] not in {'Draft','Submission failed'}:raise Conflict('Submitted attachments and applications are immutable.')
+    def issue_support(self,c,account,r,kind,now):
+        self.editable(r)
+        if kind not in {'8868','other','mismatch'}:raise Invalid('Unknown test document type.')
+        for old in r.get('issued_support',{}).values():
+            if old.get('fixture_kind')==kind:return {'url':old['url'],'filename':'demo-only-'+kind+'.pdf','demo_only':True}
+        fields=self.fields(r)|{'Test document':'Demo only - simulated existing supporting evidence, not a real filing or state determination'}
+        if kind=='mismatch':fields['EIN']='999999999'
+        body=document_pdf('Simulated '+('IRS Form 8868 acceptance packet' if kind=='8868' else 'supporting documentation'),fields)
+        if kind=='8868':
+            from pypdf import PdfReader,PdfWriter
+            values=federal.prefill(r['facts'])|dict(books='Demo document custodian',phone='202-555-0100',tax_a='0',tax_b='0',tax_c='0')
+            if not values['return_type']:raise Invalid('Verify the federal return type before generating a matching test packet.')
+            form=federal.form8868(values,accepted=True);writer=PdfWriter();writer.append(PdfReader(io.BytesIO(body)));writer.append(PdfReader(io.BytesIO(form)))
+            out=io.BytesIO();writer.write(out);body=out.getvalue()
+        url=self.document(c,account,r,'test-support',body,now);digest=hashlib.sha256(body).hexdigest()
+        metadata=dict(kind='8868' if kind=='8868' else 'other',fixture_kind=kind,accepted=kind=='8868',tuple=self.filing_tuple(r),sha256=digest,url=url,
+            demo_only=True,label='Simulated accepted Form 8868 packet' if kind=='8868' else 'Simulated other supporting document')
+        if kind=='mismatch':metadata['tuple'][0]='999999999'
+        r.setdefault('issued_support',{})[digest]=metadata;self.save(c,account,r,now)
+        return {'url':url,'filename':'demo-only-'+kind+'.pdf','demo_only':True}
+    def upload_support(self,c,account,r,p,now):
+        self.editable(r)
+        try:body=base64.b64decode(p.get('body',''),validate=True)
+        except (ValueError,TypeError):raise Invalid('Upload a valid test PDF.')
+        if not 0<len(body)<=2*1024*1024 or not body.startswith(b'%PDF'):raise Invalid('Use a test PDF no larger than 2 MB.')
+        digest=hashlib.sha256(body).hexdigest();proof=r.get('issued_support',{}).get(digest)
+        if not proof:raise Invalid('This proof of concept accepts only its issued Demo only documents. Do not upload real tax documents.')
+        if proof['tuple']!=self.filing_tuple(r):raise Invalid('The supporting document EIN, CO number, period or return type does not match.')
+        r['support']=dict(proof);r['documents']['support']=proof['url'];self.save(c,account,r,now);return self.public(r)
+    def find_federal(self,c,account,r,now):
+        self.editable(r)
+        r['federal_searched_at']=now
+        for old in self.existing(c,account,r['ein']):
+            support=old.get('support')
+            if support and support['kind']=='8868' and support.get('accepted') and support['tuple']==self.filing_tuple(r):
+                r['support']=dict(support);r['documents']['support']=support['url'];self.save(c,account,r,now)
+                return self.public(r)|{'federal_found':True}
+        self.save(c,account,r,now)
+        return self.public(r)|{'federal_found':False}
+    def irs_draft(self,c,account,r,p,now,submit=False):
+        self.editable(r)
+        if submit:
+            if r.get('irs_submission'):return self.public(r)
+            found=self.find_federal(c,account,r,now)
+            if found['federal_found']:return found
+        check=federal.federal_status(r['facts'],local_day(now))
+        if not check['eligible']:raise Invalid(check['reason'])
+        incoming=p.get('federal_fields',{})
+        if not isinstance(incoming,dict) or set(incoming)-set(federal.prefill(r['facts'])) or any(not isinstance(v,str) or len(v)>180 for v in incoming.values()):raise Invalid('Unexpected IRS form fields.')
+        try:values=federal.validated_fields(r['facts'],incoming) if submit else federal.prefill(r['facts'])|incoming
+        except ValueError as exc:raise Invalid(str(exc))
+        # Draft identity/period cannot be changed by the client either.
+        for k in ['ein','return_type','period_start','period_end']:
+            if values[k]!=federal.prefill(r['facts'])[k]:raise Invalid('The IRS identity, period and return type must match the verified request.')
+        if submit and (p.get('reviewed') is not True or p.get('authorized') is not True):raise Invalid('The authorized filer must review and explicitly submit the IRS TEST request.')
+        r['federal_fields']=values
+        body=federal.form8868(values,accepted=submit);url=self.document(c,account,r,'irs-filed' if submit else 'irs-draft',body,now)
+        r['documents']['irs_filed' if submit else 'irs_draft']=url
+        if submit:
+            confirmation='DEMO-IRS-'+uuid.uuid4().hex[:12]
+            receipt=document_pdf('IRS acceptance - simulated',{'Outcome':'Demo only - accepted by isolated TEST service; NOT an IRS response','EIN':r['ein'],'Return type':values['return_type'],
+                'Period start':values['period_start'],'Period end':values['period_end'],'Confirmation':confirmation,'Form SHA256':hashlib.sha256(body).hexdigest()})
+            acknowledgment=self.document(c,account,r,'irs-acceptance',receipt,now)
+            r['documents']['irs_acceptance']=acknowledgment;r['irs_submission']=dict(confirmation=confirmation,submitted_at=now,sends=1)
+            r['support']=dict(kind='8868',accepted=True,tuple=self.filing_tuple(r),sha256=hashlib.sha256(body).hexdigest(),url=url,demo_only=True,label='Form 8868 accepted by IRS TEST service',acceptance_url=acknowledgment)
+            r['documents']['support']=url
+        self.save(c,account,r,now);return self.public(r)
     def submit(self,c,account,r,p,now):
         if r['status'] in {'Extension submitted','Receipt acknowledged'}:return self.public(r)
         if r['status']=='Submission unconfirmed':raise Conflict('Submission unconfirmed. Check for a receipt before any retry.')
@@ -236,7 +328,7 @@ class Service:
             r['status']='Submission failed';r['failure']='Test service confirmed failure before accepting the filing. Draft retained.'
         else:
             confirmation='DEMO-TN-'+uuid.uuid4().hex[:12]
-            body=document_pdf('Tennessee extension application - submitted TEST copy',self.fields(r)|{'Confirmation':confirmation,'Submitted UTC':datetime.fromtimestamp(now,timezone.utc).isoformat(),'Form basis':'Published SS-6074; portal-specific fields unverified'})
+            body=document_pdf('Tennessee extension application - submitted TEST copy',self.fields(r)|{'Confirmation':confirmation,'Submitted UTC':datetime.fromtimestamp(now,timezone.utc).isoformat()})
             url=self.document(c,account,r,'application',body,now)
             r['gateway']=dict(confirmation=confirmation,ein=r['ein'],coid=r['facts']['coid'],period_start=r['facts']['period_start'],period_end=r['facts']['period_end'],
                 application_sha256=hashlib.sha256(body).hexdigest(),submitted_at=now,ack_at=now+(0 if behavior=='immediate' else 15),document=url)
@@ -276,6 +368,10 @@ class Service:
             return self.create(c,account,dict(ein=identifier,name=f['name'],scenario='verified'),now)
         if action=='create':return self.create(c,account,p,now)
         r=self.load(c,account,p.get('id'))
+        if action=='test-document':return self.issue_support(c,account,r,p.get('kind'),now)
+        if action=='upload-support':return self.upload_support(c,account,r,p,now)
+        if action=='find-federal':return self.find_federal(c,account,r,now)
+        if action in {'irs-draft','irs-submit'}:return self.irs_draft(c,account,r,p,now,submit=action=='irs-submit')
         if action=='save':self.edit(r,p);self.save(c,account,r,now);return self.public(r)
         if action=='submit':return self.submit(c,account,r,p,now)
         if action=='receipt':self.reconcile(c,account,r,now);return self.public(r)
@@ -302,7 +398,7 @@ def handle(alerts,handler,*,origin,include_body=True):
             if handler.command!='POST' or handler.headers.get('Origin')!=origin:return handler._send_json(403,{'error':'Invalid request origin.'},headers)
             if handler.headers.get('Content-Type','').split(';')[0]!='application/json':raise Invalid('JSON input required.')
             n=int(handler.headers.get('Content-Length','0'))
-            if not 0<n<=16000:raise Invalid('Invalid request size.')
+            if not 0<n<=2900000:raise Invalid('Invalid request size.')
             p=json.loads(handler.rfile.read(n))
             if not isinstance(p,dict) or any(k in p for k in ['endpoint','url','live','account','owner','facts','as_of']):raise Invalid('Only this account and the fixed test service are supported.')
             if p.get('action')=='create':raise Invalid('Use Check for extensions and the Tennessee File Extension button.')
