@@ -6813,7 +6813,8 @@ def ga_charity_detail_html(body, expected_identifier, expected_name=""):
                 "license_category": kind, "historical_unnumbered": True}
     if (not identifier or kind == "agency1prof0licType52004") and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
         raise ValueError("Georgia legacy record is not an explicit charity exemption")
-    if identifier == "EXEMPT" and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
+    explicit_active_exemption = kind == "Exempt Charity" and raw.casefold() == "active"
+    if identifier == "EXEMPT" and not explicit_active_exemption and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
         raise ValueError("Georgia EXEMPT marker is not a confirmed charity exemption")
     dates = {}
     for key in ("expiry", "issue_date", "last_ren"):

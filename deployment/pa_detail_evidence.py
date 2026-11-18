@@ -89,7 +89,13 @@ def capture(page, org, result):
         cells=chosen['cells']
         exempt = (str(result.status).strip().casefold() == 'exempt'
                   and str(cells[4]).strip().casefold() == 'exempt')
-        if (not cells[3] or not cells[4]) and not exempt and blank_record is None:return
+        if (not cells[3] or not cells[4]) and not exempt and blank_record is None:
+            # An exact-EIN profile can omit both registration fields too. Bind
+            # its unique controller record before opening the original detail.
+            if cells[3] or cells[4] or digits(cells[5]) != run.ein:return
+            binding = page.locator('tr#SearchResults').nth(chosen['index']).locator('i[ng-click="search.redirectEntityDetails(row)"]').evaluate(GRID_ID)
+            if not re.fullmatch(r"[1-9]\d*", str(binding)):return
+            blank_record = {'PersonId': binding, '_exact_ein': True}
         page.wait_for_function(SETTLED,timeout=timeout())
         grid=page.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(timeout(),2000))
         with page.expect_popup(timeout=timeout()) as opened:
@@ -113,7 +119,7 @@ def capture(page, org, result):
                     or key(fields.get('EntityName')) != key(cells[0])
                     or key(fields.get('account_SecondaryAddressLine1')) != key(cells[7])
                     or key(fields.get('account_SecondaryCity')) != key(' '.join(cells[8:11]))
-                    or digits(fields.get('FederalID')) not in {'', run.ein}
+                    or digits(fields.get('FederalID')) not in ({run.ein} if blank_record.get('_exact_ein') else {'', run.ein})
                     or str(fields.get('RegNum') or '').strip() != cells[3].strip()
                     or str(fields.get('Expdt') or '').strip() != cells[4].strip()):
                 return
