@@ -3,17 +3,19 @@ const {readFileSync}=require('node:fs');
 const vm=require('node:vm');const assert=require('node:assert/strict');
 class Element {
   constructor(){this.children=[];this.handlers={};this.isConnected=true;this.nodes={};this.disabled=false;}
-  set innerHTML(x){this.html=x;this.nodes={};for(const m of x.matchAll(/id="([^"]+)"/g))this.nodes['#'+m[1]]=new Element();}
+  set innerHTML(x){this.html=x;this.nodes={};for(const m of x.matchAll(/<([\w-]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)){const node=new Element();node.disabled=/\bdisabled\b/.test(m[2]);node.tag=m[1];this.nodes['#'+m[3]]=node;}}
   get innerHTML(){return this.html||'';}
   append(x){this.children.push(x);x.parent=this;}
   remove(){this.isConnected=false;}
-  querySelector(q){return this.nodes[q]||null;}
+  querySelector(q){return this.nodes[q]||(q==='.tn-extension-row'?this.children.find(x=>x.className==='tn-extension-row'):null)||null;}
+  querySelectorAll(q){return Object.values(this.nodes).filter(x=>x.tag===q);}
+  showModal(){this.open=true;}
   addEventListener(name,f){this.handlers[name]=f;}
 }
 async function main(){
   const panel=new Element(),rows=[{lastElementChild:new Element()},{lastElementChild:new Element()}];
   const ids={resultPanel:panel};const pending=[],calls=[];
-  const document={createElement:()=>new Element(),querySelectorAll:q=>q==='#resultRows > tr'?rows:[],getElementById:id=>{
+  const body=new Element();const document={body,createElement:()=>new Element(),querySelectorAll:q=>q==='#resultRows > tr'?rows:[],getElementById:id=>{
     if(ids[id])return ids[id];for(const c of panel.children){if(c.id===id&&c.isConnected)return c;if(c.nodes['#'+id])return c.nodes['#'+id];}return null;
   }};
   const context={document,window:{},AbortController,setTimeout,clearTimeout,console,fetch:(url,options)=>{
@@ -25,6 +27,7 @@ async function main(){
   assert.equal(calls.length,1);assert.equal(calls[0].payload.action,'status','initial request reads saved metadata only');
   assert.equal(calls[0].url,'/api/tn-extension-demo');
   const action=panel.children[0];assert(!action.querySelector('#tnCheckExtensions').disabled,'results stay usable with metadata response pending');
+  assert(!action.innerHTML.includes('Try Tennessee demo'),'no separate demo entry');
   context.window.CCTennesseeExtensions.render([Object.freeze({state:'CA',ein:'012345678'})]);
   pending.shift()({ok:true,json:async()=>({requests:[],eligibility:{reasons:['Unverified']}})});
   await new Promise(resolve=>setImmediate(resolve));assert.equal(rows[1].lastElementChild.children.length,0,'stale response cannot decorate a newer result');
@@ -36,6 +39,21 @@ async function main(){
   assert.equal(rows[0].lastElementChild.children.length,0,'unsupported state remains untouched');
   pending.pop()({ok:true,json:async()=>({requests:[],eligibility:{reasons:['Filing period unverified']}})});
   await new Promise(resolve=>setImmediate(resolve));
-  console.log('PASS: synchronous render, metadata-only hydration, separate check, usable results, stale response guard, immutable statuses and unsupported rows.');
+  context.window.CCTennesseeExtensions.render(input);
+  const facts={name:'Global Impact',coid:'CO901',period_start:'2025-07-01',period_end:'2026-06-30',expiration:'2026-12-31',checked_at:'2026-11-18'};
+  const candidate={requests:[],facts,needs_prior_confirmation:true,eligibility:{eligible:false,reasons:['Confirm prior filings']}};
+  pending.pop()({ok:true,json:async()=>candidate});await new Promise(resolve=>setImmediate(resolve));
+  let rowBox=rows[1].lastElementChild.children.at(-1);
+  assert(rowBox.querySelector('#tnFileExtension').disabled,'File Extension stays disabled until explicit check');
+  const checkButton=panel.children.at(-1).querySelector('#tnCheckExtensions');const checkPromise=checkButton.handlers.click.call(checkButton);
+  pending.pop()({ok:true,json:async()=>candidate});await checkPromise;
+  rowBox=rows[1].lastElementChild.children.at(-1);assert(!rowBox.querySelector('#tnFileExtension').disabled,'candidate opens the workflow after check');
+  rowBox.querySelector('#tnFileExtension').handlers.click();const dialog=body.children.at(-1);
+  assert(dialog.innerHTML.includes('Has a renewal or extension already been submitted'),'workflow asks prior filings first');
+  assert(!dialog.innerHTML.includes('Test case<select'),'no synthetic scenario chooser');
+  const prior=dialog.querySelector('#tnInitialPrior'),prepare=dialog.querySelector('#tnPrepareExtension');
+  prior.value='yes';prior.handlers.change.call(prior);assert(prepare.disabled);
+  prior.value='no';prior.handlers.change.call(prior);assert(!prepare.disabled);
+  console.log('PASS: nonblocking results, stale responses, unchanged statuses, Check -> File Extension -> prior-filing confirmation; no separate demo launcher.');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

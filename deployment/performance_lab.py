@@ -174,7 +174,7 @@ def final_four_asset(name, text):
     if name == 'index.html':
         import re
         if os.environ.get('CE_PERMANENT_STAGING') == '1':
-            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RK"><script src="/tn-extensions-demo.js?v=29.2RK"></script></body>')
+            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RL"><script src="/tn-extensions-demo.js?v=29.2RL"></script></body>')
             replace('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCTennesseeExtensions?.render(results);')
         replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
         replace('      if (nyResultRefresh) return;', '      if (nyResultRefresh || connectorPreflightPending) return;')

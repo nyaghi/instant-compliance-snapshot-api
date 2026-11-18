@@ -5,6 +5,7 @@ configurable destinations, email or live filing code. Registry rules are not
 changed. Nonpublic artifacts and all gateway outcomes are explicitly Demo only.
 """
 from datetime import date, datetime, timedelta, timezone
+import calendar
 import hashlib
 import io
 import json
@@ -27,6 +28,10 @@ CREATE TABLE IF NOT EXISTS cc_tn_extension_demo_requests (
  created double precision NOT NULL, updated double precision NOT NULL, data jsonb NOT NULL
 );
 CREATE INDEX IF NOT EXISTS cc_tn_extension_demo_owner ON cc_tn_extension_demo_requests(account,ein,created);
+CREATE TABLE IF NOT EXISTS cc_tn_extension_demo_checks (
+ account text NOT NULL, ein text NOT NULL, checked double precision NOT NULL, data jsonb NOT NULL,
+ PRIMARY KEY(account,ein)
+);
 CREATE TABLE IF NOT EXISTS cc_tn_extension_demo_documents (
  id text PRIMARY KEY, account text NOT NULL, request_id text NOT NULL
  REFERENCES cc_tn_extension_demo_requests(id), kind text NOT NULL,
@@ -55,7 +60,7 @@ def eligibility(facts,today):
         ('expiration_verified','The actual registration expiration is not verified.'),
         ('first_extension_verified','Eligibility for a first extension is not verified.')]:
         if facts.get(key) is not True:reasons.append(message)
-    if facts.get('existing_filing') is True:reasons.append('A renewal or extension is already on file for this period.')
+    if facts.get('existing_filing') is True:reasons.append('An extension is already submitted to the test service for this period.' if facts.get('test_submission') else 'A renewal or extension is already on file for this period.')
     elif facts.get('existing_filing') is not False:reasons.append('Confirm whether a renewal or extension has already been submitted for this period.')
     try:
         expires=day(facts.get('expiration'));start=day(facts.get('period_start'));end=day(facts.get('period_end'))
@@ -64,15 +69,35 @@ def eligibility(facts,today):
     except Invalid:reasons.append('Verified filing-period or expiration dates are missing.')
     return {'eligible':not reasons,'reasons':reasons}
 
-def public_facts(identifier):
-    known=identifier=='131610451'
-    return dict(ein=identifier,name='United Service Organizations, Inc.' if known else '',
-        coid='CO106' if known else '',address='2111 WILSON BOULEVARD, SUITE 1200, ARLINGTON, VA 22201' if known else '',
-        website='https://www.uso.org' if known else '',phone='703-908-6400' if known else '',
-        expiration='2026-11-27' if known else '',expiration_verified=known,current_verified=known,
-        identity_verified=known,period_verified=False,first_extension_verified=False,
-        period_start='',period_end='',existing_filing=None,checked_at=AS_OF,source=SOURCE,
-        limitation='Public registration facts are a dated reference, not complete filing history. Confirm existing submissions with the authorized filer. The applicable original period and first-extension eligibility are not established.')
+def reference_facts(record,today):
+    """Generic rule for dated, reviewed registry references; no organization exceptions.
+
+    A standard original deadline + same-month prior financial period establishes
+    a candidate. A filer declaration is still needed about pending submissions.
+    Nonstandard/extended dates, stale references and gaps stay disabled.
+    """
+    f={k:record.get(k,'') for k in ['ein','name','coid','address','phone','website','expiration','checked_at','source','identity_source']}
+    f.update(identity_verified=False,current_verified=False,period_verified=False,expiration_verified=False,
+        first_extension_verified=False,period_start='',period_end='',existing_filing=None,
+        limitation='A dated public-source check cannot establish absence of pending filings. The authorized filer must confirm existing submissions. Portal-specific filing steps remain unverified.')
+    try:
+        expires=day(f['expiration']);reported=day(record.get('last_reported_period'));checked=day(f['checked_at'])
+        fresh=0<=(today-checked).days<=1
+        f.update(identity_verified=fresh and record.get('identity_verified') is True,
+            current_verified=fresh and record.get('status')=='Active',expiration_verified=fresh)
+        month=expires.month-1-6;year=expires.year+month//12;month=month%12+1
+        end=date(year,month,calendar.monthrange(year,month)[1])
+        standard=expires.day==calendar.monthrange(expires.year,expires.month)[1]
+        prior=date(end.year-1,end.month,min(end.day,calendar.monthrange(end.year-1,end.month)[1]))
+        if fresh and standard and reported==prior and end<=today<=expires:
+            f.update(period_start=date(end.year-1+end.month//12,end.month%12+1,1).isoformat(),period_end=end.isoformat(),period_verified=True,first_extension_verified=True)
+    except Invalid:pass
+    return f
+
+def public_facts(identifier,today=None):
+    records=json.loads(Path(__file__).with_name('tn-extension-public-references.json').read_text(encoding='utf-8'))['records']
+    record=next((r for r in records if r.get('ein')==identifier),{'ein':identifier})
+    return reference_facts(record,today or day(AS_OF))
 
 def demo_facts(identifier,name,scenario):
     if scenario not in {'open','closed','already-filed','unverified'}:raise Invalid('Unknown demo case.')
@@ -126,12 +151,28 @@ class Service:
     def public(self,r):
         return {k:v for k,v in r.items() if k!='gateway'} | {'eligibility':eligibility(r['facts'],day(r['as_of'])),
             'portal_verified':False,'production_ready':False,'portal':PORTAL,'form_source':FORM}
+    def checked_facts(self,c,account,identifier,now):
+        f=public_facts(identifier,local_day(now))
+        row=c.execute('SELECT data FROM cc_tn_extension_demo_checks WHERE account=%s AND ein=%s',(account,identifier)).fetchone()
+        answer=row['data'] if row else {}
+        if (answer.get('period_end'),answer.get('expiration'),answer.get('source_checked_at'))==(f['period_end'],f['expiration'],f['checked_at']):
+            f['existing_filing']={'yes':True,'no':False}.get(answer.get('answer'))
+            f['filer_declaration']=answer
+        for old in self.existing(c,account,identifier):
+            if old.get('scenario')=='verified' and old['facts']['period_end']==f['period_end'] and old['status'] in {'Extension submitted','Receipt acknowledged','Submission unconfirmed'}:
+                f['existing_filing']=True;f['test_submission']=True;break
+        return f
     def create(self,c,account,p,now):
         identifier=ein(p.get('ein'));name=str(p.get('name','')).strip()
         if not 1<=len(name)<=200:raise Invalid('Organization name is required.')
         count=c.execute('SELECT count(*) AS n FROM cc_tn_extension_demo_requests WHERE account=%s',(account,)).fetchone()['n']
         if count>=100:raise Invalid('This demo account has reached its 100-draft limit.')
-        scenario=p.get('scenario','open');f=demo_facts(identifier,name,scenario)
+        scenario=p.get('scenario','open')
+        if scenario=='verified':
+            f=self.checked_facts(c,account,identifier,now)
+            if not eligibility(f,local_day(now))['eligible']:raise Invalid('Check extensions and confirm prior filings before preparing the request.')
+            name=f['name']
+        else:f=demo_facts(identifier,name,scenario)
         # Reuse a prior submitted period rather than opening a duplicate draft.
         for old in self.existing(c,account,identifier):
             if old['scenario']==scenario and old['facts']['period_end']==f['period_end'] and old['status'] in {'Extension submitted','Receipt acknowledged','Submission unconfirmed'}:
@@ -140,7 +181,8 @@ class Service:
             status='Draft',approval='Not approved - demo only',documents={},gateway={},state_sends=0,
             fields=dict(name=name,coid=f['coid'],address=f['address'],phone=f['phone'],website=f['website'],
                 contact='',contact_email='',title='',reason='',requested_days='90'),
-            prior_filing='unknown',reviewed=False,authorized=False)
+            prior_filing='no' if scenario=='verified' else 'unknown',reviewed=False,authorized=False)
+        if scenario=='verified':r['as_of']=local_day(now).isoformat()
         c.execute('INSERT INTO cc_tn_extension_demo_requests VALUES (%s,%s,%s,%s,%s,%s)',(r['id'],account,identifier,now,now,Jsonb(r)))
         return self.public(r)
     def edit(self,r,p):
@@ -153,8 +195,8 @@ class Service:
         prior=p.get('prior_filing','unknown')
         if prior not in {'unknown','yes','no'}:raise Invalid('Confirm whether anything has already been filed.')
         r['prior_filing']=prior;r['reviewed']=p.get('reviewed') is True;r['authorized']=p.get('authorized') is True
-    def review(self,r):
-        if not eligibility(r['facts'],day(r['as_of']))['eligible']:raise Invalid('The extension window or eligibility is not verified for this case.')
+    def review(self,r,now):
+        if not eligibility(r['facts'],local_day(now) if r['scenario']=='verified' else day(r['as_of']))['eligible']:raise Invalid('The extension window or eligibility is not verified for this case.')
         if r['prior_filing']!='no':raise Invalid('Confirm that no renewal or extension is already submitted for this period.')
         if not r['reviewed'] or not r['authorized']:raise Invalid('Review the application and confirm that you are the authorized filer.')
         for k in ['name','coid','address','contact','contact_email','title','reason']:
@@ -166,8 +208,8 @@ class Service:
         labels={'name':'Organization legal name','coid':'Tennessee CO number','address':'Mailing address','phone':'Phone','website':'Website',
             'contact':'Authorized filer','contact_email':'Filer email','title':'Filer title','reason':'Reason for extension','requested_days':'Days requested'}
         return {'Request':'FIRST extension; request only, not approval','EIN':r['ein'],
-            'Tax period beginning (test)':r['facts']['period_start'],'Tax period ending (test)':r['facts']['period_end'],
-            'Actual expiration (TEST CASE)':r['facts']['expiration'],
+            'Applicable period beginning':r['facts']['period_start'],'Applicable period ending':r['facts']['period_end'],
+            'Registration expiration':r['facts']['expiration'],
             'Requested date (not granted)':(day(r['facts']['expiration'])+timedelta(days=int(r['fields']['requested_days']))).isoformat(),
             'Prior filing answer':r['prior_filing'],'Eligibility source':r['facts']['source']} | {labels[k]:v for k,v in r['fields'].items()}
     def document(self,c,account,r,kind,body,now):
@@ -177,7 +219,10 @@ class Service:
     def submit(self,c,account,r,p,now):
         if r['status'] in {'Extension submitted','Receipt acknowledged'}:return self.public(r)
         if r['status']=='Submission unconfirmed':raise Conflict('Submission unconfirmed. Check for a receipt before any retry.')
-        self.edit(r,p);self.review(r)
+        self.edit(r,p);self.review(r,now)
+        if r['scenario']=='verified':
+            f=self.checked_facts(c,account,r['ein'],now)
+            if not eligibility(f,local_day(now))['eligible'] or f['period_end']!=r['facts']['period_end']:raise Invalid('Recheck extensions: the source, period or prior-filing answer is no longer eligible.')
         for old in self.existing(c,account,r['ein']):
             if old['id']!=r['id'] and (old['facts']['coid'],old['facts']['period_start'],old['facts']['period_end'])==(r['facts']['coid'],r['facts']['period_start'],r['facts']['period_end']) and old['status'] in {'Extension submitted','Receipt acknowledged','Submission unconfirmed'}:
                 raise Conflict('Another application for this period is already submitted or unconfirmed. Review it before retrying.')
@@ -212,9 +257,20 @@ class Service:
     def dispatch(self,c,account,p,now):
         action=p.get('action')
         if action in {'check','status'}:
-            identifier=ein(p.get('ein'));facts=public_facts(identifier);rows=self.existing(c,account,identifier)
+            identifier=ein(p.get('ein'));facts=self.checked_facts(c,account,identifier,now);rows=self.existing(c,account,identifier)
             for r in rows:self.reconcile(c,account,r,now)
-            return dict(demo_only=True,state='TN',facts=facts,eligibility=eligibility(facts,local_day(now)),requests=[self.public(r) for r in rows],supported_states=['TN'])
+            return dict(demo_only=True,state='TN',facts=facts,eligibility=eligibility(facts,local_day(now)),requests=[self.public(r) for r in rows],supported_states=['TN'],needs_prior_confirmation=facts['period_verified'] and facts['existing_filing'] is None)
+        if action=='confirm-prior':
+            identifier=ein(p.get('ein'));answer=p.get('answer')
+            if answer not in {'yes','no','unknown'}:raise Invalid('Confirm whether anything has already been submitted for this period.')
+            f=public_facts(identifier,local_day(now))
+            if not f['period_verified']:raise Invalid('The original period and deadline must be verified first.')
+            declaration=dict(answer=answer,account=account,answered_at=now,period_end=f['period_end'],expiration=f['expiration'],source_checked_at=f['checked_at'])
+            c.execute('INSERT INTO cc_tn_extension_demo_checks VALUES (%s,%s,%s,%s) ON CONFLICT(account,ein) DO UPDATE SET checked=excluded.checked,data=excluded.data',(account,identifier,now,Jsonb(declaration)))
+            return self.dispatch(c,account,dict(action='check',ein=identifier),now)
+        if action=='prepare':
+            identifier=ein(p.get('ein'));f=public_facts(identifier,local_day(now))
+            return self.create(c,account,dict(ein=identifier,name=f['name'],scenario='verified'),now)
         if action=='create':return self.create(c,account,p,now)
         r=self.load(c,account,p.get('id'))
         if action=='save':self.edit(r,p);self.save(c,account,r,now);return self.public(r)
@@ -246,6 +302,7 @@ def handle(alerts,handler,*,origin,include_body=True):
             if not 0<n<=16000:raise Invalid('Invalid request size.')
             p=json.loads(handler.rfile.read(n))
             if not isinstance(p,dict) or any(k in p for k in ['endpoint','url','live','account','owner','facts','as_of']):raise Invalid('Only this account and the fixed test service are supported.')
+            if p.get('action')=='create':raise Invalid('Use Check for extensions and the Tennessee File Extension button.')
             result=service.dispatch(c,account,p,now)
         return handler._send_json(200,result,headers)
     except Conflict as exc:return handler._send_json(409,{'error':str(exc)},headers)

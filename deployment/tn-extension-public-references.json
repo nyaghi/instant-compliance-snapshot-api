@@ -1,0 +1,35 @@
+{
+  "description": "Dated, independently reviewed public-source references for the staging proof of concept. Not a production registry feed or a determination of pending filings.",
+  "records": [
+    {
+      "ein": "521273585",
+      "name": "Global Impact",
+      "coid": "CO901",
+      "address": "2300 N STREET NW, SUITE 501A, WASHINGTON, DC 20037",
+      "phone": "703-717-5200",
+      "website": "https://www.charity.org",
+      "status": "Active",
+      "expiration": "2026-12-31",
+      "last_reported_period": "2025-06-30",
+      "identity_verified": true,
+      "checked_at": "2026-11-18",
+      "source": "https://tncab.tnsos.gov/portal/registered-charities-search",
+      "identity_source": "https://projects.propublica.org/nonprofits/organizations/521273585"
+    },
+    {
+      "ein": "131610451",
+      "name": "United Service Organizations, Inc.",
+      "coid": "CO106",
+      "address": "2111 WILSON BOULEVARD, SUITE 1200, ARLINGTON, VA 22201",
+      "phone": "703-908-6400",
+      "website": "https://www.uso.org",
+      "status": "Active",
+      "expiration": "2026-11-27",
+      "last_reported_period": "2024-12-31",
+      "identity_verified": true,
+      "checked_at": "2026-11-18",
+      "source": "https://tncab.tnsos.gov/portal/registered-charities-search",
+      "identity_source": "https://projects.propublica.org/nonprofits/organizations/131610451"
+    }
+  ]
+}

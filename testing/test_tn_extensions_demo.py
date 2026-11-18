@@ -19,6 +19,7 @@ from deployment import tn_extensions_demo as t
 
 ACCOUNT='pilot@example.org';OTHER='other@example.org';NOW=1795017600
 CASE_RESULTS=[]
+REFERENCE_RESULTS=[]
 
 class Connection:
     def __init__(self):
@@ -142,6 +143,47 @@ class Tests(unittest.TestCase):
     def test_real_facts_do_not_assert_open_window(self):
         f=t.public_facts('131610451');self.assertEqual(f['expiration'],'2026-11-27');self.assertFalse(t.eligibility(f,date(2026,11,18))['eligible'])
         self.assertFalse(t.eligibility(t.public_facts('012345678'),date(2026,11,18))['eligible'])
+    def test_70_reference_records_use_generic_rules(self):
+        REFERENCE_RESULTS.clear()
+        for i in range(70):
+            r=dict(ein=str(200000000+i),name='Reference Organization '+str(i),coid='CO'+str(i),identity_verified=True,status='Active',expiration='2026-12-31',last_reported_period='2025-06-30',checked_at='2026-11-18')
+            case=i%10;expected=case==0
+            if case==1:r['expiration']='2026-11-27'
+            if case==2:r['last_reported_period']='2024-06-30'
+            if case==3:r['last_reported_period']='2026-06-30'
+            if case==4:r['checked_at']='2026-11-15'
+            if case==5:r['identity_verified']=False
+            if case==6:r['status']='Expired'
+            if case==7:r['expiration']='2026-12-30'
+            if case==8:r['last_reported_period']='2025-05-31'
+            if case==9:r['checked_at']='2026-11-19'
+            f=t.reference_facts(r,date(2026,11,18));f['existing_filing']=False
+            actual=t.eligibility(f,date(2026,11,18))
+            with self.subTest(ein=r['ein']):self.assertEqual(actual['eligible'],expected)
+            REFERENCE_RESULTS.append(dict(input=r,expected=expected,result=actual))
+    def test_verified_candidate_requires_filer_answer_before_prepare(self):
+        d=self.s.dispatch(self.c,ACCOUNT,dict(action='check',ein='521273585'),NOW)
+        self.assertTrue(d['needs_prior_confirmation']);self.assertFalse(d['eligibility']['eligible'])
+        self.assertEqual(d['facts']['period_end'],'2026-06-30');self.assertEqual(d['facts']['period_start'],'2025-07-01')
+        with self.assertRaises(t.Invalid):self.s.dispatch(self.c,ACCOUNT,dict(action='prepare',ein='521273585'),NOW)
+        yes=self.s.dispatch(self.c,ACCOUNT,dict(action='confirm-prior',ein='521273585',answer='yes'),NOW)
+        self.assertFalse(yes['eligibility']['eligible'])
+        no=self.s.dispatch(self.c,ACCOUNT,dict(action='confirm-prior',ein='521273585',answer='no'),NOW)
+        self.assertTrue(no['eligibility']['eligible'])
+        r=self.s.dispatch(self.c,ACCOUNT,dict(action='prepare',ein='521273585'),NOW)
+        self.assertEqual(r['fields']['coid'],'CO901');self.assertEqual(r['fields']['name'],'Global Impact');self.assertEqual(r['scenario'],'verified');self.assertEqual(r['prior_filing'],'no')
+        self.assertFalse(self.s.checked_facts(self.c,OTHER,'521273585',NOW)['existing_filing'] is False)
+        d=self.submit(r,test_response='immediate');self.assertEqual(d['status'],'Receipt acknowledged')
+        after=self.s.dispatch(self.c,ACCOUNT,dict(action='check',ein='521273585'),NOW+1)
+        self.assertFalse(after['eligibility']['eligible']);self.assertTrue(after['facts']['existing_filing'])
+        self.assertIn('acknowledgment',after['requests'][0]['documents'])
+    def test_verified_candidate_requires_fresh_source_at_submission(self):
+        self.s.dispatch(self.c,ACCOUNT,dict(action='confirm-prior',ein='521273585',answer='no'),NOW)
+        r=self.s.dispatch(self.c,ACCOUNT,dict(action='prepare',ein='521273585'),NOW)
+        with self.assertRaises(t.Invalid):self.s.submit(self.c,ACCOUNT,self.s.load(self.c,ACCOUNT,r['id']),self.payload(r),NOW+3*86400)
+    def test_no_separate_synthetic_create_through_http(self):
+        h=Handler(dict(action='create',ein='012345678',name='Example',scenario='open'))
+        self.assertEqual(t.handle(self.a,h,origin='https://staging.example')[0],400)
     def test_no_outbound_client_or_submission_endpoint(self):
         tree=ast.parse(Path(t.__file__).read_text())
         imported=[n.names[0].name if isinstance(n,ast.Import) else n.module for n in ast.walk(tree) if isinstance(n,(ast.Import,ast.ImportFrom))]
