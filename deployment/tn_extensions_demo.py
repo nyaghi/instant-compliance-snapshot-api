@@ -66,9 +66,10 @@ def eligibility(facts,today):
     if facts.get('existing_filing') is True:reasons.append('An extension is already submitted to the test service for this period.' if facts.get('test_submission') else 'A renewal or extension is already on file for this period.')
     elif facts.get('existing_filing') is not False:reasons.append('Confirm whether a renewal or extension has already been submitted for this period.')
     try:
-        expires=day(facts.get('expiration'));start=day(facts.get('period_start'));end=day(facts.get('period_end'))
-        if start>end or end>=expires:reasons.append('The filing period and registration deadline conflict.')
+        expires=day(facts.get('expiration'))
         if today>expires:reasons.append('The registration deadline has passed; the first-extension window is closed.')
+        start=day(facts.get('period_start'));end=day(facts.get('period_end'))
+        if start>end or end>=expires:reasons.append('The filing period and registration deadline conflict.')
     except Invalid:reasons.append('Verified filing-period or expiration dates are missing.')
     return {'eligible':not reasons,'reasons':reasons}
 
@@ -138,6 +139,17 @@ def document_pdf(title,fields):
 
 class Service:
     def __init__(self,alerts):self.alerts=alerts
+    def upgrade_draft(self,r):
+        if r.get('scenario')=='verified' and r['status'] in {'Draft','Submission failed'}:
+            r['workflow_version']=2
+            reference=public_facts(r['ein'],day(r['as_of']))
+            keys=['coid','period_start','period_end','expiration']
+            if all(reference.get(k)==r['facts'].get(k) for k in keys) and reference.get('identity_verified'):
+                # Enrich only unsubmitted drafts with reviewed prefill provenance.
+                # Preserve user edits and the original state eligibility facts.
+                for k in ['return_type','irs_street','irs_city_state_zip','irs_source']:
+                    if reference.get(k) and not r['facts'].get(k):r['facts'][k]=reference[k]
+        return r
     def initialize(self,c):
         c.execute('SELECT pg_advisory_xact_lock(824527339)')
         c.execute(SCHEMA)
@@ -145,16 +157,14 @@ class Service:
         if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9]{32}',identifier):raise Invalid('Invalid draft.')
         row=c.execute('SELECT * FROM cc_tn_extension_demo_requests WHERE id=%s AND account=%s FOR UPDATE',(identifier,account)).fetchone()
         if not row:raise Invalid('Draft not found for this account.')
-        r=row['data']
-        if r.get('scenario')=='verified' and r['status'] in {'Draft','Submission failed'}:r['workflow_version']=2
-        return r
+        return self.upgrade_draft(row['data'])
     def save(self,c,account,r,now):
         c.execute('UPDATE cc_tn_extension_demo_requests SET data=%s,updated=%s WHERE id=%s AND account=%s',(Jsonb(r),now,r['id'],account))
     def existing(self,c,account,identifier):
         rows=c.execute('SELECT data FROM cc_tn_extension_demo_requests WHERE account=%s AND ein=%s ORDER BY created DESC LIMIT 30',(account,identifier)).fetchall()
         return [x['data'] for x in rows]
     def public(self,r):
-        if r.get('scenario')=='verified' and r['status'] in {'Draft','Submission failed'}:r['workflow_version']=2
+        self.upgrade_draft(r)
         fields=dict(r['fields'])
         if r['status'] in {'Draft','Submission failed'} and not fields.get('reason','').strip():fields['reason']=SUGGESTED_REASON
         return {k:v for k,v in r.items() if k!='gateway'} | {'fields':fields,'eligibility':eligibility(r['facts'],day(r['as_of'])),

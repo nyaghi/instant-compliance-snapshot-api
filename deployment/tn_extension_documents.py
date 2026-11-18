@@ -72,6 +72,7 @@ def validated_fields(facts,values):
 def form8868(values,accepted=False):
     """Official fillable Part I/II, with generated appearances and demo watermark."""
     from pypdf import PdfReader,PdfWriter
+    from pypdf.generic import DecodedStreamObject,DictionaryObject,NameObject,ArrayObject,NumberObject
     from reportlab.pdfgen import canvas
     writer=PdfWriter();writer.append(PdfReader(Path(__file__).with_name('tn-extension-form8868.pdf')),pages=(0,1))
     page='topmostSubform[0].Page1[0].';automatic=page+'Automatic[0].'
@@ -87,11 +88,18 @@ def form8868(values,accepted=False):
         a=annotation.get_object()
         if a.get('/T')=='c1_3[1]':fields[page+'c1_3[1]']=next(k for k in a['/AP']['/N'] if k!='/Off')
     writer.update_page_form_field_values(writer.pages[0],fields,auto_regenerate=False)
+    # A font-independent checkbox appearance remains interactive when unchecked.
+    for annotation in writer.pages[0].get('/Annots',[]):
+        a=annotation.get_object()
+        if a.get('/T')=='c1_3[1]':
+            appearances=DictionaryObject()
+            for name,content in [('/Off',b''),(str(a['/AS']),b'0 G 0.8 w 1 1 m 7 7 l S 1 7 m 7 1 l S')]:
+                stream=DecodedStreamObject();stream.set_data(content);stream.update({NameObject('/Type'):NameObject('/XObject'),NameObject('/Subtype'):NameObject('/Form'),NameObject('/BBox'):ArrayObject([NumberObject(0),NumberObject(0),NumberObject(8),NumberObject(8)])})
+                appearances[NameObject(name)]=writer._add_object(stream)
+            a[NameObject('/AP')]=DictionaryObject({NameObject('/N'):appearances})
     overlay=io.BytesIO();c=canvas.Canvas(overlay,pagesize=(612,792));c.setFillColorRGB(.7,.08,.08);c.setFont('Helvetica-Bold',11)
     c.drawString(36,782,'DEMO ONLY — '+('SIMULATED FILED COPY' if accepted else 'DRAFT — NOT FILED'))
     c.setFont('Helvetica',7);c.drawString(36,771,'Nothing is sent to the IRS. Part III (Form 5330) is outside this pilot.')
-    # The template checkbox appearance uses an unavailable symbol font in some
-    # renderers. Preserve its form value and add a visible, font-independent X.
-    c.setStrokeColorRGB(0,0,0);c.setLineWidth(.8);c.line(66,159,71,164);c.line(66,164,71,159);c.save()
+    c.save()
     writer.pages[0].merge_page(PdfReader(overlay).pages[0]);writer.add_metadata({'/Title':'Demo only - Form 8868'})
     output=io.BytesIO();writer.write(output);return output.getvalue()

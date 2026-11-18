@@ -8,6 +8,7 @@ from testing.test_tn_extensions_demo import Tests as Base,ACCOUNT,OTHER,NOW
 from deployment import tn_extensions_demo as t
 from deployment import tn_extension_documents as f
 DOCUMENT_CASES=[]
+MIGRATION_CASES=[]
 
 class Tests(Base):
     def verified(self,ein='440610626'):
@@ -106,6 +107,33 @@ class Tests(Base):
         r=self.verified();old=self.s.load(self.c,ACCOUNT,r['id']);old.pop('workflow_version');old['fields']['reason']='Keep my original note';self.s.save(self.c,ACCOUNT,old,NOW)
         resumed=self.s.load(self.c,ACCOUNT,r['id']);self.assertEqual(resumed['workflow_version'],2);self.assertEqual(resumed['fields']['reason'],'Keep my original note')
         with self.assertRaises(t.Invalid):self.s.submit(self.c,ACCOUNT,resumed,self.payload(r),NOW)
+    def test_70_legacy_draft_migrations_are_bound_and_non_destructive(self):
+        MIGRATION_CASES.clear();reference=t.public_facts('521273585')
+        for i in range(70):
+            ref=copy.deepcopy(reference);identifier=str(400000000+i);ref['ein']=identifier;ref['coid']='CO'+str(400000+i)
+            original=copy.deepcopy(ref)
+            for key in ['return_type','irs_street','irs_city_state_zip','irs_source']:original.pop(key,None)
+            r=dict(ein=identifier,scenario='verified',status='Draft',as_of='2026-11-18',facts=original,fields=dict(reason='Preserve filer wording',name='Keep registered name'))
+            case=i%5
+            if case==1:r['facts']['coid']='CO1'
+            if case==2:r['facts']['period_end']='2025-06-30'
+            if case==3:r['status']='Receipt acknowledged'
+            if case==4:r['federal_fields']={'books':'Keep my custodian'}
+            before=copy.deepcopy(r)
+            with patch.object(t,'public_facts',return_value=ref):self.s.upgrade_draft(r)
+            enriched=bool(r['facts'].get('return_type'))
+            self.assertEqual(enriched,case in [0,4]);self.assertEqual(r['fields'],before['fields'])
+            for key,value in before['facts'].items():self.assertEqual(r['facts'][key],value)
+            if case==3:self.assertEqual(r,before)
+            if case==4:self.assertEqual(r['federal_fields'],before['federal_fields'])
+            MIGRATION_CASES.append(dict(ein=identifier,case=case,enriched=enriched,passed=True))
+    def test_old_global_draft_gets_deadline_and_8868_packet(self):
+        r=self.verified('521273585');old=self.s.load(self.c,ACCOUNT,r['id'])
+        for key in ['return_type','irs_street','irs_city_state_zip','irs_source']:old['facts'].pop(key,None)
+        old.pop('workflow_version');self.s.save(self.c,ACCOUNT,old,NOW)
+        resumed=self.s.load(self.c,ACCOUNT,r['id']);public=self.s.public(resumed)
+        self.assertEqual(public['federal_check']['deadline'],'2026-11-16');self.assertIn('deadline has passed',public['federal_check']['reason'])
+        self.assertTrue(self.attachment(public)['support']['accepted'])
     def test_http_upload_boundaries_and_real_docs_rejected(self):
         r=self.verified()
         for body in ['!!!!',base64.b64encode(b'not PDF').decode(),base64.b64encode(b'%PDF'+b'x'*2097152).decode()]:
