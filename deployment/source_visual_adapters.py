@@ -357,7 +357,7 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     before=len(run.documents)
     note=('Original state entity candidate: explicit Exempt standing and organization name. Source EIN is blank; identity confirmation is required.'
           if not expected_ein else ('Original state entity page: explicit Exempt standing, organization name and EIN. A historical Merged Out registration is retained in the search result; the current exemption is on this entity page.'
-          if hint.get('retired_registration_present') else 'Original state entity page: explicit Exempt standing, organization name and EIN. No registration record exists in the completed lookup.'))
+          if hint.get('retired_registration_present') else 'Original state entity page: explicit Exempt standing, organization name and EIN. No charitable organization registration exists in the completed lookup.'))
     run.document(url,raw,'image',core,note=note)
     fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
