@@ -266,12 +266,13 @@ def capture_selected_source(master,result,run,deadline):
   fact['total_ms']=round((time.perf_counter()-started)*1000,2)
 
 def remember_ca_exempt_entity(run,result):
+ from deployment.gate52_repairs import ca_exempt_raffle_only
  if run is None or run.state!='CA' or not getattr(result,'success',False) or getattr(result,'status','')!='Exempt':return
  entity=getattr(result,'_cc_selected_entity',None)
  records=getattr(result,'_cc_registration_records',None)
  retired=(isinstance(records,list) and bool(records)
           and re.search(r'(?:^|\|)\s*Registration Status:\s*(?:Not Registered\s+)?Merged Out\s*(?:\||$)',str(getattr(result,'raw_status_text','')),re.I))
- if not isinstance(entity,dict) or not (records==[] or retired):return
+ if not isinstance(entity,dict) or not (records==[] or retired or ca_exempt_raffle_only(entity,records)):return
  identifier=str(getattr(result,'matched_registry_identifier','') or '')
  name=str(getattr(result,'matched_registry_name','') or '')
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())

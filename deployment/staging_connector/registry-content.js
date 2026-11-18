@@ -2044,6 +2044,15 @@
       && [...(main?.querySelectorAll('h4')||[])].some(el=>text(el)==='Something went wrong')
       && text(main).includes("A problem occured on our end and we could't process your request.");
   }
+  function gaFormReadiness() {
+    const profession=[...document.querySelectorAll('select')].find(el=>[...el.options].some(o=>text(o)==='Charities'));
+    const option=profession && [...profession.options].find(o=>text(o)==='Charities');
+    const name=document.querySelector('#t_web_lookup__full_name');
+    const search=[...document.querySelectorAll('input[type="submit"],button')].find(el=>/^(Search)$/i.test(el.value||text(el)));
+    return {profession:!!profession && !profession.disabled,
+      selected:!!option && profession.value===option.value,
+      name:!!name && !name.disabled,search:!!search && !search.disabled && visible(search)};
+  }
   function registryDocumentReady() {
     if (document.readyState === 'loading') return false;
     if (AL) {
@@ -2062,6 +2071,10 @@
       : !!document.querySelector('#MainContent_TextBoxFEIN') && !!document.querySelector('#MainContent_ButtonSearch');
     if (TN) return !!document.querySelector('input[id^="Name_"]')
       && [...document.querySelectorAll('button[id^="Search_"]')].some(el=>visible(el)&&!el.disabled&&text(el)==='Search');
+    if (GA && location.pathname==='/verification/Search.aspx') {
+      const form=gaFormReadiness();
+      return document.readyState==='complete' && form.profession && (!form.selected || form.name && form.search);
+    }
     // A loaded verification/shell document is not a loaded registry form.
     // Observe normal page readiness; do not operate any human challenge.
     if (NC) {
@@ -2237,6 +2250,9 @@
     }
     if (!GA) throw new Error("REGISTRY_WRONG_ORIGIN");
     if (m.action === "registry-ga-form") {
+      const readiness=gaFormReadiness();
+      if(!readiness.profession || readiness.selected && (!readiness.name || !readiness.search))
+        return {ok:false,phase:'form-not-ready',controls:readiness};
       const profession = [...document.querySelectorAll("select")].find(el=>[...el.options].some(o=>text(o)==="Charities"));
       if (!profession) throw new Error("REGISTRY_FORM_CHANGED");
       const option = [...profession.options].find(o=>text(o)==="Charities");

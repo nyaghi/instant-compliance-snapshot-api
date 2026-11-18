@@ -790,6 +790,10 @@ def ca_evoke_entity_matches(entity: dict, org: Organization, allow_name_match: b
 
 def ca_evoke_status_from_record(entity: dict, registrations: list[dict]) -> tuple[str, str, str, date | None]:
     from deployment.ca_nonregistration import explicit_absence
+    from deployment.gate52_repairs import ca_exempt_raffle_only
+    if ca_exempt_raffle_only(entity, registrations):
+        return ('Exempt', 'Entity Status: Exempt | Separate raffle registrations do not establish charitable registration standing',
+                str(entity['id']), None)
     entity_status = str(entity.get("entityStatus") or "")
     relevant_registrations = [
         reg for reg in registrations or []

@@ -1570,15 +1570,29 @@ async function registryGaSearch(job, query, requestedIdentifier=null, selectedRe
     if(P.TRIAL_ORIGIN)diagnostic('ga-phase',job,`${name} ms=${elapsed} total_ms=${phaseStarted-totalStarted}`);
   };
   if(P.TRIAL_ORIGIN)diagnostic('ga-search-start',job,requestedIdentifier===null?'name search':'record detail');
-  let document=await wfAwait(job,"registry-worker.js:registryGaSearch:1291:15:await",()=>(registryNavigate(job,registryStart("GA"))));
-  phase('navigate');
-  let form=await wfAwait(job,"registry-worker.js:registryGaSearch:1293:11:await",()=>(registryMessage(job,{action:"registry-ga-form",query})));
-  phase('form');
-  if (form.phase === "profession") {
-    document=await wfAwait(job,"registry-worker.js:registryGaSearch:1296:13:await",()=>(registryReady(job,document.documentId,"/verification/Search.aspx")));
-    phase('profession-ready');
-    form=await wfAwait(job,"registry-worker.js:registryGaSearch:1298:9:await",()=>(registryMessage(job,{action:"registry-ga-form",query})));
-    phase('profession-form');
+  // One recovery of a form that never became submittable. No completed search
+  // is repeated, and both attempts share the former 45-second form allowance.
+  const formStop=Math.min(job.activeExpiresAt,totalStarted+45000);
+  let document,form;
+  for(let attempt=0;attempt<2;attempt++) {
+    try {
+      document=await registryNavigate(job,registryStart('GA'),Math.min(attempt?45000:20000,formStop-Date.now()));
+      phase('navigate');
+      form=await registryMessage(job,{action:'registry-ga-form',query});
+      phase('form');
+      if(form.phase==='profession') {
+        document=await registryReady(job,document.documentId,'/verification/Search.aspx',formStop-Date.now());
+        form=await registryMessage(job,{action:'registry-ga-form',query});
+        phase('profession-form');
+      }
+      if(form?.ok && form.phase==='submitted')break;
+      if(form?.phase!=='form-not-ready')throw new Error('NY_CONNECTOR_INCOMPLETE');
+      diagnostic('ga-form-not-ready',job,JSON.stringify(form.controls));
+    } catch(error) {
+      if(attempt || error?.message!=='NY_CONNECTOR_TAB_READY_TIMEOUT' || formStop-Date.now()<1000)throw error;
+    }
+    if(attempt || formStop-Date.now()<1000)throw new Error('NY_CONNECTOR_TAB_READY_TIMEOUT');
+    diagnostic('ga-form-recovery',job,'fresh form before any search submission');
   }
   if (!form.ok || form.phase!=="submitted") throw new Error("NY_CONNECTOR_INCOMPLETE");
   document=await wfAwait(job,"registry-worker.js:registryGaSearch:1302:11:await",()=>(registryReady(job,document.documentId,"/verification/SearchResults.aspx")));

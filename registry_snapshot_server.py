@@ -4636,6 +4636,12 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
         if proof := ownership_conflicts.get(identity_name_key(item['name'])):
             item['verified'] = False
             item['identity_conflict'] = proof
+    from deployment.gate52_repairs import nj_discovery_discrepancies
+    nj_conflicts = nj_discovery_discrepancies(sys.modules[__name__], names, results, organization_name)
+    for item in names:
+        if proof := nj_conflicts.get(identity_name_key(item['name'])):
+            item['verified'] = False
+            item['identity_conflict'] = proof
     selected_names = prioritized_discovery_names(organization_name, names)
     answer = {"organization_name": organization_name.strip(), "ein": format_ein(ein),
             "names": selected_names, "addresses": discovered_organization_addresses(ein, results),
@@ -6938,6 +6944,7 @@ def ga_separate_foundation_history(org, required, selected, historical_names):
 
 def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     """Master-owned discovery, matching, duplicate resolution and interpretation."""
+    from deployment.gate52_repairs import ga_compound_candidate
     deadline = time.monotonic() + 40
     required, generated = licensed_charity_names(org, literal_name_priority=state == "GA")
     queries = ([{"state": state, "ein": canonical_ein_digits(org.ein)}] if state == "IL" else [])
@@ -7014,6 +7021,9 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                 elif state == "GA" and not row.get("ein") and any(
                         single_token_typo_review_candidate(name, row["name"]) for name in required):
                     row = dict(row, _review_minor_typo=True)
+                elif state == "GA" and not row.get("ein") and ga_compound_candidate(
+                        sys.modules[__name__], required, row["name"]):
+                    row = dict(row, _ga_compound_candidate=True)
                 else:
                     continue
             detail_query = {"state": state, "identifier": row["identifier"]}
@@ -11224,6 +11234,17 @@ def licensed_charity_identity(org, row, state, deadline):
         row["match"] = {"decision": "accepted", "score": 100, "reason": "USER_CONFIRMED_IDENTITY"}
         row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
         return "accepted"
+    if state == "GA" and row.get("_ga_compound_candidate") and not row.get("ein"):
+        from deployment.gate52_repairs import ga_compound_candidate
+        if ga_compound_candidate(sys.modules[__name__], [org.organization_name, *known_names_for_ein(org.ein)], row['name']):
+            proof = (licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+                     or licensed_charity_street_evidence(org, row, deadline) or {})
+            outcome = {'different_ein': 'rejected', 'corroborated': 'accepted'}.get(proof.get('decision'), 'possible')
+            row['match'] = {'decision': outcome, 'score': {'rejected': 0, 'accepted': 95, 'possible': 55}[outcome],
+                            'reason': 'GA_COMPLETE_NAME_IN_COMPOUND_LABEL'}
+            row['address_evidence'] = proof or {'decision': 'unavailable', 'basis':
+                'The complete name appears in a compound Georgia label, without a confirming EIN or office. Confirm or reject the identity.'}
+            return outcome
     if state == "TN" and not row.get("ein"):
         primary_name = normalized_match_name(org.organization_name)
         candidate_name = normalized_match_name(row["name"])
@@ -23167,7 +23188,11 @@ def ma_confirm_filing_attachment(page, org, completed, conflict):
                         and re.fullmatch(r"\d{2}-?\d{7}", ein) and canonical_ein_digits(ein) == requested_ein):
                     verified.append(number)
                     break
-        if len(verified) < 2 or verified[-1] != verified[-2] + 1 or time.monotonic() >= stop:
+        if len(verified) < 2 or verified[-1] != verified[-2] + 1:
+            from deployment.gate52_repairs import ma_primary_return_identity
+            if not ma_primary_return_identity(raw, org.organization_name, requested_ein, stop):
+                return None
+        if time.monotonic() >= stop:
             return None
         return {"filing_year": int(latest), "source_url": url, "profile_tax_id": conflict["source_tax_id"]}
     except Exception as exc:
@@ -35149,17 +35174,22 @@ def ok_certificate_date_from_text(text: str, registry_name: str) -> date | None:
 
 
 @release_native_memory_after
-def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str, *, allow_ocr: bool = True) -> tuple[date | None, str]:
+def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str, *, allow_ocr: bool = True,
+                              deadline: float = float('inf'), first_page_only: bool = False) -> tuple[date | None, str]:
     """Read the date printed on the matched entity's actual registration certificate."""
     from pypdf import PdfReader
     global _OK_CERTIFICATE_OCR, _OK_CERTIFICATE_OCR_DETAIL
     if len(pdf_bytes) > 20_000_000:
         return None, "Certificate exceeds the bounded document size."
     reader = PdfReader(io.BytesIO(pdf_bytes))
-    for pdf_page in list(reader.pages)[:2]:
+    for pdf_page in list(reader.pages)[:1 if first_page_only else 2]:
+        if time.monotonic() >= deadline:
+            return None, "Certificate interpretation allowance exhausted."
         text = pdf_page.extract_text() or ""
         due = ok_certificate_date_from_text(text, registry_name)
         if due:
+            if first_page_only and re.search(r"\b(?:rejected|denied|suspended|revoked|void|unapproved)\b", text, re.I):
+                return None, "Certificate contains adverse registration evidence."
             return due, text
         printed_name = re.search(r"Registration\s*of\s+(.+?)\s+has\s+been\s+filed", text, re.I | re.S)
         if printed_name and normalized_match_name(printed_name.group(1)) != normalized_match_name(registry_name):
@@ -35168,23 +35198,33 @@ def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str, *, allow_ocr
             return None, "Certificate contains adverse registration evidence."
         if not allow_ocr:
             continue
+        if first_page_only and text.strip():
+            continue  # The narrow recovery is for image-only certificates.
         images = list(pdf_page.images)
         if not images:
             continue
         image = max(images, key=lambda item: item.image.width * item.image.height).image
         # Retain the fast established pass. A higher-resolution pass is only used
         # when the certificate's full name and expiration were not both readable.
-        with _OK_CERTIFICATE_OCR_LOCK:
+        acquired = (_OK_CERTIFICATE_OCR_LOCK.acquire(timeout=max(0.0, deadline-time.monotonic()))
+                    if deadline != float('inf') else _OK_CERTIFICATE_OCR_LOCK.acquire())
+        if not acquired:
+            return None, "Certificate interpretation allowance exhausted."
+        try:
+            if time.monotonic() >= deadline:
+                return None, "Certificate interpretation allowance exhausted."
             from rapidocr_onnxruntime import RapidOCR
             if _OK_CERTIFICATE_OCR is None:
                 _OK_CERTIFICATE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
-            for detailed in (False, True):
+            for detailed in ((False,) if first_page_only else (False, True)):
                 engine = _OK_CERTIFICATE_OCR
                 if detailed:
                     if _OK_CERTIFICATE_OCR_DETAIL is None:
                         _OK_CERTIFICATE_OCR_DETAIL = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_side_len=1600)
                     engine = _OK_CERTIFICATE_OCR_DETAIL
                 lines, _ = engine(image)
+                if time.monotonic() >= deadline:
+                    return None, "Certificate interpretation allowance exhausted."
                 # OCR casing can depress a correctly read name's score. Retain
                 # only an exact full registry-name line below the usual cutoff;
                 # headings, expiration text and digits keep the 0.90 requirement.
@@ -35192,9 +35232,13 @@ def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str, *, allow_ocr
                 text = "\n".join(str(row[1]) for row in lines or []
                                  if float(row[2]) >= 0.90 or
                                  (identity_key and re.sub(r"[^a-z0-9]", "", normalized_match_name(str(row[1]))) == identity_key))
+                if re.search(r"\b(?:rejected|denied|suspended|revoked|void|unapproved)\b", text, re.I):
+                    return None, "Certificate contains adverse registration evidence."
                 due = ok_certificate_date_from_text(text, registry_name)
                 if due:
                     return due, text
+        finally:
+            _OK_CERTIFICATE_OCR_LOCK.release()
     return None, "The certificate's identity and stated expiration could not both be confirmed."
 
 
@@ -35251,7 +35295,10 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
 
     def read_certificate(pdf_bytes):
         try:
-            due, note = ok_certificate_expiration(pdf_bytes, registry_name, allow_ocr=False)
+            # The original delivery path already has this ten-second ceiling.
+            # Share it with one scan interpretation, never another request.
+            due, note = ok_certificate_expiration(pdf_bytes, registry_name, allow_ocr=True,
+                deadline=min(state_stop, started + 10.0), first_page_only=True)
         except Exception as exc:
             due, note = None, f"The returned certificate could not be read ({type(exc).__name__}); its expiration was not inferred."
         with _ok_certificate_cache_lock:

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity - Gate 51 Ownership & Evidence",
+  "name": "CharityClarity - Gate 52 Source Repair",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
   "description": "Bounded source recovery and record-bound evidence capture; existing quiet collectors retained.",
