@@ -173,6 +173,9 @@ def final_four_asset(name, text):
         text = text.replace(old, new)
     if name == 'index.html':
         import re
+        if os.environ.get('CE_PERMANENT_STAGING') == '1':
+            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RK"><script src="/tn-extensions-demo.js?v=29.2RK"></script></body>')
+            replace('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCTennesseeExtensions?.render(results);')
         replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
         replace('      if (nyResultRefresh) return;', '      if (nyResultRefresh || connectorPreflightPending) return;')
         replace('    let runAlternateNames = [];', '    let runAlternateNames = [];\n    let connectorPreflightPending = false;')
@@ -788,6 +791,9 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
             if alerts is not None and (urlparse(self.path).path == '/api/alerts' or self.path.startswith('/api/alerts/')):
                 from deployment.alerts import handle
                 return handle(alerts,self,self.path,origin=LAB_ORIGIN,include_body=include_body,session_required_status=403)
+            if alerts is not None and os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity() and self.path.startswith('/api/tn-extension-demo/'):
+                from deployment.tn_extensions_demo import handle
+                return handle(alerts,self,origin=LAB_ORIGIN,include_body=include_body)
             if not self.authorized(): return
             if os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity():
                 target = staging_collector_entry(self.path)
@@ -862,6 +868,9 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
         def do_HEAD(self): return self._get(False)
 
         def do_POST(self):
+            if alerts is not None and os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity() and self.path == '/api/tn-extension-demo':
+                from deployment.tn_extensions_demo import handle
+                return handle(alerts,self,origin=LAB_ORIGIN)
             if alerts is not None and self.path.startswith('/api/alerts/'):
                 if self.path == '/api/alerts/runner/lookup':
                     from deployment.alerts_browser import lookup
