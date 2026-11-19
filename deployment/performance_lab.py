@@ -174,7 +174,7 @@ def final_four_asset(name, text):
     if name == 'index.html':
         import re
         if os.environ.get('CE_PERMANENT_STAGING') == '1':
-            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RQ"><script src="/tn-extension-portal-rehearsal.js?v=29.2RQ"></script><script src="/tn-extensions-demo.js?v=29.2RQ"></script></body>')
+            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RR"><script src="/tn-extension-portal-rehearsal.js?v=29.2RR"></script><script src="/tn-extensions-demo.js?v=29.2RR"></script></body>')
             replace('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCTennesseeExtensions?.render(results);')
         replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
         replace('      if (nyResultRefresh) return;', '      if (nyResultRefresh || connectorPreflightPending) return;')
@@ -1032,7 +1032,7 @@ def main():
                     try:
                         from deployment.storage_retention import Maintenance
                         report=Maintenance(durable.pool).batch()
-                        if any(report.get(k) for k in ('backfilled','deleted_snapshots','trimmed_jobs','deleted_events')):
+                        if report.get('deferred_stages') or any(report.get(k) for k in ('backfilled','deleted_snapshots','trimmed_jobs','deleted_events')):
                             print('Storage retention: '+json.dumps(report),flush=True)
                     except Exception as exc:
                         print(f'Snapshot cleanup deferred: {type(exc).__name__}',flush=True)

@@ -100,4 +100,19 @@ class Tests(unittest.TestCase):
     started=time.perf_counter();store.save({'captured_at':self.now},b'small-test-source');times[label].append(1000*(time.perf_counter()-started))
   RESULTS['save_latency_ms']={key:{'median':round(statistics.median(values),3),'p95':round(sorted(values)[37],3)} for key,values in times.items()}
   self.assertLess(RESULTS['save_latency_ms']['candidate']['p95'],100)
+ def test_history_statement_timeout_cannot_roll_back_snapshot_expiry(self):
+  self.archive()
+  def timeout(c,now,limit):c.execute('SELECT pg_sleep(2)')
+  with patch.object(r,'trim_jobs',side_effect=timeout):report=self.m.batch(events=0)
+  self.assertEqual(report['deleted_snapshots'],1);self.assertFalse(self.fetch('SELECT * FROM cc_state_snapshots'))
+  self.assertEqual(report['deferred_stages'],['job_payloads:QueryCanceled']);self.assertIn('QueryCanceled',self.m.status()['last_error'])
+  self.m.batch();self.assertIsNone(self.m.status()['last_error'])
+ def test_event_failure_does_not_roll_back_expiry_or_job_compaction(self):
+  self.archive();self.workflow('old')
+  self.execute("INSERT INTO cc_lab_jobs(id,workflow_id,state,resources,weight,phase,finished,result) VALUES('job','old','TN','[]',1,'done',%s,%s)",(self.now-20*r.DAY,Jsonb({'status':'Current','large':'x'*5000})))
+  def fail(c,now,limit):c.execute('SELECT 1/0')
+  with patch.object(r,'delete_events',side_effect=fail):report=self.m.batch()
+  self.assertEqual(report['deleted_snapshots'],1);self.assertEqual(report['trimmed_jobs'],1)
+  self.assertEqual(report['deferred_stages'],['events:DivisionByZero'])
+  self.assertTrue(self.fetch("SELECT result FROM cc_lab_jobs WHERE id='job'")[0]['result']['storage_compacted'])
 if __name__=='__main__':unittest.main()

@@ -125,13 +125,23 @@ class Maintenance:
                     return {'deferred':'active_check'}
                 filled=backfill(c,now,enroll) if enroll else 0
                 removed,raw=delete_snapshots(c,now,snapshots) if snapshots else (0,0)
-                trimmed=trim_jobs(c,now,jobs) if jobs else 0
-                purged=delete_events(c,now,events) if events else 0
+                # Optional history maintenance must never roll back successful
+                # artifact expiry. A savepoint isolates each secondary stage.
+                deferred=[];trimmed=0;purged=0
+                if jobs:
+                    try:
+                        with c.transaction():trimmed=trim_jobs(c,now,jobs)
+                    except Exception as exc:deferred.append('job_payloads:'+type(exc).__name__)
+                if events:
+                    try:
+                        with c.transaction():purged=delete_events(c,now,events)
+                    except Exception as exc:deferred.append('events:'+type(exc).__name__)
                 report=dict(backfilled=filled,deleted_snapshots=removed,released_logical_bytes=raw,trimmed_jobs=trimmed,deleted_events=purged,seconds=round(time.monotonic()-started,3))
-                c.execute("UPDATE cc_storage_maintenance SET last_attempt=%s,last_success=%s,last_error=NULL,"
+                if deferred:report['deferred_stages']=deferred
+                c.execute("UPDATE cc_storage_maintenance SET last_attempt=%s,last_success=%s,last_error=%s,"
                     "backfilled=backfilled+%s,deleted_snapshots=deleted_snapshots+%s,released_logical_bytes=released_logical_bytes+%s,"
                     "trimmed_jobs=trimmed_jobs+%s,deleted_events=deleted_events+%s,latest=%s WHERE id=1",
-                    (now,now,filled,removed,raw,trimmed,purged,Jsonb(report)))
+                    (now,now,';'.join(deferred) or None,filled,removed,raw,trimmed,purged,Jsonb(report)))
                 return report
         except Exception as exc:
             try:
