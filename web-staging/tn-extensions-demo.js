@@ -73,7 +73,7 @@
   }
   function openDialog() {
     if(!dialog){dialog=document.createElement('dialog');dialog.id='tnExtensionDialog';document.body.append(dialog);dialog.addEventListener('cancel',e=>{if(working)e.preventDefault();});}
-    receiptAttempts=0;captureFailed=false;draw();if(!dialog.open)dialog.showModal();scheduleReceipt();
+    receiptAttempts=0;captureFailed=false;draw();if(!dialog.open)dialog.showModal();void captureConfirmation();scheduleReceipt();
     if(current?.workflow_version>=2&&["Draft","Submission failed"].includes(current.status)&&!current.federal_searched_at)void operate("find-federal",{});
   }
   function scheduleReceipt(){
@@ -83,12 +83,13 @@
   }
   async function captureConfirmation(){
     const card=dialog?.querySelector('#tnConfirmationCard');
-    if(!card||capturing||captureFailed||(current.documents.confirmation_screen&&current.confirmation_capture?.format_version>=2))return;
+    if(!dialog?.open||!card||capturing||captureFailed||(current.documents.confirmation_screen&&current.confirmation_capture?.format_version>=2))return;
     capturing=true;const id=current.id;
     try{
       const copy=card.cloneNode(true),originals=[card,...card.querySelectorAll('*')],copies=[copy,...copy.querySelectorAll('*')];
       originals.forEach((element,index)=>{const style=getComputedStyle(element);copies[index].setAttribute('style',Array.from(style).map(key=>`${key}:${style.getPropertyValue(key)};`).join(''));});
       const bounds=card.getBoundingClientRect(),width=Math.ceil(bounds.width),height=Math.ceil(bounds.height)+25;
+      if(width<100||height<80)throw new Error('The confirmation must be visible before capture.');
       copy.setAttribute('xmlns','http://www.w3.org/1999/xhtml');copy.style.width=width+'px';copy.style.boxSizing='border-box';copy.style.margin='0';
       const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(copy)}</foreignObject></svg>`;
       const picture=new Image();await new Promise((resolve,reject)=>{picture.onload=resolve;picture.onerror=reject;picture.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);});
@@ -126,6 +127,7 @@
   function draw(message='') {
     attachmentReady=false;
     const locked=current&&!['Draft','Submission failed'].includes(current.status);
+    const hasCompleteCapture=!!(current?.documents.confirmation_screen&&current.confirmation_capture?.format_version>=2);
     dialog.innerHTML=`<div class="tn-dialog-heading"><h2>Tennessee File Extension</h2><button type="button" id="tnClose" aria-label="Close extension demo">×</button></div>
       <p class="tn-demo-banner"><strong>Demo only — no live filings.</strong> Both Submit buttons use isolated test services. Applications, acceptance responses and receipts are simulated.</p>
       <div id="tnDemoError" role="alert">${esc(message)}</div>
@@ -141,7 +143,7 @@
        <section class="tn-workflow-step"><h4>3. Submission and acknowledgment</h4>
        <p><strong>${esc(current.status)} — Demo only</strong></p><p class="tn-small">${esc(current.receipt_method||'The isolated test service supplies simulated responses. No real Tennessee acknowledgment is retrieved.')}</p>
        ${current.failure?`<p class="tn-disabled-reason">${esc(current.failure)}</p>`:''}
-       ${['Extension submitted','Receipt acknowledged'].includes(current.status)?`<div id="tnConfirmationCard" style="box-sizing:border-box;max-width:620px;padding:22px;border:1px solid #b9c9df;border-radius:8px;background:#fff;color:#20324a;font:14px/1.5 Arial,sans-serif"><p style="color:#9c1f1f;font-weight:bold">DEMO ONLY — ISOLATED TENNESSEE TEST SERVICE</p><h3 style="font-size:20px;color:#0b2a5b">Thank you for your submission.</h3><p>Your test extension request has been received. Review is pending; this is not approval. No email will be sent by this demo.</p><p>${esc(current.fields.name)}<br>EIN ${esc(current.ein)} · ${esc(current.facts.coid)}<br>Period ${esc(current.facts.period_start)} to ${esc(current.facts.period_end)}<br>Confirmation ${esc(current.confirmation)}</p><p style="font-size:11px">Compliance Express · www.compliance-express.com · info@compliance-express.com</p></div><p id="tnCaptureMessage" class="tn-small">${current.documents.confirmation_screen?'Confirmation screen captured and saved with this application.':'Saving the displayed test confirmation screen separately from the application.'}</p>${current.documents.confirmation_screen?'':'<button type="button" id="tnRetryCapture">Retry capture</button>'}`:''}
+       ${['Extension submitted','Receipt acknowledged'].includes(current.status)?`<div id="tnConfirmationCard" style="box-sizing:border-box;max-width:620px;padding:22px;border:1px solid #b9c9df;border-radius:8px;background:#fff;color:#20324a;font:14px/1.5 Arial,sans-serif"><p style="color:#9c1f1f;font-weight:bold">DEMO ONLY — ISOLATED TENNESSEE TEST SERVICE</p><h3 style="font-size:20px;color:#0b2a5b">Thank you for your submission.</h3><p>Your test extension request has been received. Review is pending; this is not approval. No email will be sent by this demo.</p><p>${esc(current.fields.name)}<br>EIN ${esc(current.ein)} · ${esc(current.facts.coid)}<br>Period ${esc(current.facts.period_start)} to ${esc(current.facts.period_end)}<br>Confirmation ${esc(current.confirmation)}</p><p style="font-size:11px">Compliance Express · www.compliance-express.com · info@compliance-express.com</p></div><p id="tnCaptureMessage" class="tn-small">${hasCompleteCapture?'Confirmation screen captured and saved with this application.':'Saving the displayed test confirmation screen separately from the application.'}</p>${hasCompleteCapture?'':'<button type="button" id="tnRetryCapture">Retry capture</button>'}`:''}
        ${current.irs_submission?`<p class="tn-small">IRS test service: accepted ${esc(new Date(current.irs_submission.submitted_at*1000).toLocaleString())}. <a href="${esc(current.documents.irs_acceptance)}" target="_blank" rel="noopener">View simulated IRS acceptance</a></p>`:''}
        ${current.acknowledgment_provenance?`<p class="tn-small">Acknowledgment source: ${esc(current.acknowledgment_provenance.source)}. Received ${esc(new Date(current.acknowledgment_provenance.received_at*1000).toLocaleString())}. Matched to this account, organization, filing period, confirmation and exact submitted application.</p>`:''}
        ${unknownSend||['Extension submitted','Submission unconfirmed'].includes(current.status)?'<p class="tn-small">Checking the test service automatically for a matching acknowledgment. You can close this window; a later CharityClarity run will check the saved submission again. Nothing is resubmitted.</p>':''}

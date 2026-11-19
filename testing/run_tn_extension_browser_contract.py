@@ -5,7 +5,7 @@ import base64,io,json,os,threading,urllib.request
 from http.server import BaseHTTPRequestHandler,HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit,parse_qs
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright,expect
 from deployment import tn_extensions_demo as t
 from testing.test_tn_extensions_demo import Accounts,ACCOUNT,NOW
 
@@ -30,6 +30,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in ['/tn-extensions-demo.js','/tn-extensions-demo.css','/tn-extension-portal-rehearsal.js']:
             return self.send((ROOT/'web-staging'/path[1:]).read_bytes(),'text/javascript' if path.endswith('.js') else 'text/css')
         if path=='/__advance':self.server.offset=17;return self.send({'offset':17})
+        if path=='/__old_capture':
+            row=c.execute('SELECT data FROM cc_tn_extension_demo_requests WHERE account=%s AND ein=%s',(ACCOUNT,'042774441')).fetchone()
+            r=row['data'];r['confirmation_capture']['format_version']=1;service.save(c,ACCOUNT,r,NOW+self.server.offset);c.db.commit();return self.send({'test_only_old_capture':True})
         if path=='/__state':
             rows=c.execute('SELECT data FROM cc_tn_extension_demo_requests WHERE account=%s',(ACCOUNT,)).fetchall()
             return self.send({'requests':[r['data'] for r in rows],'calls':self.server.calls,'document_count':c.execute('SELECT count(*) AS n FROM cc_tn_extension_demo_documents').fetchone()['n']})
@@ -100,6 +103,14 @@ def main():
             page.get_by_role('link',name='View captured confirmation screen — Demo only').wait_for()
             assert page.locator('#tnFileExtension').is_disabled();assert page.get_by_role('link',name='View captured confirmation screen — Demo only').count()==1
             refreshed=json.loads(get('/__state'));later=next(x for x in refreshed['requests'] if x['id']==boston['id']);assert later['documents']==original;assert refreshed['document_count']==original_count
+            get('/__old_capture');page.goto(ORIGIN+'/?case=boston');page.locator('#tnFileExtension').wait_for();page.locator('#tnCheckExtensions').click();page.get_by_role('button',name='View submitted filing',exact=True).click()
+            capture_link=page.locator('#tnExtensionDialog').get_by_role('link',name='View captured confirmation screen — Demo only',exact=True)
+            expect(capture_link).not_to_have_attribute('href',original['confirmation_screen'],timeout=12000)
+            migrated=json.loads(get('/__state'));latest=next(x for x in migrated['requests'] if x['id']==boston['id'])
+            assert migrated['document_count']==original_count
+            for kind in ['application','acknowledgment','irs_filed','irs_acceptance']:assert latest['documents'][kind]==original[kind]
+            (OUT/'reopened-confirmation.pdf').write_bytes(get(latest['documents']['confirmation_screen']))
+            page.locator('#tnClose').click()
             # The Yes path requests an upload; it never displays the new-form fields.
             go('global');prepare();page.locator('#tnIRSAnswer').select_option('yes')
             assert page.locator('#tnSupportUpload').count()==1;assert page.locator('#irs_ein').count()==0
