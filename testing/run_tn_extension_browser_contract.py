@@ -41,7 +41,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send({'requests':[r['data'] for r in rows],'calls':self.server.calls,'document_count':c.execute('SELECT count(*) AS n FROM cc_tn_extension_demo_documents').fetchone()['n']})
         key=parse_qs(urlsplit(self.path).query).get('case',['fcc'])[0];identifier,name=ORG[key]
         result=dict(state='TN',ein=identifier,organization_name=name,status='Upcoming Filing')
-        html='''<!doctype html><html><head><meta charset="utf-8"><title>Local isolated Tennessee workflow test</title><style>*,::before,::after{box-sizing:border-box}p,h1,h2,h3{margin:0}h1,h2,h3{font-weight:inherit;font-size:inherit}</style><link rel="stylesheet" href="/tn-extensions-demo.css"></head><body style="font:16px Arial;margin:24px"><h1>CharityClarity local test â€” Demo only</h1><p id="mainReady">Main results ready</p><section id="resultPanel"><table><tbody id="resultRows"><tr><td>Tennessee</td><td>Upcoming Filing</td><td></td></tr></tbody></table></section><script src="/tn-extension-portal-rehearsal.js"></script><script src="/tn-extensions-demo.js"></script><script>CCTennesseeExtensions.render(REPLACE_RESULT)</script></body></html>'''
+        html='''<!doctype html><html><head><meta charset="utf-8"><title>Local isolated Tennessee workflow test</title><style>*,::before,::after{box-sizing:border-box}p,h1,h2,h3{margin:0}h1,h2,h3{font-weight:inherit;font-size:inherit}</style><link rel="stylesheet" href="/tn-extensions-demo.css"></head><body style="font:16px Arial;margin:24px"><h1>CharityClarity local test — Demo only</h1><p id="mainReady">Main results ready</p><section id="resultPanel"><table><tbody id="resultRows"><tr><td>Tennessee</td><td>Upcoming Filing</td><td></td></tr></tbody></table></section><script src="/tn-extension-portal-rehearsal.js"></script><script src="/tn-extensions-demo.js"></script><script>CCTennesseeExtensions.render(REPLACE_RESULT)</script></body></html>'''
         # Explicit local-only transport fixtures. Production endpoints never
         # accept caller-supplied public results or account credentials here.
         fixture='''<script>
@@ -97,7 +97,7 @@ def main():
             def go(key):
                 page.goto(ORIGIN+'/?case='+key);page.get_by_text('Main results ready',exact=True).wait_for()
                 page.locator('#tnFileExtension').wait_for()
-                assert page.get_by_role('link',name='View captured confirmation screen â€” Demo only').count()==0,'No saved filing link before explicit check'
+                assert page.get_by_role('link',name='View captured confirmation screen — Demo only').count()==0,'No saved filing link before explicit check'
                 page.locator('#tnCheckExtensions').click();expect(page.locator('#tnCheckExtensions')).to_be_enabled(timeout=15000);page.locator('#tnFileExtension').wait_for()
             def prepare():
                 page.locator('#tnFileExtension').click();page.locator('#tnInitialPrior').select_option('no')
@@ -114,7 +114,7 @@ def main():
             assert page.locator('#tnSubmitDemo').is_disabled()
             page.locator('#tnPrepareFirst').click();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
             page.locator('#tnReviewed').check();page.locator('#tnAuthorized').check();page.get_by_text('Test response options',exact=True).click();page.locator('#tnTestResponse').select_option('returned');page.locator('#tnSubmitDemo').click()
-            page.get_by_text('Receipt acknowledged â€” Demo only',exact=True).wait_for(timeout=12000)
+            page.get_by_text('Receipt acknowledged — Demo only',exact=True).wait_for(timeout=12000)
             assert 'State review: Returned for correction' in page.locator('#tnExtensionDialog').inner_text()
             page.screenshot(path=str(OUT/'FCC-FIRST-EXTENSION-NO-FEDERAL-STEP.png'),full_page=True)
             page.locator('#tnClose').click()
@@ -124,7 +124,7 @@ def main():
             page.get_by_text('Demo documents',exact=True).click();page.locator('#tnUseDemoEvidence').click()
             page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
             page.locator('#tnReviewed').check();page.locator('#tnAuthorized').check();page.locator('#tnSubmitDemo').click()
-            page.get_by_text('Receipt acknowledged â€” Demo only',exact=True).wait_for(timeout=12000);page.locator('#tnClose').click()
+            page.get_by_text('Receipt acknowledged — Demo only',exact=True).wait_for(timeout=12000);page.locator('#tnClose').click()
             get('/__second');go('boston');prepare();page.locator('#tnIRSAnswer').select_option('no')
             for key,value in dict(books='Demo Books Custodian',phone='202-555-0100',tax_a='0',tax_b='0',tax_c='0').items():page.locator('#irs_'+key).fill(value)
             page.locator('#tnIRSReviewed').check();page.locator('#tnSubmitIRS').click();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
@@ -134,18 +134,18 @@ def main():
             page.locator('#tnConfirmationCard').wait_for();page.get_by_text('Confirmation screen captured and saved with this application.',exact=True).wait_for(timeout=12000)
             page.screenshot(path=str(OUT/'TEST-SUBMISSION-CONFIRMATION.png'),full_page=True)
             get('/__advance')
-            page.get_by_text('Receipt acknowledged â€” Demo only',exact=True).wait_for(timeout=12000)
+            page.get_by_text('Receipt acknowledged — Demo only',exact=True).wait_for(timeout=12000)
             assert 'Isolated Tennessee test service' in page.locator('#tnExtensionDialog').inner_text()
             state=json.loads(get('/__state'));boston=next(x for x in state['requests'] if x['ein']=='042774441')
             assert boston['state_sends']==1 and boston['irs_submission']['sends']==1
             for key in ['irs_filed','irs_acceptance','application','acknowledgment','confirmation_screen']:
                 assert key in boston['documents'];(OUT/(key+'.pdf')).write_bytes(get(boston['documents'][key]))
             original=dict(boston['documents']);original_count=state['document_count'];page.locator('#tnClose').click();go('boston')
-            page.get_by_role('link',name='View captured confirmation screen â€” Demo only').wait_for()
-            assert page.locator('#tnFileExtension').is_disabled();assert page.get_by_role('link',name='View captured confirmation screen â€” Demo only').count()==1
+            page.get_by_role('link',name='View captured confirmation screen — Demo only').wait_for()
+            assert page.locator('#tnFileExtension').is_disabled();assert page.get_by_role('link',name='View captured confirmation screen — Demo only').count()==1
             refreshed=json.loads(get('/__state'));later=next(x for x in refreshed['requests'] if x['id']==boston['id']);assert later['documents']==original;assert refreshed['document_count']==original_count
             get('/__old_capture');page.goto(ORIGIN+'/?case=boston');page.locator('#tnFileExtension').wait_for();page.locator('#tnCheckExtensions').click();page.get_by_role('button',name='View submitted filing',exact=True).click()
-            capture_link=page.locator('#tnExtensionDialog').get_by_role('link',name='View captured confirmation screen â€” Demo only',exact=True)
+            capture_link=page.locator('#tnExtensionDialog').get_by_role('link',name='View captured confirmation screen — Demo only',exact=True)
             expect(capture_link).not_to_have_attribute('href',original['confirmation_screen'],timeout=12000)
             migrated=json.loads(get('/__state'));latest=next(x for x in migrated['requests'] if x['id']==boston['id'])
             assert migrated['document_count']==original_count
@@ -160,7 +160,7 @@ def main():
             assert page.get_by_text('Download matching test packet',exact=True).count()==0
             page.screenshot(path=str(OUT/'YES-EXISTING-IRS-AUTOMATIC-ATTACHMENT.png'),full_page=True)
             page.locator('#tnReviewed').check();page.locator('#tnAuthorized').check();drop_submit['once']=True;page.locator('#tnSubmitDemo').click()
-            page.get_by_text('Receipt acknowledged â€” Demo only',exact=True).wait_for(timeout=12000)
+            page.get_by_text('Receipt acknowledged — Demo only',exact=True).wait_for(timeout=12000)
             global_request=next(x for x in json.loads(get('/__state'))['requests'] if x['ein']=='521273585')
             assert global_request['state_sends']==1,'Lost HTTP response must reconcile, never resend'
             assert not errors,errors

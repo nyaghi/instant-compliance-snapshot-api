@@ -174,7 +174,7 @@ def final_four_asset(name, text):
     if name == 'index.html':
         import re
         if os.environ.get('CE_PERMANENT_STAGING') == '1':
-            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RX"><script src="/tn-extension-portal-rehearsal.js?v=29.2RX"></script><script src="/tn-extensions-demo.js?v=29.2RX"></script></body>')
+            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RY"><script src="/tn-extension-portal-rehearsal.js?v=29.2RY"></script><script src="/tn-extensions-demo.js?v=29.2RY"></script></body>')
             replace('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCTennesseeExtensions?.render(results);')
         replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
         replace('      if (nyResultRefresh) return;', '      if (nyResultRefresh || connectorPreflightPending) return;')
@@ -185,7 +185,7 @@ def final_four_asset(name, text):
         connectorPreflightPending = true;
         const submitLabel = submitButton.textContent;
         submitButton.disabled = true;
-        submitButton.textContent = "Connecting to the registry browserâ€¦";
+        submitButton.textContent = "Connecting to the registry browser…";
         let readiness;
         try {
           readiness = await window.CCNYConnector?.preflight(connectorStates);
@@ -201,7 +201,7 @@ def final_four_asset(name, text):
             ? "An automatic Alerts check is finishing. This Aurora check has not started. Retry shortly; the two checks will run separately."
             : readiness?.reason === "NY_CONNECTOR_UPDATE_REQUIRED"
             ? "The registry browser connector needs an update. This check did not start."
-            : "Couldnâ€™t connect to the registry browser connector. This check did not start. Make sure the CharityClarity extension is enabled, then retry.");
+            : "Couldn’t connect to the registry browser connector. This check did not start. Make sure the CharityClarity extension is enabled, then retry.");
           const retry = document.createElement("button");
           retry.type = "button";
           retry.className = "ml-2 underline font-semibold";
@@ -414,7 +414,7 @@ def final_four_asset(name, text):
         replace('Choose any or all 34 states.', 'Choose any or all ${STATES.length} states.')
         replace('Select all 34</button>', 'Select all ${STATES.length}</button>')
         environment_label = 'Staging' if identity.get('permanent_staging') else 'Isolated Trial'
-        replace('Staging Â· Sales Mode ${VERSION}', environment_label+' Â· Sales Mode ${VERSION}')
+        replace('Staging · Sales Mode ${VERSION}', environment_label+' · Sales Mode ${VERSION}')
         replace('{signal:controller.signal}', '{signal:controller.signal,mode:"sales"}', 2)
     elif name == 'ny-connector.js':
         import re
@@ -684,7 +684,7 @@ def lab_asset(path):
   window.addEventListener('load', () => observer.disconnect(), {once: true});
 })();
 </script></head>""", 1)
-            title = 'CharityClarity Staging â€” ' if os.environ.get('CE_PERMANENT_STAGING') == '1' else 'Performance Lab â€” '
+            title = 'CharityClarity Staging — ' if os.environ.get('CE_PERMANENT_STAGING') == '1' else 'Performance Lab — '
             text = text.replace('<title>', '<title>'+title, 1)
             text = text.replace('<body', '<body data-performance-lab="true"', 1)
             ny_note = ('New York uses this lab\'s isolated browser connector.' if trial_identity() else
@@ -920,7 +920,7 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
                         self.rfile.read(length)
                     if self.path == '/api/lab/workflows':
                         length = int(self.headers.get('Content-Length', '0'))
-                        if not 0 < length <= 32768: raise ValueError('Workflow input must be 1â€“32768 bytes')
+                        if not 0 < length <= 32768: raise ValueError('Workflow input must be 1–32768 bytes')
                         payload = normalize_submission(json.loads(self.rfile.read(length)), master.SUPPORTED_STATES)
                         ident, created = durable.submit('private-performance-lab', self.headers.get('Idempotency-Key'),
                             payload, master.APP_VERSION, (*master.IDENTITY_STATES, 'IRS'))
