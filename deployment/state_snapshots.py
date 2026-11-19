@@ -10,6 +10,7 @@ from contextlib import closing, contextmanager
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -156,10 +157,11 @@ class SQLiteStore:
         with self.lock,closing(sqlite3.connect(self.path)) as c,c:c.execute('UPDATE snapshots SET pdf=? WHERE id=? AND pdf IS NULL',(pdf,ident))
 
 class PostgresStore:
-    def __init__(self,pool,*,provisional_enabled=False,alerts_owner=None):
+    def __init__(self,pool,*,provisional_enabled=False,alerts_owner=None,retention_enabled=None):
         self.pool=pool
         self.provisional_enabled=provisional_enabled
         self.alerts_owner=alerts_owner
+        self.retention_enabled=os.environ.get('CE_PERMANENT_STAGING')=='1' if retention_enabled is None else retention_enabled
 
     def save(self,meta,raw,*,provisional=False):
         from psycopg.types.json import Jsonb
@@ -171,7 +173,7 @@ class PostgresStore:
                           "VALUES(%s,%s,%s) RETURNING id) INSERT INTO cc_alert_artifacts "
                           "SELECT id,%s,%s,extract(epoch FROM clock_timestamp()) FROM saved",
                           (ident,Jsonb({**meta,'alerts_owned':True}),raw,*self.alerts_owner))
-            elif provisional:
+            elif provisional or self.retention_enabled:
                 c.execute("WITH saved AS (INSERT INTO cc_state_snapshots(id,metadata,source) "
                           "VALUES(%s,%s,%s) RETURNING id) INSERT INTO cc_state_snapshot_scratch "
                           "SELECT id,CURRENT_TIMESTAMP+interval '1 day' FROM saved",(ident,Jsonb(meta),raw))
@@ -182,13 +184,18 @@ class PostgresStore:
     def protect(self,ids):
         with self.pool.connection(timeout=.25) as c:
             c.execute("SET LOCAL statement_timeout = '500ms'")
-            c.execute("DELETE FROM cc_state_snapshot_scratch WHERE id=ANY(%s)",(ids,))
+            if self.retention_enabled:
+                c.execute("UPDATE cc_state_snapshot_scratch SET discard_after=GREATEST(discard_after,CURRENT_TIMESTAMP+interval '1 day') WHERE id=ANY(%s)",(ids,))
+            else:c.execute("DELETE FROM cc_state_snapshot_scratch WHERE id=ANY(%s)",(ids,))
             # Separate READ COMMITTED statement: if the reaper won the lock,
             # this must see its committed deletion before a link can go out.
             rows=c.execute("SELECT id FROM cc_state_snapshots WHERE id=ANY(%s)",(ids,)).fetchall()
             return {r['id'] for r in rows}
 
     def prune_provisional(self):
+        if self.retention_enabled:
+            from deployment.storage_retention import Maintenance
+            return Maintenance(self.pool).batch(jobs=0,events=0,enroll=0).get('deleted_snapshots',0)
         with self.pool.connection(timeout=.25) as c:
             c.execute("SET LOCAL statement_timeout = '1s'")
             return c.execute("WITH batch AS (SELECT id FROM cc_state_snapshot_scratch "
@@ -1535,7 +1542,10 @@ def serve(handler,include_body=True,store=None):
     if not match:handler._send_json(404,{'error':'Saved state snapshot not found.'});return True
     try:value=saved_pdf(match[1],store)
     except Exception:handler._send_json(503,{'error':'Saved state snapshot is temporarily unavailable. No registry search was run.'});return True
-    if value is None:handler._send_json(404,{'error':'No saved source capture is available. No registry search was run.'});return True
+    if value is None:
+        message=('Saved evidence is unavailable or expired. Aurora evidence is kept online for 24 hours; run a new check for fresh evidence.'
+                 if getattr(store or STORE,'retention_enabled',False) else 'No saved source capture is available. No registry search was run.')
+        handler._send_json(404,{'error':message});return True
     meta,pdf=value
     private=bool(meta.get('alerts_owned'))
     if private and not getattr(handler,'cc_alerts_evidence_authorized',False):

@@ -1,12 +1,13 @@
 -- Lab-only schema. One short transaction coordinates all API/worker replicas.
 -- Source archives are immutable and independent of short-lived browser sessions.
--- They are not cleared when a workflow or candidate decision expires.
+-- On permanent staging, ordinary Aurora source and cached PDF expire after
+-- 24 hours. Alerts-owned evidence follows its separate reference-aware policy.
 CREATE TABLE IF NOT EXISTS cc_state_snapshots (
  id text PRIMARY KEY CHECK (id ~ '^[a-f0-9]{64}$'),
  metadata jsonb NOT NULL, source bytea NOT NULL CHECK (octet_length(source) BETWEEN 1 AND 3000000),
  pdf bytea
 );
--- Only newly created connector scratch captures enter the expiry ledger.
+-- Expiry ledger for both unused captures and published Aurora evidence.
 CREATE TABLE IF NOT EXISTS cc_state_snapshot_scratch (
  id text PRIMARY KEY REFERENCES cc_state_snapshots(id) ON DELETE CASCADE,
  discard_after timestamptz NOT NULL

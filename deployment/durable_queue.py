@@ -434,6 +434,9 @@ class Queue:
             raise ValueError('Invalid queue limits')
         with self.transaction() as (c, now):
             c.execute(Path(__file__).with_name('queue_schema.sql').read_text())
+            if os.environ.get('CE_PERMANENT_STAGING')=='1':
+                from deployment.storage_retention import SCHEMA
+                c.execute(SCHEMA)
             c.execute('INSERT INTO cc_lab_settings VALUES (1,%s,%s,%s,%s) ON CONFLICT DO NOTHING',
                       (workflow_limit, backlog_limit, version, Jsonb(registry_limits)))
             actual = c.execute('SELECT * FROM cc_lab_settings WHERE id=1').fetchone()
@@ -451,6 +454,9 @@ class Queue:
             raise ValueError('Idempotency-Key required (1–128 characters)')
         fingerprint = digest({'payload': payload, 'version': version})
         with self.transaction() as (c, now):
+            if os.environ.get('CE_PERMANENT_STAGING')=='1':
+                maintenance=c.execute('SELECT busy_until FROM cc_storage_maintenance WHERE id=1').fetchone()
+                if maintenance and maintenance['busy_until']>now:raise Conflict('Brief storage maintenance is in progress. This check has not started. Please retry in a few minutes.')
             config = c.execute('SELECT * FROM cc_lab_settings WHERE id=1').fetchone()
             if config['source_version'] != version: raise Conflict('Queue release mismatch')
             prior = c.execute('SELECT * FROM cc_lab_submissions WHERE scope=%s AND key=%s', (scope, key)).fetchone()

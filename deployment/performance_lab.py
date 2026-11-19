@@ -174,7 +174,7 @@ def final_four_asset(name, text):
     if name == 'index.html':
         import re
         if os.environ.get('CE_PERMANENT_STAGING') == '1':
-            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RO"><script src="/tn-extension-portal-rehearsal.js?v=29.2RO"></script><script src="/tn-extensions-demo.js?v=29.2RO"></script></body>')
+            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RP"><script src="/tn-extension-portal-rehearsal.js?v=29.2RP"></script><script src="/tn-extensions-demo.js?v=29.2RP"></script></body>')
             replace('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCTennesseeExtensions?.render(results);')
         replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
         replace('      if (nyResultRefresh) return;', '      if (nyResultRefresh || connectorPreflightPending) return;')
@@ -837,6 +837,11 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
                 data['instance'] = os.environ.get('RENDER_INSTANCE_ID', 'local')
                 if capacity is not None: data['capacity'] = capacity.snapshot()
                 if durable is not None: data['durable_queue'] = durable.metrics()
+                if durable is not None and os.environ.get('CE_PERMANENT_STAGING')=='1':
+                    try:
+                        from deployment.storage_retention import Maintenance
+                        data['storage_retention']=Maintenance(durable.pool).status()
+                    except Exception as exc:data['storage_retention']={'error':type(exc).__name__}
                 try:
                     import resource
                     data['process_peak_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -1025,13 +1030,15 @@ def main():
             def clean_unused_captures():
                 while not stop_cleanup.wait(60):
                     try:
-                        removed=state_snapshots.STORE.prune_provisional()
-                        if removed:print(f'Expired temporary snapshots removed: {removed}',flush=True)
+                        from deployment.storage_retention import Maintenance
+                        report=Maintenance(durable.pool).batch()
+                        if any(report.get(k) for k in ('backfilled','deleted_snapshots','trimmed_jobs','deleted_events')):
+                            print('Storage retention: '+json.dumps(report),flush=True)
                     except Exception as exc:
                         print(f'Snapshot cleanup deferred: {type(exc).__name__}',flush=True)
             cleanup_thread=threading.Thread(target=clean_unused_captures,daemon=True,name='lab-snapshot-cleanup')
             cleanup_thread.start()
-            print('Temporary snapshot cleanup enabled on staging API.',flush=True)
+            print('Storage retention enabled: Aurora archives 24 hours; old job payloads/events 10 days; checked every 60 seconds while idle.',flush=True)
         alerts_thread=None
         if alerts is not None:
             def monitor_alerts():

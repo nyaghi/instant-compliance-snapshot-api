@@ -416,7 +416,10 @@ def serve(handler,include_body=True,store=None):
     try:
         if store is None:raise ValueError('Archive unavailable')
         item=loaded(match[1],store)
-        if item is None:handler._send_json(404,{'error':'Saved evidence not found.'});return
+        if item is None:
+            message=('Saved evidence is unavailable or expired. Aurora evidence is kept online for 24 hours; run a new check for fresh evidence.'
+                     if getattr(store,'retention_enabled',False) else 'Saved evidence not found.')
+            handler._send_json(404,{'error':message});return
         meta,doc,pdf=item
         if meta.get('alerts_owned') and not getattr(handler,'cc_alerts_evidence_authorized',False):
             handler._send_json(404,{'error':'Saved evidence not found.'});return
