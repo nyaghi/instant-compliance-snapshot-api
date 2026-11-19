@@ -83,14 +83,16 @@ def delete_snapshots(c,now,limit):
     return len(rows),sum(x['bytes'] for x in rows)
 
 def trim_jobs(c,now,limit):
-    rows=c.execute("""SELECT j.id,j.result FROM cc_lab_jobs j JOIN cc_lab_workflows w ON w.id=j.workflow_id
+    rows=c.execute("""WITH candidates AS MATERIALIZED (
+      SELECT j.id FROM cc_lab_jobs j JOIN cc_lab_workflows w ON w.id=j.workflow_id
       LEFT JOIN cc_storage_compacted_jobs x ON x.job_id=j.id
       WHERE j.phase='done' AND j.finished<%s AND w.finished<%s
         AND w.phase IN ('completed','canceled','expired') AND j.result IS NOT NULL AND x.job_id IS NULL
         AND NOT EXISTS(SELECT 1 FROM cc_alert_artifacts a WHERE a.workflow=w.id)
         AND NOT EXISTS(SELECT 1 FROM cc_alert_auto_matches a WHERE a.workflow=w.id)
         AND NOT EXISTS(SELECT 1 FROM cc_alert_changes a WHERE a.workflow=w.id)
-      ORDER BY j.finished,j.id LIMIT %s FOR UPDATE OF j SKIP LOCKED""",(now-10*DAY,now-10*DAY,limit)).fetchall()
+      ORDER BY j.finished,j.id LIMIT %s FOR UPDATE OF j SKIP LOCKED
+      ) SELECT j.id,j.result FROM candidates x JOIN cc_lab_jobs j ON j.id=x.id""",(now-10*DAY,now-10*DAY,limit)).fetchall()
     for row in rows:
         c.execute('UPDATE cc_lab_jobs SET result=%s WHERE id=%s',(Jsonb(compact_result(row['result'])),row['id']))
         c.execute('INSERT INTO cc_storage_compacted_jobs VALUES(%s,%s) ON CONFLICT DO NOTHING',(row['id'],now))
