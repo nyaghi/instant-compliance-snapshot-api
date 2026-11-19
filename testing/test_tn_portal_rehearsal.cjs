@@ -10,8 +10,8 @@ vm.runInNewContext(readFileSync('web-staging/tn-extension-portal-rehearsal.js','
  const populate=c.window.CCTennesseePortalRehearsal.populate;
  for(const url of ['https://tncab.tnsos.gov/upload','https://evil.example/file.pdf','/api/tn-extension-demo/documents/notvalid','/api/tn-extension-demo/documents/'+ 'a'.repeat(32)+'?redirect=evil'])await assert.rejects(populate(root,'CO901',url));
  assert.equal(fetched.length,0,'invalid targets must be rejected before fetch');
- const out=await populate(root,'CO901','/api/tn-extension-demo/documents/'+'a'.repeat(32));
- assert.equal(field.value,'CO901');assert.equal(input.files.length,1);assert.equal(out.bytes,86432);assert.deepEqual(events,['input','change','change']);assert.equal(clicks,0);
+ const out=await populate(root,'CO901','/api/tn-extension-demo/documents/'+'a'.repeat(32),'reason');
+ assert.equal(out.filename,'Reason statement - Demo only.pdf');assert.equal(field.value,'CO901');assert.equal(input.files.length,1);assert.equal(out.bytes,86432);assert.deepEqual(events,['input','change','change']);assert.equal(clicks,0);
  c.location.origin='https://tncab.tnsos.gov';await assert.rejects(populate(root,'CO901','/api/tn-extension-demo/documents/'+'a'.repeat(32)));
  assert.equal(fetched.length,1,'adapter cannot run against live Tennessee');
  console.log('PASS: exact owned staging destination, automatic CO and file input, no Submit click, live Tennessee rejected.');

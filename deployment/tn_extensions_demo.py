@@ -185,8 +185,9 @@ def document_pdf(title,fields):
     p.save();return out.getvalue()
 
 class Service:
-    def __init__(self,alerts):
+    def __init__(self,alerts,*,source_key="",session_binding="",source_version=""):
         self.alerts=alerts
+        self.source_key=source_key;self.session_binding=session_binding;self.source_version=source_version
         # Explicit offline test dependency only. Production Alerts has no
         # reference provider; live eligibility must use fresh source evidence.
         self.reference_provider=getattr(alerts,'extension_reference_provider',None)
@@ -341,7 +342,7 @@ class Service:
             'Period beginning':r['facts']['period_start'],'Period ending':r['facts']['period_end'],
             'Current expiration':r['facts']['expiration'],'Reason for extension':statement,
             'Supporting documentation':'Reason statement instead of IRS Form 8868, as specified by Tennessee. This TEST document has not been approved by the state.'}
-        body=document_pdf('First-extension request - TEST supporting document',fields)
+        body=document_pdf('Reason statement for Tennessee first extension - Demo only',fields)
         digest=hashlib.sha256(body).hexdigest()
         original_url=r['documents'].get('first_request') or (support.get('url') if support.get('kind')=='first-request' and support.get('tuple')==self.filing_tuple(r) else None)
         if original_url:
@@ -568,10 +569,12 @@ class Service:
         if action=='receipt':self.reconcile(c,account,r,now);return self.public(r)
         raise Invalid('Unsupported extension action.')
 
-def handle(alerts,handler,*,origin,include_body=True):
+def handle(alerts,handler,*,origin,include_body=True,source_key="",source_version=""):
     headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}
     try:
-        entry=urlsplit(handler.path);service=Service(alerts)
+        entry=urlsplit(handler.path)
+        from deployment.tn_extension_refresh import session_binding
+        service=Service(alerts,source_key=source_key,session_binding=session_binding(handler),source_version=source_version)
         with alerts.transaction() as c:
             account=alerts.account(c,handler)
             if not account:return handler._send_json(403,{'error':'Sign into your existing CharityClarity account to use the extension demo.','sign_in':'/alerts'},headers)
@@ -582,7 +585,8 @@ def handle(alerts,handler,*,origin,include_body=True):
                 row=c.execute('SELECT * FROM cc_tn_extension_demo_documents WHERE id=%s AND account=%s',(match[1],account)).fetchone()
                 if not row:return handler._send_json(404,{'error':'Document not found.'},headers)
                 body=bytes(row['body']);handler.send_response(200)
-                for k,v in (headers|{'Content-Type':'application/pdf','Content-Disposition':'inline; filename="demo-only-tennessee-extension.pdf"','Content-Length':str(len(body))}).items():handler.send_header(k,v)
+                filename={'first-request':'Reason statement - Demo only.pdf','irs-filed':'Filed Form 8868 - Demo only.pdf','irs-acceptance':'IRS acceptance - Demo only.pdf'}.get(row['kind'],'Tennessee extension document - Demo only.pdf')
+                for k,v in (headers|{'Content-Type':'application/pdf','Content-Disposition':'inline; filename="'+filename+'"','Content-Length':str(len(body))}).items():handler.send_header(k,v)
                 handler.end_headers()
                 if include_body:handler.wfile.write(body)
                 return

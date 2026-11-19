@@ -58,7 +58,7 @@
       if(version!==generation||serial!==refreshSerial)return;
       if(action==='check')context.checked=true;
       rowPanel(data);
-      if(!quiet)document.getElementById('tnExtensionMessage').textContent=data.facts.refresh_error||'Fresh Tennessee check completed. Other results are unchanged. Test submissions only.';
+      if(!quiet)document.getElementById('tnExtensionMessage').textContent=data.facts.refresh_error||(context.reusedMain?'Tennessee registration reused from your completed run. Extension checks completed. Test submissions only.':'Fresh Tennessee check completed. Other results are unchanged. Test submissions only.');
     } catch(e) {
       if(version!==generation||quiet)return;
       const msg=document.getElementById('tnExtensionMessage');msg.textContent=e.message;
@@ -80,13 +80,16 @@
   }
   async function refreshPublic(version,ein){
     context.checked=false;if(context.checkData)rowPanel(context.checkData);
-    const message=document.getElementById('tnExtensionMessage');message.textContent='Refreshing Tennessee registration and extension eligibility…';
-    const started=await request({action:'begin-check',ein,name:context.result.organization_name});
+    const message=document.getElementById('tnExtensionMessage');message.textContent='Checking Tennessee extension eligibility…';
+    const started=await request({action:'begin-check',ein,name:context.result.organization_name,source_token:context.result.extension_source_token});
+    context.reusedMain=started.reuse_public===true;
     refreshController=new AbortController();const signal=AbortSignal.any([refreshController.signal,AbortSignal.timeout(60000)]);
     try{
+      if(!started.reuse_public){
       if(!window.CCNYConnector?.lookup)throw new Error('Connect the registry connector, then Check for extensions again.');
       const credentials=window.CCIdentityConfig?.();if(!credentials)throw new Error('Unlock CharityClarity before refreshing Tennessee.');
       await window.CCNYConnector.lookup({...credentials,state:'TN',organization_name:started.name,ein,alternate_names:context.aliases,extensionRefresh:started.nonce,signal,onProgress:text=>{if(version===generation&&text)message.textContent=text;}});
+      }
       if(version!==generation)return;
       const fresh=await request({action:'status',ein});
       if(!fresh.facts.refresh_error){
@@ -167,7 +170,7 @@
       <p class="tn-small">Tennessee's portal and returned-filing notice allow a reason document. This test document has not been submitted to or approved by Tennessee.</p></section>
       <section class="tn-workflow-step"><h4>2. Review and submit Tennessee request</h4>
       <p class="tn-small"><a href="${PORTAL}" target="_blank" rel="noopener">Sign in to Tennessee</a> to review actual account filings. Account history is checked read-only when available. The form below sends only to the test service.</p>
-      <div id="tnPortalRehearsal" data-demo-only="true"><label>CO number<input id="tnPortalCO" readonly></label><label>Supporting document — Demo only<input id="tnPortalUpload" type="file" accept="application/pdf" disabled></label><p id="tnAttachmentReady" role="status"></p></div>
+      <div id="tnPortalRehearsal" data-demo-only="true"><label>CO number<input id="tnPortalCO" readonly></label><label>${!current.federal_required&&firstChoice==='reason'?'Reason statement':'Filed Form 8868 and acceptance'} — Demo only<input id="tnPortalUpload" type="file" accept="application/pdf" disabled></label><p id="tnAttachmentReady" role="status"></p></div>
       <label class="tn-check"><input id="tnReviewed" type="checkbox"> I reviewed the CO number, period and first-extension request.</label>
       <label class="tn-check"><input id="tnAuthorized" type="checkbox"> I am the authorized filer for this test application.</label>
       <button type="button" id="tnSubmitDemo" disabled>Submit to Tennessee test service</button>
@@ -251,7 +254,7 @@
   async function populateRehearsal(id) {
     const root=dialog.querySelector('#tnPortalRehearsal');
     try{
-      await window.CCTennesseePortalRehearsal.populate(root,current.facts.coid,current.support.url);
+      await window.CCTennesseePortalRehearsal.populate(root,current.facts.coid,current.support.url,current.support.kind==='first-request'?'reason':'8868');
       if(current.id!==id||dialog.querySelector('#tnPortalRehearsal')!==root)return;
       attachmentReady=current.federal_required||(firstChoice==='reason'?current.support.kind==='first-request':current.support.kind==='8868');
       dialog.querySelector('#tnAttachmentReady').textContent=attachmentReady?'CO number and matching test attachment added automatically. Review them before submitting.':'Attach the selected supporting document before submitting.';

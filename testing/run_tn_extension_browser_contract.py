@@ -6,12 +6,15 @@ from http.server import BaseHTTPRequestHandler,HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit,parse_qs
 from playwright.sync_api import sync_playwright,expect
-from deployment import tn_extensions_demo as t
+from deployment import tn_extensions_demo as t,tn_extension_refresh as refresh
+from types import SimpleNamespace
 from testing.test_tn_extensions_demo import Accounts,ACCOUNT,NOW
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=Path(os.environ.get('CC_TN_TEST_OUTPUT',str(ROOT/'testing/tn-workflow-evidence')));OUT.mkdir(parents=True,exist_ok=True)
 ORIGIN='https://charityclarity-final-four-29-2.onrender.com'
+TEST_MASTER=SimpleNamespace(NY_CONNECTOR_SIGNING_KEY='local-only-test-source-key-12345678901234567890',APP_VERSION='local-test')
+TEST_COOKIE=SimpleNamespace(headers={'Cookie':'__Host-cc_alerts='+'a'*43})
 ORG={'fcc':('680412350','Foundation for California Community Colleges'),'fca':('440610626','Fellowship of Christian Athletes'),'boston':('042774441',"Children's Hospital Corporation"),'global':('521273585','Global Impact'),'closed':('521125072','Society for Scholarly Publishing')}
 
 class Handler(BaseHTTPRequestHandler):
@@ -23,7 +26,7 @@ class Handler(BaseHTTPRequestHandler):
         if not hasattr(self.server,'accounts'):
             self.server.accounts=Accounts();del self.server.accounts.extension_reference_provider
             self.server.offset=0;self.server.calls=[]
-        return t.Service(self.server.accounts),self.server.accounts.c
+        return t.Service(self.server.accounts,source_key=TEST_MASTER.NY_CONNECTOR_SIGNING_KEY,session_binding=refresh.session_binding(TEST_COOKIE),source_version=TEST_MASTER.APP_VERSION),self.server.accounts.c
     def do_GET(self):
         service,c=self.setup_service();path=urlsplit(self.path).path
         if path.startswith(t.PREFIX+'/documents/'):
@@ -40,7 +43,10 @@ class Handler(BaseHTTPRequestHandler):
             rows=c.execute('SELECT data FROM cc_tn_extension_demo_requests WHERE account=%s',(ACCOUNT,)).fetchall()
             return self.send({'requests':[r['data'] for r in rows],'calls':self.server.calls,'document_count':c.execute('SELECT count(*) AS n FROM cc_tn_extension_demo_documents').fetchone()['n']})
         key=parse_qs(urlsplit(self.path).query).get('case',['fcc'])[0];identifier,name=ORG[key]
-        result=dict(state='TN',ein=identifier,organization_name=name,status='Upcoming Filing')
+        reference=t.public_facts(identifier)
+        result=dict(state='TN',ein=identifier,organization_name=name,matched_registry_name=reference['name'],matched_registry_identifier=reference['coid'],raw_status_text='Active' if reference['current_verified'] else 'Expired',computed_due_date=reference['expiration'],renewal_filing_type='filed_period_end',renewal_filing_value='2025-'+reference['period_end'][5:] if reference.get('period_end') else '2025-06-30',source_url=t.SOURCE,success=True,status='Upcoming Filing')
+        result['extension_source_token']=refresh.issue_public_proof(TEST_MASTER,TEST_COOKIE,result,NOW+self.server.offset)
+        assert result['extension_source_token']
         html='''<!doctype html><html><head><meta charset="utf-8"><title>Local isolated Tennessee workflow test</title><style>*,::before,::after{box-sizing:border-box}p,h1,h2,h3{margin:0}h1,h2,h3{font-weight:inherit;font-size:inherit}</style><link rel="stylesheet" href="/tn-extensions-demo.css"></head><body style="font:16px Arial;margin:24px"><h1>CharityClarity local test — Demo only</h1><p id="mainReady">Main results ready</p><section id="resultPanel"><table><tbody id="resultRows"><tr><td>Tennessee</td><td>Upcoming Filing</td><td></td></tr></tbody></table></section><script src="/tn-extension-portal-rehearsal.js"></script><script src="/tn-extensions-demo.js"></script><script>CCTennesseeExtensions.render(REPLACE_RESULT)</script></body></html>'''
         # Explicit local-only transport fixtures. Production endpoints never
         # accept caller-supplied public results or account credentials here.
@@ -108,6 +114,7 @@ def main():
             go('fcc');assert 'Eligibility findings:' in page.locator('.tn-extension-row').inner_text()
             assert 'registration is Active' in page.locator('.tn-extension-row').inner_text()
             prepare();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
+            assert page.locator('#tnPortalUpload').evaluate('el=>el.files[0].name')=='Reason statement - Demo only.pdf'
             assert page.locator('#tnIRSAnswer').count()==0;assert page.locator('#tnSubmitIRS').count()==0;assert page.locator('#tnSupportUpload').count()==0
             assert 'Federal Form 8868 deadline' not in page.locator('#tnExtensionDialog').inner_text()
             page.locator('#tnFirstReason').fill('Additional time is needed to complete the audited financial statements.')
@@ -164,7 +171,8 @@ def main():
             global_request=next(x for x in json.loads(get('/__state'))['requests'] if x['ein']=='521273585')
             assert global_request['state_sends']==1,'Lost HTTP response must reconcile, never resend'
             assert not errors,errors
-            (OUT/'BROWSER-CONTRACT.json').write_text(json.dumps({'passed':True,'live_network_requests':0,'main_results_nonblocking':True,'first_request_no_federal_step_or_deadline':True,'first_request_test_submission':True,'second_both_test_submits':True,'second_synthetic_fixture_explicit':True,'closed_state_window_disabled':True,'automatic_co_and_file':True,'displayed_test_confirmation_captured':True,'delayed_receipt_polled':True,'five_document_links_persist':True,'links_hidden_until_check':True,'repeated_check_creates_no_files':True,'no_download_upload_loop':True,'actual_lost_http_response_reconciled_without_duplicate':True,'page_errors':errors,'browser_requests':len(network)},indent=2))
+            assert '/__public' not in network,'A fresh signed main result must avoid the duplicate public lookup'
+            (OUT/'BROWSER-CONTRACT.json').write_text(json.dumps({'passed':True,'reused_fresh_main_result_without_public_lookup':True,'reason_statement_filename_explicit':True,'live_network_requests':0,'main_results_nonblocking':True,'first_request_no_federal_step_or_deadline':True,'first_request_test_submission':True,'second_both_test_submits':True,'second_synthetic_fixture_explicit':True,'closed_state_window_disabled':True,'automatic_co_and_file':True,'displayed_test_confirmation_captured':True,'delayed_receipt_polled':True,'five_document_links_persist':True,'links_hidden_until_check':True,'repeated_check_creates_no_files':True,'no_download_upload_loop':True,'actual_lost_http_response_reconciled_without_duplicate':True,'page_errors':errors,'browser_requests':len(network)},indent=2))
             browser.close()
     finally:server.shutdown();thread.join()
     print('PASS: local actual-browser workflow, both test submits, confirmation image, delayed receipt, persistence and Yes upload; zero live traffic.')

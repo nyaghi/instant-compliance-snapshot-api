@@ -4,12 +4,53 @@ Public records come from the existing authenticated public connector, never
 client-supplied eligibility facts. Account observations are read-only browser
 observations, not proof of absence in every account or of a filing's period.
 """
-import copy,json,re,secrets,time
+import copy,json,re,secrets,time,base64,hashlib,hmac
+from http.cookies import SimpleCookie,CookieError
 from datetime import datetime,timezone
 from psycopg.types.json import Jsonb
 
 AGE=300
 PATH='/api/tn-extension-source'
+
+PROOF_FIELDS=('state','ein','organization_name','success','status','source_url','matched_registry_name',
+    'matched_registry_identifier','raw_status_text','computed_due_date','renewal_filing_type','renewal_filing_value',
+    'confirmation_required','identity_review','_worker_identity_review','source_truth_conflict','identity_anchor')
+
+def session_binding(handler):
+    from deployment.alerts import COOKIE
+    try:
+        value=SimpleCookie(handler.headers.get('Cookie',''))[COOKIE].value
+        return hashlib.sha256(value.encode()).hexdigest() if re.fullmatch('[A-Za-z0-9_-]{43}',value) else ''
+    except (CookieError,KeyError,ValueError):return ''
+
+def issue_public_proof(master,handler,result,now):
+    """Stateless receipt for a completed main-run TN result; no DB or lookup."""
+    from deployment.tn_extensions_demo import ein,Invalid
+    binding=session_binding(handler);key=getattr(master,'NY_CONNECTOR_SIGNING_KEY','')
+    if not binding or len(key)<32:return ''
+    try:
+        identifier=ein(result.get('ein'));f=result_facts(result,identifier,now)
+        if result.get('status')!='Not Registered' and not all([f.get('coid'),f.get('expiration_verified'),result.get('raw_status_text'),
+                result.get('renewal_filing_type')=='filed_period_end',result.get('renewal_filing_value')]):return ''
+        record=dict(binding=binding,issued=now,version=master.APP_VERSION,result={k:result[k] for k in PROOF_FIELDS if k in result})
+        body=base64.urlsafe_b64encode(json.dumps(record,separators=(',',':'),sort_keys=True).encode()).rstrip(b'=')
+        signature=hmac.new(key.encode(),b'cc-tn-main-result-v1.'+body,hashlib.sha256).hexdigest()
+        return body.decode()+'.'+signature
+    except (Invalid,ValueError,TypeError,AttributeError):return ''
+
+def reuse_public_proof(service,p,identifier,name,now):
+    token=p.get('source_token');key=service.source_key;binding=service.session_binding
+    if not isinstance(token,str) or not 65<len(token)<10000 or len(key)<32 or not binding:return None
+    try:
+        body,signature=token.rsplit('.',1)
+        expected=hmac.new(key.encode(),b'cc-tn-main-result-v1.'+body.encode(),hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature,expected):return None
+        record=json.loads(base64.urlsafe_b64decode(body+'='*(-len(body)%4)))
+        if record['binding']!=binding or record['version']!=service.source_version or not 0<=now-record['issued']<=AGE:return None
+        result=record['result']
+        if result.get('organization_name')!=name:return None
+        return result_facts(result,identifier,record['issued']),record['issued']
+    except (ValueError,TypeError,KeyError,UnicodeError):return None
 
 def stored(c,account,identifier):
     row=c.execute('SELECT data FROM cc_tn_extension_demo_checks WHERE account=%s AND ein=%s',(account,identifier)).fetchone()
@@ -37,8 +78,12 @@ def begin(service,c,account,p,now):
     identifier=ein(p.get('ein'));name=p.get('name','')
     if not isinstance(name,str) or not 1<=len(name.strip())<=200:raise Invalid('Organization name is required for the fresh Tennessee check.')
     data=dict(fresh=dict(state='pending',nonce=secrets.token_hex(24),started=now,ein=identifier,name=name.strip()))
+    reuse=reuse_public_proof(service,p,identifier,name.strip(),now)
+    if reuse:
+        facts,checked=reuse
+        data['fresh'].update(state='confirmed',checked=checked,facts=facts,reused_main_result=True)
     save(c,account,identifier,data,now)
-    return dict(nonce=data['fresh']['nonce'],ein=identifier,name=name.strip(),maximum_seconds=60)
+    return dict(nonce=data['fresh']['nonce'],ein=identifier,name=name.strip(),maximum_seconds=60,reuse_public=reuse is not None)
 
 def context(c,account,identifier,nonce,now):
     from deployment.tn_extensions_demo import Invalid
