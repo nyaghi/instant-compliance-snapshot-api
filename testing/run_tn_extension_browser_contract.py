@@ -52,14 +52,18 @@ def main():
     def get(path):return urllib.request.urlopen(base+path).read()
     try:
         with sync_playwright() as p:
-            browser=p.chromium.launch(headless=True);context=browser.new_context(viewport={'width':1280,'height':1000})
+            browser=p.chromium.launch(headless=True);context=browser.new_context(viewport={'width':1280,'height':1000});drop_submit={'once':False}
             def route(request_route):
                 request=request_route.request;parsed=urlsplit(request.url)
                 assert parsed.netloc==urlsplit(ORIGIN).netloc,'No external test traffic allowed'
                 network.append(parsed.path)
                 req=urllib.request.Request(base+parsed.path+('?' +parsed.query if parsed.query else ''),data=request.post_data_buffer,method=request.method,headers={'Content-Type':request.headers.get('content-type','application/json')})
                 try:
-                    with urllib.request.urlopen(req) as response:request_route.fulfill(status=response.status,body=response.read(),headers={'content-type':response.headers['Content-Type']})
+                    with urllib.request.urlopen(req) as response:
+                        raw=response.read()
+                        if request.post_data and json.loads(request.post_data).get('action')=='submit' and drop_submit['once']:
+                            drop_submit['once']=False;request_route.abort('failed');return
+                        request_route.fulfill(status=response.status,body=raw,headers={'content-type':response.headers['Content-Type']})
                 except urllib.error.HTTPError as response:request_route.fulfill(status=response.code,body=response.read(),headers={'content-type':'application/json'})
             context.route('**/*',route);page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
             def go(key):
@@ -100,8 +104,12 @@ def main():
             page.locator('#tnSupportUpload').set_input_files({'name':'matching-demo-packet.pdf','mimeType':'application/pdf','buffer':packet})
             page.locator('#tnUploadSupport').click();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
             page.screenshot(path=str(OUT/'YES-EXISTING-IRS-AUTOMATIC-ATTACHMENT.png'),full_page=True)
+            page.locator('#tnReviewed').check();page.locator('#tnAuthorized').check();drop_submit['once']=True;page.locator('#tnSubmitDemo').click()
+            page.get_by_text('Receipt acknowledged — Demo only',exact=True).wait_for(timeout=12000)
+            global_request=next(x for x in json.loads(get('/__state'))['requests'] if x['ein']=='521273585')
+            assert global_request['state_sends']==1,'Lost HTTP response must reconcile, never resend'
             assert not errors,errors
-            (OUT/'BROWSER-CONTRACT.json').write_text(json.dumps({'passed':True,'live_network_requests':0,'main_results_nonblocking':True,'fcc_no_path_prefilled_without_upload':True,'past_federal_submission_blocked':True,'closed_state_window_disabled':True,'eligible_both_submits':True,'automatic_co_and_file':True,'displayed_test_confirmation_captured':True,'delayed_receipt_polled':True,'five_document_links_persist':True,'yes_path_requires_matching_upload':True,'page_errors':errors,'browser_requests':len(network)},indent=2))
+            (OUT/'BROWSER-CONTRACT.json').write_text(json.dumps({'passed':True,'live_network_requests':0,'main_results_nonblocking':True,'fcc_no_path_prefilled_without_upload':True,'past_federal_submission_blocked':True,'closed_state_window_disabled':True,'eligible_both_submits':True,'automatic_co_and_file':True,'displayed_test_confirmation_captured':True,'delayed_receipt_polled':True,'five_document_links_persist':True,'yes_path_requires_matching_upload':True,'actual_lost_http_response_reconciled_without_duplicate':True,'page_errors':errors,'browser_requests':len(network)},indent=2))
             browser.close()
     finally:server.shutdown();thread.join()
     print('PASS: local actual-browser workflow, both test submits, confirmation image, delayed receipt, persistence and Yes upload; zero live traffic.')
