@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity - Gate 52 Source Repair",
+  "name": "CharityClarity — Tennessee Extension Checks",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
-  "description": "Bounded source recovery and record-bound evidence capture; existing quiet collectors retained.",
+  "description": "Existing quiet registry collectors plus explicitly requested, read-only Tennessee account history checks.",
   "permissions": [
     "storage",
     "browsingData",

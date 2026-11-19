@@ -37,7 +37,8 @@ class Connection:
         return self.db.execute(q.replace('%s','?').replace(' FOR UPDATE',''),tuple(json.dumps(x.obj) if isinstance(x,Jsonb) else x for x in p))
 
 class Accounts:
-    def __init__(self):self.c=Connection()
+    def __init__(self):
+        self.c=Connection();self.extension_reference_provider=lambda identifier,today=None:t.public_facts(identifier,today)
     @contextmanager
     def transaction(self):
         with self.c.db:yield self.c

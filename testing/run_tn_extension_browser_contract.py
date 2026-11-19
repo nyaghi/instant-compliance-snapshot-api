@@ -20,7 +20,9 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body,bytes):body=json.dumps(body).encode()
         self.send_response(status);self.send_header('Content-Type',kind);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
     def setup_service(self):
-        if not hasattr(self.server,'accounts'):self.server.accounts=Accounts();self.server.offset=0;self.server.calls=[]
+        if not hasattr(self.server,'accounts'):
+            self.server.accounts=Accounts();del self.server.accounts.extension_reference_provider
+            self.server.offset=0;self.server.calls=[]
         return t.Service(self.server.accounts),self.server.accounts.c
     def do_GET(self):
         service,c=self.setup_service();path=urlsplit(self.path).path
@@ -40,10 +42,24 @@ class Handler(BaseHTTPRequestHandler):
         key=parse_qs(urlsplit(self.path).query).get('case',['fcc'])[0];identifier,name=ORG[key]
         result=dict(state='TN',ein=identifier,organization_name=name,status='Upcoming Filing')
         html='''<!doctype html><html><head><meta charset="utf-8"><title>Local isolated Tennessee workflow test</title><style>*,::before,::after{box-sizing:border-box}p,h1,h2,h3{margin:0}h1,h2,h3{font-weight:inherit;font-size:inherit}</style><link rel="stylesheet" href="/tn-extensions-demo.css"></head><body style="font:16px Arial;margin:24px"><h1>CharityClarity local test — Demo only</h1><p id="mainReady">Main results ready</p><section id="resultPanel"><table><tbody id="resultRows"><tr><td>Tennessee</td><td>Upcoming Filing</td><td></td></tr></tbody></table></section><script src="/tn-extension-portal-rehearsal.js"></script><script src="/tn-extensions-demo.js"></script><script>CCTennesseeExtensions.render(REPLACE_RESULT)</script></body></html>'''
+        # Explicit local-only transport fixtures. Production endpoints never
+        # accept caller-supplied public results or account credentials here.
+        fixture='''<script>
+        window.CCIdentityConfig=()=>({email:'offline@example.org',admin_passcode:'TEST',device_id:'test-device'});
+        window.CCNYConnector={lookup:async input=>{const r=await fetch('/__public',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ein:input.ein,nonce:input.extensionRefresh})});if(!r.ok)throw new Error('Test public source unavailable');return r.json();}};
+        window.addEventListener('message',event=>{const m=event.data;if(m?.channel==='cc-tn-extension-account-v1'&&m.direction==='request')window.postMessage({channel:m.channel,direction:'response',id:m.id,nonce:m.nonce,extension_id:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',observation:{state:'checked',records:m.coid==='CO901'?[{tracking:'9000001234',coid:m.coid,description:'First Extension Request for GLOBAL IMPACT',type:'Extension Request',status:'Rejected',updated:'Test timestamp',source:'https://tncab.tnsos.gov/portal/my-filings',identity_method:'co_number'}]:[]}},location.origin);});
+        </script>'''
+        html=html.replace('<script>CCTennesseeExtensions.render',fixture+'<script>CCTennesseeExtensions.render')
         return self.send(html.replace('REPLACE_RESULT',json.dumps([result])).encode(),'text/html')
     def do_POST(self):
         service,c=self.setup_service()
         p=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if urlsplit(self.path).path=='/__public':
+            from deployment import tn_extension_refresh as refresh
+            reference=t.public_facts(p['ein'])
+            public=dict(state='TN',ein=p['ein'],organization_name=reference['name'],matched_registry_name=reference['name'],matched_registry_identifier=reference['coid'],raw_status_text='Active' if reference['current_verified'] else 'Expired',computed_due_date=reference['expiration'],renewal_filing_type='filed_period_end',renewal_filing_value='2025-'+reference['period_end'][5:] if reference.get('period_end') else '2025-06-30',source_url=t.SOURCE,success=True,status='Upcoming Filing')
+            with c.db:refresh.complete(service,c,ACCOUNT,p['ein'],p['nonce'],public,NOW+self.server.offset)
+            return self.send(public)
         self.server.calls.append({'action':p.get('action'),'ein':p.get('ein'),'id':p.get('id')})
         try:
             with c.db:
@@ -52,6 +68,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:result=service.dispatch(c,ACCOUNT,p,NOW+self.server.offset)
                 if p.get('action') in {'check','status'} and getattr(self.server,'second',False):
                     facts=t.demo_facts(p['ein'],'Synthetic second-extension example','second-open')
+                    facts['account_check']=result['facts'].get('account_check',{})
                     facts['existing_filing']=True if any(x['scenario']=='second-open' and x['status'] in {'Extension submitted','Receipt acknowledged','Submission unconfirmed'} for x in result['requests']) else None
                     result.update(facts=facts,eligibility=t.eligibility(facts,t.day(t.AS_OF)),eligibility_explanation=t.eligibility_explanation(facts,t.day(t.AS_OF)),needs_prior_confirmation=facts['existing_filing'] is None)
             self.send(result)
@@ -81,9 +98,13 @@ def main():
                 page.goto(ORIGIN+'/?case='+key);page.get_by_text('Main results ready',exact=True).wait_for()
                 page.locator('#tnFileExtension').wait_for()
                 assert page.get_by_role('link',name='View captured confirmation screen — Demo only').count()==0,'No saved filing link before explicit check'
-                page.locator('#tnCheckExtensions').click();page.locator('#tnFileExtension').wait_for()
+                page.locator('#tnCheckExtensions').click();expect(page.locator('#tnCheckExtensions')).to_be_enabled(timeout=15000);page.locator('#tnFileExtension').wait_for()
             def prepare():
-                page.locator('#tnFileExtension').click();page.locator('#tnInitialPrior').select_option('no');page.locator('#tnPrepareExtension').click();page.locator('#tnSubmitDemo').wait_for()
+                page.locator('#tnFileExtension').click();page.locator('#tnInitialPrior').select_option('no')
+                if page.locator('#tnOtherPeriod').count():
+                    assert page.locator('#tnPrepareExtension').is_disabled()
+                    page.locator('#tnOtherPeriod').check()
+                page.locator('#tnPrepareExtension').click();page.locator('#tnSubmitDemo').wait_for()
             go('fcc');assert 'may be eligible' in page.locator('.tn-extension-row').inner_text()
             assert 'registration is Active' in page.locator('.tn-extension-row').inner_text()
             prepare();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()

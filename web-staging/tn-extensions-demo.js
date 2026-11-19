@@ -4,7 +4,8 @@
   const API='/api/tn-extension-demo';
   const PORTAL='https://tncab.tnsos.gov/portal/portal-login-page';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let context=null,generation=0,current=null,dialog=null,working=false,unknownSend=false,receiptTimer=null,receiptAttempts=0,capturing=false,captureFailed=false;
+  let context=null,generation=0,current=null,dialog=null,working=false,unknownSend=false,receiptTimer=null,receiptAttempts=0,capturing=false,captureFailed=false,refreshController=null,refreshSerial=0;
+  document.addEventListener('submit',event=>{if(event.target.id==='snapshotForm'){refreshController?.abort();generation++;}},true);
   async function request(payload) {
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
     try {
@@ -24,7 +25,7 @@
     const heading=data.eligibility?.eligible?'Why this organization qualifies to prepare a request':e.prior_filing_confirmation_required?'Why this organization may be eligible':'Eligibility findings';
     return `<div class="tn-eligibility-explanation"><strong>${heading}:</strong><ul>${(e.basis||[]).map(item=>`<li>${esc(item)}</li>`).join('')}</ul><p>${esc(e.summary)}${e.prior_filing_confirmation_required?' Confirm that no renewal or extension is already submitted before preparing the request.':''}</p></div>
       ${e.federal?.deadline?`<p class="tn-small">Federal Form 8868 deadline: ${esc(dateLabel(e.federal.deadline))}. ${esc(e.federal.eligible?'New federal test submission is available after review.':e.federal.reason)}</p>`:''}
-      <p class="tn-small">Source checked ${esc(dateLabel(e.checked_at))}. <a href="${esc(e.source)}" target="_blank" rel="noopener">Tennessee extension rule</a> · <a href="${esc(e.registry_source)}" target="_blank" rel="noopener">Registration source</a></p>`;
+      <p class="tn-small">Source checked ${esc(e.checked_at_epoch?new Date(e.checked_at_epoch*1000).toLocaleString():dateLabel(e.checked_at))}. <a href="${esc(e.source)}" target="_blank" rel="noopener">Tennessee extension rule</a> · <a href="${esc(e.registry_source)}" target="_blank" rel="noopener">Registration source</a></p>`;
   }
   function rowPanel(data) {
     if(!context||!context.cell.isConnected)return;
@@ -35,36 +36,86 @@
     const pending=data.needs_prior_confirmation&&data.eligibility.reasons.length===1;
     const enabled=context.checked&&(data.eligibility.eligible||pending);
     const ordinal=data.facts?.extension_number===2?'second':'first';
+    const pendingLabel=data.facts?.account_check?.requires_period_review?'Matching Tennessee filings need review. Check their fiscal period and correct an existing returned request before creating another.':`May be eligible to request a ${ordinal} extension. Prior filings need your confirmation.`;
     box.innerHTML=`<strong>Tennessee extensions</strong><br><button type="button" id="tnFileExtension" ${enabled?'':'disabled'}>File Extension</button>
-      <span>${esc(!context.checked?'Click Check for extensions to assess Tennessee.':pending?`May be eligible to request a ${ordinal} extension. Prior filings need your confirmation.`:data.eligibility.eligible?`Eligible to prepare a ${ordinal}-extension request based on the reviewed record and your prior-filing answer. Submission is test-only.`:data.eligibility.reasons.join(' '))}</span>
+      <span>${esc(!context.checked?'Click Check for extensions to assess Tennessee.':pending?pendingLabel:data.eligibility.eligible?`Eligible to prepare a ${ordinal}-extension request based on the reviewed record and your prior-filing answer. Submission is test-only.`:data.eligibility.reasons.join(' '))}</span>
       ${context.checked?eligibilityDetails(data):''}
+      ${context.checked?`<details class="tn-account-summary"><summary>Tennessee account: ${esc(data.facts?.account_check?.records?.length?data.facts.account_check.records.map(r=>r.status).join(', '):data.facts?.account_check?.state||'not checked')}</summary>${accountDetails(data.facts)}</details>`:''}
       ${r?`<div class="tn-demo-saved"><strong>Demo only — ${esc(r.status)}</strong><br>${links(r)}
       ${r.confirmation?`<small>${esc(r.confirmation)} · ${esc(new Date((r.acknowledged_at||r.submitted_at)*1000).toLocaleString())}</small>`:''}
       ${['Draft','Submission failed'].includes(r.status)?'':'<button type="button" class="tn-resume">View submitted filing</button>'}</div>`:''}`;
     box.querySelector('.tn-resume')?.addEventListener('click',()=>{current=r;irsAnswer="";showFederal=false;unknownSend=false;openDialog();});
-    box.querySelector('#tnFileExtension')?.addEventListener('click',()=>{irsAnswer="";showFederal=false;current=r?.scenario==='verified'&&['Draft','Submission failed'].includes(r.status)?r:null;unknownSend=false;openDialog();});
+    box.querySelector('#tnFileExtension')?.addEventListener('click',()=>{irsAnswer="";showFederal=false;current=!data.needs_prior_confirmation&&r?.scenario==='verified'&&['Draft','Submission failed'].includes(r.status)&&['coid','period_start','period_end','expiration'].every(k=>r.facts[k]===data.facts[k])?r:null;unknownSend=false;openDialog();});
   }
   async function hydrate(action,quiet=false) {
     if(!context)return;
     const version=generation,ein=context.result.ein;
+    const serial=action==='check'?++refreshSerial:refreshSerial;
     try {
+      if(action==='check')await refreshPublic(version,ein);
+      if(version!==generation||serial!==refreshSerial)return;
       const data=await request({action,ein});
-      if(version!==generation)return;
+      if(version!==generation||serial!==refreshSerial)return;
       if(action==='check')context.checked=true;
       rowPanel(data);
-      if(!quiet)document.getElementById('tnExtensionMessage').textContent='Tennessee checked. Other results are unchanged. This pilot does not submit live filings.';
+      if(!quiet)document.getElementById('tnExtensionMessage').textContent=data.facts.refresh_error||'Fresh Tennessee check completed. Other results are unchanged. Test submissions only.';
     } catch(e) {
       if(version!==generation||quiet)return;
       const msg=document.getElementById('tnExtensionMessage');msg.textContent=e.message;
       if(e.signIn){const a=document.createElement('a');a.href=e.signIn;a.textContent=' Sign in to CharityClarity';a.target='_blank';a.rel='noopener';msg.append(a);}
     }
   }
+  async function accountRead(facts,nonce,signal){
+    if(!facts.coid)return {state:'unavailable',records:[]};
+    const id=crypto.randomUUID();
+    return new Promise(resolve=>{
+      let timer;
+      const finish=observation=>{clearTimeout(timer);window.removeEventListener('message',receive);signal?.removeEventListener('abort',abort);resolve(observation);};
+      const abort=()=>finish({state:'unavailable',records:[]});
+      const receive=event=>{const m=event.data;if(event.source===window&&event.origin===location.origin&&m?.channel==='cc-tn-extension-account-v1'&&m.direction==='response'&&m.id===id&&m.nonce===nonce&&/^[a-p]{32}$/.test(m.extension_id||''))finish(m.observation);};
+      window.addEventListener('message',receive);signal?.addEventListener('abort',abort,{once:true});
+      timer=setTimeout(()=>finish({state:'connector_update_required',records:[]}),24000);
+      window.postMessage({channel:'cc-tn-extension-account-v1',direction:'request',id,nonce,coid:facts.coid,names:[facts.name]},location.origin);
+    });
+  }
+  async function refreshPublic(version,ein){
+    context.checked=false;if(context.checkData)rowPanel(context.checkData);
+    const message=document.getElementById('tnExtensionMessage');message.textContent='Refreshing Tennessee registration and extension eligibility…';
+    const started=await request({action:'begin-check',ein,name:context.result.organization_name});
+    refreshController=new AbortController();const signal=AbortSignal.any([refreshController.signal,AbortSignal.timeout(60000)]);
+    try{
+      if(!window.CCNYConnector?.lookup)throw new Error('Connect the registry connector, then Check for extensions again.');
+      const credentials=window.CCIdentityConfig?.();if(!credentials)throw new Error('Unlock CharityClarity before refreshing Tennessee.');
+      await window.CCNYConnector.lookup({...credentials,state:'TN',organization_name:started.name,ein,alternate_names:context.aliases,extensionRefresh:started.nonce,signal,onProgress:text=>{if(version===generation&&text)message.textContent=text;}});
+      if(version!==generation)return;
+      const fresh=await request({action:'status',ein});
+      if(!fresh.facts.refresh_error){
+        message.textContent='Checking signed-in Tennessee account history…';
+        const observation=await accountRead(fresh.facts,started.nonce,signal);
+        if(version!==generation)return;
+        try{await request({action:'account-observation',ein,nonce:started.nonce,observation});}
+        catch{await request({action:'account-observation',ein,nonce:started.nonce,observation:{state:'unavailable',records:[]}});}
+      }
+    }catch(error){
+      if(version!==generation)return;
+      const kind=/connector|connection|browser/i.test(error.message||'')?'connector_unavailable':['AbortError','TimeoutError'].includes(error.name)?'timeout':'public_unconfirmed';
+      await request({action:'refresh-failed',ein,nonce:started.nonce,kind});
+      message.textContent=error.message||'The fresh Tennessee check did not complete. Try Check for extensions again.';
+    }finally{refreshController=null;}
+  }
+  function accountDetails(facts){
+    const a=facts?.account_check;if(!a)return '';
+    const label={checked:'Account history checked',sign_in_required:'Sign in to Tennessee to check account history',partial:'Account history was only partially checked',unavailable:'Account history could not be checked',busy:'The browser is busy; account history was not checked',connector_update_required:'Account check did not respond. Reload the existing registry connector or review Tennessee manually.',not_checked:'Account history has not been checked'}[a.state]||'Account history needs review';
+    return `<section class="tn-workflow-step"><h4>${esc(label)}</h4>${a.checked?`<p class="tn-small">Checked ${esc(new Date(a.checked*1000).toLocaleString())}.</p>`:''}
+      ${(a.records||[]).length?`<ul>${a.records.map(r=>`<li>${esc(r.description)} · ${esc(r.coid||'Name match; verify identity')} · tracking ${esc(r.tracking)} · ${esc(r.status)} · ${esc(r.updated)}</li>`).join('')}</ul><p>These records may cover this filing period. Review or correct an existing request before preparing another. The history table does not show its fiscal period.</p>`:a.state==='checked'?'<p>No matching filing was found in the account history checked. Filings in another account or outside that history still need your confirmation.</p>':'<p>Review existing filings in Tennessee and confirm the applicable period before preparing this test request.</p>'}
+      <a href="https://tncab.tnsos.gov/portal/my-filings" target="_blank" rel="noopener">Sign in to Tennessee / review filings</a></section>`;
+  }
   function render(results) {
     generation++;context=null;
     const old=document.getElementById('tnExtensionActions');if(old)old.remove();
     const index=results.findIndex(r=>r.state==='TN');if(index<0)return;
     const rows=document.querySelectorAll('#resultRows > tr'),row=rows[index];if(!row)return;
-    context={result:results[index],cell:row.lastElementChild,checked:false,checkData:null};
+    context={result:results[index],cell:row.lastElementChild,checked:false,checkData:null,aliases:Object.freeze([...(window.CCIdentity?.names?.()||[])])};
     const actions=document.createElement('div');actions.id='tnExtensionActions';actions.className='tn-extension-actions';
     actions.innerHTML='<button type="button" id="tnCheckExtensions">Check for extensions</button><span id="tnExtensionMessage" role="status">Tennessee · Separate from the main run · Test submissions only</span>';
     const panel=document.getElementById('resultPanel');panel.append(actions);
@@ -112,10 +163,10 @@
       <p>Attach either an existing filed IRS Form 8868 or a document stating the reason for the extension. You do not need a new IRS filing to use the reason-statement route.</p>
       <label>Supporting document<select id="tnFirstSupport"><option value="reason" ${firstChoice==='reason'?'selected':''}>Prepare a reason statement</option><option value="irs" ${firstChoice==='irs'?'selected':''}>Use an already-filed IRS extension</option></select></label>
       ${firstChoice==='reason'?`<label>Reason for extension — review or edit<textarea id="tnFirstReason" maxlength="600" rows="3">${esc(current.fields.reason)}</textarea></label><button type="button" id="tnPrepareFirst">Update reason document</button>${current.support?.kind==='first-request'?`<p class="tn-ready">Reason document prepared for your review.</p><a href="${esc(current.support.url)}" target="_blank" rel="noopener">Review reason document — Demo only</a>`:''}`:
-      `${current.support?.kind==='8868'?`<p class="tn-ready">Matching test IRS evidence attached.</p><a href="${esc(current.support.url)}" target="_blank" rel="noopener">Review attached evidence — Demo only</a>`:`<p>This demo checks only its own test evidence. It does not search Tennessee's account or the IRS.</p><label>Upload filed copy and acceptance evidence (test PDF, maximum 2 MB)<input id="tnSupportUpload" type="file" accept="application/pdf"></label><button type="button" id="tnUploadSupport">Validate and attach test PDF</button><details><summary>Demo documents</summary><button type="button" id="tnUseDemoEvidence">Use matching simulated IRS evidence</button></details>`}`}
+      `${current.support?.kind==='8868'?`<p class="tn-ready">Matching test IRS evidence attached.</p><a href="${esc(current.support.url)}" target="_blank" rel="noopener">Review attached evidence — Demo only</a>`:`<p>This demo checks its saved accepted test evidence. The Tennessee history check does not retrieve attachments or IRS records.</p><label>Upload filed copy and acceptance evidence (test PDF, maximum 2 MB)<input id="tnSupportUpload" type="file" accept="application/pdf"></label><button type="button" id="tnUploadSupport">Validate and attach test PDF</button><details><summary>Demo documents</summary><button type="button" id="tnUseDemoEvidence">Use matching simulated IRS evidence</button></details>`}`}
       <p class="tn-small">Tennessee's portal and returned-filing notice allow a reason document. This test document has not been submitted to or approved by Tennessee.</p></section>
       <section class="tn-workflow-step"><h4>2. Review and submit Tennessee request</h4>
-      <p class="tn-small"><a href="${PORTAL}" target="_blank" rel="noopener">Sign in to Tennessee</a> to review actual account filings. This pilot does not search that account or submit there; the form below sends only to the test service.</p>
+      <p class="tn-small"><a href="${PORTAL}" target="_blank" rel="noopener">Sign in to Tennessee</a> to review actual account filings. Account history is checked read-only when available. The form below sends only to the test service.</p>
       <div id="tnPortalRehearsal" data-demo-only="true"><label>CO number<input id="tnPortalCO" readonly></label><label>Supporting document — Demo only<input id="tnPortalUpload" type="file" accept="application/pdf" disabled></label><p id="tnAttachmentReady" role="status"></p></div>
       <label class="tn-check"><input id="tnReviewed" type="checkbox"> I reviewed the CO number, period and first-extension request.</label>
       <label class="tn-check"><input id="tnAuthorized" type="checkbox"> I am the authorized filer for this test application.</label>
@@ -155,7 +206,9 @@
       ${!current?`<h3>${esc(context.checkData?.facts.name||context.result.organization_name)}</h3>
        <p>EIN ${esc(context.result.ein)} · Tennessee ${esc(context.checkData?.facts.coid)}<br>Filing period ${esc(context.checkData?.facts.period_start)} to ${esc(context.checkData?.facts.period_end)}<br>Registration expires ${esc(context.checkData?.facts.expiration)}</p>
        <p class="tn-small">Public source checked ${esc(dateLabel(context.checkData?.facts.checked_at))}. Pending filings require your confirmation. <a href="${PORTAL}" target="_blank" rel="noopener">Sign in to Tennessee</a> to review your account. Tennessee sign-in is required for real portal filings; this pilot submits only to test services.</p>
+       ${accountDetails(context.checkData?.facts)}
        <label>Has a renewal or this extension request already been submitted for this filing period?<select id="tnInitialPrior"><option value="unknown">Select an answer</option><option value="yes">Yes — do not prepare another filing</option><option value="no">No — nothing has been submitted</option></select></label>
+       ${context.checkData?.facts.account_check?.requires_period_review?'<label class="tn-check"><input id="tnOtherPeriod" type="checkbox"> I reviewed the listed filings and confirm no submitted request covers this filing period.</label>':''}
        <p id="tnPriorExplanation" role="status"></p><button type="button" id="tnPrepareExtension" disabled>Continue to application</button>`:
       `<h3>${esc(current.fields.name)} — ${esc(current.status)}</h3><p class="tn-small">EIN ${esc(current.ein)} · Filing period ${esc(current.facts.period_start)} to ${esc(current.facts.period_end)} · Registration expiration ${esc(current.facts.expiration)}</p>
        ${eligibilityDetails(current)}
@@ -174,8 +227,10 @@
        ${!locked?`<div class="tn-documents">${links(current)}</div>`:''}<p class="tn-small">${esc(current.approval)}${current.confirmation?' · '+esc(current.confirmation):''}${current.submitted_at?' · Submitted '+esc(new Date(current.submitted_at*1000).toLocaleString()):''}${current.acknowledged_at?' · Acknowledged '+esc(new Date(current.acknowledged_at*1000).toLocaleString()):''}</p>`}
       <footer>Compliance Express · www.compliance-express.com · info@compliance-express.com</footer>`;
     dialog.querySelector('#tnClose').onclick=()=>{if(!working){clearTimeout(receiptTimer);dialog.close();}};
-    dialog.querySelector('#tnInitialPrior')?.addEventListener('change',function(){dialog.querySelector('#tnPrepareExtension').disabled=this.value!=='no';dialog.querySelector('#tnPriorExplanation').textContent=this.value==='yes'?'Do not create a duplicate. Sign in to Tennessee to review or correct the existing filing, including a returned request.':'';});
-    dialog.querySelector('#tnPrepareExtension')?.addEventListener('click',()=>operate('prepare',{ein:context.result.ein,answer:dialog.querySelector('#tnInitialPrior').value}));
+    const priorChanged=()=>{const value=dialog.querySelector('#tnInitialPrior').value,other=dialog.querySelector('#tnOtherPeriod');dialog.querySelector('#tnPrepareExtension').disabled=value!=='no'||!!other&&!other.checked;dialog.querySelector('#tnPriorExplanation').textContent=value==='yes'?'Do not create a duplicate. Sign in to Tennessee to review or correct the existing filing, including a returned request.':'';};
+    dialog.querySelector('#tnInitialPrior')?.addEventListener('change',priorChanged);
+    dialog.querySelector('#tnOtherPeriod')?.addEventListener('change',priorChanged);
+    dialog.querySelector('#tnPrepareExtension')?.addEventListener('click',()=>operate('prepare',{ein:context.result.ein,answer:dialog.querySelector('#tnInitialPrior').value,records_not_for_period:dialog.querySelector('#tnOtherPeriod')?.checked===true}));
     dialog.querySelector('#tnIRSAnswer')?.addEventListener('change',function(){irsAnswer=this.value;showFederal=this.value==='no'&&current.federal_check.eligible;draw();});
     dialog.querySelector('#tnFirstSupport')?.addEventListener('change',function(){firstChoice=this.value;draw();if(firstChoice==='irs')void operate('find-federal',{});});
     dialog.querySelector('#tnFirstReason')?.addEventListener('input',()=>{attachmentReady=false;dialog.querySelector('#tnSubmitDemo').disabled=true;dialog.querySelector('#tnAttachmentReady').textContent='Update the reason document, then review the attachment before submitting.';});
@@ -217,7 +272,7 @@
     if(working)return;working=true;dialog.querySelectorAll('button').forEach(b=>b.disabled=true);
     try {
       if(action==='prepare'){
-        const checked=await request({action:'confirm-prior',ein:extra.ein,answer:extra.answer});context.checked=true;rowPanel(checked);
+        const checked=await request({action:'confirm-prior',ein:extra.ein,answer:extra.answer,records_not_for_period:extra.records_not_for_period===true});context.checked=true;rowPanel(checked);
       }
       const r=await request({action,...(current?{id:current.id}:{}),...extra});current=r;unknownSend=false;draw();void hydrate('status',true);
     } catch(e) {

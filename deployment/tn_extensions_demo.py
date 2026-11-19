@@ -59,6 +59,8 @@ def extension_number(facts):
     return 2 if facts.get('extension_number')==2 else 1
 
 def eligibility(facts,today):
+    if facts.get('refresh_error'):return {'eligible':False,'reasons':[facts['refresh_error']]}
+    if facts.get('ineligibility_reason'):return {'eligible':False,'reasons':[facts['ineligibility_reason']]}
     reasons=[]
     for key,message in [('identity_verified','Organization identity is not verified.'),
         ('current_verified','Current Tennessee registration is not verified.'),
@@ -88,6 +90,7 @@ def eligibility_explanation(facts,today):
     result=dict(source=FORM,registry_source=facts.get('source') or SOURCE,extension_number=number,
         checked_at=facts.get('checked_at',''),fiscal_year_end=facts.get('period_end',''),
         registration_expiration=facts.get('expiration',''),maximum_days=maximum,
+        checked_at_epoch=facts.get('checked_at_epoch'),account_check=facts.get('account_check'),
         maximum_requested_date='',approval_required=True,
         prior_filing_confirmation_required=facts.get('existing_filing') is None,
         federal=federal.federal_status(facts,today) if number==2 else None,summary='',basis=[])
@@ -182,7 +185,11 @@ def document_pdf(title,fields):
     p.save();return out.getvalue()
 
 class Service:
-    def __init__(self,alerts):self.alerts=alerts
+    def __init__(self,alerts):
+        self.alerts=alerts
+        # Explicit offline test dependency only. Production Alerts has no
+        # reference provider; live eligibility must use fresh source evidence.
+        self.reference_provider=getattr(alerts,'extension_reference_provider',None)
     def upgrade_draft(self,r):
         if r.get('scenario')=='verified' and r['status'] in {'Draft','Submission failed'}:
             r['workflow_version']=max(4,r.get('workflow_version',0))
@@ -221,14 +228,16 @@ class Service:
             'acknowledgment_provenance':r.get('acknowledgment_provenance'),
             'application_sha256':r.get('gateway',{}).get('application_sha256'),
             'confirmation_capture':r.get('confirmation_capture'),
-            'receipt_method':'This demo polls its isolated test service. A matching receipt is stored and linked; it is not a Tennessee response. Tennessee also sends review outcomes by email, including returned-for-correction notices. Real portal and email retrieval are not connected in this pilot. Receipt does not mean approval. No email is read or sent.',
+            'receipt_method':'This demo polls its isolated test service. A matching receipt is stored and linked; it is not a Tennessee response. Tennessee also sends review outcomes by email, including returned-for-correction notices. Account history is read-only; actual filing-document and email retrieval are not connected. Receipt does not mean approval. No email is read or sent.',
             'support':r.get('support'),'portal_schema':'CO number; IRS Form 8868 or Other Documentation upload. Later steps unverified.'}
     def checked_facts(self,c,account,identifier,now):
-        f=public_facts(identifier,local_day(now))
+        from deployment import tn_extension_refresh as refresh
+        f=self.reference_provider(identifier,local_day(now)) if self.reference_provider else refresh.facts(self,c,account,identifier,now)
         row=c.execute('SELECT data FROM cc_tn_extension_demo_checks WHERE account=%s AND ein=%s',(account,identifier)).fetchone()
         answer=row['data'] if row else {}
         if (answer.get('period_end'),answer.get('expiration'),answer.get('source_checked_at'))==(f['period_end'],f['expiration'],f['checked_at']):
             f['existing_filing']={'yes':True,'no':False}.get(answer.get('answer'))
+            if f.get('account_check',{}).get('requires_period_review') and answer.get('answer')=='no' and answer.get('records_not_for_period') is not True:f['existing_filing']=None
             f['filer_declaration']=answer
         for old in self.existing(c,account,identifier):
             if old.get('scenario')=='verified' and old['facts']['period_end']==f['period_end'] and old['status'] in {'Extension submitted','Receipt acknowledged','Submission unconfirmed'}:
@@ -249,6 +258,10 @@ class Service:
         for old in self.existing(c,account,identifier):
             if old['scenario']==scenario and extension_number(old['facts'])==extension_number(f) and old['facts']['period_end']==f['period_end'] and old['status'] in {'Extension submitted','Receipt acknowledged','Submission unconfirmed'}:
                 self.reconcile(c,account,old,now);return self.public(old)
+            if scenario=='verified' and old['scenario']=='verified' and old['status'] in {'Draft','Submission failed'} and all(old['facts'].get(k)==f.get(k) for k in ['coid','period_start','period_end','expiration']):
+                old['facts']=f;old['as_of']=local_day(now).isoformat();old['workflow_version']=4;old['prior_filing']='no'
+                self.save(c,account,old,now)
+                return self.prepare_first(c,account,old,now) if extension_number(f)==1 else self.public(old)
         r=dict(id=uuid.uuid4().hex,ein=identifier,scenario=scenario,demo_only=True,as_of=AS_OF,facts=f,
             status='Draft',approval='Not approved - demo only',documents={},gateway={},state_sends=0,
             fields=dict(name=name,coid=f['coid'],address=f['address'],phone=f['phone'],website=f['website'],
@@ -321,7 +334,8 @@ class Service:
         statement=(r['fields'].get('reason') or SUGGESTED_REASON) if reason is None else reason
         if not isinstance(statement,str) or not 1<=len(statement.strip())<=600:raise Invalid('Enter a reason statement between 1 and 600 characters.')
         statement=statement.strip();r['fields']['reason']=statement;support=r.get('support',{})
-        if support.get('kind')=='first-request' and support.get('tuple')==self.filing_tuple(r) and support.get('reason')==statement:return self.public(r)
+        facts_sha=hashlib.sha256(json.dumps({k:r['facts'].get(k) for k in ['ein','name','coid','period_start','period_end','expiration']},sort_keys=True).encode()).hexdigest()
+        if support.get('kind')=='first-request' and support.get('tuple')==self.filing_tuple(r) and support.get('reason')==statement and support.get('facts_sha')==facts_sha:return self.public(r)
         fields={'Request':'First Tennessee extension, up to 90 days; request only, not approval',
             'Organization':r['facts']['name'],'EIN':r['ein'],'CO number':r['facts']['coid'],
             'Period beginning':r['facts']['period_start'],'Period ending':r['facts']['period_end'],
@@ -335,7 +349,7 @@ class Service:
             c.execute('UPDATE cc_tn_extension_demo_documents SET body=%s,sha256=%s WHERE id=%s AND account=%s AND request_id=%s AND kind=%s',(body,digest,identifier,account,r['id'],'first-request'))
         else:url=self.document(c,account,r,'first-request',body,now)
         r['support']=dict(kind='first-request',tuple=self.filing_tuple(r),sha256=hashlib.sha256(body).hexdigest(),
-            url=url,demo_only=True,label='Reason statement for first extension',reason=statement,accepted=False)
+            url=url,demo_only=True,label='Reason statement for first extension',reason=statement,facts_sha=facts_sha,accepted=False)
         r['documents']['support']=url;r['documents']['first_request']=url
         self.save(c,account,r,now);return self.public(r)
     def issue_support(self,c,account,r,kind,now):
@@ -449,7 +463,7 @@ class Service:
             if not proof or proof['sha256']!=support['sha256']:raise Invalid('The exact supporting document is unavailable or changed. Prepare and review it again before submitting.')
         if r['scenario']=='verified':
             f=self.checked_facts(c,account,r['ein'],now)
-            if not eligibility(f,local_day(now))['eligible'] or f['period_end']!=r['facts']['period_end']:raise Invalid('Recheck extensions: the source, period or prior-filing answer is no longer eligible.')
+            if not eligibility(f,local_day(now))['eligible'] or any(f.get(k)!=r['facts'].get(k) for k in ['coid','period_start','period_end','expiration']):raise Invalid('Recheck extensions: the source, period, CO number, deadline or prior-filing answer changed.')
         for old in self.existing(c,account,r['ein']):
             if old['id']!=r['id'] and extension_number(old['facts'])==extension_number(r['facts']) and (old['facts']['coid'],old['facts']['period_start'],old['facts']['period_end'])==(r['facts']['coid'],r['facts']['period_start'],r['facts']['period_end']) and old['status'] in {'Extension submitted','Receipt acknowledged','Submission unconfirmed'}:
                 raise Conflict('Another application for this period is already submitted or unconfirmed. Review it before retrying.')
@@ -505,9 +519,19 @@ class Service:
             r['documents']['state_response']=self.document(c,account,r,'state-response',document_pdf('Returned for correction - simulated email',r['state_review']),now)
         self.save(c,account,r,now)
     def dispatch(self,c,account,p,now):
+        from deployment import tn_extension_refresh as refresh
         action=p.get('action')
+        if action=='begin-check':return refresh.begin(self,c,account,p,now)
+        if action=='refresh-failed':
+            refresh.failure(self,c,account,p,now)
+            return self.dispatch(c,account,dict(action='status',ein=p['ein']),now)
+        if action=='account-observation':
+            refresh.account_observation(self,c,account,p,now)
+            return self.dispatch(c,account,dict(action='status',ein=p['ein']),now)
         if action in {'check','status'}:
             identifier=ein(p.get('ein'));facts=self.checked_facts(c,account,identifier,now);rows=self.existing(c,account,identifier)
+            if action=='check' and not self.reference_provider and not refresh.stored(c,account,identifier).get('fresh'):
+                facts['refresh_error']='Refresh CharityClarity to load the current extension checker, then click Check for extensions.'
             for r in rows:self.reconcile(c,account,r,now)
             return dict(demo_only=True,state='TN',facts=facts,eligibility=eligibility(facts,local_day(now)),
                 eligibility_explanation=eligibility_explanation(facts,local_day(now)),
@@ -515,13 +539,17 @@ class Service:
         if action=='confirm-prior':
             identifier=ein(p.get('ein'));answer=p.get('answer')
             if answer not in {'yes','no','unknown'}:raise Invalid('Confirm whether anything has already been submitted for this period.')
-            f=public_facts(identifier,local_day(now))
+            f=self.checked_facts(c,account,identifier,now)
             if not f['period_verified']:raise Invalid('The original period and deadline must be verified first.')
-            declaration=dict(answer=answer,account=account,answered_at=now,period_end=f['period_end'],expiration=f['expiration'],source_checked_at=f['checked_at'])
-            c.execute('INSERT INTO cc_tn_extension_demo_checks VALUES (%s,%s,%s,%s) ON CONFLICT(account,ein) DO UPDATE SET checked=excluded.checked,data=excluded.data',(account,identifier,now,Jsonb(declaration)))
+            if f.get('refresh_error'):raise Invalid(f['refresh_error'])
+            records=f.get('account_check',{}).get('records',[])
+            if answer=='no' and f.get('account_check',{}).get('requires_period_review') and p.get('records_not_for_period') is not True:raise Invalid('Review the matching account filings and confirm they do not cover this period, or correct the existing request.')
+            declaration=dict(answer=answer,account=account,answered_at=now,period_end=f['period_end'],expiration=f['expiration'],source_checked_at=f['checked_at'],records_not_for_period=p.get('records_not_for_period') is True)
+            data=refresh.stored(c,account,identifier);data.update(declaration)
+            refresh.save(c,account,identifier,data,now)
             return self.dispatch(c,account,dict(action='check',ein=identifier),now)
         if action=='prepare':
-            identifier=ein(p.get('ein'));f=public_facts(identifier,local_day(now))
+            identifier=ein(p.get('ein'));f=self.checked_facts(c,account,identifier,now)
             return self.create(c,account,dict(ein=identifier,name=f['name'],scenario='verified'),now)
         if action=='create':return self.create(c,account,p,now)
         r=self.load(c,account,p.get('id'))

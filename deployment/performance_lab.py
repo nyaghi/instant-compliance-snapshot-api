@@ -174,7 +174,7 @@ def final_four_asset(name, text):
     if name == 'index.html':
         import re
         if os.environ.get('CE_PERMANENT_STAGING') == '1':
-            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RV"><script src="/tn-extension-portal-rehearsal.js?v=29.2RV"></script><script src="/tn-extensions-demo.js?v=29.2RV"></script></body>')
+            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RW"><script src="/tn-extension-portal-rehearsal.js?v=29.2RW"></script><script src="/tn-extensions-demo.js?v=29.2RW"></script></body>')
             replace('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCTennesseeExtensions?.render(results);')
         replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
         replace('      if (nyResultRefresh) return;', '      if (nyResultRefresh || connectorPreflightPending) return;')
@@ -432,10 +432,10 @@ def final_four_asset(name, text):
         replace('...(Array.isArray(alternate_names) ? {alternate_names} : {})', '...(mode==="sales" ? {alternate_names:[]} : (Array.isArray(alternate_names) ? {alternate_names} : {}))')
         replace('{NY:"New York",IL:"Illinois",GA:"Georgia"}', '{NY:"New York",IL:"Illinois",GA:"Georgia",AL:"Alabama",NC:"North Carolina",NV:"Nevada",TN:"Tennessee",NM:"New Mexico",MS:"Mississippi"}')
         replace('    const supported = c =>', '    const finalFour = ["AL","NC","NV","TN","NM","MS"].includes(registryState);\n    const supported = c => (!finalFour || c.capabilities?.includes("final-four-public-v1")) &&')
-        replace('mode = "standard", sales_cutoff_seconds })', 'mode = "standard", sales_cutoff_seconds, alertLease })')
+        replace('mode = "standard", sales_cutoff_seconds })', 'mode = "standard", sales_cutoff_seconds, alertLease, extensionRefresh })')
         replace('JSON.stringify({ ...credentials, ...fields })',
-                'JSON.stringify({ ...credentials, ...fields, ...(alertLease ? {alert_lease:alertLease,alert_state:registryState} : {}) })')
-        replace('API + "/api/ny-connector"', 'API + (alertLease ? "/api/alerts/runner/lookup" : finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
+                'JSON.stringify({ ...credentials, ...fields, ...(alertLease ? {alert_lease:alertLease,alert_state:registryState} : {}), ...(extensionRefresh && registryState === "TN" ? {extension_refresh:extensionRefresh,extension_ein:ein.replace(/\\D/g,"")} : {}) })')
+        replace('API + "/api/ny-connector"', 'API + (extensionRefresh && registryState === "TN" ? "/api/tn-extension-source" : alertLease ? "/api/alerts/runner/lookup" : finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
         replace('headers: { "Content-Type": "application/json" }', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + admin_passcode }')
         replace('action: "start", state: registryState,', 'action: "start", mode, ...(finalFour && sales_cutoff_seconds!==undefined ? {sales_cutoff_seconds}:{}), state: registryState,')
         replace('recovery_protocol: "il-fresh-page-v1"', 'recovery_protocol: registryState === "AL" ? "al-unread-image-v1" : registryState === "NC" ? "nc-fresh-search-v1" : "il-fresh-page-v1"')
@@ -873,6 +873,9 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
         def do_HEAD(self): return self._get(False)
 
         def do_POST(self):
+            if alerts is not None and os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity() and self.path == '/api/tn-extension-source':
+                from deployment.tn_extension_refresh import handle_source
+                return handle_source(alerts,master,self,LAB_ORIGIN)
             if alerts is not None and os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity() and self.path == '/api/tn-extension-demo':
                 from deployment.tn_extensions_demo import handle
                 return handle(alerts,self,origin=LAB_ORIGIN)

@@ -190,3 +190,16 @@
     }
   });
 })();
+
+/* Explicit, read-only account checks from the extension pilot only. */
+(() => {
+  if(location.origin!==CCNYProtocol.TRIAL_ORIGIN)return;
+  window.addEventListener('message',event=>{
+    const m=event.data;
+    if(event.source!==window||event.origin!==location.origin||m?.channel!=='cc-tn-extension-account-v1'||m.direction!=='request'
+      ||typeof m.id!=='string'||!/^[a-f0-9-]{36}$/.test(m.id)||!/^[a-f0-9]{48}$/.test(m.nonce||'')||!/^CO\d{1,15}$/.test(m.coid||''))return;
+    chrome.runtime.sendMessage({type:'cc-tn-extension-account-v1',nonce:m.nonce,coid:m.coid,names:m.names}).then(
+      observation=>window.postMessage({channel:m.channel,direction:'response',id:m.id,nonce:m.nonce,observation:observation||{state:'connector_update_required',records:[]},extension_id:chrome.runtime.id},location.origin),
+      ()=>window.postMessage({channel:m.channel,direction:'response',id:m.id,nonce:m.nonce,observation:{state:'unavailable',records:[]},extension_id:chrome.runtime.id},location.origin));
+  });
+})();
