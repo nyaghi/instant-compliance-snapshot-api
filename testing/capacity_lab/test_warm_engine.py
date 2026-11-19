@@ -4,6 +4,7 @@ Public registries are stubbed; normalization and the task lifetime are real.
 Runs in a separate build process, never in the live supervisor.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import socket
@@ -16,11 +17,39 @@ from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[2]
 
+def isolation_fixture_asset(state,relative):
+    """Hash-bound offline assets for process tests, independent of wall-clock age.
+
+    Freshness/refresh behavior is covered by the downloadable-data guardrails.
+    A process-tree test must not fetch a live registry when a bundled fixture ages.
+    This override is installed only inside the disposable forked TEST child.
+    """
+    manifest=json.loads((ROOT/'downloadable-state-data.json').read_text(encoding='utf-8'))
+    entries=manifest.get('states',{}).get(state,{}).get('assets',[])
+    asset=next((x for x in entries if x.get('path')==relative),None)
+    if asset is None:return None
+    path=(ROOT/relative).resolve()
+    if not path.is_relative_to(ROOT.resolve()) or not path.is_file():raise AssertionError('Isolation fixture asset missing or outside checkout')
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=asset['sha256']:raise AssertionError('Isolation fixture checksum mismatch')
+    return path
+
+class FixtureAssetsTests(unittest.TestCase):
+    def test_fixture_age_does_not_trigger_network_and_checksum_is_required(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);asset=root/'source.json';asset.write_text('["offline"]')
+            manifest={'states':{'NH':{'downloaded_at':'2000-01-01','assets':[{'path':'source.json','sha256':hashlib.sha256(asset.read_bytes()).hexdigest()}]}}}
+            (root/'downloadable-state-data.json').write_text(json.dumps(manifest))
+            with patch(__name__+'.ROOT',root):
+                self.assertEqual(isolation_fixture_asset('NH','source.json'),asset)
+                asset.write_text('corrupt')
+                with self.assertRaises(AssertionError):isolation_fixture_asset('NH','source.json')
+                self.assertIsNone(isolation_fixture_asset('NH','unknown.json'))
 
 def fixture(job,output,log,ready,supervisor,env):
     from deployment.queue_engine import prepare_forked_child,run_job
     warmed=prepare_forked_child(log,ready,env)
     master=warmed.master
+    master.weekly_asset=isolation_fixture_asset
     nh_rows,_=master.nh_download_live_pdf_records()
     nh_first=nh_rows[0]['registry_name']
     # A task mutation must never leak back into the fork template or next task.
