@@ -73,6 +73,35 @@ def eligibility(facts,today):
     except Invalid:reasons.append('Verified filing-period or expiration dates are missing.')
     return {'eligible':not reasons,'reasons':reasons}
 
+def eligibility_explanation(facts,today):
+    """Explain verified state facts separately from federal submission eligibility."""
+    result=dict(source=FORM,registry_source=facts.get('source') or SOURCE,
+        checked_at=facts.get('checked_at',''),fiscal_year_end=facts.get('period_end',''),
+        registration_expiration=facts.get('expiration',''),maximum_days=90,
+        maximum_requested_date='',approval_required=True,
+        prior_filing_confirmation_required=facts.get('existing_filing') is None,
+        federal=federal.federal_status(facts,today),summary='',basis=[])
+    checks=[
+        (facts.get('identity_verified') is True,f"Organization identity and CO number {facts.get('coid') or '(not verified)'} match the reviewed Tennessee record."),
+        (facts.get('current_verified') is True,'The reviewed Tennessee registration is Active.'),
+        (facts.get('period_verified') is True,f"The applicable fiscal period is {facts.get('period_start') or 'unverified'} to {facts.get('period_end') or 'unverified'}."),
+        (facts.get('first_extension_verified') is True,'The reviewed period and original expiration support a first-extension request, subject to confirming prior submissions.'),
+    ]
+    result['basis']=[message for verified,message in checks if verified]
+    if facts.get('existing_filing') is False:result['basis'].append('The authorized filer confirmed that no renewal or extension has been submitted for this period; public lookup alone does not establish this.')
+    elif facts.get('existing_filing') is None:result['basis'].append('A prior renewal or extension is not yet ruled out. The authorized filer must confirm before preparation.')
+    try:
+        end=day(facts.get('period_end'));expires=day(facts.get('expiration'))
+        if facts.get('period_verified') and facts.get('expiration_verified'):
+            result['basis'].append(f'The request window is open: today is on or before the verified {expires:%B %d, %Y} expiration.' if today<=expires else f'The request window is closed: the verified {expires:%B %d, %Y} expiration has passed.')
+            result['maximum_requested_date']=(expires+timedelta(days=90)).isoformat()
+            result['summary']=(f'The reviewed fiscal year ends {end:%B %d, %Y}; Tennessee registration expires {expires:%B %d, %Y}. '
+                f'Tennessee may grant a first extension of up to 90 days, through {expires+timedelta(days=90):%B %d, %Y}, if requested by the expiration date. '
+                'This is a request, not an approved extension.')
+    except Invalid:pass
+    if not result['summary']:result['summary']='A first extension cannot be offered until the current registration, filing period and actual expiration are verified.'
+    return result
+
 def reference_facts(record,today):
     """Generic rule for dated, reviewed registry references; no organization exceptions.
 
@@ -141,7 +170,7 @@ class Service:
     def __init__(self,alerts):self.alerts=alerts
     def upgrade_draft(self,r):
         if r.get('scenario')=='verified' and r['status'] in {'Draft','Submission failed'}:
-            r['workflow_version']=2
+            r['workflow_version']=max(3,r.get('workflow_version',0))
             reference=public_facts(r['ein'],day(r['as_of']))
             keys=['coid','period_start','period_end','expiration']
             if all(reference.get(k)==r['facts'].get(k) for k in keys) and reference.get('identity_verified'):
@@ -171,6 +200,10 @@ class Service:
             'portal_verified':False,'production_ready':False,'portal':PORTAL,'form_source':FORM,
             'federal_check':federal.federal_status(r['facts'],day(r['as_of'])),
             'federal_fields':r.get('federal_fields') or federal.prefill(r['facts']),
+            'eligibility_explanation':eligibility_explanation(r['facts'],day(r['as_of'])),
+            'acknowledgment_provenance':r.get('acknowledgment_provenance'),
+            'application_sha256':r.get('gateway',{}).get('application_sha256'),
+            'receipt_method':'This demo polls its isolated test service. A matching receipt is stored and linked; it is not a Tennessee response. For a real filing, the signed-in portal provides completed filing documents after acceptance, but the extension-specific receipt format and retrieval have not been verified. No email is read or sent.',
             'support':r.get('support'),'portal_schema':'CO number; IRS Form 8868 or Other Documentation upload. Later steps unverified.'}
     def checked_facts(self,c,account,identifier,now):
         f=public_facts(identifier,local_day(now))
@@ -203,7 +236,7 @@ class Service:
             fields=dict(name=name,coid=f['coid'],address=f['address'],phone=f['phone'],website=f['website'],
                 contact='',contact_email='',title='',reason=SUGGESTED_REASON,requested_days='90'),
             prior_filing='no' if scenario=='verified' else 'unknown',reviewed=False,authorized=False,
-            workflow_version=2 if scenario=='verified' else 1)
+            workflow_version=3 if scenario=='verified' else 1)
         if scenario=='verified':r['as_of']=local_day(now).isoformat()
         c.execute('INSERT INTO cc_tn_extension_demo_requests VALUES (%s,%s,%s,%s,%s,%s)',(r['id'],account,identifier,now,now,Jsonb(r)))
         return self.find_federal(c,account,r,now) if scenario=='verified' else self.public(r)
@@ -221,7 +254,7 @@ class Service:
         if not eligibility(r['facts'],local_day(now) if r['scenario']=='verified' else day(r['as_of']))['eligible']:raise Invalid('The extension window or eligibility is not verified for this case.')
         if r['prior_filing']!='no':raise Invalid('Confirm that no renewal or extension is already submitted for this period.')
         if not r['reviewed'] or not r['authorized']:raise Invalid('Review the application and confirm that you are the authorized filer.')
-        if r.get('workflow_version')==2:
+        if r.get('workflow_version',0)>=2:
             if r['fields']['coid']!=r['facts']['coid']:raise Invalid('The CO number must match the verified Tennessee record.')
             support=r.get('support')
             if not support or support.get('tuple')!=self.filing_tuple(r):raise Invalid('Attach a validated matching supporting document before submitting.')
@@ -233,7 +266,7 @@ class Service:
         if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',r['fields']['contact_email']):raise Invalid('Confirm the filer email address.')
         if not re.fullmatch(r'\d{1,2}',r['fields']['requested_days']) or not 1<=int(r['fields']['requested_days'])<=90:raise Invalid('A first extension request must be between 1 and 90 days.')
     def fields(self,r):
-        if r.get('workflow_version')==2:
+        if r.get('workflow_version',0)>=2:
             support=r.get('support',{})
             return {'Tennessee CO number':r['facts']['coid'],'Organization context (not an additional portal field)':r['facts']['name'],
                 'EIN':r['ein'],'Applicable period beginning':r['facts']['period_start'],'Applicable period ending':r['facts']['period_end'],
@@ -300,7 +333,7 @@ class Service:
             found=self.find_federal(c,account,r,now)
             if found['federal_found']:return found
         check=federal.federal_status(r['facts'],local_day(now))
-        if not check['eligible']:raise Invalid(check['reason'])
+        if not check.get('can_prepare') or (submit and not check['eligible']):raise Invalid(check['reason'])
         incoming=p.get('federal_fields',{})
         if not isinstance(incoming,dict) or set(incoming)-set(federal.prefill(r['facts'])) or any(not isinstance(v,str) or len(v)>180 for v in incoming.values()):raise Invalid('Unexpected IRS form fields.')
         try:values=federal.validated_fields(r['facts'],incoming) if submit else federal.prefill(r['facts'])|incoming
@@ -317,9 +350,37 @@ class Service:
             receipt=document_pdf('IRS acceptance - simulated',{'Outcome':'Demo only - accepted by isolated TEST service; NOT an IRS response','EIN':r['ein'],'Return type':values['return_type'],
                 'Period start':values['period_start'],'Period end':values['period_end'],'Confirmation':confirmation,'Form SHA256':hashlib.sha256(body).hexdigest()})
             acknowledgment=self.document(c,account,r,'irs-acceptance',receipt,now)
-            r['documents']['irs_acceptance']=acknowledgment;r['irs_submission']=dict(confirmation=confirmation,submitted_at=now,sends=1)
+            r['documents']['irs_acceptance']=acknowledgment;r['irs_submission']=dict(confirmation=confirmation,submitted_at=now,sends=1,
+                source='Isolated IRS test service',demo_only=True,accepted_at=now,form_sha256=hashlib.sha256(body).hexdigest())
             r['support']=dict(kind='8868',accepted=True,tuple=self.filing_tuple(r),sha256=hashlib.sha256(body).hexdigest(),url=url,demo_only=True,label='Form 8868 accepted by IRS TEST service',acceptance_url=acknowledgment)
             r['documents']['support']=url
+        self.save(c,account,r,now);return self.public(r)
+    def capture_confirmation(self,c,account,r,p,now):
+        """Store the browser-rendered TEST confirmation card, never a live receipt."""
+        if r['status'] not in {'Extension submitted','Receipt acknowledged'}:raise Invalid('A confirmed test submission is required before capturing its confirmation.')
+        g=r.get('gateway',{})
+        if (p.get('confirmation'),p.get('application_sha256'))!=(g.get('confirmation'),g.get('application_sha256')):raise Invalid('The confirmation capture does not match this submitted application.')
+        if r['documents'].get('confirmation_screen'):return self.public(r)
+        try:
+            body=base64.b64decode(p.get('body',''),validate=True)
+            if not 0<len(body)<=1024*1024 or not body.startswith(b'\x89PNG\r\n\x1a\n'):raise ValueError()
+            from PIL import Image
+            picture=Image.open(io.BytesIO(body))
+            if not 100<=picture.width<=1800 or not 80<=picture.height<=1800:raise ValueError()
+            picture.verify()
+        except Exception as exc:
+            raise Invalid('Use a valid bounded PNG capture of the test confirmation.') from exc
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.utils import ImageReader
+        image=ImageReader(io.BytesIO(body));width,height=image.getSize();scale=min(540/width,640/height)
+        out=io.BytesIO();pdf=canvas.Canvas(out,pagesize=(612,792));pdf.setTitle('Demo only - captured test submission confirmation')
+        pdf.setFont('Helvetica-Bold',11);pdf.drawString(36,760,'DEMO ONLY - CAPTURE OF CHARITYCLARITY TEST CONFIRMATION')
+        pdf.drawImage(image,36,725-height*scale,width=width*scale,height=height*scale,mask='auto')
+        pdf.setFont('Helvetica',8);pdf.drawString(36,45,'Not a screenshot of the Tennessee website; not state approval.')
+        pdf.drawString(36,32,'Compliance Express | www.compliance-express.com | info@compliance-express.com');pdf.save()
+        r['documents']['confirmation_screen']=self.document(c,account,r,'confirmation-screen',out.getvalue(),now)
+        r['confirmation_capture']=dict(source='Browser capture of the displayed CharityClarity test confirmation',demo_only=True,
+            captured_at=now,confirmation=g['confirmation'],application_sha256=g['application_sha256'],image_sha256=hashlib.sha256(body).hexdigest())
         self.save(c,account,r,now);return self.public(r)
     def submit(self,c,account,r,p,now):
         if r['status'] in {'Extension submitted','Receipt acknowledged'}:return self.public(r)
@@ -342,6 +403,12 @@ class Service:
             url=self.document(c,account,r,'application',body,now)
             r['gateway']=dict(confirmation=confirmation,ein=r['ein'],coid=r['facts']['coid'],period_start=r['facts']['period_start'],period_end=r['facts']['period_end'],
                 application_sha256=hashlib.sha256(body).hexdigest(),submitted_at=now,ack_at=now+(0 if behavior=='immediate' else 15),document=url)
+            # Persist the TEST provider response at submission. Time passing alone
+            # cannot acknowledge a new workflow without this exact matching record.
+            if r.get('workflow_version',0)>=3:
+                r['gateway']['receipt']=dict(source='Isolated Tennessee test service',demo_only=True,account=account,
+                    confirmation=confirmation,ein=r['ein'],coid=r['facts']['coid'],period_start=r['facts']['period_start'],period_end=r['facts']['period_end'],
+                    application_sha256=r['gateway']['application_sha256'],available_at=r['gateway']['ack_at'])
             r.update(submitted_at=now,confirmation=confirmation,status='Submission unconfirmed' if behavior=='timeout' else 'Extension submitted')
             r['documents']['application']=url
             if behavior=='immediate':self.reconcile(c,account,r,now)
@@ -352,19 +419,28 @@ class Service:
         row=c.execute('SELECT * FROM cc_tn_extension_demo_documents WHERE id=%s AND account=%s',(g['document'].rsplit('/',1)[-1],account)).fetchone()
         if not row or (g.get('ein'),g.get('coid'),g.get('period_start'),g.get('period_end'),g.get('application_sha256'))!=(r['ein'],r['facts']['coid'],r['facts']['period_start'],r['facts']['period_end'],row['sha256']):return
         if r['status']=='Submission unconfirmed':r['status']='Extension submitted'
+        proof=g.get('receipt')
+        if r.get('workflow_version',0)>=3:
+            if not proof or proof.get('source')!='Isolated Tennessee test service' or proof.get('demo_only') is not True:return
+            if tuple(proof.get(k) for k in ['account','confirmation','ein','coid','period_start','period_end','application_sha256','available_at'])!=(account,g['confirmation'],r['ein'],r['facts']['coid'],r['facts']['period_start'],r['facts']['period_end'],row['sha256'],g['ack_at']):return
         if now>=g['ack_at'] and not r['documents'].get('acknowledgment'):
             body=document_pdf('Tennessee acknowledgment - simulated',self.fields(r)|{'Outcome':'Receipt acknowledged by TEST service. NOT state approval.',
                 'Confirmation':g['confirmation'],'Submitted UTC':datetime.fromtimestamp(g['submitted_at'],timezone.utc).isoformat(),
                 'Acknowledged UTC':datetime.fromtimestamp(now,timezone.utc).isoformat(),'Exact submitted application SHA256':g['application_sha256']})
             r['documents']['acknowledgment']=self.document(c,account,r,'acknowledgment',body,now)
             r.update(acknowledged_at=now,status='Receipt acknowledged')
+            r['acknowledgment_provenance']=dict(source='Isolated Tennessee test service',demo_only=True,
+                received_at=now,confirmation=g['confirmation'],application_sha256=g['application_sha256'],
+                receipt_url=r['documents']['acknowledgment'],matched_fields=['Account','EIN','CO number','Filing period','Application hash','Confirmation'])
         self.save(c,account,r,now)
     def dispatch(self,c,account,p,now):
         action=p.get('action')
         if action in {'check','status'}:
             identifier=ein(p.get('ein'));facts=self.checked_facts(c,account,identifier,now);rows=self.existing(c,account,identifier)
             for r in rows:self.reconcile(c,account,r,now)
-            return dict(demo_only=True,state='TN',facts=facts,eligibility=eligibility(facts,local_day(now)),requests=[self.public(r) for r in rows],supported_states=['TN'],needs_prior_confirmation=facts['period_verified'] and facts['existing_filing'] is None)
+            return dict(demo_only=True,state='TN',facts=facts,eligibility=eligibility(facts,local_day(now)),
+                eligibility_explanation=eligibility_explanation(facts,local_day(now)),
+                requests=[self.public(r) for r in rows],supported_states=['TN'],needs_prior_confirmation=facts['period_verified'] and facts['existing_filing'] is None)
         if action=='confirm-prior':
             identifier=ein(p.get('ein'));answer=p.get('answer')
             if answer not in {'yes','no','unknown'}:raise Invalid('Confirm whether anything has already been submitted for this period.')
@@ -382,6 +458,7 @@ class Service:
         if action=='upload-support':return self.upload_support(c,account,r,p,now)
         if action=='find-federal':return self.find_federal(c,account,r,now)
         if action in {'irs-draft','irs-submit'}:return self.irs_draft(c,account,r,p,now,submit=action=='irs-submit')
+        if action=='capture-confirmation':return self.capture_confirmation(c,account,r,p,now)
         if action=='save':self.edit(r,p);self.save(c,account,r,now);return self.public(r)
         if action=='submit':return self.submit(c,account,r,p,now)
         if action=='receipt':self.reconcile(c,account,r,now);return self.public(r)

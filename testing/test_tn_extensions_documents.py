@@ -105,7 +105,7 @@ class Tests(Base):
             self.assertEqual(t.eligibility(facts,date(2026,11,18))['eligible'],identifier in positive,identifier)
     def test_resume_old_verified_draft_preserves_data_but_requires_attachment(self):
         r=self.verified();old=self.s.load(self.c,ACCOUNT,r['id']);old.pop('workflow_version');old['fields']['reason']='Keep my original note';self.s.save(self.c,ACCOUNT,old,NOW)
-        resumed=self.s.load(self.c,ACCOUNT,r['id']);self.assertEqual(resumed['workflow_version'],2);self.assertEqual(resumed['fields']['reason'],'Keep my original note')
+        resumed=self.s.load(self.c,ACCOUNT,r['id']);self.assertEqual(resumed['workflow_version'],3);self.assertEqual(resumed['fields']['reason'],'Keep my original note')
         with self.assertRaises(t.Invalid):self.s.submit(self.c,ACCOUNT,resumed,self.payload(r),NOW)
     def test_70_legacy_draft_migrations_are_bound_and_non_destructive(self):
         MIGRATION_CASES.clear();reference=t.public_facts('521273585')
