@@ -96,5 +96,17 @@ class Workflow(unittest.TestCase):
             self.assertEqual(state['eligible'],mode in [0,5,6]);self.assertEqual(f['eligible'],mode not in [0,5]);self.assertEqual(f['can_prepare'],mode!=5)
             self.assertTrue(e['approval_required'])
             CASES.append(dict(organization=org['name'],ein=org['ein'],mode=mode,state_eligible=state['eligible'],federal_eligible=f['eligible'],draftable=f['can_prepare'],conditions='Synthetic eligibility conditions on recorded organization identity; not live registry adjudication',passed=True))
+    def test_replace_obsolete_test_capture_without_duplicate_or_filing_changes(self):
+        import base64
+        from PIL import Image
+        d=self.submit(self.irs(self.prepare()),'immediate');image=io.BytesIO();Image.new('RGB',(620,400),'white').save(image,format='PNG')
+        payload=dict(action='capture-confirmation',id=d['id'],confirmation=d['confirmation'],application_sha256=d['application_sha256'],body=base64.b64encode(image.getvalue()).decode())
+        first=self.s.dispatch(self.c,ACCOUNT,payload,NOW);stored=self.s.load(self.c,ACCOUNT,d['id']);stored['confirmation_capture']['format_version']=1;self.s.save(self.c,ACCOUNT,stored,NOW)
+        before=self.c.execute('SELECT count(*) AS n FROM cc_tn_extension_demo_documents').fetchone()['n']
+        second=self.s.dispatch(self.c,ACCOUNT,payload,NOW+1)
+        self.assertNotEqual(second['documents']['confirmation_screen'],first['documents']['confirmation_screen'])
+        self.assertEqual(self.c.execute('SELECT count(*) AS n FROM cc_tn_extension_demo_documents').fetchone()['n'],before)
+        for kind in ['application','acknowledgment','irs_filed','irs_acceptance']:self.assertEqual(second['documents'][kind],first['documents'][kind])
+        self.assertEqual(second['confirmation_capture']['format_version'],2);self.assertEqual(second['state_sends'],1)
 
 if __name__=='__main__':unittest.main()

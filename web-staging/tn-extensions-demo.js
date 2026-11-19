@@ -83,14 +83,16 @@
   }
   async function captureConfirmation(){
     const card=dialog?.querySelector('#tnConfirmationCard');
-    if(!card||capturing||captureFailed||current.documents.confirmation_screen)return;
+    if(!card||capturing||captureFailed||(current.documents.confirmation_screen&&current.confirmation_capture?.format_version>=2))return;
     capturing=true;const id=current.id;
     try{
-      const copy=card.cloneNode(true);copy.setAttribute('xmlns','http://www.w3.org/1999/xhtml');copy.style.width='620px';copy.style.boxSizing='border-box';
-      const height=Math.ceil(card.getBoundingClientRect().height)+25;
-      const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="620" height="${height}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(copy)}</foreignObject></svg>`;
+      const copy=card.cloneNode(true),originals=[card,...card.querySelectorAll('*')],copies=[copy,...copy.querySelectorAll('*')];
+      originals.forEach((element,index)=>{const style=getComputedStyle(element);copies[index].setAttribute('style',Array.from(style).map(key=>`${key}:${style.getPropertyValue(key)};`).join(''));});
+      const bounds=card.getBoundingClientRect(),width=Math.ceil(bounds.width),height=Math.ceil(bounds.height)+25;
+      copy.setAttribute('xmlns','http://www.w3.org/1999/xhtml');copy.style.width=width+'px';copy.style.boxSizing='border-box';copy.style.margin='0';
+      const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(copy)}</foreignObject></svg>`;
       const picture=new Image();await new Promise((resolve,reject)=>{picture.onload=resolve;picture.onerror=reject;picture.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);});
-      const canvas=document.createElement('canvas'),ratio=Math.min(2,1800/height);canvas.width=Math.floor(620*ratio);canvas.height=Math.floor(height*ratio);const paint=canvas.getContext('2d');paint.fillStyle='#fff';paint.fillRect(0,0,canvas.width,canvas.height);paint.scale(ratio,ratio);paint.drawImage(picture,0,0);
+      const canvas=document.createElement('canvas'),ratio=Math.min(2,1800/height,1800/width);canvas.width=Math.floor(width*ratio);canvas.height=Math.floor(height*ratio);const paint=canvas.getContext('2d');paint.fillStyle='#fff';paint.fillRect(0,0,canvas.width,canvas.height);paint.scale(ratio,ratio);paint.drawImage(picture,0,0);
       const body=canvas.toDataURL('image/png').split(',')[1];
       if(current.id!==id)return;
       const r=await request({action:'capture-confirmation',id,confirmation:current.confirmation,application_sha256:current.application_sha256,body});

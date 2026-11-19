@@ -203,6 +203,7 @@ class Service:
             'eligibility_explanation':eligibility_explanation(r['facts'],day(r['as_of'])),
             'acknowledgment_provenance':r.get('acknowledgment_provenance'),
             'application_sha256':r.get('gateway',{}).get('application_sha256'),
+            'confirmation_capture':r.get('confirmation_capture'),
             'receipt_method':'This demo polls its isolated test service. A matching receipt is stored and linked; it is not a Tennessee response. For a real filing, the signed-in portal provides completed filing documents after acceptance, but the extension-specific receipt format and retrieval have not been verified. No email is read or sent.',
             'support':r.get('support'),'portal_schema':'CO number; IRS Form 8868 or Other Documentation upload. Later steps unverified.'}
     def checked_facts(self,c,account,identifier,now):
@@ -357,10 +358,12 @@ class Service:
         self.save(c,account,r,now);return self.public(r)
     def capture_confirmation(self,c,account,r,p,now):
         """Store the browser-rendered TEST confirmation card, never a live receipt."""
+        if r.get('demo_only') is not True:raise Invalid('Only this isolated test confirmation may be captured.')
         if r['status'] not in {'Extension submitted','Receipt acknowledged'}:raise Invalid('A confirmed test submission is required before capturing its confirmation.')
         g=r.get('gateway',{})
         if (p.get('confirmation'),p.get('application_sha256'))!=(g.get('confirmation'),g.get('application_sha256')):raise Invalid('The confirmation capture does not match this submitted application.')
-        if r['documents'].get('confirmation_screen'):return self.public(r)
+        old_capture=r['documents'].get('confirmation_screen')
+        if old_capture and r.get('confirmation_capture',{}).get('format_version',0)>=2:return self.public(r)
         try:
             body=base64.b64decode(p.get('body',''),validate=True)
             if not 0<len(body)<=1024*1024 or not body.startswith(b'\x89PNG\r\n\x1a\n'):raise ValueError()
@@ -379,8 +382,12 @@ class Service:
         pdf.setFont('Helvetica',8);pdf.drawString(36,45,'Not a screenshot of the Tennessee website; not state approval.')
         pdf.drawString(36,32,'Compliance Express | www.compliance-express.com | info@compliance-express.com');pdf.save()
         r['documents']['confirmation_screen']=self.document(c,account,r,'confirmation-screen',out.getvalue(),now)
-        r['confirmation_capture']=dict(source='Browser capture of the displayed CharityClarity test confirmation',demo_only=True,
+        r['confirmation_capture']=dict(source='Browser capture of the displayed CharityClarity test confirmation',demo_only=True,format_version=2,
             captured_at=now,confirmation=g['confirmation'],application_sha256=g['application_sha256'],image_sha256=hashlib.sha256(body).hexdigest())
+        if old_capture:
+            # Replace only the obsolete derived TEST screenshot. Submitted
+            # applications, federal evidence and provider receipts are immutable.
+            c.execute("DELETE FROM cc_tn_extension_demo_documents WHERE id=%s AND account=%s AND request_id=%s AND kind='confirmation-screen'",(old_capture.rsplit('/',1)[-1],account,r['id']))
         self.save(c,account,r,now);return self.public(r)
     def submit(self,c,account,r,p,now):
         if r['status'] in {'Extension submitted','Receipt acknowledged'}:return self.public(r)
