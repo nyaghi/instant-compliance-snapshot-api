@@ -31,7 +31,7 @@
     context.checkData=data;
     let box=context.cell.querySelector('.tn-extension-row');
     if(!box){box=document.createElement('div');box.className='tn-extension-row';context.cell.append(box);}
-    const r=data.requests?.find(x=>['Extension submitted','Receipt acknowledged','Submission unconfirmed'].includes(x.status))||data.requests?.[0];
+    const r=context.checked?(data.requests?.find(x=>['Extension submitted','Receipt acknowledged','Submission unconfirmed'].includes(x.status))||data.requests?.[0]):null;
     const pending=data.needs_prior_confirmation&&data.eligibility.reasons.length===1;
     const enabled=context.checked&&(data.eligibility.eligible||pending);
     box.innerHTML=`<strong>Tennessee extensions</strong><br><button type="button" id="tnFileExtension" ${enabled?'':'disabled'}>File Extension</button>

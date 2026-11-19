@@ -54,6 +54,14 @@ async function main(){
   const prior=dialog.querySelector('#tnInitialPrior'),prepare=dialog.querySelector('#tnPrepareExtension');
   prior.value='yes';prior.handlers.change.call(prior);assert(prepare.disabled);
   prior.value='no';prior.handlers.change.call(prior);assert(!prepare.disabled);
+  const history={requests:[{status:'Receipt acknowledged',documents:{application:'/api/tn-extension-demo/documents/'+'a'.repeat(32)},confirmation:'DEMO-TN-test',submitted_at:1}],facts,eligibility:{eligible:false,reasons:['Already submitted']}};
+  context.window.CCTennesseeExtensions.render(input);
+  pending.pop()({ok:true,json:async()=>history});await new Promise(resolve=>setImmediate(resolve));
+  rowBox=rows[1].lastElementChild.children.at(-1);
+  assert(!rowBox.innerHTML.includes('View submitted test extension'),'saved filing links stay hidden until Check for extensions');
+  const explicitCheck=panel.children.at(-1).querySelector('#tnCheckExtensions');const historyCheck=explicitCheck.handlers.click.call(explicitCheck);
+  pending.pop()({ok:true,json:async()=>history});await historyCheck;
+  assert(rowBox.innerHTML.includes('View submitted test extension'),'existing filing links appear after the explicit extension check');
   console.log('PASS: nonblocking results, stale responses, unchanged statuses, Check -> File Extension -> prior-filing confirmation; no separate demo launcher.');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
