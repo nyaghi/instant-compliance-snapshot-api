@@ -59,7 +59,7 @@ class Tests(unittest.TestCase):
     def create(self,scenario='open',identifier='012345678'):
         return self.s.create(self.c,ACCOUNT,dict(ein=identifier,name='Demo Foundation',scenario=scenario),NOW)
     def payload(self,r,**overrides):
-        return dict(fields=r['fields']|dict(contact='Test Filer',contact_email='filer@example.org',title='Authorized Agent',reason='Additional time to finalize the financial report.'),prior_filing='no',reviewed=True,authorized=True,test_response='delayed')|overrides
+        return dict(fields=r['fields']|dict(contact='Test Filer',contact_email='filer@example.org',title='Authorized Agent',reason=r['fields']['reason'] if r.get('workflow_version',0)>=4 else 'Additional time to finalize the financial report.'),prior_filing='no',reviewed=True,authorized=True,test_response='delayed')|overrides
     def submit(self,r,**kw):return self.s.submit(self.c,ACCOUNT,self.s.load(self.c,ACCOUNT,r['id']),self.payload(r,**kw),NOW)
     def test_70_distinct_organization_eligibility_inputs(self):
         CASE_RESULTS.clear()
@@ -174,9 +174,7 @@ class Tests(unittest.TestCase):
         r=self.s.dispatch(self.c,ACCOUNT,dict(action='prepare',ein='521273585'),NOW)
         self.assertEqual(r['fields']['coid'],'CO901');self.assertEqual(r['fields']['name'],'Global Impact');self.assertEqual(r['scenario'],'verified');self.assertEqual(r['prior_filing'],'no')
         self.assertFalse(self.s.checked_facts(self.c,OTHER,'521273585',NOW)['existing_filing'] is False)
-        packet=self.s.dispatch(self.c,ACCOUNT,dict(action='test-document',id=r['id'],kind='8868'),NOW)
-        body=self.c.execute('SELECT body FROM cc_tn_extension_demo_documents WHERE id=%s',(packet['url'].rsplit('/',1)[-1],)).fetchone()['body']
-        r=self.s.dispatch(self.c,ACCOUNT,dict(action='upload-support',id=r['id'],body=base64.b64encode(body).decode()),NOW)
+        self.assertFalse(r['federal_required']);self.assertEqual(r['support']['kind'],'first-request')
         d=self.submit(r,test_response='immediate');self.assertEqual(d['status'],'Receipt acknowledged')
         after=self.s.dispatch(self.c,ACCOUNT,dict(action='check',ein='521273585'),NOW+1)
         self.assertFalse(after['eligibility']['eligible']);self.assertTrue(after['facts']['existing_filing'])

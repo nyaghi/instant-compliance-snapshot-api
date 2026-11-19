@@ -18,6 +18,8 @@ class Tests(Base):
         d=self.s.dispatch(self.c,ACCOUNT,dict(action='test-document',id=r['id'],kind=kind),NOW)
         raw=self.c.execute('SELECT body FROM cc_tn_extension_demo_documents WHERE id=%s',(d['url'].rsplit('/',1)[-1],)).fetchone()['body']
         return self.s.dispatch(self.c,ACCOUNT,dict(action='upload-support',id=r['id'],body=base64.b64encode(raw).decode()),NOW)
+    def second(self,identifier='440610626'):
+        return self.s.create(self.c,ACCOUNT,dict(ein=identifier,name='Synthetic second-extension control',scenario='second-open'),NOW)
     def federal_values(self,r):
         return r['federal_fields']|dict(books='Demo Books Custodian',phone='816-555-0100',tax_a='0',tax_b='0',tax_c='0')
     def test_70_distinct_document_contracts(self):
@@ -25,7 +27,7 @@ class Tests(Base):
         for i in range(70):
             identifier=str(300000000+i);facts=original('440610626');facts['ein']=identifier;facts['coid']='CO'+str(100000+i);facts['name']='Offline document organization '+str(i)
             patched=patch.object(t,'public_facts',side_effect=lambda e,today=None,identifier=identifier,facts=facts,original=original:copy.deepcopy(facts) if e==identifier else original(e,today));patched.start();self.addCleanup(patched.stop)
-            r=self.verified(identifier);mode=i%7
+            r=self.second(identifier);mode=i%7
             if mode==0:
                 with self.assertRaises(t.Invalid):self.submit(r)
                 outcome='missing attachment blocked'
@@ -44,7 +46,9 @@ class Tests(Base):
                 with self.assertRaises(t.Invalid):self.submit(r)
                 outcome='unaccepted federal evidence blocked'
             elif mode==5:
-                r=self.attachment(r,'other');d=self.submit(r,test_response='immediate');self.assertEqual(d['status'],'Receipt acknowledged');outcome='other document test receipt, not approval'
+                r=self.attachment(r,'other')
+                with self.assertRaises(t.Invalid):self.submit(r,test_response='immediate')
+                outcome='second extension cannot substitute other documentation for IRS evidence'
             else:
                 r=self.attachment(r);d=self.submit(r,test_response='timeout');self.assertEqual(d['state_sends'],1)
                 with self.assertRaises(t.Conflict):self.submit(d)
@@ -52,8 +56,8 @@ class Tests(Base):
             DOCUMENT_CASES.append(dict(ein=r['ein'],mode=mode,outcome=outcome,passed=True));patched.stop()
         self.assertEqual(len(set(x['ein'] for x in DOCUMENT_CASES)),70)
     def test_exact_portal_schema_has_no_paper_fields(self):
-        r=self.attachment(self.verified())
-        empty=dict.fromkeys(['contact','contact_email','title','reason'],'')
+        r=self.verified()
+        empty=dict.fromkeys(['contact','contact_email','title'],'')
         d=self.submit(r,fields={'coid':r['facts']['coid']}|empty,test_response='immediate')
         self.assertEqual(d['status'],'Receipt acknowledged')
         fields=self.s.fields(d)
@@ -67,7 +71,7 @@ class Tests(Base):
         facts['return_type']='990-N';self.assertIn('990-N',f.federal_status(facts,date(2026,11,15))['reason'])
         with self.assertRaises(t.Invalid):self.s.dispatch(self.c,ACCOUNT,dict(action='irs-submit',id=self.verified('521273585')['id']),NOW)
     def test_irs_no_path_prefill_review_acceptance_then_state(self):
-        r=self.verified();self.assertFalse(r['federal_found']);self.assertEqual(r['federal_fields']['ein'],'440610626');self.assertEqual(r['federal_fields']['street'],'8701 LEEDS RD')
+        r=self.second();self.assertFalse(r['federal_found']);self.assertEqual(r['federal_fields']['ein'],'440610626');self.assertEqual(r['federal_fields']['street'],'8701 LEEDS RD')
         p=dict(action='irs-submit',id=r['id'],federal_fields=self.federal_values(r),reviewed=True,authorized=True)
         for change in [dict(reviewed=False),dict(authorized=False),dict(federal_fields=r['federal_fields'])]:
             with self.assertRaises(t.Invalid):self.s.dispatch(self.c,ACCOUNT,p|change,NOW)
@@ -78,8 +82,8 @@ class Tests(Base):
             raw=self.c.execute('SELECT body FROM cc_tn_extension_demo_documents WHERE id=%s',(d['documents'][kind].rsplit('/',1)[-1],)).fetchone()['body']
             text=' '.join(page.extract_text() for page in PdfReader(io.BytesIO(raw)).pages);self.assertIn('DEMO ONLY',text.upper())
     def test_existing_federal_path_scoped_and_period_exact(self):
-        first=self.attachment(self.verified());second=self.verified();self.assertTrue(second['federal_found']);self.assertEqual(second['support']['sha256'],first['support']['sha256'])
-        other=self.s.create(self.c,OTHER,dict(ein='440610626',name='Other',scenario='open'),NOW)
+        first=self.attachment(self.second());second=self.second();self.assertTrue(second['federal_found']);self.assertEqual(second['support']['sha256'],first['support']['sha256'])
+        other=self.s.create(self.c,OTHER,dict(ein='440610626',name='Other',scenario='second-open'),NOW)
         self.assertFalse(self.s.find_federal(self.c,OTHER,self.s.load(self.c,OTHER,other['id']),NOW)['federal_found'])
         raw=self.s.load(self.c,ACCOUNT,second['id']);raw['facts']['period_end']='2025-08-31';raw.pop('support');self.s.save(self.c,ACCOUNT,raw,NOW)
         self.assertFalse(self.s.find_federal(self.c,ACCOUNT,raw,NOW)['federal_found'])
@@ -104,8 +108,8 @@ class Tests(Base):
             facts=t.public_facts(identifier);facts['existing_filing']=False
             self.assertEqual(t.eligibility(facts,date(2026,11,18))['eligible'],identifier in positive,identifier)
     def test_resume_old_verified_draft_preserves_data_but_requires_attachment(self):
-        r=self.verified();old=self.s.load(self.c,ACCOUNT,r['id']);old.pop('workflow_version');old['fields']['reason']='Keep my original note';self.s.save(self.c,ACCOUNT,old,NOW)
-        resumed=self.s.load(self.c,ACCOUNT,r['id']);self.assertEqual(resumed['workflow_version'],3);self.assertEqual(resumed['fields']['reason'],'Keep my original note')
+        r=self.verified();old=self.s.load(self.c,ACCOUNT,r['id']);old.pop('workflow_version');old.pop('support');old['fields']['reason']='Keep my original note';self.s.save(self.c,ACCOUNT,old,NOW)
+        resumed=self.s.load(self.c,ACCOUNT,r['id']);self.assertEqual(resumed['workflow_version'],4);self.assertEqual(resumed['fields']['reason'],'Keep my original note')
         with self.assertRaises(t.Invalid):self.s.submit(self.c,ACCOUNT,resumed,self.payload(r),NOW)
     def test_70_legacy_draft_migrations_are_bound_and_non_destructive(self):
         MIGRATION_CASES.clear();reference=t.public_facts('521273585')
@@ -127,13 +131,13 @@ class Tests(Base):
             if case==3:self.assertEqual(r,before)
             if case==4:self.assertEqual(r['federal_fields'],before['federal_fields'])
             MIGRATION_CASES.append(dict(ein=identifier,case=case,enriched=enriched,passed=True))
-    def test_old_global_draft_gets_deadline_and_8868_packet(self):
+    def test_old_global_first_draft_does_not_show_federal_deadline(self):
         r=self.verified('521273585');old=self.s.load(self.c,ACCOUNT,r['id'])
         for key in ['return_type','irs_street','irs_city_state_zip','irs_source']:old['facts'].pop(key,None)
         old.pop('workflow_version');self.s.save(self.c,ACCOUNT,old,NOW)
         resumed=self.s.load(self.c,ACCOUNT,r['id']);public=self.s.public(resumed)
-        self.assertEqual(public['federal_check']['deadline'],'2026-11-16');self.assertIn('deadline has passed',public['federal_check']['reason'])
-        self.assertTrue(self.attachment(public)['support']['accepted'])
+        self.assertIsNone(public['federal_check']);self.assertFalse(public['federal_required'])
+        self.assertEqual(self.s.prepare_first(self.c,ACCOUNT,resumed,NOW)['support']['kind'],'first-request')
     def test_http_upload_boundaries_and_real_docs_rejected(self):
         r=self.verified()
         for body in ['!!!!',base64.b64encode(b'not PDF').decode(),base64.b64encode(b'%PDF'+b'x'*2097152).decode()]:

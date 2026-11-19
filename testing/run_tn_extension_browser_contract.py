@@ -12,7 +12,7 @@ from testing.test_tn_extensions_demo import Accounts,ACCOUNT,NOW
 ROOT=Path(__file__).resolve().parents[1]
 OUT=Path(os.environ.get('CC_TN_TEST_OUTPUT',str(ROOT/'testing/tn-workflow-evidence')));OUT.mkdir(parents=True,exist_ok=True)
 ORIGIN='https://charityclarity-final-four-29-2.onrender.com'
-ORG={'fcc':('680412350','Foundation for California Community Colleges'),'boston':('042774441',"Children's Hospital Corporation"),'global':('521273585','Global Impact'),'closed':('521125072','Society for Scholarly Publishing')}
+ORG={'fcc':('680412350','Foundation for California Community Colleges'),'fca':('440610626','Fellowship of Christian Athletes'),'boston':('042774441',"Children's Hospital Corporation"),'global':('521273585','Global Impact'),'closed':('521125072','Society for Scholarly Publishing')}
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
@@ -30,6 +30,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ['/tn-extensions-demo.js','/tn-extensions-demo.css','/tn-extension-portal-rehearsal.js']:
             return self.send((ROOT/'web-staging'/path[1:]).read_bytes(),'text/javascript' if path.endswith('.js') else 'text/css')
         if path=='/__advance':self.server.offset=17;return self.send({'offset':17})
+        if path=='/__second':self.server.second=True;return self.send({'synthetic_second_fixture':True})
         if path=='/__old_capture':
             row=c.execute('SELECT data FROM cc_tn_extension_demo_requests WHERE account=%s AND ein=%s',(ACCOUNT,'042774441')).fetchone()
             r=row['data'];r['confirmation_capture']['format_version']=1;service.save(c,ACCOUNT,r,NOW+self.server.offset);c.db.commit();return self.send({'test_only_old_capture':True})
@@ -45,7 +46,14 @@ class Handler(BaseHTTPRequestHandler):
         p=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         self.server.calls.append({'action':p.get('action'),'ein':p.get('ein'),'id':p.get('id')})
         try:
-            with c.db:result=service.dispatch(c,ACCOUNT,p,NOW+self.server.offset)
+            with c.db:
+                if p.get('action')=='prepare' and getattr(self.server,'second',False):
+                    result=service.create(c,ACCOUNT,dict(ein=p['ein'],name='Synthetic second-extension example',scenario='second-open'),NOW+self.server.offset)
+                else:result=service.dispatch(c,ACCOUNT,p,NOW+self.server.offset)
+                if p.get('action') in {'check','status'} and getattr(self.server,'second',False):
+                    facts=t.demo_facts(p['ein'],'Synthetic second-extension example','second-open')
+                    facts['existing_filing']=True if any(x['scenario']=='second-open' and x['status'] in {'Extension submitted','Receipt acknowledged','Submission unconfirmed'} for x in result['requests']) else None
+                    result.update(facts=facts,eligibility=t.eligibility(facts,t.day(t.AS_OF)),eligibility_explanation=t.eligibility_explanation(facts,t.day(t.AS_OF)),needs_prior_confirmation=facts['existing_filing'] is None)
             self.send(result)
         except t.Invalid as e:self.send({'error':str(e)},status=400)
 
@@ -75,16 +83,28 @@ def main():
                 assert page.get_by_role('link',name='View captured confirmation screen — Demo only').count()==0,'No saved filing link before explicit check'
                 page.locator('#tnCheckExtensions').click();page.locator('#tnFileExtension').wait_for()
             def prepare():
-                page.locator('#tnFileExtension').click();page.locator('#tnInitialPrior').select_option('no');page.locator('#tnPrepareExtension').click();page.locator('#tnIRSAnswer').wait_for()
+                page.locator('#tnFileExtension').click();page.locator('#tnInitialPrior').select_option('no');page.locator('#tnPrepareExtension').click();page.locator('#tnSubmitDemo').wait_for()
             go('fcc');assert 'may be eligible' in page.locator('.tn-extension-row').inner_text()
             assert 'registration is Active' in page.locator('.tn-extension-row').inner_text()
-            prepare();page.locator('#tnIRSAnswer').select_option('no');page.locator('#irs_ein').wait_for()
-            assert page.locator('#irs_ein').input_value()=='680412350';assert page.locator('#tnSupportUpload').count()==0
-            assert page.locator('#tnSubmitIRS').is_disabled();page.locator('#tnDownloadDraftIRS').click();page.get_by_role('link',name='View draft Form 8868 — Demo only').wait_for()
-            page.screenshot(path=str(OUT/'FCC-PAST-FEDERAL-DEADLINE.png'),full_page=True)
+            prepare();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
+            assert page.locator('#tnIRSAnswer').count()==0;assert page.locator('#tnSubmitIRS').count()==0;assert page.locator('#tnSupportUpload').count()==0
+            assert 'Federal Form 8868 deadline' not in page.locator('#tnExtensionDialog').inner_text()
+            page.locator('#tnFirstReason').fill('Additional time is needed to complete the audited financial statements.')
+            assert page.locator('#tnSubmitDemo').is_disabled()
+            page.locator('#tnPrepareFirst').click();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
+            page.locator('#tnReviewed').check();page.locator('#tnAuthorized').check();page.get_by_text('Test response options',exact=True).click();page.locator('#tnTestResponse').select_option('returned');page.locator('#tnSubmitDemo').click()
+            page.get_by_text('Receipt acknowledged — Demo only',exact=True).wait_for(timeout=12000)
+            assert 'State review: Returned for correction' in page.locator('#tnExtensionDialog').inner_text()
+            page.screenshot(path=str(OUT/'FCC-FIRST-EXTENSION-NO-FEDERAL-STEP.png'),full_page=True)
             page.locator('#tnClose').click()
             go('closed');assert page.locator('#tnFileExtension').is_disabled()
-            go('boston');prepare();page.locator('#tnIRSAnswer').select_option('no')
+            go('fca');prepare();page.locator('#tnFirstSupport').select_option('irs')
+            assert page.locator('#tnSubmitDemo').is_disabled();assert page.locator('#tnSubmitIRS').count()==0
+            page.get_by_text('Demo documents',exact=True).click();page.locator('#tnUseDemoEvidence').click()
+            page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
+            page.locator('#tnReviewed').check();page.locator('#tnAuthorized').check();page.locator('#tnSubmitDemo').click()
+            page.get_by_text('Receipt acknowledged — Demo only',exact=True).wait_for(timeout=12000);page.locator('#tnClose').click()
+            get('/__second');go('boston');prepare();page.locator('#tnIRSAnswer').select_option('no')
             for key,value in dict(books='Demo Books Custodian',phone='202-555-0100',tax_a='0',tax_b='0',tax_c='0').items():page.locator('#irs_'+key).fill(value)
             page.locator('#tnIRSReviewed').check();page.locator('#tnSubmitIRS').click();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
             assert page.locator('#tnPortalCO').input_value()=='CO52803'
@@ -114,16 +134,16 @@ def main():
             # The Yes path requests an upload; it never displays the new-form fields.
             go('global');prepare();page.locator('#tnIRSAnswer').select_option('yes')
             assert page.locator('#tnSupportUpload').count()==1;assert page.locator('#irs_ein').count()==0
-            page.locator('#tnSample8868').click();page.locator('#tnTestDownload a').wait_for();packet=get(page.locator('#tnTestDownload a').get_attribute('href'))
-            page.locator('#tnSupportUpload').set_input_files({'name':'matching-demo-packet.pdf','mimeType':'application/pdf','buffer':packet})
-            page.locator('#tnUploadSupport').click();page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
+            page.get_by_text('Demo documents',exact=True).click();page.locator('#tnUseDemoEvidence').click()
+            page.get_by_text('CO number and matching test attachment added automatically.',exact=False).wait_for()
+            assert page.get_by_text('Download matching test packet',exact=True).count()==0
             page.screenshot(path=str(OUT/'YES-EXISTING-IRS-AUTOMATIC-ATTACHMENT.png'),full_page=True)
             page.locator('#tnReviewed').check();page.locator('#tnAuthorized').check();drop_submit['once']=True;page.locator('#tnSubmitDemo').click()
             page.get_by_text('Receipt acknowledged — Demo only',exact=True).wait_for(timeout=12000)
             global_request=next(x for x in json.loads(get('/__state'))['requests'] if x['ein']=='521273585')
             assert global_request['state_sends']==1,'Lost HTTP response must reconcile, never resend'
             assert not errors,errors
-            (OUT/'BROWSER-CONTRACT.json').write_text(json.dumps({'passed':True,'live_network_requests':0,'main_results_nonblocking':True,'fcc_no_path_prefilled_without_upload':True,'past_federal_submission_blocked':True,'closed_state_window_disabled':True,'eligible_both_submits':True,'automatic_co_and_file':True,'displayed_test_confirmation_captured':True,'delayed_receipt_polled':True,'five_document_links_persist':True,'links_hidden_until_check':True,'repeated_check_creates_no_files':True,'yes_path_requires_matching_upload':True,'actual_lost_http_response_reconciled_without_duplicate':True,'page_errors':errors,'browser_requests':len(network)},indent=2))
+            (OUT/'BROWSER-CONTRACT.json').write_text(json.dumps({'passed':True,'live_network_requests':0,'main_results_nonblocking':True,'first_request_no_federal_step_or_deadline':True,'first_request_test_submission':True,'second_both_test_submits':True,'second_synthetic_fixture_explicit':True,'closed_state_window_disabled':True,'automatic_co_and_file':True,'displayed_test_confirmation_captured':True,'delayed_receipt_polled':True,'five_document_links_persist':True,'links_hidden_until_check':True,'repeated_check_creates_no_files':True,'no_download_upload_loop':True,'actual_lost_http_response_reconciled_without_duplicate':True,'page_errors':errors,'browser_requests':len(network)},indent=2))
             browser.close()
     finally:server.shutdown();thread.join()
     print('PASS: local actual-browser workflow, both test submits, confirmation image, delayed receipt, persistence and Yes upload; zero live traffic.')

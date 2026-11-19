@@ -49,7 +49,7 @@ async function main(){
   pending.pop()({ok:true,json:async()=>candidate});await checkPromise;
   rowBox=rows[1].lastElementChild.children.at(-1);assert(!rowBox.querySelector('#tnFileExtension').disabled,'candidate opens the workflow after check');
   rowBox.querySelector('#tnFileExtension').handlers.click();const dialog=body.children.at(-1);
-  assert(dialog.innerHTML.includes('Has a renewal or extension already been submitted'),'workflow asks prior filings first');
+  assert(dialog.innerHTML.includes('Has a renewal or this extension request already been submitted'),'workflow asks prior filings first');
   assert(!dialog.innerHTML.includes('Test case<select'),'no synthetic scenario chooser');
   const prior=dialog.querySelector('#tnInitialPrior'),prepare=dialog.querySelector('#tnPrepareExtension');
   prior.value='yes';prior.handlers.change.call(prior);assert(prepare.disabled);

@@ -18,17 +18,19 @@ class Workflow(unittest.TestCase):
         self.s.dispatch(self.c,ACCOUNT,dict(action='confirm-prior',ein=identifier,answer='no'),NOW)
         return self.s.dispatch(self.c,ACCOUNT,dict(action='prepare',ein=identifier),NOW)
     def irs(self,r):
+        # Federal contracts exercise a separately verified synthetic SECOND
+        # extension, never the public first-extension candidate.
+        r=self.s.create(self.c,ACCOUNT,dict(ein=r['ein'],name=r['facts']['name'],scenario='second-open'),NOW)
         return self.s.dispatch(self.c,ACCOUNT,dict(action='irs-submit',id=r['id'],federal_fields=r['federal_fields']|dict(books='Demo Custodian',phone='202-555-0100',tax_a='0',tax_b='0',tax_c='0'),reviewed=True,authorized=True),NOW)
     def submit(self,r,behavior='delayed'):
         return self.s.dispatch(self.c,ACCOUNT,dict(action='submit',id=r['id'],fields={'coid':r['facts']['coid']},prior_filing='no',reviewed=True,authorized=True,test_response=behavior),NOW)
-    def test_reported_fcc_no_path_allows_draft_but_not_late_test_acceptance(self):
+    def test_reported_fcc_first_request_does_not_require_federal_draft(self):
         r=self.prepare('680412350')
-        self.assertTrue(r['federal_check']['can_prepare']);self.assertFalse(r['federal_check']['eligible'])
-        draft=self.s.dispatch(self.c,ACCOUNT,dict(action='irs-draft',id=r['id'],federal_fields=r['federal_fields']),NOW)
-        self.assertIn('irs_draft',draft['documents']);self.assertNotIn('support',draft['documents'])
-        with self.assertRaises(t.Invalid):self.irs(draft)
-        self.assertEqual(draft['state_sends'],0)
-        self.assertEqual(draft['eligibility_explanation']['maximum_requested_date'],'2027-03-31')
+        self.assertIsNone(r['federal_check']);self.assertEqual(r['support']['kind'],'first-request')
+        for action in ['irs-draft','irs-submit']:
+            with self.assertRaises(t.Invalid):self.s.dispatch(self.c,ACCOUNT,dict(action=action,id=r['id']),NOW)
+        self.assertEqual(self.submit(r,'immediate')['status'],'Receipt acknowledged')
+        self.assertEqual(r['eligibility_explanation']['maximum_requested_date'],'2027-03-31')
     def test_eligible_no_path_both_test_submissions_and_matching_receipt(self):
         r=self.irs(self.prepare());self.assertTrue(r['support']['accepted'])
         d=self.submit(r);self.assertEqual(d['status'],'Extension submitted')

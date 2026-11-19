@@ -15,7 +15,7 @@
     } finally {clearTimeout(timer);}
   }
   function links(r) {
-    return [['application','View submitted test extension'],['acknowledgment','View test acknowledgment'],['confirmation_screen','View captured confirmation screen'],['irs_filed','View test-filed Form 8868'],['irs_acceptance','View test IRS acceptance']].filter(([k])=>r.documents[k])
+    return [['application','View submitted test extension'],['acknowledgment','View test acknowledgment'],['confirmation_screen','View captured confirmation screen'],['state_response','View test state review response'],['irs_filed','View test-filed Form 8868'],['irs_acceptance','View test IRS acceptance']].filter(([k])=>r.documents[k])
       .map(([k,label])=>`<a href="${esc(r.documents[k])}" target="_blank" rel="noopener">${label} — Demo only</a>`).join(' · ');
   }
   function dateLabel(value){if(!value)return 'Not verified';const d=new Date(value+'T12:00:00Z');return Number.isNaN(d.getTime())?value:d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric',timeZone:'UTC'});}
@@ -34,8 +34,9 @@
     const r=context.checked?(data.requests?.find(x=>['Extension submitted','Receipt acknowledged','Submission unconfirmed'].includes(x.status))||data.requests?.[0]):null;
     const pending=data.needs_prior_confirmation&&data.eligibility.reasons.length===1;
     const enabled=context.checked&&(data.eligibility.eligible||pending);
+    const ordinal=data.facts?.extension_number===2?'second':'first';
     box.innerHTML=`<strong>Tennessee extensions</strong><br><button type="button" id="tnFileExtension" ${enabled?'':'disabled'}>File Extension</button>
-      <span>${esc(!context.checked?'Click Check for extensions to assess Tennessee.':pending?'May be eligible to request a first extension. Prior filings need your confirmation.':data.eligibility.eligible?'Eligible to prepare a first-extension request based on the reviewed record and your prior-filing answer. Submission is test-only.':data.eligibility.reasons.join(' '))}</span>
+      <span>${esc(!context.checked?'Click Check for extensions to assess Tennessee.':pending?`May be eligible to request a ${ordinal} extension. Prior filings need your confirmation.`:data.eligibility.eligible?`Eligible to prepare a ${ordinal}-extension request based on the reviewed record and your prior-filing answer. Submission is test-only.`:data.eligibility.reasons.join(' '))}</span>
       ${context.checked?eligibilityDetails(data):''}
       ${r?`<div class="tn-demo-saved"><strong>Demo only — ${esc(r.status)}</strong><br>${links(r)}
       ${r.confirmation?`<small>${esc(r.confirmation)} · ${esc(new Date((r.acknowledged_at||r.submitted_at)*1000).toLocaleString())}</small>`:''}
@@ -73,8 +74,11 @@
   }
   function openDialog() {
     if(!dialog){dialog=document.createElement('dialog');dialog.id='tnExtensionDialog';document.body.append(dialog);dialog.addEventListener('cancel',e=>{if(working)e.preventDefault();});}
-    receiptAttempts=0;captureFailed=false;draw();if(!dialog.open)dialog.showModal();void captureConfirmation();scheduleReceipt();
-    if(current?.workflow_version>=2&&["Draft","Submission failed"].includes(current.status)&&!current.federal_searched_at)void operate("find-federal",{});
+    firstChoice=current?.support?.kind==='8868'?'irs':'reason';receiptAttempts=0;captureFailed=false;draw();if(!dialog.open)dialog.showModal();void captureConfirmation();scheduleReceipt();
+    if(current?.workflow_version>=2&&["Draft","Submission failed"].includes(current.status)){
+      if(current.federal_required&&!current.federal_searched_at)void operate("find-federal",{});
+      else if(!current.federal_required&&!current.support)void operate("prepare-first",{});
+    }
   }
   function scheduleReceipt(){
     clearTimeout(receiptTimer);receiptTimer=null;
@@ -102,18 +106,35 @@
     finally{capturing=false;}
   }
   const federalLabels={name:'Organization name — confirm',ein:'EIN',street:'Street / suite — confirm from prior return',city_state_zip:'City, state, ZIP — confirm',return_type:'Return type — confirm',period_start:'Tax period begins',period_end:'Tax period ends',books:'Books are in the care of *',phone:'Books-in-care-of phone *',tax_a:'Line 3a: tentative tax *',tax_b:'Line 3b: credits/payments *',tax_c:'Line 3c: balance due *'};
-  let irsAnswer='',showFederal=false,attachmentReady=false;
+  let irsAnswer='',showFederal=false,attachmentReady=false,firstChoice='reason';
+  function firstRequestContent(){
+    return `<section class="tn-workflow-step"><h4>1. First Tennessee extension — up to 90 days</h4>
+      <p>Attach either an existing filed IRS Form 8868 or a document stating the reason for the extension. You do not need a new IRS filing to use the reason-statement route.</p>
+      <label>Supporting document<select id="tnFirstSupport"><option value="reason" ${firstChoice==='reason'?'selected':''}>Prepare a reason statement</option><option value="irs" ${firstChoice==='irs'?'selected':''}>Use an already-filed IRS extension</option></select></label>
+      ${firstChoice==='reason'?`<label>Reason for extension — review or edit<textarea id="tnFirstReason" maxlength="600" rows="3">${esc(current.fields.reason)}</textarea></label><button type="button" id="tnPrepareFirst">Update reason document</button>${current.support?.kind==='first-request'?`<p class="tn-ready">Reason document prepared for your review.</p><a href="${esc(current.support.url)}" target="_blank" rel="noopener">Review reason document — Demo only</a>`:''}`:
+      `${current.support?.kind==='8868'?`<p class="tn-ready">Matching test IRS evidence attached.</p><a href="${esc(current.support.url)}" target="_blank" rel="noopener">Review attached evidence — Demo only</a>`:`<p>This demo checks only its own test evidence. It does not search Tennessee's account or the IRS.</p><label>Upload filed copy and acceptance evidence (test PDF, maximum 2 MB)<input id="tnSupportUpload" type="file" accept="application/pdf"></label><button type="button" id="tnUploadSupport">Validate and attach test PDF</button><details><summary>Demo documents</summary><button type="button" id="tnUseDemoEvidence">Use matching simulated IRS evidence</button></details>`}`}
+      <p class="tn-small">Tennessee's portal and returned-filing notice allow a reason document. This test document has not been submitted to or approved by Tennessee.</p></section>
+      <section class="tn-workflow-step"><h4>2. Review and submit Tennessee request</h4>
+      <p class="tn-small"><a href="${PORTAL}" target="_blank" rel="noopener">Sign in to Tennessee</a> to review actual account filings. This pilot does not search that account or submit there; the form below sends only to the test service.</p>
+      <div id="tnPortalRehearsal" data-demo-only="true"><label>CO number<input id="tnPortalCO" readonly></label><label>Supporting document — Demo only<input id="tnPortalUpload" type="file" accept="application/pdf" disabled></label><p id="tnAttachmentReady" role="status"></p></div>
+      <label class="tn-check"><input id="tnReviewed" type="checkbox"> I reviewed the CO number, period and first-extension request.</label>
+      <label class="tn-check"><input id="tnAuthorized" type="checkbox"> I am the authorized filer for this test application.</label>
+      <button type="button" id="tnSubmitDemo" disabled>Submit to Tennessee test service</button>
+      ${responseOptions()}</section>`;
+  }
+  function responseOptions(){return '<details><summary>Test response options</summary><label>Tennessee test response<select id="tnTestResponse"><option value="immediate">Immediate submission confirmation</option><option value="delayed">Submitted; acknowledgment after 15 seconds</option><option value="timeout">Response timeout; check receipt before retrying</option><option value="returned">Receipt, then returned for correction</option><option value="failed">Confirmed failure; keep draft</option></select></label></details>';}
   function draftContent(locked) {
     const support=current.support,check=current.federal_check;
     if(locked)return `<div class="tn-documents">${links(current)}</div>`;
+    if(!current.federal_required)return firstRequestContent();
     return `<p><strong>Tennessee CO number:</strong> ${esc(current.facts.coid)}</p>
-      <section class="tn-workflow-step"><h4>1. IRS extension</h4>
+      <section class="tn-workflow-step"><h4>1. Second Tennessee extension — IRS evidence required</h4><p class="tn-small">This request is for up to 60 additional days after a verified first extension.</p>
       ${support?`<p class="tn-ready">Attached: ${esc(support.label)} — Demo only</p><a href="${esc(support.url)}" target="_blank" rel="noopener">Review attachment</a>${support.acceptance_url?` · <a href="${esc(support.acceptance_url)}" target="_blank" rel="noopener">View simulated IRS acceptance</a>`:''}`:
-      `<p class="tn-small">${esc(check.search_scope)}</p><label>No matching IRS extension was found. Has one already been filed?<select id="tnIRSAnswer"><option value="">Select an answer</option><option value="yes" ${irsAnswer==='yes'?'selected':''}>Yes — upload the filed copy and acceptance evidence</option><option value="no" ${irsAnswer==='no'?'selected':''}>No — prepare Form 8868</option></select></label>
-       ${irsAnswer==='yes'?`<p>Upload the filed copy and acceptance evidence. This isolated demo accepts only its matching test packet; do not upload real tax documents.</p><button type="button" id="tnSample8868">Download matching test packet</button><div id="tnTestDownload"></div><label>Upload matching test packet (maximum 2 MB)<input id="tnSupportUpload" type="file" accept="application/pdf"></label><button type="button" id="tnUploadSupport">Validate and attach test PDF</button>`:''}
+      `<p class="tn-small">${esc(check.search_scope)}</p>${!check.eligible?`<p class="tn-disabled-reason">${esc(check.reason)} If an extension was filed on time, upload its filed copy and acceptance evidence. A new federal draft is unavailable in this workflow.</p>`:''}<label>No matching IRS extension was found. Has one already been filed?<select id="tnIRSAnswer"><option value="">Select an answer</option><option value="yes" ${irsAnswer==='yes'?'selected':''}>Yes — upload the filed copy and acceptance evidence</option><option value="no" ${irsAnswer==='no'?'selected':''}>${check.eligible?'No — prepare Form 8868':'No — no timely IRS extension is available'}</option></select></label>
+       ${irsAnswer==='yes'?`<p>Upload the filed copy and acceptance evidence. This isolated demo validates only issued test documents; do not upload real tax documents.</p><label>Upload filed copy and acceptance evidence (test PDF, maximum 2 MB)<input id="tnSupportUpload" type="file" accept="application/pdf"></label><button type="button" id="tnUploadSupport">Validate and attach test PDF</button><details><summary>Demo documents</summary><button type="button" id="tnUseDemoEvidence">Use matching simulated IRS evidence</button></details>`:''}
        ${irsAnswer==='no'?`<p class="tn-small">Federal deadline: ${esc(dateLabel(check.deadline))}. ${esc(check.eligible?'Review the prefilled draft below, complete the required fields, then explicitly submit to the IRS test service.':check.reason)}</p>${!check.can_prepare?'<p>Form preparation requires a verified, supported return type and regular annual filing period.</p>':''}`:''}
        `}
-      ${showFederal&&!support?`<section><h4>Form 8868 — draft for authorized review</h4><p class="tn-small">Prefill comes from the dated organization record and prior public Form 990. Confirm the address and return type; complete the books-in-care-of and tax lines. Regular annual 990, 990-EZ and 990-PF only; group/short-year returns are outside this pilot.</p><div class="tn-field-grid">${Object.entries(federalLabels).map(([k,label])=>`<label>${esc(label)}<input data-irs="${k}" id="irs_${k}" value="${esc(current.federal_fields[k])}" ${['ein','return_type','period_start','period_end'].includes(k)?'readonly':''} maxlength="180"></label>`).join('')}</div>
+      ${showFederal&&check.eligible&&!support?`<section><h4>Form 8868 — draft for authorized review</h4><p class="tn-small">Prefill comes from the dated organization record and prior public Form 990. Confirm the address and return type; complete the books-in-care-of and tax lines. Regular annual 990, 990-EZ and 990-PF only; group/short-year returns are outside this pilot.</p><div class="tn-field-grid">${Object.entries(federalLabels).map(([k,label])=>`<label>${esc(label)}<input data-irs="${k}" id="irs_${k}" value="${esc(current.federal_fields[k])}" ${['ein','return_type','period_start','period_end'].includes(k)?'readonly':''} maxlength="180"></label>`).join('')}</div>
        <label class="tn-check"><input id="tnIRSReviewed" type="checkbox"> I reviewed this federal request and am authorized to submit this test.</label>
        <button type="button" id="tnDownloadDraftIRS">Save and preview draft 8868</button> <button type="button" id="tnSubmitIRS" ${check.eligible?'':'disabled'}>Submit to IRS test service</button>
        ${current.documents.irs_draft?`<a href="${esc(current.documents.irs_draft)}" target="_blank" rel="noopener">View draft Form 8868 — Demo only</a>`:''}</section>`:''}</section>
@@ -129,12 +150,12 @@
     const locked=current&&!['Draft','Submission failed'].includes(current.status);
     const hasCompleteCapture=!!(current?.documents.confirmation_screen&&current.confirmation_capture?.format_version>=2);
     dialog.innerHTML=`<div class="tn-dialog-heading"><h2>Tennessee File Extension</h2><button type="button" id="tnClose" aria-label="Close extension demo">×</button></div>
-      <p class="tn-demo-banner"><strong>Demo only — no live filings.</strong> Both Submit buttons use isolated test services. Applications, acceptance responses and receipts are simulated.</p>
+      <p class="tn-demo-banner"><strong>Demo only — no live filings.</strong> Submission uses isolated test services. Applications, acceptance responses and receipts are simulated.</p>
       <div id="tnDemoError" role="alert">${esc(message)}</div>
       ${!current?`<h3>${esc(context.checkData?.facts.name||context.result.organization_name)}</h3>
        <p>EIN ${esc(context.result.ein)} · Tennessee ${esc(context.checkData?.facts.coid)}<br>Filing period ${esc(context.checkData?.facts.period_start)} to ${esc(context.checkData?.facts.period_end)}<br>Registration expires ${esc(context.checkData?.facts.expiration)}</p>
        <p class="tn-small">Public source checked ${esc(dateLabel(context.checkData?.facts.checked_at))}. Pending filings require your confirmation. <a href="${PORTAL}" target="_blank" rel="noopener">Sign in to Tennessee</a> to review your account. Tennessee sign-in is required for real portal filings; this pilot submits only to test services.</p>
-       <label>Has a renewal or extension already been submitted for this filing period?<select id="tnInitialPrior"><option value="unknown">Select an answer</option><option value="yes">Yes — do not prepare another filing</option><option value="no">No — nothing has been submitted</option></select></label>
+       <label>Has a renewal or this extension request already been submitted for this filing period?<select id="tnInitialPrior"><option value="unknown">Select an answer</option><option value="yes">Yes — do not prepare another filing</option><option value="no">No — nothing has been submitted</option></select></label>
        <p id="tnPriorExplanation" role="status"></p><button type="button" id="tnPrepareExtension" disabled>Continue to application</button>`:
       `<h3>${esc(current.fields.name)} — ${esc(current.status)}</h3><p class="tn-small">EIN ${esc(current.ein)} · Filing period ${esc(current.facts.period_start)} to ${esc(current.facts.period_end)} · Registration expiration ${esc(current.facts.expiration)}</p>
        ${eligibilityDetails(current)}
@@ -142,8 +163,9 @@
        ${draftContent(locked)}
        <section class="tn-workflow-step"><h4>3. Submission and acknowledgment</h4>
        <p><strong>${esc(current.status)} — Demo only</strong></p><p class="tn-small">${esc(current.receipt_method||'The isolated test service supplies simulated responses. No real Tennessee acknowledgment is retrieved.')}</p>
+       ${current.state_review?`<p class="tn-disabled-reason"><strong>State review: ${esc(current.state_review.outcome)} — Demo only.</strong> ${esc(current.state_review.reason)}</p><p class="tn-small">Source: ${esc(current.state_review.source)}. Acknowledgment confirms receipt, not approval. Real state email retrieval and correction submission are not connected in this pilot.</p>`:''}
        ${current.failure?`<p class="tn-disabled-reason">${esc(current.failure)}</p>`:''}
-       ${['Extension submitted','Receipt acknowledged'].includes(current.status)?`<div id="tnConfirmationCard" style="box-sizing:border-box;max-width:620px;padding:22px;border:1px solid #b9c9df;border-radius:8px;background:#fff;color:#20324a;font:14px/1.5 Arial,sans-serif"><p style="color:#9c1f1f;font-weight:bold">DEMO ONLY — ISOLATED TENNESSEE TEST SERVICE</p><h3 style="font-size:20px;color:#0b2a5b">Thank you for your submission.</h3><p>Your test extension request has been received. Review is pending; this is not approval. No email will be sent by this demo.</p><p>${esc(current.fields.name)}<br>EIN ${esc(current.ein)} · ${esc(current.facts.coid)}<br>Period ${esc(current.facts.period_start)} to ${esc(current.facts.period_end)}<br>Confirmation ${esc(current.confirmation)}</p><p style="font-size:11px">Compliance Express · www.compliance-express.com · info@compliance-express.com</p></div><p id="tnCaptureMessage" class="tn-small">${hasCompleteCapture?'Confirmation screen captured and saved with this application.':'Saving the displayed test confirmation screen separately from the application.'}</p>${hasCompleteCapture?'':'<button type="button" id="tnRetryCapture">Retry capture</button>'}`:''}
+       ${['Extension submitted','Receipt acknowledged'].includes(current.status)?`<div id="tnConfirmationCard" style="box-sizing:border-box;max-width:620px;padding:22px;border:1px solid #b9c9df;border-radius:8px;background:#fff;color:#20324a;font:14px/1.5 Arial,sans-serif"><p style="color:#9c1f1f;font-weight:bold">DEMO ONLY — ISOLATED TENNESSEE TEST SERVICE</p><h3 style="font-size:20px;color:#0b2a5b">Thank you for your submission.</h3><p>${current.state_review?'Your test request was received, then returned for correction. Correct the existing filing; this is not approval.':'Your test extension request has been received. Review is pending; this is not approval.'} No email will be sent by this demo.</p><p>${esc(current.fields.name)}<br>EIN ${esc(current.ein)} · ${esc(current.facts.coid)}<br>Period ${esc(current.facts.period_start)} to ${esc(current.facts.period_end)}<br>Confirmation ${esc(current.confirmation)}</p><p style="font-size:11px">Compliance Express · www.compliance-express.com · info@compliance-express.com</p></div><p id="tnCaptureMessage" class="tn-small">${hasCompleteCapture?'Confirmation screen captured and saved with this application.':'Saving the displayed test confirmation screen separately from the application.'}</p>${hasCompleteCapture?'':'<button type="button" id="tnRetryCapture">Retry capture</button>'}`:''}
        ${current.irs_submission?`<p class="tn-small">IRS test service: accepted ${esc(new Date(current.irs_submission.submitted_at*1000).toLocaleString())}. <a href="${esc(current.documents.irs_acceptance)}" target="_blank" rel="noopener">View simulated IRS acceptance</a></p>`:''}
        ${current.acknowledgment_provenance?`<p class="tn-small">Acknowledgment source: ${esc(current.acknowledgment_provenance.source)}. Received ${esc(new Date(current.acknowledgment_provenance.received_at*1000).toLocaleString())}. Matched to this account, organization, filing period, confirmation and exact submitted application.</p>`:''}
        ${unknownSend||['Extension submitted','Submission unconfirmed'].includes(current.status)?'<p class="tn-small">Checking the test service automatically for a matching acknowledgment. You can close this window; a later CharityClarity run will check the saved submission again. Nothing is resubmitted.</p>':''}
@@ -152,15 +174,19 @@
        ${!locked?`<div class="tn-documents">${links(current)}</div>`:''}<p class="tn-small">${esc(current.approval)}${current.confirmation?' · '+esc(current.confirmation):''}${current.submitted_at?' · Submitted '+esc(new Date(current.submitted_at*1000).toLocaleString()):''}${current.acknowledged_at?' · Acknowledged '+esc(new Date(current.acknowledged_at*1000).toLocaleString()):''}</p>`}
       <footer>Compliance Express · www.compliance-express.com · info@compliance-express.com</footer>`;
     dialog.querySelector('#tnClose').onclick=()=>{if(!working){clearTimeout(receiptTimer);dialog.close();}};
-    dialog.querySelector('#tnInitialPrior')?.addEventListener('change',function(){dialog.querySelector('#tnPrepareExtension').disabled=this.value!=='no';dialog.querySelector('#tnPriorExplanation').textContent=this.value==='yes'?'Do not prepare another filing. Sign in to Tennessee to review the existing submission.':'';});
+    dialog.querySelector('#tnInitialPrior')?.addEventListener('change',function(){dialog.querySelector('#tnPrepareExtension').disabled=this.value!=='no';dialog.querySelector('#tnPriorExplanation').textContent=this.value==='yes'?'Do not create a duplicate. Sign in to Tennessee to review or correct the existing filing, including a returned request.':'';});
     dialog.querySelector('#tnPrepareExtension')?.addEventListener('click',()=>operate('prepare',{ein:context.result.ein,answer:dialog.querySelector('#tnInitialPrior').value}));
-    dialog.querySelector('#tnIRSAnswer')?.addEventListener('change',function(){irsAnswer=this.value;showFederal=this.value==='no'&&current.federal_check.can_prepare;draw();});
+    dialog.querySelector('#tnIRSAnswer')?.addEventListener('change',function(){irsAnswer=this.value;showFederal=this.value==='no'&&current.federal_check.eligible;draw();});
+    dialog.querySelector('#tnFirstSupport')?.addEventListener('change',function(){firstChoice=this.value;draw();if(firstChoice==='irs')void operate('find-federal',{});});
+    dialog.querySelector('#tnFirstReason')?.addEventListener('input',()=>{attachmentReady=false;dialog.querySelector('#tnSubmitDemo').disabled=true;dialog.querySelector('#tnAttachmentReady').textContent='Update the reason document, then review the attachment before submitting.';});
+    dialog.querySelector('#tnPrepareFirst')?.addEventListener('click',()=>operate('prepare-first',{reason:dialog.querySelector('#tnFirstReason').value}));
+    dialog.querySelector('#tnUseDemoEvidence')?.addEventListener('click',()=>operate('attach-demo-evidence',{}));
     dialog.querySelector('#tnPrepareIRS')?.addEventListener('click',()=>{showFederal=true;draw();});
     for(const [id,kind] of [['tnSample8868','8868'],['tnSampleOther','other']])dialog.querySelector('#'+id)?.addEventListener('click',()=>sample(kind));
     dialog.querySelector('#tnUploadSupport')?.addEventListener('click',upload);
     dialog.querySelector('#tnDownloadDraftIRS')?.addEventListener('click',()=>operate('irs-draft',{federal_fields:irsValues()}));
     dialog.querySelector('#tnSubmitIRS')?.addEventListener('click',()=>{if(current.federal_check.eligible)operate('irs-submit',{federal_fields:irsValues(),reviewed:dialog.querySelector('#tnIRSReviewed').checked,authorized:dialog.querySelector('#tnIRSReviewed').checked});});
-    dialog.querySelector('#tnSubmitDemo')?.addEventListener('click',()=>{if(attachmentReady)operate('submit',{fields:{coid:current.facts.coid},prior_filing:'no',reviewed:dialog.querySelector('#tnReviewed').checked,authorized:dialog.querySelector('#tnAuthorized').checked,test_response:dialog.querySelector('#tnTestResponse').value||'immediate'});});
+    dialog.querySelector('#tnSubmitDemo')?.addEventListener('click',()=>{if(attachmentReady)operate('submit',{fields:{coid:current.facts.coid,...(!current.federal_required&&firstChoice==='reason'?{reason:dialog.querySelector('#tnFirstReason').value}:{})},prior_filing:'no',reviewed:dialog.querySelector('#tnReviewed').checked,authorized:dialog.querySelector('#tnAuthorized').checked,test_response:dialog.querySelector('#tnTestResponse').value||'immediate'});});
     dialog.querySelector('#tnCheckReceipt')?.addEventListener('click',()=>operate('receipt',{}));
     dialog.querySelector('#tnRetryCapture')?.addEventListener('click',()=>{captureFailed=false;void captureConfirmation();});
     void captureConfirmation();
@@ -172,8 +198,9 @@
     try{
       await window.CCTennesseePortalRehearsal.populate(root,current.facts.coid,current.support.url);
       if(current.id!==id||dialog.querySelector('#tnPortalRehearsal')!==root)return;
-      attachmentReady=true;dialog.querySelector('#tnAttachmentReady').textContent='CO number and matching test attachment added automatically. Review them before submitting.';
-      dialog.querySelector('#tnSubmitDemo').disabled=!current.eligibility.eligible||unknownSend;
+      attachmentReady=current.federal_required||(firstChoice==='reason'?current.support.kind==='first-request':current.support.kind==='8868');
+      dialog.querySelector('#tnAttachmentReady').textContent=attachmentReady?'CO number and matching test attachment added automatically. Review them before submitting.':'Attach the selected supporting document before submitting.';
+      dialog.querySelector('#tnSubmitDemo').disabled=!attachmentReady||!current.eligibility.eligible||unknownSend;
     }catch(e){if(current?.id===id)dialog.querySelector('#tnDemoError').textContent=e.message;}
   }
   async function sample(kind){

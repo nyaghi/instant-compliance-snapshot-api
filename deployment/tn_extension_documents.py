@@ -41,7 +41,7 @@ def federal_status(facts,today):
     except (ValueError,KeyError,TypeError):return dict(eligible=False,reason='The federal filing period is not verified.',deadline='')
     reason=('Form 990-N cannot be extended using Form 8868.' if form=='990-N' else
         'The return type or regular annual period needs verification.' if not supported or not regular else
-        'The ordinary federal deadline has passed. You can prepare a demo draft, but this record cannot be submitted as a timely new IRS extension. No disaster relief has been verified.' if today>due else '')
+        'The ordinary federal deadline has passed. A new timely IRS extension is unavailable; upload evidence of an existing timely filing if available. No disaster relief has been verified.' if today>due else '')
     return dict(eligible=not reason,reason=reason,deadline=due.isoformat(),return_type=form,
         can_prepare=supported and regular,deadline_open=today<=due,
         search_scope='This account’s accepted test records only. Public Form 990 data supplies prefill, not proof that an IRS extension was or was not filed.',
