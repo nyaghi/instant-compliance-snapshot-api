@@ -315,6 +315,16 @@ class Snapshots(unittest.TestCase):
                     if scenario == 'different page':
                         page = SimpleNamespace(**vars(page))
                     run.page(page)
+                    if state=='MN' and scenario=='legacy':
+                        # The default MN path now retries only a timed-out
+                        # capture. Existing explicitly selected allowances stay
+                        # unchanged; this fixture fails before waiting in real time.
+                        self.assertTrue(run.documents)
+                        self.assertEqual(len(calls),2)
+                        self.assertEqual(calls[0],1000)
+                        self.assertGreaterEqual(calls[1],latency)
+                        self.assertLess(calls[1],3000)
+                        continue
                     self.assertEqual(bool(run.documents), scenario == 'selected')
                     self.assertEqual(len(calls), 1)
                     if scenario == 'selected':

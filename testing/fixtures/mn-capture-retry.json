@@ -1,0 +1,425 @@
+{
+  "scope": "70 distinct recorded organization/EIN inputs with original MN outcomes. Timing/DOM/failure variants in local tests are synthetic, not live searches or independently verified MN identities.",
+  "cases": [
+    {
+      "name": "ASSOCIATION OF UNIVERSITIES FOR RESEARCH IN ASTRONOMY, INC",
+      "ein": "86-0138043",
+      "source_export": "outputs\\gate45-20261113\\01-association-of-universities\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "AUGUSTANA COLLEGE",
+      "ein": "36-2166962",
+      "source_export": "outputs\\gate45-20261113\\02-augustana-college\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BAYLOR COLLEGE OF MEDICINE",
+      "ein": "74-1613878",
+      "source_export": "outputs\\gate45-20261113\\06-baylor-college-of\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BAYLOR UNIVERSITY",
+      "ein": "74-1159753",
+      "source_export": "outputs\\gate45-20261113\\07-baylor-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BEREA COLLEGE",
+      "ein": "61-0444650",
+      "source_export": "outputs\\gate45-20261113\\08-berea-college\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BETH ISRAEL MEDICAL CENTER",
+      "ein": "13-5564934",
+      "source_export": "outputs\\gate45-20261113\\09-beth-israel-medical\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BLOOD CANCER UNITED, INC.",
+      "ein": "13-5644916",
+      "source_export": "outputs\\gate46-20261113\\01-blood-cancer-united-inc\\export.xlsx",
+      "recorded_mn_status": "Current"
+    },
+    {
+      "name": "BNY MELLON CHARITABLE GIFT FUND",
+      "ein": "30-0748315",
+      "source_export": "outputs\\gate46-20261113\\02-bny-mellon-charitable-gift-fund\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "BOSTON FOUNDATION, INC.",
+      "ein": "04-2104021",
+      "source_export": "outputs\\gate46-20261113\\03-boston-foundation-inc\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BREAKTHROUGH T1D",
+      "ein": "23-1907729",
+      "source_export": "outputs\\gate46-20261113\\04-breakthrough-t1d\\export.xlsx",
+      "recorded_mn_status": "Current"
+    },
+    {
+      "name": "BROWN UNIVERSITY",
+      "ein": "05-0258809",
+      "source_export": "outputs\\gate46-20261113\\05-brown-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BRYANT UNIVERSITY",
+      "ein": "05-0258810",
+      "source_export": "outputs\\gate46-20261113\\06-bryant-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BRYN MAWR COLLEGE",
+      "ein": "23-1352621",
+      "source_export": "outputs\\gate46-20261113\\07-bryn-mawr-college\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "BUCKNELL UNIVERSITY",
+      "ein": "24-0772407",
+      "source_export": "outputs\\gate46-20261113\\08-bucknell-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CALIFORNIA BAPTIST UNIVERSITY",
+      "ein": "95-1890710",
+      "source_export": "outputs\\gate46-20261113\\09-california-baptist-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CALIFORNIA COMMUNITY FOUNDATION",
+      "ein": "95-3510055",
+      "source_export": "outputs\\gate46-20261113\\10-california-community-foundation\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "CALIFORNIA LUTHERAN UNIVERSITY",
+      "ein": "95-2962604",
+      "source_export": "outputs\\gate47-20261113\\01-california-lutheran-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CARNEGIE MELLON UNIVERSITY",
+      "ein": "25-0969449",
+      "source_export": "outputs\\gate47-20261113\\02-carnegie-mellon-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CASE WESTERN RESERVE UNIVERSITY",
+      "ein": "34-1018992",
+      "source_export": "outputs\\gate47-20261113\\03-case-western-reserve-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CATHOLIC RELIEF SERVICES-UNITED STATES CONFERENCE OF CATHOLIC BISHOPS",
+      "ein": "13-5563422",
+      "source_export": "outputs\\gate47-20261113\\04-catholic-relief-services-united-states-conference-of-catholic-bishops\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CATHOLIC UNIVERSITY OF AMERICA (THE)",
+      "ein": "53-0196583",
+      "source_export": "outputs\\gate47-20261113\\05-catholic-university-of-america-the\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CEDARS-SINAI MEDICAL CENTER",
+      "ein": "95-1644600",
+      "source_export": "outputs\\gate47-20261113\\06-cedars-sinai-medical-center\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHALLENGE AIR FOR KIDS AND FRIENDS",
+      "ein": "75-2559486",
+      "source_export": "outputs\\gate47-20261113\\07-challenge-air-for-kids-and-friends\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CHAPMAN UNIVERSITY",
+      "ein": "95-1643992",
+      "source_export": "outputs\\gate47-20261113\\08-chapman-university\\export.xlsx",
+      "recorded_mn_status": "Review required"
+    },
+    {
+      "name": "CHARITIES AID FOUNDATION AMERICA",
+      "ein": "43-1634280",
+      "source_export": "outputs\\gate47-20261113\\09-charities-aid-foundation-america\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHICANOS POR LA CAUSA, INC.",
+      "ein": "86-0227210",
+      "source_export": "outputs\\gate47-20261113\\10-chicanos-por-la-causa-inc\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHILD WELFARE LEAGUE OF AMERICA, INC.",
+      "ein": "13-1641066",
+      "source_export": "outputs\\gate48-20261113\\01-child-welfare-league-of-america-inc\\export.xlsx",
+      "recorded_mn_status": "Review required"
+    },
+    {
+      "name": "CHILDREN'S HEALTHCARE OF ATLANTA FOUNDATION, INC.",
+      "ein": "58-1710601",
+      "source_export": "outputs\\gate48-20261113\\02-children-s-healthcare-of-atlanta-foundation-inc\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHILDREN'S HOSPITAL CORPORATION",
+      "ein": "04-2774441",
+      "source_export": "outputs\\gate48-20261113\\03-children-s-hospital-corporation\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "CHILDREN'S HOSPITAL MEDICAL CENTER",
+      "ein": "31-0833936",
+      "source_export": "outputs\\gate48-20261113\\04-children-s-hospital-medical-center\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "CHILDREN'S HOSPITAL OF THE KING'S DAUGHTERS",
+      "ein": "54-0506321",
+      "source_export": "outputs\\gate48-20261113\\05-children-s-hospital-of-the-king-s-daughters\\export.xlsx",
+      "recorded_mn_status": "Current"
+    },
+    {
+      "name": "CHILDREN'S HUNGER FUND",
+      "ein": "95-4335462",
+      "source_export": "outputs\\gate48-20261113\\06-children-s-hunger-fund\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "CHILDREN'S MEDICAL CENTER FOUNDATION",
+      "ein": "75-2062015",
+      "source_export": "outputs\\gate48-20261113\\07-children-s-medical-center-foundation\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHRISTIAN APPALACHIAN PROJECT, INC.",
+      "ein": "61-0661137",
+      "source_export": "outputs\\gate48-20261113\\08-christian-appalachian-project-inc\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHRISTIAN HEALTHCARE MINISTRIES, INC.",
+      "ein": "34-1964742",
+      "source_export": "outputs\\gate48-20261113\\09-christian-healthcare-ministries-inc\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHRONIC DISEASE FUND, INC.",
+      "ein": "61-1462062",
+      "source_export": "outputs\\gate48-20261113\\10-chronic-disease-fund-inc\\export.xlsx",
+      "recorded_mn_status": "Current"
+    },
+    {
+      "name": "DEPAUL UNIVERSITY",
+      "ein": "36-2167048",
+      "source_export": "outputs\\gate50-20261117\\07-depaul-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "DEPAUW UNIVERSITY",
+      "ein": "35-0869045",
+      "source_export": "outputs\\gate50-20261117\\08-depauw-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "DIALYSIS CLINIC INC",
+      "ein": "62-0850498",
+      "source_export": "outputs\\gate50-20261117\\09-dialysis-clinic\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "DICKINSON COLLEGE",
+      "ein": "23-1365954",
+      "source_export": "outputs\\gate50-20261117\\10-dickinson-college\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "DANA-FARBER CANCER INSTITUTE, INC.",
+      "ein": "04-2263040",
+      "source_export": "outputs\\gate50-20261117\\FINAL-DANA-EXPORT.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "DISABLED AMERICAN VETERANS",
+      "ein": "31-0263158",
+      "source_export": "outputs\\gate51-20261117\\01-disabled-american-veterans\\export.xlsx",
+      "recorded_mn_status": "Current"
+    },
+    {
+      "name": "DREXEL UNIVERSITY",
+      "ein": "23-1352630",
+      "source_export": "outputs\\gate51-20261117\\02-drexel-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "DUKE UNIVERSITY HEALTH SYSTEM, INC.",
+      "ein": "56-2070036",
+      "source_export": "outputs\\gate51-20261117\\04-duke-health\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "DUQUESNE UNIVERSITY OF THE HOLY SPIRIT",
+      "ein": "25-1035663",
+      "source_export": "outputs\\gate51-20261117\\05-duquesne-university\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "EDUCATIONAL MEDIA FOUNDATION",
+      "ein": "94-2816342",
+      "source_export": "outputs\\gate51-20261117\\06-educational-media-foundation\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "ELON UNIVERSITY",
+      "ein": "56-0532303",
+      "source_export": "outputs\\gate51-20261117\\07-elon-university\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "ELDERHOSTEL, INC. D/B/A ROAD SCHOLAR",
+      "ein": "04-2632526",
+      "source_export": "outputs\\gate51-20261117\\08-elderhostel\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "EMBRY-RIDDLE AERONAUTICAL UNIVERSITY, INC.",
+      "ein": "59-0936101",
+      "source_export": "outputs\\gate51-20261117\\09-embry-riddle\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "EMORY UNIVERSITY",
+      "ein": "58-0566256",
+      "source_export": "outputs\\gate51-20261117\\10-emory-university\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "United Service Organizations Inc.",
+      "ein": "13-1610451",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\05-control-uso\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "Stonestreet-Rone Post No 1983 Veterans of Foreign Wars of the United States",
+      "ein": "64-0517029",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\07-control-stonestreet\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "Partnership for Civil Justice Fund",
+      "ein": "26-2851211",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\08-control-partnership\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "YWCA USA, Inc",
+      "ein": "13-1624103",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\09-control-ywca\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "Northeast Hospital Corporation",
+      "ein": "04-2121317",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\10-control-northeast\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "Annie E. Casey Foundation",
+      "ein": "52-1951681",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\13-control-casey\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "Society for Scholarly Publishing",
+      "ein": "52-1125072",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\14-control-scholarly\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "EMPLOYMENT POLICIES INSTITUTE FOUNDATION",
+      "ein": "52-1902264",
+      "source_export": "outputs\\gate52-20261117\\01-employment-policies-institute-foundation\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "FATHER FLANAGAN'S BOYS' HOME",
+      "ein": "47-0376606",
+      "source_export": "outputs\\gate52-20261117\\02-father-flanagan-s-boys-home\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "FELLOWSHIP OF CHRISTIAN ATHLETES",
+      "ein": "44-0610626",
+      "source_export": "outputs\\gate52-20261117\\03-fellowship-of-christian-athletes\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "FIDELIS",
+      "ein": "20-2603413",
+      "source_export": "outputs\\gate52-20261117\\04-fidelis\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "FIDELITY INVESTMENTS CHARITABLE GIFT FUND",
+      "ein": "11-0303001",
+      "source_export": "outputs\\gate52-20261117\\05-fidelity-investments-charitable-gift-fund\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "FOOD BANK FOR NEW YORK CITY",
+      "ein": "13-3179546",
+      "source_export": "outputs\\gate52-20261117\\06-food-bank-for-new-york-city\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "FOUNDATION FOR CALIFORNIA COMMUNITY COLLEGES",
+      "ein": "68-0412350",
+      "source_export": "outputs\\gate52-20261117\\07-foundation-for-california-community-colleges\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "FRANKLIN AND MARSHALL COLLEGE",
+      "ein": "23-1352635",
+      "source_export": "outputs\\gate52-20261117\\08-franklin-and-marshall-college\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "FRIENDS OF THE ISRAEL DEFENSE FORCES",
+      "ein": "13-3156445",
+      "source_export": "outputs\\gate52-20261117\\09-friends-of-the-israel-defense-forces\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "GETTYSBURG COLLEGE",
+      "ein": "23-1352641",
+      "source_export": "outputs\\gate52-20261117\\10-gettysburg-college\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    },
+    {
+      "name": "GLOBAL IMPACT",
+      "ein": "52-1273585",
+      "source_export": "outputs\\gate53-20261118\\user-first-five\\01-global-impact\\export.xlsx",
+      "recorded_mn_status": "Upcoming Filing"
+    },
+    {
+      "name": "GOOD360",
+      "ein": "54-1282616",
+      "source_export": "outputs\\gate53-20261118\\user-first-five\\02-good360\\export.xlsx",
+      "recorded_mn_status": "Delinquent"
+    },
+    {
+      "name": "GRAND CANYON UNIVERSITY",
+      "ein": "47-2507725",
+      "source_export": "outputs\\gate53-20261118\\user-first-five\\03-grand-canyon\\export.xlsx",
+      "recorded_mn_status": "Not Registered"
+    }
+  ]
+}

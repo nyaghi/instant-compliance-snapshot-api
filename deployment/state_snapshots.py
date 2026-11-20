@@ -732,6 +732,43 @@ class CaptureRun:
         """Scope the capture allowance to one already selected official page."""
         self.selected_screenshot = (page, page.url, stop, matches_text)
 
+    def _mn_screenshot(self, page, original_url, text, stop):
+        """Retry pixels once, on the same loaded record, inside one allowance."""
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        fact={'adapter':'MN-existing-page-capture','attempts':[],'outcome':'pending'}
+        self.visual_adapter_facts.append(fact)
+        def allowance(cap, reserve=.4):
+            remaining=stop-time.monotonic()-reserve
+            if remaining<=0:raise TimeoutError('MN_capture_allowance_exhausted')
+            return max(1,int(min(cap,remaining)*1000))
+        try:
+            for attempt in range(2):
+                if attempt:
+                    if (page.url!=original_url or workflow_call(
+                        'MN.capture.retry_binding',page.inner_text,locals(),'body',
+                        timeout=allowance(.3))[:20000]!=text):
+                        raise ValueError('MN_source_page_changed_before_retry')
+                timeout=allowance(1.0 if attempt==0 else 3.0)
+                row={'attempt':attempt+1,'timeout_ms':timeout}
+                fact['attempts'].append(row)
+                started=time.monotonic()
+                try:
+                    raw=workflow_call('MN.capture.screenshot',page.screenshot,locals(),
+                        type='jpeg',quality=80,full_page=True,timeout=timeout)
+                    row['outcome']='captured'
+                    if time.monotonic()>=stop:
+                        raise TimeoutError('MN_capture_allowance_exhausted')
+                    fact['outcome']='captured'
+                    return raw
+                except (TimeoutError,PlaywrightTimeoutError):
+                    row['outcome']='timeout'
+                    if attempt:raise
+                finally:
+                    row['elapsed_seconds']=round(time.monotonic()-started,6)
+        except Exception as exc:
+            fact.update(outcome='failed',error_type=type(exc).__name__)
+            raise
+
     def page(self,page):
         """Capture before its existing context closes; do not navigate or scroll."""
         if self.state=='NJ' and getattr(self,'nj_unnumbered_capture_guard',False):return
@@ -810,12 +847,22 @@ class CaptureRun:
                         return
                     selected_timeout = max(1, int(min(3.0, remaining) * 1000))
             observed('screenshot')
-            raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=selected_timeout if selected_timeout is not None else min(1000,hi_timeout(.2)) if self.state=='HI' else ((co_timeout(1,5) if self.state=='CO' else ma_timeout(5) if self.state=='MA' else hi_timeout(.5) if self.state=='HI' else fl_timeout(.5) if fl_owned else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'AK','OK','ME'} or (self.state in {'WV','RI'} and hasattr(self,'page_capture_stop')) else 1000)))
+            mn_capture_end=None
+            if self.state=='MN' and selected is None:
+                mn_capture_end=min(time.monotonic()+3,DEADLINE.get()-1,
+                    getattr(self,'page_capture_stop',float('inf'))-1)
+                raw=self._mn_screenshot(page,original_url,text,mn_capture_end)
+            else:
+                raw=workflow_call('deployment/state_snapshots.py:page:463:16:screenshot',page.screenshot,locals(), type='jpeg',quality=80,full_page=True,timeout=selected_timeout if selected_timeout is not None else min(1000,hi_timeout(.2)) if self.state=='HI' else ((co_timeout(1,5) if self.state=='CO' else ma_timeout(5) if self.state=='MA' else hi_timeout(.5) if self.state=='HI' else fl_timeout(.5) if fl_owned else max(1,int(min(5.0,DEADLINE.get()-time.monotonic()-1,getattr(self,'page_capture_stop',float('inf'))-time.monotonic()-1)*1000)) if self.state in {'AK','OK','ME'} or (self.state in {'WV','RI'} and hasattr(self,'page_capture_stop')) else 1000)))
             if self.state=='WA' and workflow_call('deployment/state_snapshots.py:page:464:36:is_visible',page.locator('#loaderDiv').is_visible,locals()):
                 self.errors.append('WA_source_overlay_returned_during_capture');return trace_return('deployment/state_snapshots.py:page:465:80:return',None)
             observed('post_capture_binding')
-            if page.url!=original_url or workflow_call('deployment/state_snapshots.py:page:467:41:inner_text',page.inner_text,locals(), 'body',timeout=co_timeout(0,2) if self.state=='CO' else ma_timeout(2) if self.state=='MA' else hi_timeout() if self.state=='HI' else fl_timeout() if fl_owned else 400)[:20000]!=text:
+            if mn_capture_end is not None and time.monotonic()>=mn_capture_end:
+                raise TimeoutError('MN_capture_allowance_exhausted')
+            if page.url!=original_url or workflow_call('deployment/state_snapshots.py:page:467:41:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int(min(.4,mn_capture_end-time.monotonic())*1000)) if mn_capture_end is not None else co_timeout(0,2) if self.state=='CO' else ma_timeout(2) if self.state=='MA' else hi_timeout() if self.state=='HI' else fl_timeout() if fl_owned else 400)[:20000]!=text:
                 self.errors.append('source_page_changed_during_capture');return trace_return('deployment/state_snapshots.py:page:468:73:return',None)
+            if mn_capture_end is not None and time.monotonic()>=mn_capture_end:
+                raise TimeoutError('MN_capture_allowance_exhausted')
             if ak_empty is not None:
                 if ak_empty_controls(page,self,text)!=ak_empty:
                     self.errors.append('AK_empty_criteria_changed_during_capture');return trace_return('deployment/state_snapshots.py:page:471:83:return',None)
