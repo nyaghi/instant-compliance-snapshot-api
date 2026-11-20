@@ -11,6 +11,7 @@ _UNRESOLVED = {'Site Not Reachable', 'Unable to Confirm', 'Unable to Verify',
 _DEADLINES = {'OR_SOURCE_TIME_LIMIT', 'WI_SOURCE_ALLOWANCE_EXHAUSTED',
               'RI_LOOKUP_TIMEOUT', 'NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT'}
 _SOURCE_ERRORS = {
+    'NH_DATASET_UNAVAILABLE', 'AR_SOURCE_MAINTENANCE',
     'OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED',
     'DC_LICENSE_SOURCE_UNREACHABLE', 'WI_SOURCE_UNREACHABLE',
     'ME_SOURCE_APPLICATION_ERROR', 'FL_CERTIFICATE_ERROR',
@@ -102,6 +103,10 @@ def apply(data):
         'source_error': 'The registry returned an error or its search could not be opened.',
         'transport_error': 'The registry connection failed or did not respond in time.',
     }[fact['kind']]
+    if data.get('status_reason') == 'AR_SOURCE_MAINTENANCE':
+        explanation = 'Arkansas reports scheduled registry maintenance. CharityClarity stopped searching.'
+    elif data.get('status_reason') == 'NH_DATASET_UNAVAILABLE':
+        explanation = 'The verified New Hampshire registry download is unavailable or needs refresh.'
     # Do not claim the entire site is down, nor publish raw exception payloads.
     data['comments'] = explanation + ' No registration status was established. Retry this state later.'
     return data

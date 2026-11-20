@@ -45,8 +45,10 @@ class PdfGuardrails(unittest.TestCase):
 
     def test_nh_documented_nameless_row_is_review_only(self):
         nameless = ['2652', '', 'G', '11/15/2026']
+        # The reviewed source cells are unchanged in a newer weekly PDF.
+        self.assertEqual(c.nh_record_from_cells(nameless, source_digest='different PDF')['registry_name'], '')
         with self.assertRaisesRegex(ValueError, 'identity'):
-            c.nh_record_from_cells(nameless, source_digest='different PDF')
+            c.nh_record_from_cells(['2652', '', 'G', '5/15/2027'], source_digest='different PDF')
         with self.assertRaisesRegex(ValueError, 'identity'):
             c.nh_record_from_cells(['2653', *nameless[1:]], source_digest=c.NH_NAMELESS_ROW_PDF_SHA256)
         record = c.nh_record_from_cells(nameless, source_digest=c.NH_NAMELESS_ROW_PDF_SHA256)

@@ -33174,9 +33174,11 @@ def nh_record_from_cells(cells: list[str], *, source_digest: str = "") -> dict:
     if len(cells) != 4:
         raise ValueError("NH registration row has an unexpected number of fields")
     registry_id, registry_name, status_code, due_raw = [re.sub(r"\s+", " ", str(value or "")).strip() for value in cells]
+    # This reviewed, unnamed row remains unmatchable. Bind the exception to its
+    # exact source cells, not the checksum of all other 14,000 registrations:
+    # unrelated weekly updates must not invalidate every named organization.
     known_nameless_row = (
-        source_digest == NH_NAMELESS_ROW_PDF_SHA256
-        and (registry_id, registry_name, status_code, due_raw) == ("2652", "", "G", "11/15/2026")
+        (registry_id, registry_name, status_code, due_raw) == ("2652", "", "G", "11/15/2026")
     )
     if ((registry_id and not re.fullmatch(r"\d{1,6}", registry_id))
             or (not registry_name and not known_nameless_row) or "(cid:" in registry_name):
@@ -33308,27 +33310,15 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
 
 
 def nh_live_pdf_records() -> tuple[list[dict], str]:
-    global NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_LOADED_AT, NH_LIVE_PDF_UPDATED_LABEL
     if weekly_asset("NH", "downloadable-data/NH-records.json") is not None:
         records, label = nh_download_live_pdf_records()
         if len(records) < 1000:
             raise RuntimeError("New Hampshire PDF was empty or incomplete; registration cannot be determined")
         return records, label
-    now = time.time()
-    if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS and weekly_asset("NH", "registered-charities.pdf") is not None:
-        return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
-    with NH_LIVE_PDF_LOCK:
-        now = time.time()
-        if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS and weekly_asset("NH", "registered-charities.pdf") is not None:
-            return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
-        records, updated_label = nh_download_live_pdf_records()
-        if len(records) < 1000:
-            raise RuntimeError("New Hampshire PDF was empty or incomplete; registration cannot be determined")
-        if records:
-            NH_LIVE_PDF_RECORDS = records
-            NH_LIVE_PDF_LOADED_AT = now
-            NH_LIVE_PDF_UPDATED_LABEL = updated_label
-    return NH_LIVE_PDF_RECORDS or [], NH_LIVE_PDF_UPDATED_LABEL
+    # Full-document extraction belongs to the weekly refresh, never a customer
+    # lookup. An expired/missing parsed asset must fail promptly without a new
+    # 440-page parse for every organization (or reuse of stale statuses).
+    raise RuntimeError("NH verified weekly source is unavailable; refresh required")
 
 
 def nh_registry_name_from_live_body(body: str) -> str:
@@ -33376,6 +33366,7 @@ def search_nh_live_pdf(org):
         records, updated_label = nh_live_pdf_records()
     except Exception as exc:
         result.status = "Site Not Reachable"
+        result.status_reason = "NH_DATASET_UNAVAILABLE"
         result.raw_status_text = f"NH live PDF fetch failed: {exc}"
         result.source_note = "The New Hampshire registered-charities PDF could not be loaded for this lookup."
         result.success = False
@@ -36202,6 +36193,24 @@ def ar_institution_name_reviewable(candidate_name: str, original_name: str, ein:
     return False
 
 
+def ar_maintenance_notice(body: str) -> bool:
+    return bool(re.search(r"Maintenance\s+Alert\s*:", body, re.I)
+                and re.search(r"temporarily\s+unavailable.*scheduled\s+maintenance", body, re.I | re.S)
+                and re.search(r"Normal\s+operations\s+will\s+resume", body, re.I))
+
+
+def ar_record_maintenance(result, body: str) -> bool:
+    if not ar_maintenance_notice(body):
+        return False
+    result.status = "Site Not Reachable"
+    result.status_reason = "AR_SOURCE_MAINTENANCE"
+    result.raw_status_text = "Arkansas public charity search displays scheduled maintenance"
+    result.source_note = re.sub(r"\s+", " ", body).strip()[:1200]
+    result.error = "AR registry scheduled maintenance"
+    result.success = False
+    return True
+
+
 def ar_wait_for_search_form(page, timeout_ms: int) -> bool:
     deadline = time.perf_counter() + max(1.0, timeout_ms / 1000.0)
     while time.perf_counter() < deadline:
@@ -36213,7 +36222,7 @@ def ar_wait_for_search_form(page, timeout_ms: int) -> bool:
             pass
         try:
             body = registry_page_body(page)
-            if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront", body, re.I):
+            if ar_maintenance_notice(body) or re.search(r"403\s+ERROR|request could not be satisfied|cloudfront", body, re.I):
                 return False
         except Exception:
             pass
@@ -36452,6 +36461,8 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
             observed["form_navigation_seconds"] = round(time.perf_counter() - observation_started, 6)
             if not ar_wait_for_search_form(page, nav_timeout_ms):
                 body = registry_page_body(page)
+                if ar_record_maintenance(result, body):
+                    return result
                 if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
                     result.status = "Site Not Reachable"
                     result.raw_status_text = "Arkansas public charity search returned a bot-verification or block page"
@@ -36461,6 +36472,9 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                     return result
                 raise RuntimeError("Arkansas search form did not become visible")
             body = registry_page_body(page)
+            if (ar_maintenance_notice(body) and not page.locator('input[name="name"]').count()
+                    and ar_record_maintenance(result, body)):
+                return result
             if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
                 result.status = "Site Not Reachable"
                 result.raw_status_text = "Arkansas public charity search returned a bot-verification or block page"
@@ -36483,6 +36497,9 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
             ar_wait_for_bound_result(page, variant, min(600, max(0, int((deadline - time.perf_counter()) * 1000))))
             observed["settle_wait_seconds"] = round(time.perf_counter() - phase_started, 6)
             body = registry_page_body(page)
+            if (ar_maintenance_notice(body) and not re.search(r"Registration\s+Date|No\s+Results\s+Found", body, re.I)
+                    and ar_record_maintenance(result, body)):
+                return result
             if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
                 result.status = "Site Not Reachable"
                 result.raw_status_text = "Arkansas public charity search returned a bot-verification or block page after submit"
@@ -36970,6 +36987,9 @@ def search_ar_serialized(page, org):
                     time.sleep(AR_TRANSIENT_RETRY_DELAY_SECONDS)
             result = search_ar_name_variants_once(page, org)
             last_result = result
+            if getattr(result, "status_reason", "") == "AR_SOURCE_MAINTENANCE":
+                AR_LAST_LOOKUP_FINISHED = time.perf_counter()
+                return result
             if lab_sales_ar_access_block_is_terminal(result) or not ar_transient_unreachable_result(result):
                 AR_LAST_LOOKUP_FINISHED = time.perf_counter()
                 return result

@@ -83,13 +83,8 @@ def refresh_nh(server_module, dry_run: bool) -> dict[str, object]:
     changed = checksum != old_checksum
     label = pdf_updated_label(pdf_bytes)
     # Parse exactly the bytes just downloaded, before replacing a deployed asset.
-    from unittest.mock import patch
-    import io
     server_module.NH_LIVE_PDF_RECORDS = None
-    with patch.object(server_module, "weekly_asset", return_value=None), patch.object(
-        server_module.urllib.request, "urlopen", return_value=io.BytesIO(pdf_bytes)
-    ):
-        records, parsed_label = server_module.nh_live_pdf_records()
+    records, parsed_label = server_module.nh_parse_pdf_table_records(pdf_bytes)
     if len(records) < 1000:
         raise RuntimeError(f"NH parser returned suspiciously few records: {len(records)}")
     if not dry_run:
