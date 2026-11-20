@@ -147,6 +147,11 @@
     }
     if (!P.validId(m.lookup_id)) return;
     const active=P.TRIAL_ORIGIN?trialJobs.get(m.lookup_id):singleActive;
+    // A failed MS lookup has lost its admitted transport. Never reinterpret
+    // its continuation as New York; the page must explicitly reacquire MS.
+    if (!active && ORIGIN === P.TRIAL_ORIGIN && m.action === "search" && m.query?.state === "MS") {
+      reply(m.id, {ok:false,reason:"NY_CONNECTOR_INVALID_SEQUENCE"}); return;
+    }
     if (m.action === "finish") {
       if (active?.lookupId === m.lookup_id) {
         active.finishId = m.id;

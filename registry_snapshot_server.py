@@ -10231,6 +10231,7 @@ def final_four_connector_request(payload, origin):
     action = payload.get("action")
     now = time.time()
     specific_nc_fresh_transport = False
+    ms_fresh_transport = False
     if action == "start":
         state, name, ein = payload.get("state"), payload.get("organization_name"), payload.get("ein")
         mode = payload.get("mode", "standard")
@@ -10345,9 +10346,11 @@ def final_four_connector_request(payload, origin):
             if ms_probe_failed:
                 record["ms_skip_probe"] = True
                 record["pending"] = None
+                ms_fresh_transport = True
             elif recovery:
                 record["ms_search_recovery"] = recovery
                 record["pending"] = None
+                ms_fresh_transport = True
             elif nc_specific_name_recovery(record, payload, now):
                 record["pending"] = None
                 specific_nc_fresh_transport = True
@@ -10446,6 +10449,11 @@ def final_four_connector_request(payload, origin):
             # recovery protocol must admit the replacement before its query.
             response["recovery"] = {"action": "fresh_browser", "attempt": 1,
                                     "reason": record["nc_specific_name_recovery"]["reason"]}
+        if ms_fresh_transport:
+            # A failed MS worker closes its transport. Admit a replacement as
+            # Mississippi before sending the existing signed continuation.
+            response["recovery"] = {"action": "fresh_browser", "attempt": 1,
+                                    "reason": reason}
         try:
             response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"]-time.time())),
                             lookup_remaining_ms=max(0, int((record["expires"]-time.time())*1000)))
