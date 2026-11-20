@@ -62,6 +62,12 @@ class AvailabilityTests(unittest.TestCase):
         with patch.object(c,'registry_page_body',return_value=NOTICE):
             self.assertTrue(c.ar_wait_for_search_form(page,100))
 
+    def test_ar_note_excludes_appended_source_html(self):
+        result=c.checker.StateResult('YWCA','131624103','AR','Unknown',c.AR_SEARCH_URL)
+        self.assertTrue(c.ar_record_maintenance(result,NOTICE+'<!DOCTYPE html><html><script>internalSource()</script></html>'))
+        self.assertEqual(result.source_note,NOTICE)
+        self.assertNotIn('internalSource',result.source_note)
+
     def test_ar_no_results_or_unrelated_maintenance_words_are_not_an_outage(self):
         for body in ['Back to Search Form No Results Found','Charity: Maintenance Alert Foundation',
                      'Maintenance Alert: future maintenance is planned. Search charities now.']:

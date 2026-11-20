@@ -36205,7 +36205,11 @@ def ar_record_maintenance(result, body: str) -> bool:
     result.status = "Site Not Reachable"
     result.status_reason = "AR_SOURCE_MAINTENANCE"
     result.raw_status_text = "Arkansas public charity search displays scheduled maintenance"
-    result.source_note = re.sub(r"\s+", " ", body).strip()[:1200]
+    # registry_page_body also includes source HTML. Publish only the visible
+    # maintenance sentence, never the appended document markup.
+    text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", body))).strip()
+    notice = re.search(r"Maintenance\s+Alert\s*:.*?Normal\s+operations\s+will\s+resume[^.]*\.", text, re.I)
+    result.source_note = notice.group(0) if notice else "Arkansas reports scheduled maintenance. Retry after the registry reopens."
     result.error = "AR registry scheduled maintenance"
     result.success = False
     return True
