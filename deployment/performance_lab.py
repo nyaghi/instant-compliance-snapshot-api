@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from deployment.lab_identity import configured_lab_origin, trial_identity, trial_access_expired, TRIAL_RELEASE_LABEL
 
+# Temporary staging-only causal experiment. Restore exact SC after controls.
+TN_EXTENSION_DIAGNOSTIC_OFF = True
 LAB_ORIGIN = configured_lab_origin()
 LAB_SERVICE_ID = 'srv-d8u0hsu7r5hc73aqfsg0'
 DISABLED_CONNECTIONS = (
@@ -173,7 +175,7 @@ def final_four_asset(name, text):
         text = text.replace(old, new)
     if name == 'index.html':
         import re
-        if os.environ.get('CE_PERMANENT_STAGING') == '1':
+        if os.environ.get('CE_PERMANENT_STAGING') == '1' and not TN_EXTENSION_DIAGNOSTIC_OFF:
             replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RZ"><script src="/tn-extension-portal-rehearsal.js?v=29.2RZ"></script><script src="/tn-extensions-demo.js?v=29.2RZ"></script></body>')
             replace('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCTennesseeExtensions?.render(results);')
         replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
@@ -711,7 +713,7 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
     class LabHandler(master.RegistrySnapshotHandler):
         def _send_json(self, status_code, payload, extra_headers=None):
             from deployment.lab_capacity import REQUEST_TIMING
-            if (os.environ.get('CE_PERMANENT_STAGING')=='1' and self.path=='/api/final-four-connector'
+            if (not TN_EXTENSION_DIAGNOSTIC_OFF and os.environ.get('CE_PERMANENT_STAGING')=='1' and self.path=='/api/final-four-connector'
                     and status_code==200 and isinstance(payload,dict) and payload.get('phase')=='complete'
                     and isinstance(payload.get('result'),dict) and payload['result'].get('state')=='TN'):
                 from deployment.tn_extension_refresh import issue_public_proof
@@ -779,6 +781,8 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
             if include_body: self.wfile.write(body)
 
         def _get(self, include_body):
+            if TN_EXTENSION_DIAGNOSTIC_OFF and urlparse(self.path).path.startswith('/api/tn-extension'):
+                return self._send_json(503, {'error':'Tennessee extension pilot disabled for timing comparison.'})
             if self.path in ('/health', '/healthz'):
                 return self._send_healthz(include_body)
             # This empty test form contains no credentials or results. Its API
@@ -880,6 +884,8 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
         def do_HEAD(self): return self._get(False)
 
         def do_POST(self):
+            if TN_EXTENSION_DIAGNOSTIC_OFF and urlparse(self.path).path.startswith('/api/tn-extension'):
+                return self._send_json(503, {'error':'Tennessee extension pilot disabled for timing comparison.'})
             if alerts is not None and os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity() and self.path == '/api/tn-extension-source':
                 from deployment.tn_extension_refresh import handle_source
                 return handle_source(alerts,master,self,LAB_ORIGIN)

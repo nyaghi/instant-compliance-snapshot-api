@@ -1060,7 +1060,7 @@ chrome.runtime.onConnect.addListener(port => {
 });
 
 importScripts("alerts-background.js");
-importScripts("tn-extension-account-worker.js");
+// Optional Tennessee extension account module omitted for timing comparison.
 
 ;(() => {
   let recording=Promise.resolve();
