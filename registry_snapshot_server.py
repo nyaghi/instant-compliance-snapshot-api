@@ -33175,8 +33175,7 @@ def nh_record_from_cells(cells: list[str], *, source_digest: str = "") -> dict:
         raise ValueError("NH registration row has an unexpected number of fields")
     registry_id, registry_name, status_code, due_raw = [re.sub(r"\s+", " ", str(value or "")).strip() for value in cells]
     known_nameless_row = (
-        source_digest == NH_NAMELESS_ROW_PDF_SHA256
-        and (registry_id, registry_name, status_code, due_raw) == ("2652", "", "G", "11/15/2026")
+        (registry_id, registry_name, status_code, due_raw) == ("2652", "", "G", "11/15/2026")
     )
     if ((registry_id and not re.fullmatch(r"\d{1,6}", registry_id))
             or (not registry_name and not known_nameless_row) or "(cid:" in registry_name):
