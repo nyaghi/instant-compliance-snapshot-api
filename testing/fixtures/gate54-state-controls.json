@@ -1,0 +1,565 @@
+{
+  "scope": "70 distinct recorded organization inputs/outcomes. Edge responses, identities, timing and failures in regression tests are synthetic; not70 live searches.",
+  "cases": [
+    {
+      "name": "ASSOCIATION OF UNIVERSITIES FOR RESEARCH IN ASTRONOMY, INC",
+      "ein": "86-0138043",
+      "source_export": "outputs\\gate45-20261113\\01-association-of-universities\\export.xlsx",
+      "source_sha256": "2757c554b766178bab6e047be8516740e851333ce5b20fc0635d3a09273b90a8",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "AUGUSTANA COLLEGE",
+      "ein": "36-2166962",
+      "source_export": "outputs\\gate45-20261113\\02-augustana-college\\export.xlsx",
+      "source_sha256": "cd33220a0bf6c970291673dce7f170718f17fe2dcb002b69c6b879c20c367019",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "BAYLOR COLLEGE OF MEDICINE",
+      "ein": "74-1613878",
+      "source_export": "outputs\\gate45-20261113\\06-baylor-college-of\\export.xlsx",
+      "source_sha256": "5c0ae16c36a1046b8762ea7037803de4de0802b5d69c025ce1b4b4858025eb35",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "BAYLOR UNIVERSITY",
+      "ein": "74-1159753",
+      "source_export": "outputs\\gate45-20261113\\07-baylor-university\\export.xlsx",
+      "source_sha256": "37c0c3d72d490acb159eae6ab308ed84dc114b09347b9e230926b017cb9d761d",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "BEREA COLLEGE",
+      "ein": "61-0444650",
+      "source_export": "outputs\\gate45-20261113\\08-berea-college\\export.xlsx",
+      "source_sha256": "bfc309cab9b0e9d987ed501654d3ec81c64ed0fe3274d18cc2b805b158f12e3a",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "BETH ISRAEL MEDICAL CENTER",
+      "ein": "13-5564934",
+      "source_export": "outputs\\gate45-20261113\\09-beth-israel-medical\\export.xlsx",
+      "source_sha256": "ce44a587036757babd359b157e6285fc9afeaa3a4c6833f4bdce565055686c21",
+      "recorded_RI_status": "Pending",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "BLOOD CANCER UNITED, INC.",
+      "ein": "13-5644916",
+      "source_export": "outputs\\gate46-20261113\\01-blood-cancer-united-inc\\export.xlsx",
+      "source_sha256": "8db7ef2cd09f0cdf93edf206be3bdba6bb767fac3e03c6447a2aa72a54032c5b",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "BNY MELLON CHARITABLE GIFT FUND",
+      "ein": "30-0748315",
+      "source_export": "outputs\\gate46-20261113\\02-bny-mellon-charitable-gift-fund\\export.xlsx",
+      "source_sha256": "c313e572f0bdd0a2c6bf7083e40ebc0b171df89f33c341c06176324c2fc88c62",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "BOSTON FOUNDATION, INC.",
+      "ein": "04-2104021",
+      "source_export": "outputs\\gate46-20261113\\03-boston-foundation-inc\\export.xlsx",
+      "source_sha256": "43f5ef8c1417f8bb7487d548814ecf853b4292e7e1aee963c6c8746f2b408a6d",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "BREAKTHROUGH T1D",
+      "ein": "23-1907729",
+      "source_export": "outputs\\gate46-20261113\\04-breakthrough-t1d\\export.xlsx",
+      "source_sha256": "0665a626bfa2c90f49f353c86f93cc6efcee5fbc23e563823c9340c0c9c3352e",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Current"
+    },
+    {
+      "name": "BROWN UNIVERSITY",
+      "ein": "05-0258809",
+      "source_export": "outputs\\gate46-20261113\\05-brown-university\\export.xlsx",
+      "source_sha256": "717c3b29b5e5efd31d9044e3e380b11c82faf5ad9b2961cdc07e9012690ca93d",
+      "recorded_RI_status": "Closed / Withdrawn / Canceled / Inactive",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "BRYANT UNIVERSITY",
+      "ein": "05-0258810",
+      "source_export": "outputs\\gate46-20261113\\06-bryant-university\\export.xlsx",
+      "source_sha256": "9c39ae263601337cb40fb9469e3ce21616a30a371a6163f21257a8be0f4af45e",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "BRYN MAWR COLLEGE",
+      "ein": "23-1352621",
+      "source_export": "outputs\\gate46-20261113\\07-bryn-mawr-college\\export.xlsx",
+      "source_sha256": "a717b77004f7389ea385e2a2f85cad1e90f4e14e467eb5a6b108c4296c47cc00",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "BUCKNELL UNIVERSITY",
+      "ein": "24-0772407",
+      "source_export": "outputs\\gate46-20261113\\08-bucknell-university\\export.xlsx",
+      "source_sha256": "8f70f063f0f2909617722d1559707c2b1a2762c95275768da82bf72eed289805",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "CALIFORNIA BAPTIST UNIVERSITY",
+      "ein": "95-1890710",
+      "source_export": "outputs\\gate46-20261113\\09-california-baptist-university\\export.xlsx",
+      "source_sha256": "eb4e692a065edc53bf701e892154575965ebc91eb661f559c8abf11b32cc0c2a",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "CALIFORNIA COMMUNITY FOUNDATION",
+      "ein": "95-3510055",
+      "source_export": "outputs\\gate46-20261113\\10-california-community-foundation\\export.xlsx",
+      "source_sha256": "aec11387edccbcc08d59a430b29ef9105d78798f5c386cccba377cd1f3798b4a",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "CALIFORNIA LUTHERAN UNIVERSITY",
+      "ein": "95-2962604",
+      "source_export": "outputs\\gate47-20261113\\01-california-lutheran-university\\export.xlsx",
+      "source_sha256": "a12042ba38cf4eadbac41d56a2f911cf35d12893e1d51670e28f9eb5f6e214c4",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Review required"
+    },
+    {
+      "name": "CARNEGIE MELLON UNIVERSITY",
+      "ein": "25-0969449",
+      "source_export": "outputs\\gate47-20261113\\02-carnegie-mellon-university\\export.xlsx",
+      "source_sha256": "217853f0c0762e30fe247a03d6ba8fac5ecb1476cdb5e25e3a481bd5c90e90e3",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "CASE WESTERN RESERVE UNIVERSITY",
+      "ein": "34-1018992",
+      "source_export": "outputs\\gate47-20261113\\03-case-western-reserve-university\\export.xlsx",
+      "source_sha256": "566863eeed162f4ad287ae394cf8813bf356faf5e9564717ba28f1234e554e90",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "CATHOLIC RELIEF SERVICES-UNITED STATES CONFERENCE OF CATHOLIC BISHOPS",
+      "ein": "13-5563422",
+      "source_export": "outputs\\gate47-20261113\\04-catholic-relief-services-united-states-conference-of-catholic-bishops\\export.xlsx",
+      "source_sha256": "5739da50c95d4e5e11f3daa0f4ebd04f064cdb3dac3cd510b1e0b3532198a553",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "CATHOLIC UNIVERSITY OF AMERICA (THE)",
+      "ein": "53-0196583",
+      "source_export": "outputs\\gate47-20261113\\05-catholic-university-of-america-the\\export.xlsx",
+      "source_sha256": "4ffe741f244162a90f87b6b7413a2474e1fd3f548db8d2c554dd7a0ab775ce61",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "CEDARS-SINAI MEDICAL CENTER",
+      "ein": "95-1644600",
+      "source_export": "outputs\\gate47-20261113\\06-cedars-sinai-medical-center\\export.xlsx",
+      "source_sha256": "fdb9d2fe35712d3c244fc7ae275711dd8c3f324ce4fd29e74ab675829086b4c5",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHALLENGE AIR FOR KIDS AND FRIENDS",
+      "ein": "75-2559486",
+      "source_export": "outputs\\gate47-20261113\\07-challenge-air-for-kids-and-friends\\export.xlsx",
+      "source_sha256": "b81420f357858f60ab30deee3d33e62b8f0ac7a22c66c8efa70b97fa49ad03ed",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "CHAPMAN UNIVERSITY",
+      "ein": "95-1643992",
+      "source_export": "outputs\\gate47-20261113\\08-chapman-university\\export.xlsx",
+      "source_sha256": "dddb12535c80c0b738fa15c90159d34fbaef979e54c2bb461da122fc0f06da26",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "CHARITIES AID FOUNDATION AMERICA",
+      "ein": "43-1634280",
+      "source_export": "outputs\\gate47-20261113\\09-charities-aid-foundation-america\\export.xlsx",
+      "source_sha256": "ca5dffb7dc5ff8710b50517e519d9e7925dff6babf4298683000a26e8a7be0c4",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHICANOS POR LA CAUSA, INC.",
+      "ein": "86-0227210",
+      "source_export": "outputs\\gate47-20261113\\10-chicanos-por-la-causa-inc\\export.xlsx",
+      "source_sha256": "b453204094fb8f633f75cbafce6ec96f4574fa0625a97bf2d5a4ce4d957f93b0",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "CHILD WELFARE LEAGUE OF AMERICA, INC.",
+      "ein": "13-1641066",
+      "source_export": "outputs\\gate48-20261113\\01-child-welfare-league-of-america-inc\\export.xlsx",
+      "source_sha256": "cb9f7220ddb804eb5a72cc60d260ea546b63395ece91e3ee9c065ce432576916",
+      "recorded_RI_status": "Pending",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "CHILDREN'S HEALTHCARE OF ATLANTA FOUNDATION, INC.",
+      "ein": "58-1710601",
+      "source_export": "outputs\\gate48-20261113\\02-children-s-healthcare-of-atlanta-foundation-inc\\export.xlsx",
+      "source_sha256": "2e9178b4e324a79257ee81459a1d4c4c5346c2d8b493fc32b596fa8e38e445e6",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHILDREN'S HOSPITAL CORPORATION",
+      "ein": "04-2774441",
+      "source_export": "outputs\\gate48-20261113\\03-children-s-hospital-corporation\\export.xlsx",
+      "source_sha256": "31c8247a943e58385810d1389b3744f02be4d8c67dfd60dfdeae9d64be8daae4",
+      "recorded_RI_status": "Review required",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHILDREN'S HOSPITAL MEDICAL CENTER",
+      "ein": "31-0833936",
+      "source_export": "outputs\\gate48-20261113\\04-children-s-hospital-medical-center\\export.xlsx",
+      "source_sha256": "3bf24dab2843956ae5e9663d062835ee5c86209e1e0e8acd238895f64423265a",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "CHILDREN'S HOSPITAL OF THE KING'S DAUGHTERS",
+      "ein": "54-0506321",
+      "source_export": "outputs\\gate48-20261113\\05-children-s-hospital-of-the-king-s-daughters\\export.xlsx",
+      "source_sha256": "169a75d840f5bf21dd12fff05f4a4094a70c23c2bb7ce60645397a772be5a93b",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "CHILDREN'S HUNGER FUND",
+      "ein": "95-4335462",
+      "source_export": "outputs\\gate48-20261113\\06-children-s-hunger-fund\\export.xlsx",
+      "source_sha256": "58bafaa95ff81746892d614da06af2db548cc5b24d45b3235d9af372d37c48f4",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Current"
+    },
+    {
+      "name": "CHILDREN'S MEDICAL CENTER FOUNDATION",
+      "ein": "75-2062015",
+      "source_export": "outputs\\gate48-20261113\\07-children-s-medical-center-foundation\\export.xlsx",
+      "source_sha256": "aa39e615a4ee0a62ab3af84a1ae98c144dc51868104743675ac3a5d5d716a981",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHRISTIAN APPALACHIAN PROJECT, INC.",
+      "ein": "61-0661137",
+      "source_export": "outputs\\gate48-20261113\\08-christian-appalachian-project-inc\\export.xlsx",
+      "source_sha256": "9f64d4e5c1200f5398335591f158abe491b82995bd26c3791a82835e2f545f50",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHRISTIAN HEALTHCARE MINISTRIES, INC.",
+      "ein": "34-1964742",
+      "source_export": "outputs\\gate48-20261113\\09-christian-healthcare-ministries-inc\\export.xlsx",
+      "source_sha256": "842d84a49896b47bcc11c34e4a934c4ad2802fd3e1d8ce5c0e647113ebd59329",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "CHRONIC DISEASE FUND, INC.",
+      "ein": "61-1462062",
+      "source_export": "outputs\\gate48-20261113\\10-chronic-disease-fund-inc\\export.xlsx",
+      "source_sha256": "3dccf7471bc81a444a51a704fdb19ad187d12283898641dd8f0c59e19c88b665",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Current"
+    },
+    {
+      "name": "DEPAUL UNIVERSITY",
+      "ein": "36-2167048",
+      "source_export": "outputs\\gate50-20261117\\07-depaul-university\\export.xlsx",
+      "source_sha256": "ce34ca451a2f44de064bf942abff093a2342f9dae9dbaea1c4331eaf5812287a",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "DEPAUW UNIVERSITY",
+      "ein": "35-0869045",
+      "source_export": "outputs\\gate50-20261117\\08-depauw-university\\export.xlsx",
+      "source_sha256": "e7d21788a570da10cbdb2c222502d660d5c3039d643089f2bd2b333b4df39301",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "DIALYSIS CLINIC INC",
+      "ein": "62-0850498",
+      "source_export": "outputs\\gate50-20261117\\09-dialysis-clinic\\export.xlsx",
+      "source_sha256": "db00f44b54e7ed6c67488338c63b2d657dae80f24dc670ba1a04091e3c531f43",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "DICKINSON COLLEGE",
+      "ein": "23-1365954",
+      "source_export": "outputs\\gate50-20261117\\10-dickinson-college\\export.xlsx",
+      "source_sha256": "6554e21d1fead2af19bee3b58572d76dedff25fbc04487ec28ef5365206476b5",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "DANA-FARBER CANCER INSTITUTE, INC.",
+      "ein": "04-2263040",
+      "source_export": "outputs\\gate50-20261117\\FINAL-DANA-EXPORT.xlsx",
+      "source_sha256": "2f2bc355af1fc528e15a381d284c57e22ea4a8fd9968543c070193a4fce5ff6a",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "DISABLED AMERICAN VETERANS",
+      "ein": "31-0263158",
+      "source_export": "outputs\\gate51-20261117\\01-disabled-american-veterans\\export.xlsx",
+      "source_sha256": "f7f163018d9adc27da5678b9a6992fd628de723c5d8b91de0268972d0dab550f",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Review required"
+    },
+    {
+      "name": "DREXEL UNIVERSITY",
+      "ein": "23-1352630",
+      "source_export": "outputs\\gate51-20261117\\02-drexel-university\\export.xlsx",
+      "source_sha256": "dc4471777e527328e03a12496eac24224d64438beebd7d6013ed18d3b7c1c066",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "DUKE UNIVERSITY HEALTH SYSTEM, INC.",
+      "ein": "56-2070036",
+      "source_export": "outputs\\gate51-20261117\\04-duke-health\\export.xlsx",
+      "source_sha256": "cb949787d0bab4996f174483ccf2e1e160dcb4b8c6c0a8f063eefb08fee0b89f",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "DUQUESNE UNIVERSITY OF THE HOLY SPIRIT",
+      "ein": "25-1035663",
+      "source_export": "outputs\\gate51-20261117\\05-duquesne-university\\export.xlsx",
+      "source_sha256": "ddf50dfc355ff5bb448184566eea17402e37d1f215f47386fde799643777ef9a",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "EDUCATIONAL MEDIA FOUNDATION",
+      "ein": "94-2816342",
+      "source_export": "outputs\\gate51-20261117\\06-educational-media-foundation\\export.xlsx",
+      "source_sha256": "fc904c61dba7f16bf2857e4cb1f4b33ebba78f9cfb8c2a91a1316167cd7ee81a",
+      "recorded_RI_status": "Pending",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "ELON UNIVERSITY",
+      "ein": "56-0532303",
+      "source_export": "outputs\\gate51-20261117\\07-elon-university\\export.xlsx",
+      "source_sha256": "27d9c2511b98c29815463817c47784aa9d871562f0dca3b28b8dfbdcc0a3de15",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "ELDERHOSTEL, INC. D/B/A ROAD SCHOLAR",
+      "ein": "04-2632526",
+      "source_export": "outputs\\gate51-20261117\\08-elderhostel\\export.xlsx",
+      "source_sha256": "664c6f51179bff67195b4fea723a114612aba0a329f5328561982d96b2ce0d97",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "EMBRY-RIDDLE AERONAUTICAL UNIVERSITY, INC.",
+      "ein": "59-0936101",
+      "source_export": "outputs\\gate51-20261117\\09-embry-riddle\\export.xlsx",
+      "source_sha256": "615f6b53b017c5a424d74a9b4115d9daa54663374d169fc808072f061b5158c5",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "EMORY UNIVERSITY",
+      "ein": "58-0566256",
+      "source_export": "outputs\\gate51-20261117\\10-emory-university\\export.xlsx",
+      "source_sha256": "843a76e2ec37e7c3a2e4918cd041ff568120d125e0e689ea8dad48dce268b6b8",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "United Service Organizations Inc.",
+      "ein": "13-1610451",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\05-control-uso\\export.xlsx",
+      "source_sha256": "8fdbfdc623493bb41e4f5caba8e32be18b52a7a4c0fcea351351d2e354a26873",
+      "recorded_RI_status": "Closed / Withdrawn / Canceled / Inactive",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "Stonestreet-Rone Post No 1983 Veterans of Foreign Wars of the United States",
+      "ein": "64-0517029",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\07-control-stonestreet\\export.xlsx",
+      "source_sha256": "d64a8c27e4a86c496a2e9a3f981f3ba0a0b3c84450d30c2527d8d14999845fae",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "Partnership for Civil Justice Fund",
+      "ein": "26-2851211",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\08-control-partnership\\export.xlsx",
+      "source_sha256": "426b1a3e13424a65975f3af9a399c0faad900b8f53540a63591a590cd43ede50",
+      "recorded_RI_status": "Pending",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "YWCA USA, Inc",
+      "ein": "13-1624103",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\09-control-ywca\\export.xlsx",
+      "source_sha256": "90ac47ac635c7620de772c52101b6c521419bf5a0fcbadf11fc340c1b751542b",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Current"
+    },
+    {
+      "name": "Northeast Hospital Corporation",
+      "ein": "04-2121317",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\10-control-northeast\\export.xlsx",
+      "source_sha256": "d43ceb0e64afc0ccb79ad29c6f6724cdf33b6e0c2784096ae3d3dabbd0d672ac",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "Annie E. Casey Foundation",
+      "ein": "52-1951681",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\13-control-casey\\export.xlsx",
+      "source_sha256": "d1987cc772e5aab428bd38f6fdcc3c4ba1dfcb0adeaff9a8fbc330f00a88372d",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "Society for Scholarly Publishing",
+      "ein": "52-1125072",
+      "source_export": "outputs\\gate51-20261117\\live-repair\\14-control-scholarly\\export.xlsx",
+      "source_sha256": "477e19bf073099b38a3b1b210348f4d9558a53749f77e5577a652547ff2b48e1",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "EMPLOYMENT POLICIES INSTITUTE FOUNDATION",
+      "ein": "52-1902264",
+      "source_export": "outputs\\gate52-20261117\\01-employment-policies-institute-foundation\\export.xlsx",
+      "source_sha256": "dcf3f4d59d7a9e4411a0c14434ee28fd7b502f63b2cda87bfe7ddb6d26867607",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "FATHER FLANAGAN'S BOYS' HOME",
+      "ein": "47-0376606",
+      "source_export": "outputs\\gate52-20261117\\02-father-flanagan-s-boys-home\\export.xlsx",
+      "source_sha256": "9a088f72d71b067b030326124a07825c0253a8d462c193bf5ad2a1c262744888",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Not Registered"
+    },
+    {
+      "name": "FELLOWSHIP OF CHRISTIAN ATHLETES",
+      "ein": "44-0610626",
+      "source_export": "outputs\\gate52-20261117\\03-fellowship-of-christian-athletes\\export.xlsx",
+      "source_sha256": "9d4620fd7ebdb372d75f0aeca83f24f13e5156c5947032971ba3ccb7ba6f9164",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "FIDELIS",
+      "ein": "20-2603413",
+      "source_export": "outputs\\gate52-20261117\\04-fidelis\\export.xlsx",
+      "source_sha256": "ecfbe2c00d52046bc61032b0a160ef3906052c6ebd7fa4125fba4ea764ac00ad",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "FIDELITY INVESTMENTS CHARITABLE GIFT FUND",
+      "ein": "11-0303001",
+      "source_export": "outputs\\gate52-20261117\\05-fidelity-investments-charitable-gift-fund\\export.xlsx",
+      "source_sha256": "7472cdf29e19d72ef9fcf91833a665127da5afcf87d1a0338036c3e96ee2c781",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Confirm match"
+    },
+    {
+      "name": "FOOD BANK FOR NEW YORK CITY",
+      "ein": "13-3179546",
+      "source_export": "outputs\\gate52-20261117\\06-food-bank-for-new-york-city\\export.xlsx",
+      "source_sha256": "8827446323c1b7e91d7721622cc385f6951ebecd27797828498b4f5afd01e2f5",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "FOUNDATION FOR CALIFORNIA COMMUNITY COLLEGES",
+      "ein": "68-0412350",
+      "source_export": "outputs\\gate52-20261117\\07-foundation-for-california-community-colleges\\export.xlsx",
+      "source_sha256": "58f0e96a4618cc6d045b4a8848e74d904c7afb5ab4febf81b1f76d4426335d95",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "FRANKLIN AND MARSHALL COLLEGE",
+      "ein": "23-1352635",
+      "source_export": "outputs\\gate52-20261117\\08-franklin-and-marshall-college\\export.xlsx",
+      "source_sha256": "3fd1a4de43613faa72214f9d1ccdb59b743c0ee610690ec3c0bb6293f799b33d",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "FRIENDS OF THE ISRAEL DEFENSE FORCES",
+      "ein": "13-3156445",
+      "source_export": "outputs\\gate52-20261117\\09-friends-of-the-israel-defense-forces\\export.xlsx",
+      "source_sha256": "55e2a0fd6a6dd685a05acade059c45a2026848dc0a2e164ea5c6904acf8d355e",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "GETTYSBURG COLLEGE",
+      "ein": "23-1352641",
+      "source_export": "outputs\\gate52-20261117\\10-gettysburg-college\\export.xlsx",
+      "source_sha256": "4ad4e6a787d913a936e8120c62d45db6c6b3e2f7defd99886c54ab05f61d2c68",
+      "recorded_RI_status": "Not Registered",
+      "recorded_TN_status": "Delinquent"
+    },
+    {
+      "name": "GLOBAL IMPACT",
+      "ein": "52-1273585",
+      "source_export": "outputs\\gate53-20261118\\user-first-five\\01-global-impact\\export.xlsx",
+      "source_sha256": "2b105934aefcdadf581c3869e90acb3f61e59cd7bd2b5c3489f2e706ef2ff6e0",
+      "recorded_RI_status": "Current",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "GOOD360",
+      "ein": "54-1282616",
+      "source_export": "outputs\\gate53-20261118\\user-first-five\\02-good360\\export.xlsx",
+      "source_sha256": "feb9abbe9b01d974264a048401cde8d373de84e9e932b92fd0fccb30bb0c14d4",
+      "recorded_RI_status": "Upcoming Filing",
+      "recorded_TN_status": "Upcoming Filing"
+    },
+    {
+      "name": "GRAND CANYON UNIVERSITY",
+      "ein": "47-2507725",
+      "source_export": "outputs\\gate53-20261118\\user-first-five\\03-grand-canyon\\export.xlsx",
+      "source_sha256": "5c8d0f2323722b0141d737ca37693dfb2e33fdcbba2e49a1de7d7c794dbb28ad",
+      "recorded_RI_status": "Pending",
+      "recorded_TN_status": "Not Registered"
+    }
+  ]
+}

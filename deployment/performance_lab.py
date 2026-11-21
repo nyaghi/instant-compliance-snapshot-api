@@ -384,7 +384,10 @@ def final_four_asset(name, text):
             const remaining=Math.floor(tennesseeRetryDeadline-performance.now());
             if(remaining>=40000) {
               trace("quiet Tennessee retry started",{state,reason:diagnostic.code,remaining_ms:remaining});
-              const timeout=AbortSignal.timeout(Math.min(60000,remaining));
+              // Queue admission, passive verification and the existing search
+              // plan share the original 120-second deadline. A second 60-second
+              // cutoff discarded in-time recovery after queue/verification waits.
+              const timeout=AbortSignal.timeout(remaining);
               const retrySignal=signal?AbortSignal.any([signal,timeout]):timeout;
               try {
                 const retry=await externalLookup(state,names,retrySignal);

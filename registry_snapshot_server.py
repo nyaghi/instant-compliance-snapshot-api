@@ -12023,6 +12023,10 @@ def search_dc(org):
         return result
 
 
+class RiSearchTooBroad(ValueError):
+    """A complete count exceeded the public search's bounded result limit."""
+
+
 def ri_charity_search(query, deadline, headers):
     from deployment.search_history import begin_source_query
     history_receipt=begin_source_query('RI',query,'Organization Name filter (source matching rule not specified)',RI_PUBLIC_SEARCH_API)
@@ -12036,7 +12040,10 @@ def ri_charity_search(query, deadline, headers):
                     or not isinstance(data.get("resultCount"), int) or data.get("message", {}).get("errors")):
                 raise ValueError("Rhode Island search response is incomplete")
             if expected is None: expected = data["resultCount"]
-            if expected != data["resultCount"] or expected > 1000: raise ValueError("Rhode Island result set is unstable or too broad")
+            if expected != data["resultCount"]:
+                raise ValueError("Rhode Island result set changed during pagination")
+            if expected > 1000:
+                raise RiSearchTooBroad("Rhode Island result set is too broad")
             batch = data["results"]
             if any(not re.fullmatch(r"C\d+", str(r.get("id", ""))) or not r.get("title") for r in batch):
                 raise ValueError("Rhode Island returned incomplete candidate identities")
@@ -12166,6 +12173,7 @@ def search_ri(org):
         planned = required + legal_probes + [value for value in fallback
                                             if value.casefold() not in {q.casefold() for q in required + legal_probes}]
         rows, seen = [], set()
+        broad_secondary_queries = []
         unresolved_foundation = None
         historical_foundations = []
         reviewed_keys = {complete_name_identity_key(value) for value in required}
@@ -12174,7 +12182,22 @@ def search_ri(org):
             if index >= len(required) + len(legal_probes) and rows:
                 selected, _ = select_licensed_charity(org, rows, "RI", deadline)
                 if selected: break
-            for candidate in ri_charity_search(query, deadline, headers):
+            try:
+                candidates = ri_charity_search(query, deadline, headers)
+            except RiSearchTooBroad:
+                # A broad alias is not a source outage and cannot erase a
+                # verified, currently usable primary credential. Continue the
+                # other legal/alias probes so a newer credential still wins.
+                # Historical, uncertain, conflicting and wrong-EIN rows never
+                # qualify. All other source/parser failures remain failures.
+                selected, _ = select_licensed_charity(org, rows, "RI", deadline)
+                if (index == 0 or selected is None
+                        or normalized_match_name(selected["name"]) != normalized_match_name(org.organization_name)
+                        or selected.get("status") not in {"Current", "Upcoming Filing", "Exempt", "Pending"}):
+                    raise
+                broad_secondary_queries.append(query)
+                continue
+            for candidate in candidates:
                 if candidate["id"] in seen: continue
                 seen.add(candidate["id"])
                 decision = score_candidate(org.organization_name, org.ein, {"name": candidate["title"]})
@@ -12223,6 +12246,10 @@ def search_ri(org):
                                        "organization could not be ruled out. Review the original record.")
             return result
         result = licensed_charity_result(org, "RI", rows, deadline, RI_PUBLIC_PORTAL)
+        if broad_secondary_queries and result.success:
+            result.source_note += (" The verified registration was retained. A secondary name search exceeded "
+                                   "the registry's 1,000-record review limit: "
+                                   + "; ".join(broad_secondary_queries) + ".")
         if result.status == "Not Registered" and historical_foundations:
             identifiers = ", ".join(historical_foundations)
             result.source_note += (f" Inactive foundation credentials {identifiers} had expired "

@@ -1,0 +1,73 @@
+[
+  {
+    "id": "C170837",
+    "contentColumns": null,
+    "contents": null,
+    "detailColumns": [
+      2,
+      1,
+      1
+    ],
+    "details": [
+      {
+        "id": null,
+        "label": "Credential Details",
+        "values": [
+          "Charitable Organization",
+          "CO.9905404",
+          "ACTIVE",
+          "10/02/2027",
+          "00170837"
+        ],
+        "size": null
+      }
+    ],
+    "headings": null,
+    "headingColumns": null,
+    "title": "Iona University",
+    "subtitle": "Organization",
+    "actions": [
+      {
+        "id": "btnViewC170837",
+        "name": "View",
+        "type": null,
+        "variant": null,
+        "emphasis": null,
+        "url": null,
+        "key": null,
+        "label": null,
+        "disabled": false,
+        "serviceType": null,
+        "data": null,
+        "form": null,
+        "route": "/search/C170837/detail",
+        "table": null,
+        "title": null,
+        "confirmations": [],
+        "card": null
+      }
+    ],
+    "formShape": null,
+    "chips": {
+      "label": "Matched On:",
+      "items": [
+        {
+          "color": "default",
+          "disabled": false,
+          "icon": null,
+          "id": "highlight.licenseType",
+          "label": "Credential Type",
+          "size": null
+        },
+        {
+          "color": "default",
+          "disabled": false,
+          "icon": null,
+          "id": "highlight.organizationName",
+          "label": "Organization Name",
+          "size": null
+        }
+      ]
+    }
+  }
+]

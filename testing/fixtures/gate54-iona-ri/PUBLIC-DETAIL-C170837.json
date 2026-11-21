@@ -1,0 +1,177 @@
+{
+  "id": "C170837",
+  "key": null,
+  "name": "Details for Iona University",
+  "mode": null,
+  "activeLocation": null,
+  "columns": null,
+  "tiles": [
+    {
+      "id": "0",
+      "key": null,
+      "name": null,
+      "description": null,
+      "type": null,
+      "disabled": false,
+      "image": null,
+      "sequence": 0,
+      "status": null,
+      "buttons": [],
+      "steps": [
+        {
+          "id": "1",
+          "key": null,
+          "name": "Summary",
+          "header": null,
+          "type": "FORM",
+          "referenceCode": null,
+          "sequence": null,
+          "contents": [
+            {
+              "id": null,
+              "formShape": null,
+              "initialValues": null,
+              "name": null,
+              "title": null,
+              "subtitle": null,
+              "type": null,
+              "message": null,
+              "columns": [
+                3,
+                2,
+                1
+              ],
+              "data": [
+                {
+                  "id": null,
+                  "label": "Credential",
+                  "type": null,
+                  "value": [
+                    "CO.9905404",
+                    "Charitable Organization",
+                    "Securities Regulation"
+                  ]
+                },
+                {
+                  "id": null,
+                  "label": "Status",
+                  "type": null,
+                  "value": [
+                    "ACTIVE"
+                  ]
+                },
+                {
+                  "id": null,
+                  "label": "Initial Credential Date",
+                  "type": null,
+                  "value": [
+                    "10/02/2024"
+                  ]
+                },
+                {
+                  "id": null,
+                  "label": "Expiration Date",
+                  "type": null,
+                  "value": [
+                    "10/02/2027"
+                  ]
+                }
+              ]
+            }
+          ],
+          "columns": null,
+          "message": null,
+          "showHelp": false,
+          "edit": false,
+          "disabled": false,
+          "hideBorder": false,
+          "status": null,
+          "filterQuery": null,
+          "buttons": null,
+          "fileDetails": null,
+          "numItems": 0,
+          "totalItems": 0,
+          "start": 0
+        },
+        {
+          "id": "4",
+          "key": null,
+          "name": "Address",
+          "header": null,
+          "type": "FORM",
+          "referenceCode": null,
+          "sequence": null,
+          "contents": [
+            {
+              "id": null,
+              "formShape": null,
+              "initialValues": null,
+              "name": null,
+              "title": null,
+              "subtitle": null,
+              "type": null,
+              "message": null,
+              "columns": [
+                2,
+                2,
+                1
+              ],
+              "data": [
+                {
+                  "id": "295587",
+                  "label": "Business Address",
+                  "type": null,
+                  "value": [
+                    "",
+                    "715 North Avenue",
+                    "",
+                    "New Rochelle, New York 10801",
+                    "United States"
+                  ]
+                }
+              ]
+            }
+          ],
+          "columns": null,
+          "message": null,
+          "showHelp": false,
+          "edit": false,
+          "disabled": false,
+          "hideBorder": false,
+          "status": null,
+          "filterQuery": null,
+          "buttons": null,
+          "fileDetails": null,
+          "numItems": 0,
+          "totalItems": 0,
+          "start": 0
+        }
+      ]
+    }
+  ],
+  "metadata": null,
+  "actions": null,
+  "readOnly": true,
+  "buttons": [],
+  "message": {
+    "errors": [],
+    "notifications": [],
+    "warnings": [],
+    "information": [],
+    "instructions": [],
+    "toasts": [],
+    "confirmations": [],
+    "header": [],
+    "tab": [],
+    "section": [],
+    "footer": [],
+    "cancellationWarnings": [],
+    "genericErrors": [],
+    "alerts": [],
+    "alertTitle": null,
+    "informationTitle": null,
+    "errorTitle": null,
+    "alertHasClose": false,
+    "empty": true
+  }
+}
