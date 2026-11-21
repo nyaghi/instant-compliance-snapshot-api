@@ -52,8 +52,8 @@ class FloridaNavigationTests(unittest.TestCase):
    result,*_=self.run_case(failures=2,error='net::ERR_CERT_AUTHORITY_INVALID')
   self.assertFalse(result.success);self.assertEqual(result.reason_code,'FL_CERTIFICATE_ERROR')
   self.assertEqual(result.status,'Site Not Reachable')
- def test_ordinary_timeout_does_not_activate_certificate_recovery(self):
-  with patch.object(c.FloridaVerifiedTransport,'enable') as repair:self.run_case(failures=1)
-  repair.assert_not_called()
+ def test_initial_timeout_uses_one_independent_verified_recovery(self):
+  with patch.object(c.FloridaVerifiedTransport,'recover_initial_timeout',autospec=True,side_effect=lambda t:setattr(t,'enabled',True)) as repair:self.run_case(failures=1)
+  repair.assert_called_once()
 
 if __name__=='__main__':unittest.main()

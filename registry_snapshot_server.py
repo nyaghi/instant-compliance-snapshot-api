@@ -2,6 +2,7 @@ from __future__ import annotations
 from deployment.workflow_observation import workflow_call, trace_return, workflow_stage
 from deployment.initial_source_access import attempt as initial_source_attempt, call as initial_source_call, page as initial_source_page
 from deployment.fl_access_diagnostics import call as fl_access_call, step as fl_access_step
+from deployment.fl_initial_recovery import initial_transport_failure
 
 
 import base64
@@ -19659,7 +19660,7 @@ def fl_verified_ssl_context():
 
 
 class FloridaVerifiedTransport:
-    """On authority failure only, complete FL's TLS chain for the existing browser.
+    """Recover an initial FL connection using authenticated HTTPS.
 
     No system/browser trust store change, HTTP downgrade, disabled verification,
     external proxy, alternative matching path, or extra lookup time allowance.
@@ -19669,6 +19670,7 @@ class FloridaVerifiedTransport:
     def __init__(self, page):
         self.page = page
         self.enabled = False
+        self.initial_timeout_recovery = False
         self.error = None
         self.deadline = 0.0
         self.handler = self.route
@@ -19689,7 +19691,12 @@ class FloridaVerifiedTransport:
             raise FloridaCertificateError("Florida certificate-chain recovery could not be initialized") from exc
         self.page.route(self.pattern, self.handler)
         self.enabled = True
-        log_event("FL enabled verified HTTPS certificate-chain recovery")
+        log_event("FL enabled authenticated HTTPS recovery")
+
+    def recover_initial_timeout(self):
+        # Only the initial GET can switch transports; never replay a submission.
+        self.initial_timeout_recovery = True
+        self.enable()
 
     def close(self):
         if self.enabled:
@@ -19701,11 +19708,13 @@ class FloridaVerifiedTransport:
             return route.fallback()
         if BLOCK_HEAVY_BROWSER_RESOURCES and request.resource_type in {"image", "media", "font"}:
             return route.abort()
-        if fl_verified_transport_first() and request.resource_type != "document":
+        if (self.initial_timeout_recovery or fl_verified_transport_first()) and request.resource_type != "document":
             # Keep independent assets concurrent in Chromium. The experiment
             # targets document navigation; serial asset forwarding delays every POST.
             return route.fallback()
-        if fl_verified_transport_first() and not isinstance(self.error, FloridaCertificateError):
+        if self.initial_timeout_recovery and isinstance(self.error, FloridaCertificateError):
+            return route.abort("failed")
+        if (self.initial_timeout_recovery or fl_verified_transport_first()) and not isinstance(self.error, FloridaCertificateError):
             # A fresh document request owns its error. A prior timeout must not
             # invalidate a later fully received response; trust failures stay fatal.
             self.error = None
@@ -19724,7 +19733,7 @@ class FloridaVerifiedTransport:
                 # Loaded public pages sometimes need more than eight seconds
                 # for a POST. Avoid restarting that same request in the lab;
                 # the lookup and workflow deadlines still bound the operation.
-                response = self.opener.open(outgoing, timeout=min(12.0 if fl_verified_transport_first() else 8.0, remaining))
+                response = fl_access_call("recovery_" + request.method.lower(), self.opener.open, outgoing, timeout=min(12.0 if fl_verified_transport_first() else 8.0, remaining))
             except urllib.error.HTTPError as exc:
                 response = exc  # Preserve HTTP errors and redirects for the existing lookup.
             with response:
@@ -19737,7 +19746,7 @@ class FloridaVerifiedTransport:
                 while True:
                     if time.monotonic() >= self.deadline:
                         raise TimeoutError("Florida lookup deadline reached during response read")
-                    chunk = response.read1(65536)
+                    chunk = fl_access_call("recovery_body", response.read1, 65536)
                     if not chunk:
                         break
                     size += len(chunk)
@@ -20182,6 +20191,11 @@ def search_fl_with_transport(page, org, transport):
                     if transport.enabled:
                         raise FloridaCertificateError("Florida registry certificate verification failed") from exc
                     transport.enable()
+                elif (attempt == 0 and not transport.enabled and remaining_seconds() > 0
+                      and initial_transport_failure(exc)):
+                    # Spend the existing second attempt on an independent,
+                    # verified connection instead of the same failed browser path.
+                    transport.recover_initial_timeout()
                 last_error = exc
                 # A timed-out document may never acquire a JavaScript context.
                 # Navigate away with a deadline instead of evaluating window.stop().
