@@ -13735,11 +13735,41 @@ def sc_official_detail_lookup(org) -> object | None:
     unrelated_alias_excluded = False
     filing_ein_conflict_excluded = False
     scope_candidates = {}
+    initial_source_opened = False
     for query in search_queries:
         if not query:
             continue
         try:
-            page_html = fetch_get()
+            if not initial_source_opened:
+                # The initial form has no organization-specific search result.
+                # Recover its transport once, then stop this check rather than
+                # starting another preflight/browser/whole-state retry cycle.
+                for access_attempt in range(2):
+                    try:
+                        page_html = fetch_get()
+                        break
+                    except Exception as exc:
+                        from deployment.source_availability import classify
+                        transport = classify({
+                            "state": "SC", "status": "Site Not Reachable",
+                            "success": False, "reason_code": "PORTAL_ERROR",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        })
+                        if not (isinstance(exc, TimeoutError) or
+                                (isinstance(exc, OSError) and transport is not None)):
+                            raise
+                        if access_attempt == 0:
+                            continue
+                        result = checker.StateResult(original_name, org.ein, "SC",
+                            "Site Not Reachable", url, success=False)
+                        result.reason_code = "SC_INITIAL_SOURCE_UNREACHABLE"
+                        result.raw_status_text = "South Carolina's initial registry form could not be opened."
+                        result.source_note = "Two bounded initial source-access attempts failed. CharityClarity stopped without submitting a name search."
+                        result.error = f"{type(exc).__name__}: {exc}"
+                        return result
+                initial_source_opened = True
+            else:
+                page_html = fetch_get()
             fields = sc_extract_hidden_fields(page_html)
             fields.update({
                 "ctl00$MainContent$dd_CharitySearchOperator": "Contains",
