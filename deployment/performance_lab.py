@@ -439,6 +439,15 @@ def final_four_asset(name, text):
         replace('JSON.stringify({ ...credentials, ...fields })',
                 'JSON.stringify({ ...credentials, ...fields, ...(alertLease ? {alert_lease:alertLease,alert_state:registryState} : {}), ...(extensionRefresh && registryState === "TN" ? {extension_refresh:extensionRefresh,extension_ein:ein.replace(/\\D/g,"")} : {}) })')
         replace('API + "/api/ny-connector"', 'API + (extensionRefresh && registryState === "TN" ? "/api/tn-extension-source" : alertLease ? "/api/alerts/runner/lookup" : finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
+        # These routes consume signed, stateless continuations. Replaying an
+        # advance resends saved public evidence, never a browser search. Reuse
+        # NY's existing one-attempt gateway recovery and original request signal.
+        replace('if (registryState === "NY" && fields.action === "advance" && !cleanup',
+                'if (["NY","IL","GA","AL","NC","NV","TN","NM","MS"].includes(registryState) && fields.action === "advance" && !cleanup')
+        replace('"New York: resubmitting the completed browser result once."',
+                '`${label}: resubmitting the completed browser result once.`')
+        replace('{state:"NY",stage:"master response retry",action:"advance",http_status:response.status}',
+                '{state:registryState,stage:"master response retry",action:"advance",http_status:response.status}')
         replace('headers: { "Content-Type": "application/json" }', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + admin_passcode }')
         replace('action: "start", state: registryState,', 'action: "start", mode, ...(finalFour && sales_cutoff_seconds!==undefined ? {sales_cutoff_seconds}:{}), state: registryState,')
         replace('recovery_protocol: "il-fresh-page-v1"', 'recovery_protocol: registryState === "AL" ? "al-unread-image-v1" : registryState === "NC" ? "nc-fresh-search-v1" : "il-fresh-page-v1"')

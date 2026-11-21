@@ -32,7 +32,7 @@ class Handoff(unittest.TestCase):
 
     def test_assembled_assets_and_signed_advance_gateway_recovery(self):
         with patch.object(lab,'trial_identity',return_value={'origin':'https://fixture-final-four.onrender.com'}),patch.object(lab,'LAB_ORIGIN','https://fixture-final-four.onrender.com'):
-            source=lab.lab_asset('/ny-connector.js')[0].decode('utf-8').replace('\r\n','\n')
+            source=lab.final_four_asset('ny-connector.js',(Path(__file__).resolve().parents[1]/'web-staging/ny-connector.js').read_text(encoding='utf-8'))
             pages=[lab.lab_asset(path)[0].decode('utf-8') for path in ['/','/instant-compliance-snapshot']]
         start=source.index('    async function api(fields, cleanup = false) {')
         # The next outer try is after api's closing brace and precedes readiness.
@@ -42,7 +42,7 @@ class Handoff(unittest.TestCase):
 const timeoutSignal={aborted:false};let timeoutCalls=0;
 const AbortSignal={timeout:ms=>{assert.equal(ms,45000);timeoutCalls++;return timeoutSignal;},any:signals=>signals[signals.length-1]};
 const API='https://fixture.invalid',credentials={email:'test',device_id:'device'},label='New York',finalFour=false,admin_passcode='offline-fixture';
-let registryState='NY',signal=null,alEvidenceDeadline=0;
+let registryState='NY',signal=null,alEvidenceDeadline=0,extensionRefresh=null,alertLease=null;
 const onProgress=()=>{},trace=()=>{};
 let statuses=[],requests=[];
 const fetch=async(url,options)=>{requests.push({url,...options});const status=statuses.shift();return {status,ok:status===200,json:async()=>{if(status!==200)throw new SyntaxError('gateway');return {phase:'complete',result:{state:'NY'}}}}};
@@ -55,7 +55,7 @@ const fetch=async(url,options)=>{requests.push({url,...options});const status=st
    assert.equal(requests[0].body,requests[1].body);assert.equal(requests[0].signal,requests[1].signal);
    assert.deepEqual(requests[0].headers,requests[1].headers);assert.equal(requests[1].headers.Authorization,'Bearer offline-fixture');
  }
- for(const [state,action,first] of [['NY','start',520],['NC','advance',520],['NY','advance',403],['NY','advance',429]]){
+ for(const [state,action,first] of [['NY','start',520],['ZZ','advance',520],['NY','advance',403],['NY','advance',429]]){
    registryState=state;statuses=[first,200];requests=[];
    await assert.rejects(api({action,query_id:'q'}));assert.equal(requests.length,1);
  }
