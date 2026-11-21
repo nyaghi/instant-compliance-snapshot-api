@@ -1,6 +1,7 @@
 from __future__ import annotations
 from deployment.workflow_observation import workflow_call, trace_return, workflow_stage
 from deployment.initial_source_access import attempt as initial_source_attempt, call as initial_source_call, page as initial_source_page
+from deployment.fl_access_diagnostics import call as fl_access_call, step as fl_access_step
 
 
 import base64
@@ -19968,14 +19969,14 @@ def _fl_business_public_rows_once(query: str, deadline: float) -> list:
                 raise TimeoutError("Florida alternate public search deadline")
             request = urllib.request.Request(url, data=data, headers={
                 "User-Agent": BROWSER_USER_AGENT, "Accept-Encoding": "identity"})
-            with opener.open(request, timeout=min(http_seconds, remaining)) as response:
+            with fl_access_call("business_post" if data is not None else "business_get", opener.open, request, timeout=min(http_seconds, remaining)) as response:
                 if response.status != 200 or response.geturl() != url:
                     raise ValueError("Unexpected Florida alternate response")
                 chunks, size = [], 0
                 while True:
                     if time.monotonic() >= deadline:
                         raise TimeoutError("Florida alternate public search deadline")
-                    chunk = response.read1(min(65536, 2_000_001-size))
+                    chunk = fl_access_call("business_body", response.read1, min(65536, 2_000_001-size))
                     if not chunk:
                         break
                     chunks.append(chunk); size += len(chunk)
@@ -20170,7 +20171,7 @@ def search_fl_with_transport(page, org, transport):
             try:
                 if fl_verified_transport_first():
                     transport.enable()
-                page.goto(url, wait_until="commit", timeout=remaining_ms(12000))
+                fl_access_call("browser_entry", page.goto, url, wait_until="commit", timeout=remaining_ms(12000))
                 if transport.error:
                     raise transport.error
                 return
@@ -20424,7 +20425,7 @@ def search_fl_with_transport(page, org, transport):
             input_box.fill(variant, timeout=remaining_ms(4000))
             # Check-A-Charity submits an ASP.NET postback. A short network-idle
             # wait can leave the old form visible; require the submitted response.
-            with page.expect_navigation(wait_until="domcontentloaded", timeout=remaining_ms(12000)) as submitted:
+            with fl_access_step("browser_submit"), page.expect_navigation(wait_until="domcontentloaded", timeout=remaining_ms(12000)) as submitted:
                 page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=remaining_ms(4000), no_wait_after=True)
             if submitted.value is None or submitted.value.status >= 400:
                 raise ValueError("Florida search submission did not return a successful document")

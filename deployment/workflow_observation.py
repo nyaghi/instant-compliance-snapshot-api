@@ -266,9 +266,15 @@ def observe_context(context,trace):
             item=pending.pop(req,None)
             if item:
                 trace.pending.pop(item[0],None)
+                extra={}
+                if trace.state=='FL' and req.resource_type=='document':
+                    try:
+                        from deployment.fl_access_diagnostics import browser_failure_fields
+                        extra=browser_failure_fields(req,failed)
+                    except Exception:pass
                 trace.emit('source.network','exception' if failed else 'finished',request_seq=item[0],
                            duration_seconds=round(time.perf_counter()-item[1],6),context_id=id(context),
-                           error_type='RequestFailed' if failed else None)
+                           error_type='RequestFailed' if failed else None,**extra)
         except Exception:trace.emit('source.network.observer','exception',error_type='ObserverError')
     def page_created(page):
         trace.resource(page,owner=trace.run_id)
