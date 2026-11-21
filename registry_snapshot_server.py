@@ -1,5 +1,6 @@
 from __future__ import annotations
 from deployment.workflow_observation import workflow_call, trace_return, workflow_stage
+from deployment.initial_source_access import attempt as initial_source_attempt, call as initial_source_call, page as initial_source_page
 
 
 import base64
@@ -3448,7 +3449,7 @@ def oh_ein_search_source(ein: str, deadline: float) -> tuple[str, str]:
     fields = {"OrgNameFilterCriteria": "1", "OrgNameOrDBAName": "", "EINFilterCriteria": "3",
         "EIN": format_ein(ein), "OrganizationPurposeCategoryValue": "", "City": "",
         "StateCode": "", "ZipCode": "", "CountyId": ""}
-    source = identity_fetch(url, deadline, headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": url},
+    source = initial_source_call('OH', identity_fetch, url, deadline, headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": url},
         data=urlencode(fields).encode()).decode("utf-8", "replace")
     submitted = re.search(r'<input\b[^>]*\bname=["\']EIN["\'][^>]*>', source, re.I)
     value = re.search(r'\bvalue=["\']([^"\']*)["\']', submitted[0]) if submitted else None
@@ -13267,7 +13268,10 @@ def preflight_name_search_registry(org, state: str) -> tuple[bool, str, object |
     if not url:
         return True, "", None
     timeout = SC_PREFLIGHT_TIMEOUT_SECONDS if state == "SC" else NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS
+    access_started = time.monotonic()
     reachable, note = quick_registry_preflight(url, timeout)
+    from deployment.initial_source_access import preflight as initial_source_preflight
+    initial_source_preflight(state, reachable, note, time.monotonic() - access_started)
     if reachable:
         return True, note, None
     result = checker.StateResult(org.organization_name, org.ein, state, "Site Not Reachable", url)
@@ -14384,9 +14388,10 @@ def va_evoke_api_get(path: str, filter_payload: dict | None = None, timeout_seco
             },
         )
         try:
-            with _history_http_call(urllib.request.urlopen, request, timeout=timeout_seconds) as response:
-                charset = response.headers.get_content_charset() or "utf-8"
-                payload = response.read().decode(charset, errors="replace")
+            with initial_source_attempt('VA'):
+                with _history_http_call(urllib.request.urlopen, request, timeout=timeout_seconds) as response:
+                    charset = response.headers.get_content_charset() or "utf-8"
+                    payload = response.read().decode(charset, errors="replace")
             parsed_payload = json.loads(payload)
             from deployment.completed_response_history import finish as _history_finish
             _history_finish(response,parsed_payload)
@@ -15058,10 +15063,11 @@ class MaineRegistrySession:
     def search(self, query):
         if not self.form_html:
             self.stage = "search form GET"
-            response = __import__('deployment.search_observation',fromlist=['observed_http_call']).observed_http_call(self.session.get, self.url, timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_GET_TIMEOUT_SECONDS))
-            response.raise_for_status()
-            self.form_html = response.text
-            self.url = response.url
+            with initial_source_attempt('ME'):
+                response = __import__('deployment.search_observation',fromlist=['observed_http_call']).observed_http_call(self.session.get, self.url, timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_GET_TIMEOUT_SECONDS))
+                response.raise_for_status()
+                self.form_html = response.text
+                self.url = response.url
         me_raise_public_application_error(self.form_html)
         fields = {}
         for hidden in re.finditer(r'<input[^>]+type="hidden"[^>]*>', self.form_html, re.I):
@@ -15145,7 +15151,7 @@ class MaineBrowserDetailReader:
 def me_browser_search_rows(page, query, deadline):
     # Search only the unresolved query; never re-enter the embedded reader's
     # direct-search and confirmation loops.
-    page.goto(NAME_SEARCH_PREFLIGHT_URLS["ME"], wait_until="domcontentloaded",
+    initial_source_call('ME', page.goto, NAME_SEARCH_PREFLIGHT_URLS["ME"], wait_until="domcontentloaded",
         timeout=1000 * me_request_timeout(deadline, 10))
     prefix = 'ctl00$ctl00$mainContent$mainContent$'
     regulator = page.locator(f'select[name="{prefix}scRegulator"]')
@@ -17692,8 +17698,9 @@ def search_mi_http_completion_probe(org, lookup_deadline=None, *, retry_empty_ei
                 "Accept-Language": "en-US,en;q=0.9",
             }
             disclaimer_url = "https://www.ag.state.mi.us/CharitableTrust/frmDisclaimer.aspx"
-            disclaimer = _history_http_call(session.get, disclaimer_url, timeout=request_timeout(10), headers=headers)
-            disclaimer.raise_for_status()
+            with initial_source_attempt('MI'):
+                disclaimer = _history_http_call(session.get, disclaimer_url, timeout=request_timeout(10), headers=headers)
+                disclaimer.raise_for_status()
             fields = sc_extract_hidden_fields(disclaimer.text or "")
             fields.update({"__EVENTTARGET": "ctl00$MainContent$lblYes", "__EVENTARGUMENT": ""})
             accepted = _history_http_call(session.post,
@@ -21370,7 +21377,7 @@ def search_oh(page, org):
         result.error = "OH: EIN search requires a 9-digit EIN."
         return result
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        initial_source_call('OH', page.goto, url, wait_until="domcontentloaded", timeout=45000)
         checker.safe_wait_for_network_idle(page, timeout=8000)
         page.locator("#EIN").fill("")
         page.locator("#EIN").fill(formatted_ein)
@@ -21444,7 +21451,7 @@ def search_oh(page, org):
                 include_leading_article_variants=True,
                 include_broad_query_prefixes=False,
             )[:10]:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                initial_source_call('OH', page.goto, url, wait_until="domcontentloaded", timeout=45000)
                 checker.safe_wait_for_network_idle(page, timeout=8000)
                 page.locator("#OrgNameOrDBAName").fill("")
                 page.locator("#OrgNameOrDBAName").fill(variant)
@@ -22016,7 +22023,7 @@ def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_nam
             return newer_year, row_name, ak_registry_identifier_from_print_row(print_link, row_text), body
         except Exception:
             try:
-                checker.open_ak_public_search(page)
+                checker.open_ak_public_search(initial_source_page('AK', page))
             except Exception:
                 pass
     return None, "", "", ""
@@ -22342,7 +22349,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     except Exception:
         pass
     try:
-        if not checker.open_ak_public_search(ak_page):
+        if not checker.open_ak_public_search(initial_source_page('AK', ak_page)):
             result.error = "Could not open Alaska Public Search form"
             return result, ""
         first_ein_years = years_to_try
@@ -22415,7 +22422,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     result.error = f"AK error: {e}"
                     try:
                         if not ak_budget_exhausted():
-                            checker.open_ak_public_search(ak_page)
+                            checker.open_ak_public_search(initial_source_page('AK', ak_page))
                     except Exception:
                         pass
                     continue
@@ -22464,7 +22471,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     result.error = f"AK historical EIN error: {e}"
                     try:
                         if not ak_budget_exhausted():
-                            checker.open_ak_public_search(ak_page)
+                            checker.open_ak_public_search(initial_source_page('AK', ak_page))
                     except Exception:
                         pass
                     continue
@@ -22573,7 +22580,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     result.error = f"AK name fallback error: {e}"
                     try:
                         if not ak_budget_exhausted():
-                            checker.open_ak_public_search(ak_page)
+                            checker.open_ak_public_search(initial_source_page('AK', ak_page))
                     except Exception:
                         pass
                     continue
@@ -23997,7 +24004,7 @@ def search_hi_direct_details(org):
         return None
     url = f"https://charity.ehawaii.gov/charity/{digits}/details.html"
     try:
-        source = identity_fetch(url, time.monotonic()+8, headers={"Accept": "text/html"}).decode("utf-8", "replace")
+        source = initial_source_call('HI', identity_fetch, url, time.monotonic()+8, headers={"Accept": "text/html"}).decode("utf-8", "replace")
         return hi_direct_details_from_source(org, source, url)
     except Exception:
         # A missing direct URL is not a completed no-match search. The existing
@@ -24009,7 +24016,7 @@ def search_hi_precise(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "HI", checker.STATUS_UNKNOWN, url)
     try:
         ein_digits = re.sub(r"\D", "", org.ein or "")
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        initial_source_call('HI', page.goto, url, wait_until="domcontentloaded", timeout=45000)
         checker.safe_wait_for_network_idle(page, timeout=6000)
         time.sleep(1)
         try:
@@ -24321,8 +24328,9 @@ def wi_reader_text(source_url: str, no_cache: bool = False, deadline: float | No
             if no_cache or attempt:
                 headers["X-No-Cache"] = "true"
             request = urllib.request.Request(wi_reader_url(source_url), headers=headers)
-            with urllib.request.urlopen(request, timeout=min(WI_READER_TIMEOUT_SECONDS, remaining)) as response:
-                text = response.read().decode("utf-8", errors="replace")
+            with initial_source_attempt('WI'):
+                with urllib.request.urlopen(request, timeout=min(WI_READER_TIMEOUT_SECONDS, remaining)) as response:
+                    text = response.read().decode("utf-8", errors="replace")
             # Reuse a complete public detail only within this lookup. Candidate
             # identity/status checks still run; empty/error pages are not cached.
             if (is_detail and session is not None and wi_extract_detail_status(text)
@@ -26190,8 +26198,9 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
     opener = wi_request_opener()
     try:
         base_request = urllib.request.Request(WI_SEARCH_URL, headers=wi_request_headers())
-        with _history_http_call(opener.open, base_request, timeout=request_timeout()) as response:
-            base_html = response.read().decode("utf-8", errors="replace")
+        with initial_source_attempt('WI'):
+            with _history_http_call(opener.open, base_request, timeout=request_timeout()) as response:
+                base_html = response.read().decode("utf-8", errors="replace")
     except Exception:
         return None, http_reached
 
@@ -36527,7 +36536,7 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
         if _query_observations is not None:
             _query_observations.append(observed)
         try:
-            page.goto(AR_SEARCH_URL, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+            initial_source_call('AR', page.goto, AR_SEARCH_URL, wait_until="domcontentloaded", timeout=nav_timeout_ms)
             observed["form_navigation_seconds"] = round(time.perf_counter() - observation_started, 6)
             if not ar_wait_for_search_form(page, nav_timeout_ms):
                 body = registry_page_body(page)
@@ -37622,13 +37631,14 @@ class WestVirginiaPublicLookup:
         request = urllib.request.Request(url,
             data=urlencode(fields).encode("utf-8") if fields is not None else None,
             headers={"User-Agent": BROWSER_USER_AGENT, "Accept-Encoding": "identity"})
-        with __import__('deployment.search_observation',fromlist=['observed_http_call']).observed_http_call(self.opener.open, request, timeout=min(8.0, remaining)) as response:
-            if response.status != 200 or response.url != url:
-                raise ValueError("West Virginia public response was not the requested page")
-            body = response.read(2_000_001)
-            if len(body) > 2_000_000 or time.monotonic() >= self.deadline:
-                raise TimeoutError("West Virginia public response was incomplete")
-            source = body.decode(response.headers.get_content_charset() or "utf-8", "replace")
+        with initial_source_attempt('WV'):
+            with __import__('deployment.search_observation',fromlist=['observed_http_call']).observed_http_call(self.opener.open, request, timeout=min(8.0, remaining)) as response:
+                if response.status != 200 or response.url != url:
+                    raise ValueError("West Virginia public response was not the requested page")
+                body = response.read(2_000_001)
+                if len(body) > 2_000_000 or time.monotonic() >= self.deadline:
+                    raise TimeoutError("West Virginia public response was incomplete")
+                source = body.decode(response.headers.get_content_charset() or "utf-8", "replace")
         if not re.search(r"</html\s*>", source, re.I):
             raise ValueError("West Virginia public document was incomplete")
         self.body = self.text(source)
@@ -37791,7 +37801,7 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 body, snapshot = public_lookup.search(query_name)
                 rows = None
             else:
-                page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=action_timeout(WV_GOTO_TIMEOUT_MS))
+                initial_source_call('WV', page.goto, WV_SEARCH_URL, wait_until="domcontentloaded", timeout=action_timeout(WV_GOTO_TIMEOUT_MS))
                 safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
                 if time.perf_counter() >= deadline:
                     break
@@ -40529,7 +40539,8 @@ def _run_single_state_lookup_reliably_source(organization_name: str, ein: str, s
     if (state or '').upper() == 'CO':
         from deployment.co_budget import run
         return run(_run_single_state_lookup_reliably_core,organization_name,ein,state)
-    return _run_single_state_lookup_reliably_core(organization_name,ein,state)
+    from deployment.initial_source_access import run as run_initial_source_access
+    return run_initial_source_access(sys.modules[__name__], _run_single_state_lookup_reliably_core, organization_name, ein, state)
 
 
 def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, state: str) -> dict:
@@ -40553,6 +40564,8 @@ def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, sta
     me_progress = {"deadline": time.perf_counter() + 265, "completed": set()} if state == "ME" else None
     wi_progress = {"attempted": [], "completed": set()} if state == "WI" else None
     for attempt in range(1, attempts + 1):
+        from deployment.initial_source_access import mark_semantic_attempt
+        mark_semantic_attempt(state, attempt)
         if state == 'CO' and result is not None:
             from deployment.co_budget import STOP
             if time.monotonic()+1 >= STOP.get():break

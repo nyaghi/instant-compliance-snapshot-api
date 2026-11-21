@@ -10,7 +10,9 @@ _UNRESOLVED = {'Site Not Reachable', 'Unable to Confirm', 'Unable to Verify',
                'Needs Review', 'Unknown', 'Runner Timeout'}
 _DEADLINES = {'OR_SOURCE_TIME_LIMIT', 'WI_SOURCE_ALLOWANCE_EXHAUSTED',
               'RI_LOOKUP_TIMEOUT', 'NY_CONNECTOR_REGISTRY_NV_LOOKUP_TIMEOUT'}
-_SOURCE_ERRORS = {
+_INITIAL_SOURCE_ERRORS = {state + '_INITIAL_SOURCE_UNREACHABLE' for state in
+                          {'SC', 'AK', 'AR', 'HI', 'ME', 'MI', 'OH', 'VA', 'WV', 'WI'}}
+_SOURCE_ERRORS = _INITIAL_SOURCE_ERRORS | {
     'SC_INITIAL_SOURCE_UNREACHABLE',
     'NH_DATASET_UNAVAILABLE', 'AR_SOURCE_MAINTENANCE',
     'OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED',
@@ -63,7 +65,7 @@ def classify(data):
             return {'kind': 'rate_limited', 'signal': code, 'terminal': False}
         if code in _SOURCE_ERRORS:
             return {'kind': 'source_error', 'signal': code,
-                    'terminal': code == 'SC_INITIAL_SOURCE_UNREACHABLE'}
+                    'terminal': code in _INITIAL_SOURCE_ERRORS}
     # Generic errors on a selected record do not prove source unavailability.
     # Explicit adapter source failures above remain valid even with an export ID.
     if data.get('matched_registry_name') or data.get('matched_registry_identifier'):
