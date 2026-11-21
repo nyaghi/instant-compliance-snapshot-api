@@ -1,4 +1,4 @@
-importScripts("protocol.js", "workflow-observation.js", "recovery.js", "registry-worker.js", "state-snapshot-worker.js", "dc-boss-source.js", "source-rail.js", "desktop-source-worker.js");
+importScripts("protocol.js", "workflow-observation.js", "recovery.js", "registry-worker.js", "owned-source-pixels.js", "state-snapshot-worker.js", "dc-boss-source.js", "source-rail.js", "desktop-source-worker.js");
 const P = CCNYProtocol;
 // Public diagnostic correlation only; never a credential or authorization key.
 const nvHandoffWorkerTag=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
@@ -120,9 +120,45 @@ async function performAlFinalEmpty(job,query,id) {
 }
 
 function withoutSourcePixels(value) { if(!value)return value; const {state_snapshot,...rest}=value; return rest; }
+// Bounded staging-only probe. It never gates a checkpoint or registry command.
+// One read-only platform call after250ms; no platform result is retained.
+let runtimeLatencyControlPending=false;
+function armRuntimeLatencyProbe(sequence,owners,invoked) {
+  const eligible=owners.filter(j=>j.workflowObservation&&(j.runtimeLatencyProbeCount||0)<2);
+  if(!P.TRIAL_ORIGIN||!eligible.length)return ()=>{};
+  const sample={sequence,invoked_epoch_ms:invoked,threshold_ms:250};let retained=false;
+  const retain=()=>{
+    if(retained)return;retained=true;
+    for(const job of eligible){
+      job.runtimeLatencyProbeCount=(job.runtimeLatencyProbeCount||0)+1;
+      const list=job.workflowObservation.runtime_latency_probes||=[];
+      list.push(sample);if(list.length>2)list.shift();
+    }
+  };
+  const timer=setTimeout(()=>{
+    try {
+      sample.timer_fired_epoch_ms=Date.now();sample.timer_lateness_ms=Date.now()-invoked-250;
+      retain();
+      if(runtimeLatencyControlPending){sample.control_skipped_busy=true;return;}
+      runtimeLatencyControlPending=true;sample.control_started_epoch_ms=Date.now();
+      const finish=outcome=>{
+        sample.control_finished_epoch_ms=Date.now();sample.control_ms=Date.now()-sample.control_started_epoch_ms;
+        sample.control_outcome=outcome;runtimeLatencyControlPending=false;
+      };
+      try {Promise.resolve(chrome.runtime.getPlatformInfo()).then(()=>finish('returned'),()=>finish('rejected'));}
+      catch {finish('threw');}
+    } catch {runtimeLatencyControlPending=false;}
+  },250);
+  return outcome=>{
+    clearTimeout(timer);sample.storage_finished_epoch_ms=Date.now();
+    sample.storage_ms=Date.now()-invoked;sample.storage_outcome=outcome;
+    if(sample.storage_ms>=250){sample.timer_serviced_before_storage=sample.timer_fired_epoch_ms!==undefined;retain();}
+  };
+}
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
+  const runtimeBuildStarted = Date.now();
   const value = runtimeState();
   if (P.TRIAL_ORIGIN && trialAlIdle) value.trialAlIdle=trialAlIdle;
   if (P.TRIAL_ORIGIN && trialTnIdle) value.trialTnIdle=trialTnIdle;
@@ -130,6 +166,14 @@ function saveRuntime() {
   if (!P.TRIAL_ORIGIN) {
     saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
   }
+  // Passive staging diagnostics: retain sizes/counts only, never payload contents.
+  // No extra Chrome calls, writes, timers, or changes to the saved runtime value.
+  const runtimeBuildMs = Date.now() - runtimeBuildStarted;
+  const payloadMeasureStarted = Date.now();
+  let payloadJsonChars = null, payloadMeasureFailed = false;
+  try { payloadJsonChars = JSON.stringify(value).length; }
+  catch { payloadMeasureFailed = true; }
+  const payloadMeasureMs = Date.now() - payloadMeasureStarted;
   const enqueued = Date.now(), owners = allJobs().filter(j => j && !j.closed);
   const sequence = ++runtimeCheckpointSequence, depth = ++runtimeCheckpointPending;
   const record = (invoked, outcome) => {
@@ -138,7 +182,11 @@ function saveRuntime() {
       const finished = Date.now();
       const sample = {sequence, enqueued_epoch_ms:enqueued, invoked_epoch_ms:invoked,
         finished_epoch_ms:finished, queue_ms:invoked-enqueued, api_ms:finished-invoked,
-        pending_at_enqueue:depth, outcome};
+        pending_at_enqueue:depth, outcome, runtime_build_ms:runtimeBuildMs,
+        latency_probe_schema:1, payload_json_chars:payloadJsonChars, payload_measure_ms:payloadMeasureMs,
+        payload_measure_failed:payloadMeasureFailed,
+        active_job_count:value.queue.filter(j => j.active).length,
+        queued_job_count:value.queue.filter(j => !j.active).length};
       for (const job of owners) {
         if (!job.workflowObservation) continue;
         const samples = job.workflowObservation.runtime_checkpoints ||= [];
@@ -148,11 +196,14 @@ function saveRuntime() {
   };
   saving = saving.catch(() => {}).then(() => {
     const invoked = Date.now();
+    let finishProbe=()=>{};
+    try {finishProbe=armRuntimeLatencyProbe(sequence,owners,invoked);} catch {}
+    const finish=(outcome)=>{try{finishProbe(outcome);}catch{}record(invoked,outcome);};
     try {
       return Promise.resolve(chrome.storage.session.set({ccnyRuntime:value})).then(
-        result => {record(invoked,'returned');return result;},
-        error => {record(invoked,'rejected');throw error;});
-    } catch(error) {record(invoked,'threw');throw error;}
+        result => {finish('returned');return result;},
+        error => {finish('rejected');throw error;});
+    } catch(error) {finish('threw');throw error;}
   });
   return saving;
 }
@@ -984,7 +1035,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return false;
   }
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", "aurora-alerts-exclusive-v1", "ein-light-name-20s-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1","al-final-empty-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", "aurora-alerts-exclusive-v1", "ein-light-name-20s-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1","al-final-empty-v1","owned-source-frame-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {
@@ -1065,11 +1116,33 @@ importScripts("tn-extension-account-worker.js");
 ;(() => {
   let recording=Promise.resolve();
   function record(kind,details) {
+    const enqueued=Date.now(),owners=allJobs().filter(j=>j&&!j.closed);
     recording=recording.catch(()=>{}).then(async()=>{
-      const {auroraTrialTrace:trace}=await chrome.storage.session.get('auroraTrialTrace');
-      if(!trace)return;
-      trace.events.push({kind,...details,time:Date.now()});
-      await chrome.storage.session.set({auroraTrialTrace:trace});
+      const invoked=Date.now();let readFinished=null,writeStarted=null;
+      let tracePresent=false,eventCount=null,payloadChars=null,measureMs=0,outcome='rejected';
+      try {
+        const {auroraTrialTrace:trace}=await chrome.storage.session.get('auroraTrialTrace');
+        readFinished=Date.now();tracePresent=!!trace;
+        if(!trace){outcome='no-trace';return;}
+        trace.events.push({kind,...details,time:Date.now()});
+        try {
+          const started=Date.now();payloadChars=JSON.stringify(trace).length;
+          measureMs=Date.now()-started;eventCount=trace.events.length;
+        } catch { /* Diagnostic failure cannot change the original write. */ }
+        writeStarted=Date.now();
+        await chrome.storage.session.set({auroraTrialTrace:trace});outcome='returned';
+      } finally {
+        try {
+          const finished=Date.now(),sample={kind,enqueued_epoch_ms:enqueued,
+            queue_ms:invoked-enqueued,get_ms:readFinished===null?null:readFinished-invoked,
+            set_ms:writeStarted===null?null:finished-writeStarted,trace_present:tracePresent,
+            trace_event_count:eventCount,payload_json_chars:payloadChars,payload_measure_ms:measureMs,outcome};
+          for(const job of owners)if(job.workflowObservation){
+            const samples=job.workflowObservation.browser_event_checkpoints||=[];
+            samples.push(sample);if(samples.length>32)samples.shift();
+          }
+        } catch { /* No changes to event handling on observation failure. */ }
+      }
     });
   }
   chrome.windows.onCreated.addListener(w=>record('window-created',{windowId:w.id,type:w.type}));

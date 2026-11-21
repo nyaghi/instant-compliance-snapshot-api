@@ -132,12 +132,32 @@
         method: "POST", headers: { "Content-Type": "application/json" },
         signal: fields.action === "capture_empty" ? AbortSignal.any([...(signal ? [signal] : []),timeout,AbortSignal.timeout(Math.max(1,alEvidenceDeadline-Date.now()))]) : signal && !cleanup ? AbortSignal.any([signal, timeout]) : timeout, body: requestBody
       };
-      let response = await fetch(endpoint, requestOptions);
+      // Small, image-free GA advances contain completed public evidence, not
+      // a state lookup. A stalled delivery may replay once; the original 45s
+      // total deadline and caller cancellation still bound both sends.
+      let handoffReplayed = false;
+      const smallGaAdvance = ORIGIN === "https://charityclarity-final-four-29-2.onrender.com"
+        && registryState === "GA" && fields.action === "advance" && !cleanup
+        && fields.evidence && !fields.state_snapshot && requestBody.length <= 65536;
+      let response;
+      if (smallGaAdvance) {
+        const firstDelivery = AbortSignal.timeout(10000);
+        try {
+          response = await fetch(endpoint, {...requestOptions,
+            signal:AbortSignal.any([requestOptions.signal,firstDelivery])});
+        } catch (error) {
+          if (!firstDelivery.aborted || timeout.aborted || signal?.aborted) throw error;
+          handoffReplayed = true;
+          onProgress?.(`${label}: resubmitting the completed browser result once.`,
+            {state:registryState,stage:"master response retry",action:"advance",reason:"DELIVERY_HEADERS_TIMEOUT"});
+          response = await fetch(endpoint,requestOptions);
+        }
+      } else response = await fetch(endpoint, requestOptions);
       // A signed NY advance replays the same saved public evidence; it does
       // not perform another browser search. Recover one gateway failure using
       // the exact request and the original timeout/abort signal.
       if (registryState === "NY" && fields.action === "advance" && !cleanup
-          && [502,503,504,520,522,524].includes(response.status)
+          && !handoffReplayed && [502,503,504,520,522,524].includes(response.status)
           && !timeout.aborted && !signal?.aborted) {
         onProgress?.("New York: resubmitting the completed browser result once.",
           {state:"NY",stage:"master response retry",action:"advance",http_status:response.status});

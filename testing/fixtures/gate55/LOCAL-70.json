@@ -1,0 +1,352 @@
+[
+  {
+    "name": "IOWA STATE UNIVERSITY FOUNDATION",
+    "ein": "421143702",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "ITHACA COLLEGE",
+    "ein": "150532204",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "JACKSONVILLE UNIVERSITY",
+    "ein": "590624412",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "JEWISH BOARD OF FAMILY & CHILDREN'S SERVICES, INC",
+    "ein": "135564937",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "JEWISH NATIONAL FUND (KEREN KAYEMETH LE ISRAEL, INC.",
+    "ein": "131659627",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "JHPIEGO CORPORATION",
+    "ein": "237424444",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "JOHNSON & WALES UNIVERSITY",
+    "ein": "050306206",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "JSI RESEARCH AND TRAINING INSTITUTE, INC.",
+    "ein": "042679824",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "KENYON COLLEGE",
+    "ein": "314379507",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "KINGSWAY CHARITIES, INC.",
+    "ein": "541668650",
+    "source": "Gate55 original saved run"
+  },
+  {
+    "name": "Hillsdale College",
+    "ein": "381374230",
+    "source": "Gate53 reported case"
+  },
+  {
+    "name": "Grand Canyon University",
+    "ein": "472507725",
+    "source": "Gate53 reported case"
+  },
+  {
+    "name": "COMMUNITY FOUNDATION OF NEW JERSEY",
+    "ein": "222281783",
+    "source": "outputs\\fresh-five-20261116\\workflow-2.json"
+  },
+  {
+    "name": "COOPERATIVE FOR ASSISTANCE AND RELIEF EVERYWHERE, INC.",
+    "ein": "131685039",
+    "source": "outputs\\fresh-five-20261116\\workflow-4.json"
+  },
+  {
+    "name": "CREIGHTON UNIVERSITY",
+    "ein": "470376583",
+    "source": "outputs\\fresh-five-20261116\\workflow-5.json"
+  },
+  {
+    "name": "DAFFY CHARITABLE FUND",
+    "ein": "863177440",
+    "source": "outputs\\fresh-five-20261116\\workflow-7.json"
+  },
+  {
+    "name": "CONSUMER REPORTS, INC.",
+    "ein": "131776434",
+    "source": "outputs\\fresh-five-20261116\\workflow-9.json"
+  },
+  {
+    "name": "ASSOCIATION OF UNIVERSITIES FOR RESEARCH IN ASTRONOMY, INC",
+    "ein": "860138043",
+    "source": "outputs\\gate45-20261113\\01-association-of-universities\\review.json"
+  },
+  {
+    "name": "AUGUSTANA COLLEGE",
+    "ein": "362166962",
+    "source": "outputs\\gate45-20261113\\02-augustana-college\\ui.json"
+  },
+  {
+    "name": "AVERA HEALTH",
+    "ein": "460422673",
+    "source": "outputs\\gate45-20261113\\03-avera-health\\ui.json"
+  },
+  {
+    "name": "AZUSA PACIFIC UNIVERSITY",
+    "ein": "951744369",
+    "source": "outputs\\gate45-20261113\\04-azusa-pacific-university\\ui.json"
+  },
+  {
+    "name": "BAYADA HOME HEALTH CARE, INC",
+    "ein": "231943113",
+    "source": "outputs\\gate45-20261113\\05-bayada-home-health\\ui.json"
+  },
+  {
+    "name": "BAYLOR COLLEGE OF MEDICINE",
+    "ein": "741613878",
+    "source": "outputs\\gate45-20261113\\06-baylor-college-of\\review.json"
+  },
+  {
+    "name": "BAYLOR UNIVERSITY",
+    "ein": "741159753",
+    "source": "outputs\\gate45-20261113\\07-baylor-university\\review.json"
+  },
+  {
+    "name": "BEREA COLLEGE",
+    "ein": "610444650",
+    "source": "outputs\\gate45-20261113\\08-berea-college\\review.json"
+  },
+  {
+    "name": "BETH ISRAEL MEDICAL CENTER",
+    "ein": "135564934",
+    "source": "outputs\\gate45-20261113\\09-beth-israel-medical\\review.json"
+  },
+  {
+    "name": "BETHANY CHRISTIAN SERVICES",
+    "ein": "382822017",
+    "source": "outputs\\gate45-20261113\\10-bethany-christian-services\\ui.json"
+  },
+  {
+    "name": "BLOOD CANCER UNITED, INC.",
+    "ein": "135644916",
+    "source": "outputs\\gate46-20261113\\01-blood-cancer-united-inc\\ui.json"
+  },
+  {
+    "name": "BNY MELLON CHARITABLE GIFT FUND",
+    "ein": "300748315",
+    "source": "outputs\\gate46-20261113\\02-bny-mellon-charitable-gift-fund\\ui.json"
+  },
+  {
+    "name": "BOSTON FOUNDATION, INC.",
+    "ein": "042104021",
+    "source": "outputs\\gate46-20261113\\03-boston-foundation-inc\\ui.json"
+  },
+  {
+    "name": "BREAKTHROUGH T1D",
+    "ein": "231907729",
+    "source": "outputs\\gate46-20261113\\04-breakthrough-t1d\\ui.json"
+  },
+  {
+    "name": "BROWN UNIVERSITY",
+    "ein": "050258809",
+    "source": "outputs\\gate46-20261113\\05-brown-university\\ui.json"
+  },
+  {
+    "name": "BRYANT UNIVERSITY",
+    "ein": "050258810",
+    "source": "outputs\\gate46-20261113\\06-bryant-university\\ui.json"
+  },
+  {
+    "name": "BRYN MAWR COLLEGE",
+    "ein": "231352621",
+    "source": "outputs\\gate46-20261113\\07-bryn-mawr-college\\ui.json"
+  },
+  {
+    "name": "BUCKNELL UNIVERSITY",
+    "ein": "240772407",
+    "source": "outputs\\gate46-20261113\\08-bucknell-university\\ui.json"
+  },
+  {
+    "name": "CALIFORNIA BAPTIST UNIVERSITY",
+    "ein": "951890710",
+    "source": "outputs\\gate46-20261113\\09-california-baptist-university\\ui.json"
+  },
+  {
+    "name": "CALIFORNIA COMMUNITY FOUNDATION",
+    "ein": "953510055",
+    "source": "outputs\\gate46-20261113\\10-california-community-foundation\\ui.json"
+  },
+  {
+    "name": "CALIFORNIA LUTHERAN UNIVERSITY",
+    "ein": "952962604",
+    "source": "outputs\\gate47-20261113\\01-california-lutheran-university\\ui.json"
+  },
+  {
+    "name": "CARNEGIE MELLON UNIVERSITY",
+    "ein": "250969449",
+    "source": "outputs\\gate47-20261113\\02-carnegie-mellon-university\\ui.json"
+  },
+  {
+    "name": "CASE WESTERN RESERVE UNIVERSITY",
+    "ein": "341018992",
+    "source": "outputs\\gate47-20261113\\03-case-western-reserve-university\\ui.json"
+  },
+  {
+    "name": "CATHOLIC RELIEF SERVICES-UNITED STATES CONFERENCE OF CATHOLIC BISHOPS",
+    "ein": "135563422",
+    "source": "outputs\\gate47-20261113\\04-catholic-relief-services-united-states-conference-of-catholic-bishops\\ui.json"
+  },
+  {
+    "name": "CATHOLIC UNIVERSITY OF AMERICA (THE)",
+    "ein": "530196583",
+    "source": "outputs\\gate47-20261113\\05-catholic-university-of-america-the\\ui.json"
+  },
+  {
+    "name": "CEDARS-SINAI MEDICAL CENTER",
+    "ein": "951644600",
+    "source": "outputs\\gate47-20261113\\06-cedars-sinai-medical-center\\ui.json"
+  },
+  {
+    "name": "CHALLENGE AIR FOR KIDS AND FRIENDS",
+    "ein": "752559486",
+    "source": "outputs\\gate47-20261113\\07-challenge-air-for-kids-and-friends\\ui.json"
+  },
+  {
+    "name": "CHAPMAN UNIVERSITY",
+    "ein": "951643992",
+    "source": "outputs\\gate47-20261113\\08-chapman-university\\ui.json"
+  },
+  {
+    "name": "CHARITIES AID FOUNDATION AMERICA",
+    "ein": "431634280",
+    "source": "outputs\\gate47-20261113\\09-charities-aid-foundation-america\\ui.json"
+  },
+  {
+    "name": "CHICANOS POR LA CAUSA, INC.",
+    "ein": "860227210",
+    "source": "outputs\\gate47-20261113\\10-chicanos-por-la-causa-inc\\ui.json"
+  },
+  {
+    "name": "CHILD WELFARE LEAGUE OF AMERICA, INC.",
+    "ein": "131641066",
+    "source": "outputs\\gate48-20261113\\01-child-welfare-league-of-america-inc\\ui.json"
+  },
+  {
+    "name": "CHILDREN'S HEALTHCARE OF ATLANTA FOUNDATION, INC.",
+    "ein": "581710601",
+    "source": "outputs\\gate48-20261113\\02-children-s-healthcare-of-atlanta-foundation-inc\\ui.json"
+  },
+  {
+    "name": "CHILDREN'S HOSPITAL CORPORATION",
+    "ein": "042774441",
+    "source": "outputs\\gate48-20261113\\03-children-s-hospital-corporation\\ui.json"
+  },
+  {
+    "name": "CHILDREN'S HOSPITAL MEDICAL CENTER",
+    "ein": "310833936",
+    "source": "outputs\\gate48-20261113\\04-children-s-hospital-medical-center\\ui.json"
+  },
+  {
+    "name": "CHILDREN'S HOSPITAL OF THE KING'S DAUGHTERS",
+    "ein": "540506321",
+    "source": "outputs\\gate48-20261113\\05-children-s-hospital-of-the-king-s-daughters\\ui.json"
+  },
+  {
+    "name": "CHILDREN'S HUNGER FUND",
+    "ein": "954335462",
+    "source": "outputs\\gate48-20261113\\06-children-s-hunger-fund\\ui.json"
+  },
+  {
+    "name": "CHILDREN'S MEDICAL CENTER FOUNDATION",
+    "ein": "752062015",
+    "source": "outputs\\gate48-20261113\\07-children-s-medical-center-foundation\\ui.json"
+  },
+  {
+    "name": "CHRISTIAN APPALACHIAN PROJECT, INC.",
+    "ein": "610661137",
+    "source": "outputs\\gate48-20261113\\08-christian-appalachian-project-inc\\ui.json"
+  },
+  {
+    "name": "CHRISTIAN HEALTHCARE MINISTRIES, INC.",
+    "ein": "341964742",
+    "source": "outputs\\gate48-20261113\\09-christian-healthcare-ministries-inc\\ui.json"
+  },
+  {
+    "name": "CHRONIC DISEASE FUND, INC.",
+    "ein": "611462062",
+    "source": "outputs\\gate48-20261113\\10-chronic-disease-fund-inc\\ui.json"
+  },
+  {
+    "name": "AMERICAN CHEMICAL SOCIETY",
+    "ein": "530196572",
+    "source": "outputs\\gate44-20261113\\american-chemical-society\\review.json"
+  },
+  {
+    "name": "AMERICAN CIVIL LIBERTIES UNION, INC.",
+    "ein": "133871360",
+    "source": "outputs\\gate44-20261113\\american-civil-liberties-union\\review.json"
+  },
+  {
+    "name": "AMERICAN COMMITTEE FOR THE WEIZMANN INSTITUTE OF SCIENCE, INC.",
+    "ein": "131623886",
+    "source": "outputs\\gate44-20261113\\american-committee-weizmann\\review.json"
+  },
+  {
+    "name": "AMERICAN ENDOWMENT FOUNDATION",
+    "ein": "341747398",
+    "source": "outputs\\gate44-20261113\\american-endowment-foundation\\review.json"
+  },
+  {
+    "name": "AMERICAN LEBANESE SYRIAN ASSOCIATED CHARITIES, INC. DBA ST JUDE CHILDREN'S RESEARCH HOSPITAL",
+    "ein": "351044585",
+    "source": "outputs\\gate44-20261113\\american-lebanese-syrian-associated-charities\\review.json"
+  },
+  {
+    "name": "AMERICAN ONLINE GIVING FOUNDATION, INC.",
+    "ein": "810739440",
+    "source": "outputs\\gate44-20261113\\american-online-giving-foundation\\review.json"
+  },
+  {
+    "name": "AMERICAN UNIVERSITY OF BEIRUT",
+    "ein": "135596846",
+    "source": "outputs\\gate44-20261113\\american-university-of-beirut\\review.json"
+  },
+  {
+    "name": "AMERICAN YOUTH HOSTELS, INC",
+    "ein": "135639689",
+    "source": "outputs\\gate44-20261113\\american-youth-hostels\\review.json"
+  },
+  {
+    "name": "AMERICANS FOR PROSPERITY",
+    "ein": "753148958",
+    "source": "outputs\\gate44-20261113\\americans-for-prosperity\\review.json"
+  },
+  {
+    "name": "ARIZONA STATE UNIVERSITY FOUNDATION FOR A NEW AMERICAN UNIVERSITY",
+    "ein": "866051042",
+    "source": "outputs\\gate44-20261113\\asu-foundation\\review.json"
+  },
+  {
+    "name": "A. T. STILL UNIVERSITY OF HEALTH SCIENCES",
+    "ein": "430356250",
+    "source": "outputs\\gate43-20261111\\a-t-still-university-of-health-sciences\\review.json"
+  },
+  {
+    "name": "AARP",
+    "ein": "951985500",
+    "source": "outputs\\gate43-20261111\\aarp\\review.json"
+  },
+  {
+    "name": "ABILENE CHRISTIAN UNIVERSITY",
+    "ein": "750851900",
+    "source": "outputs\\gate43-20261111\\abilene-christian-university\\review.json"
+  }
+]

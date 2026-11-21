@@ -8438,6 +8438,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             nc_all_words_probes[required[0]] = primary_probe
     if state == "TN":
         generated = tn_browser_generated_queries(required, generated)
+        if trial_identity():
+            from deployment.gate55_repairs import tn_contains_coverage_order
+            required = tn_contains_coverage_order(required)
     if (state in {"AL", "NV"} or state == "NC" and trial_identity()) and all(
             len(distinctive_match_tokens(name)) >= 2 for name in required):
         # Keep every reviewed name and punctuation form. A generated generic
@@ -18834,7 +18837,9 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     variant = ct_service_variant(org.organization_name) if trial_identity() else ''
     variant_match = bool(variant and plain_key(row_name) == plain_key(variant)
                          and not any(plain_key(name) == plain_key(row_name) for name in reviewed_identity_names))
-    if name_score < 0 and not variant_match:
+    from deployment.gate55_repairs import ct_parenthetical_candidate
+    parenthetical_match = bool(trial_identity() and ct_parenthetical_candidate(row_name, safe_targets, normalized_match_name))
+    if name_score < 0 and not variant_match and not parenthetical_match:
         return None, name_score
     pairs: dict[str, str] = {}
     for label_html, value_html in re.findall(r"<b[^>]*>(.*?)</b>\s*<p[^>]*>(.*?)</p>", row_html, re.I | re.S):
@@ -18898,7 +18903,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     if re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", combined, re.I):
         score -= 100
     result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
-    if variant_match:
+    if variant_match or parenthetical_match:
         ident = result.matched_registry_identifier
         eins = {canonical_ein_digits(value) for value in re.findall(
             r"\b(?:Federal\s+(?:Tax\s+ID|EIN)|FEIN|EIN)\s*[:#]\s*(\d{2}-?\d{7})\b", combined, re.I)}
@@ -18931,7 +18936,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
                     break
         if eins or proof.get("decision") == "corroborated":
             result.selection_rank = (95, 0, score)
-            result.source_note = "Connecticut's full name differs only by Service/Services. The credential was corroborated by the requested EIN or its full organization office address."
+            result.source_note = ("Connecticut's parent name matches but its parenthetical spelling differs. " if parenthetical_match else "Connecticut's full name differs only by Service/Services. ") + "The credential was corroborated by the requested EIN or its full organization office address."
         else:
             row = {"name": row_name, "identifier": ident, "ein": "", "url": url,
                    "raw_status": result.raw_status_text, "status": result.status,
@@ -18940,7 +18945,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
             result.selection_rank = (-1, 0, 0)
             result.status = "Needs Review"
             result.success = False
-            result.source_note = "Connecticut lists a full Service/Services name variant. Confirm the selected credential's identity."
+            result.source_note = ("Connecticut lists the same parent name with a different parenthetical spelling. " if parenthetical_match else "Connecticut lists a full Service/Services name variant. ") + "Confirm the selected credential's identity."
         return result, score
     reviewed = ct_shortened_identity_review(org, result, detail_text)
     return reviewed, score if reviewed else -10000
@@ -19912,12 +19917,14 @@ def fl_business_candidate_rows(source: str) -> list:
         identifier, issued, expires, status = [html_to_text(v) for v in licenses[0]]
         if not re.fullmatch(r"CH\d+", identifier) or not re.fullmatch(r"[A-Za-z -]{1,60}", status):
             return []
+        explicit_educational = status.casefold() == "law na - educational"
         try:
-            expiry = datetime.strptime(expires, "%m/%d/%y").date()
-            issue = datetime.strptime(issued, "%m/%d/%y").date()
+            expiry = datetime.strptime(expires, "%m/%d/%y").date() if expires else None
+            issue = datetime.strptime(issued, "%m/%d/%y").date() if issued else None
         except ValueError:
             return []
-        if issue > date.today() or expiry.year < 1990:
+        if ((not explicit_educational and (issue is None or expiry is None))
+                or (issue and issue > date.today()) or (expiry and expiry.year < 1990)):
             return []
         header = html_to_text(card).split("License Type", 1)[0]
         place = re.search(r",\s*([^,]+),\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?(?:\s|$)", header)
@@ -19927,7 +19934,8 @@ def fl_business_candidate_rows(source: str) -> list:
         # city/state stays before the license label for shared alias checking.
         evidence = (f"Business Name {name}, {place[1].strip()}, {place[2]} "
                     f"License/Registration Number {identifier} "
-                    f"Expiration Date {expiry.month}/{expiry.day}/{expiry.year} Status {status}")
+                    + (f"Expiration Date {expiry.month}/{expiry.day}/{expiry.year} " if expiry else "")
+                    + f"Status {status}")
         rows.append({"text": evidence, "business_evidence": {
             "identifier": identifier, "name": name, "initial": issued, "status": status,
             "initial_label": "Issued", "initial_type": "initial_credential_issue_date",
@@ -22604,6 +22612,8 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     finally:
         result.queries_attempted = query_attempts
         result.source_attempts = [f"AK completed EIN search years: {', '.join(map(str, completed_ein_years)) or 'none'}"]
+        result.ak_ein_year_evidence = {"schema":1,"ein":canonical_ein_digits(org.ein),
+            "expected_recent_years":list(years_to_try),"completed_years":list(dict.fromkeys(completed_ein_years))}
         ak_context.close()
     checked_years = ", ".join(str(year) for year in completed_ein_years) or "none"
     if set(completed_ein_years) != set(ak_negative_checked_years):
@@ -26168,7 +26178,8 @@ def wi_direct_search_names(org) -> list[str]:
                 break
     from deployment.gates2930_repairs import wi_literal_core_plan
     direct = wi_literal_core_plan(original, [original, *known_names_for_ein(org.ein)], direct)
-    return list(dict.fromkeys(plain_registry_query(value) for value in direct))
+    from deployment.gate55_repairs import wi_delimiter_variants
+    return wi_delimiter_variants(list(dict.fromkeys(plain_registry_query(value) for value in direct)), required)
 
 
 def wi_confirm_clean_no_results_page(org, max_seconds: float = 14.0, progress: dict | None = None):
@@ -27527,6 +27538,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "registration_date_diagnostics",
         "source_truth_conflict",
         "verified_registry_ein",
+        "ak_ein_year_evidence",
     ]:
         evidence_value = getattr(result, evidence_key, None)
         if evidence_value is not None:
@@ -40644,6 +40656,9 @@ def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, sta
         }:
             retryable_statuses.add(status)
         if state == "AK":
+            from deployment.gate55_repairs import ak_completed_recent_ein_years
+            if ak_completed_recent_ein_years(sys.modules[__name__],result):
+                return result
             if status == "not registered" and result.get("reason_code") != "AK_COMPLETED_EIN_SEARCH":
                 retryable_statuses.add("not registered")
             elif result.get("reason_code") != "AK_COMPLETED_EIN_SEARCH" and (ak_batch_result_needs_confirmation(result) or ak_stale_exact_ein_result_needs_confirmation(result)):

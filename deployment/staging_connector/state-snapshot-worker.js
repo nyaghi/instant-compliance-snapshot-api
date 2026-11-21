@@ -702,7 +702,18 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             ?{x:viewport.pageX||0,y:viewport.pageY||0,width:viewport.clientWidth,height:viewport.clientHeight,scale:1}
             :{x:0,y:0,width:size.width,height:size.height,scale:1}};
         const captureImage=options=>wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:389:45:await",
-          ()=>sampled('capture:'+images.length,()=>chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',options)));
+          ()=>sampled('capture:'+images.length,async()=>{
+            if(['AL','NC','NV'].includes(state)&&typeof CCOwnedSourcePixels!=='undefined'){
+              try{return await CCOwnedSourcePixels.capture(tabId,options,{
+                deadline:started+captureBudgetMs-500,alive:()=>!cancelled&&alive(),
+                observe:value=>{observed.pixel_method=value.method;observed.pixel_ms=value.milliseconds;}
+              });}catch(error){
+                observed.pixel_recovery=String(error.message||'unavailable').slice(0,70);
+                if(cancelled||!alive())throw error;
+              }
+            }
+            return chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',options);
+          }));
         let image;
         if((nyRequiredDetail||ncSelectedDetail)&&gaFullViewport) {
           // The selected source already fits its owned viewport. Request

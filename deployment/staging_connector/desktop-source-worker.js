@@ -48,7 +48,13 @@
       return Promise.race([cancelled,operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout:'+label)),Math.max(1,Math.min(label==='create'?end-Date.now()-6000:label==='Page.captureScreenshot'?end-Date.now()-3000:label==='Page.enable'?Math.min(6000,end-Date.now()-10000):label==='initial_metadata'?Math.min(5000,end-Date.now()-4000):3000,end-Date.now())));})])
         .finally(()=>{clearTimeout(timer);steps.push({phase:label,seconds:(Date.now()-begin)/1000});});
     }
-    const command=(method,params={},label=method)=>{check();return limit(chrome.debugger.sendCommand({tabId:tab.id},method,params),label);};
+    const command=(method,params={},label=method)=>{check();return limit((async()=>{
+      if(method==='Page.captureScreenshot'&&d.operation==='detail'&&typeof CCOwnedSourcePixels!=='undefined'){
+        try{return await CCOwnedSourcePixels.capture(tab.id,params,{deadline:end-2000,alive:()=>!closed&&!signal?.aborted});}
+        catch(error){if(closed||signal?.aborted)throw error;}
+      }
+      return chrome.debugger.sendCommand({tabId:tab.id},method,params);
+    })(),label);};
     const metadata=async(initial=false)=>{
       const r=await command('Runtime.evaluate',{expression:`JSON.stringify((()=>{
         const table=document.getElementById('ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults');
@@ -57,7 +63,7 @@
         const name=document.getElementById('ctl00_cphMainContent_lblSearchParam2');
         const anchors=${JSON.stringify(d.operation==='detail'?[d.name,d.identifier,d.raw_status.split(';')[0],
           ...[...d.raw_status.matchAll(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g)].map(m=>m[0])]:[])};
-        const norm=s=>String(s).toLowerCase().replace(/[^a-z0-9]/g,'');
+        const norm=s=>String(s).toLowerCase().replace(/\\b(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})\\b/g,(_,m,d,y)=>String(+m)+'/'+String(+d)+'/'+y).replace(/[^a-z0-9]/g,'');
         const cells=Array.from(document.querySelectorAll('td,th,strong,label,span')).filter(e=>{
           if(e.children.length||!visible(e))return false;
           const b=e.getBoundingClientRect();

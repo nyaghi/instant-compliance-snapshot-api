@@ -65,11 +65,8 @@ def _retained_request(run,result):
     if (run.state!='WI' or workflow_call('deployment/desktop_source_evidence.py:retained_request:41:27:get',result.get,locals(), 'state')!='WI' or workflow_call('deployment/desktop_source_evidence.py:retained_request:41:56:get',result.get,locals(), 'success') is not True
         or workflow_call('deployment/desktop_source_evidence.py:retained_request:42:11:get',result.get,locals(), 'status') in {'Unable to Confirm','Unable to Verify','Site Not Reachable','Needs Review'}
         or workflow_call('deployment/desktop_source_evidence.py:retained_request:43:11:get',result.get,locals(), 'confirmation_required') or workflow_call('deployment/desktop_source_evidence.py:retained_request:43:50:get',result.get,locals(), '_worker_identity_review')):return trace_return('deployment/desktop_source_evidence.py:retained_request:43:89:return',(None))
-    if workflow_call('deployment/desktop_source_evidence.py:retained_request:44:7:get',result.get,locals(), 'status')=='Not Registered':
-        hint=getattr(run,'source_search_hint',None)
-        if not isinstance(hint,dict) or not exact_wi_search_url(workflow_call('deployment/desktop_source_evidence.py:retained_request:46:64:get',hint.get,locals(), 'url'),workflow_call('deployment/desktop_source_evidence.py:retained_request:46:80:get',hint.get,locals(), 'name')):return trace_return('deployment/desktop_source_evidence.py:retained_request:46:98:return',(None))
-        return trace_return('deployment/desktop_source_evidence.py:retained_request:47:8:return',(dict(state='WI',ein=run.ein,name=hint['name'],url=hint['url'],run_id=run.run_id,
-            issued_at=time.time(),operation='empty_search')))
+    if result.get('status')=='Not Registered':
+        return None  # Completed negatives publish their names-searched PDF.
     identifier=workflow_call('deployment/desktop_source_evidence.py:retained_request:49:15:get',result.get,locals(), 'matched_registry_identifier');name=workflow_call('deployment/desktop_source_evidence.py:retained_request:49:62:get',result.get,locals(), 'matched_registry_name')
     hint=workflow_call('deployment/desktop_source_evidence.py:retained_request:50:9:get',getattr(run,'source_detail_hints',{}).get,locals(), identifier)
     if (not isinstance(identifier,str) or not re.fullmatch(r'\d{1,10}-800',identifier)

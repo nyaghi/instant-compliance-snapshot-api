@@ -179,6 +179,7 @@
     const verificationPending = () => [...document.querySelectorAll("button")].some(el => text(el) === "Search" && !visible(el))
       && !!document.querySelector('div[id^="recaptcha_"]');
     let button;
+    ilObserveReadiness('entered', formWaitMs);
     try {
       button = await wfcAwait("content:illinois:162:15",()=>(wait(() => {
         const b=searchButton();
@@ -190,7 +191,9 @@
           throw new Error("NY_CONNECTOR_IL_VERIFICATION_PENDING");
         return false;
       }, formWaitMs === 0 ? 45000 : verificationPending() ? formWaitMs : 45000, {trace:phase("form")})));
+      ilObserveReadiness('ready', formWaitMs);
     } catch {
+      ilObserveReadiness('failed', formWaitMs);
       // Illinois deliberately hides all Kendo buttons until its own
       // verification callback succeeds. Observe only public DOM presence;
       // never read verification values or enable/click a hidden control.
@@ -2765,6 +2768,42 @@
   }
 // Per-document passive message timing; no DOM changes, polling or extra requests.
 const wfcActive=new Map();let wfcSequence=0;
+function ilObserveReadiness(outcome, formWaitMs) {
+  // Read public DOM readiness only. No verification values, queries, cookies,
+  // input values, URLs with paths, or page-script internals are retained.
+  if (!IL || !wfcActive.size) return;
+  try {
+    const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Search');
+    const controls=buttons.slice(0,4).map(el=>{
+      const rect=el.getBoundingClientRect?.();
+      const style=typeof getComputedStyle==='function'?getComputedStyle(el):null;
+      return {visible:visible(el),disabled:!!el.disabled,
+        width:rect?Math.round(rect.width):null,height:rect?Math.round(rect.height):null,
+        display:style?.display||null,visibility:style?.visibility||null,
+        hidden_ancestors:(()=>{let count=0,node=el.parentElement;
+          for(let n=0;node&&n<8;n++,node=node.parentElement) {
+            const s=typeof getComputedStyle==='function'?getComputedStyle(node):null;
+            if(node.hidden||s?.display==='none'||s?.visibility==='hidden')count++;
+          }return count;})()};
+    });
+    const resources=[];
+    try {
+      for(const entry of performance.getEntriesByType('resource').slice(-30)) {
+        const host=new URL(entry.name).hostname;
+        if(!host)continue;
+        resources.push({host,initiator:entry.initiatorType||'unknown',
+          duration_ms:Math.round(entry.duration||0),
+          response_status:Number.isFinite(entry.responseStatus)?entry.responseStatus:null});
+      }
+    } catch { /* Optional timing API may be absent. */ }
+    const data={form_wait_ms:formWaitMs,document_ready_state:document.readyState||'unknown',
+      page_visibility:document.visibilityState||'unknown',search_button_count:buttons.length,
+      controls,verification_container_present:!!document.querySelector('div[id^="recaptcha_"]'),
+      recent_public_resources:resources,resource_status_zero_is_not_failure_proof:true};
+    for(const trace of wfcActive.values())wfcEvent(trace,'illinois.form-readiness',outcome,
+      {...data,attribution_ambiguous:wfcActive.size>1});
+  } catch { /* Observation must never change readiness or the search result. */ }
+}
 function wfcBegin(action) {
   const trace={id:++wfcSequence,action,received_epoch_seconds:Date.now()/1000,
     document_id:documentId,visibility_at_receive:document.visibilityState,

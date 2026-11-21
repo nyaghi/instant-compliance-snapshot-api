@@ -168,7 +168,13 @@ const CCDCSource=(()=>{
   const check=()=>{if(signal?.aborted)throw Error('source_cancelled');};
   function limited(p,label,late,reserve=null){const at=Date.now();let timer;return Promise.race([cancelled,Promise.resolve(p).then(v=>{if(closed||signal?.aborted){late?.(v);throw Error('closed');}return v;}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout:'+label)),Math.max(1,Math.min(reserve===null?(label==='create'?Math.max(1,end-Date.now()-3000):3000):Math.max(1,end-Date.now()-reserve),end-Date.now())));})]).finally(()=>{clearTimeout(timer);steps.push({phase:label,seconds:(Date.now()-at)/1000});});}
   function captureTiming(finished){const seconds=(finished-start)/1000,queue_seconds=steps.find(s=>s.phase==='queue')?.seconds||0;return {seconds,queue_seconds,active_seconds:seconds-queue_seconds,steps,...(selection?{selection}: {})};}
-  const command=(method,params={},reserve=null,label=method)=>{check();return limited(chrome.debugger.sendCommand({tabId:tab.id},method,params),label,null,reserve);};
+  const command=(method,params={},reserve=null,label=method)=>{check();return limited((async()=>{
+    if(method==='Page.captureScreenshot'&&typeof CCOwnedSourcePixels!=='undefined'){
+      try{return await CCOwnedSourcePixels.capture(tab.id,params,{deadline:end-(reserve||1000),alive:()=>!closed&&!signal?.aborted});}
+      catch(error){if(closed||signal?.aborted)throw error;}
+    }
+    return chrome.debugger.sendCommand({tabId:tab.id},method,params);
+  })(),label,null,reserve);};
   // Keep one pending source command; reserve five seconds for image completion.
   // Final binding gets only the same remaining active deadline, never a new clock.
   let linkedIdentifier=null;
