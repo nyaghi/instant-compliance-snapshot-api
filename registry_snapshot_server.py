@@ -13756,7 +13756,8 @@ def sc_official_detail_lookup(org) -> object | None:
                             "error": f"{type(exc).__name__}: {exc}",
                         })
                         if not (isinstance(exc, TimeoutError) or
-                                (isinstance(exc, OSError) and transport is not None)):
+                                (isinstance(exc, OSError) and transport is not None
+                                 and transport['kind'] == 'transport_error')):
                             raise
                         if access_attempt == 0:
                             continue

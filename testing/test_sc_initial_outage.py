@@ -3,7 +3,7 @@
 No live state calls. Healthy query sequences and identity decisions are compared
 against the deployed SF function; failures run the real master retry boundary.
 """
-import ast,copy,html,json,os,socket,subprocess,time,unittest
+import ast,copy,html,json,os,socket,subprocess,time,unittest,urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
@@ -104,5 +104,20 @@ class SCInitialOutage(unittest.TestCase):
         self.assertIsNone(classify(item|{'success':True,'status':'Current'}))
         # Other existing outage codes retain their delayed recovery policy.
         self.assertFalse(classify(item|{'reason_code':'OR_SOURCE_UNREACHABLE'})['terminal'])
+
+    def test_70_access_denials_preserve_existing_browser_fallback(self):
+        for case in CASES:
+            for code in [403,404,429,503]:
+                outcomes=[];calls=[]
+                for fn in [self.original,c.sc_official_detail_lookup]:
+                    session,_=self.source(case)
+                    session.get.side_effect=urllib.error.HTTPError(c.NAME_SEARCH_PREFLIGHT_URLS['SC'],code,'HTTP Error '+str(code),{},None)
+                    with patch.object(c.curl_requests,'Session',return_value=session),patch.object(c,'build_search_queries',return_value=[case['name'],case['name']+' Extra']):
+                        if fn is self.original:fn.__globals__['build_search_queries']=c.build_search_queries
+                        result=fn(c.checker.Organization(case['name'],case['ein']))
+                    session.get.side_effect.close()
+                    outcomes.append(result);calls.append(session.get.call_count)
+                self.assertIsNone(outcomes[0]);self.assertIsNone(outcomes[1],(case['name'],code))
+                self.assertEqual(calls,[2,2])
 
 if __name__=='__main__':unittest.main()
