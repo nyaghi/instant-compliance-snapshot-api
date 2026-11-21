@@ -20396,7 +20396,18 @@ def search_fl_with_transport(page, org, transport):
             if candidate is not None:
                 evidence = exact[0]["business_evidence"]
                 alternate = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, evidence["url"])
-                confirmed = finish_fl_candidate(alternate, candidate)
+                if evidence["status"] == "Law NA - Educational":
+                    # Selection already passed the same identity/EIN/address
+                    # guards. The explicit exemption needs no expiration date.
+                    confirmed = alternate
+                    confirmed.success = True
+                    confirmed.matched_registry_name = candidate["row_name"]
+                    confirmed.matched_registry_identifier = evidence["identifier"]
+                    if candidate["address"]:
+                        confirmed.address_evidence = candidate["address"]
+                        confirmed.identity_anchor = "cross_state_name_address"
+                else:
+                    confirmed = finish_fl_candidate(alternate, candidate)
                 if confirmed is not None:
                     confirmed.source_note = "FL uses the charity license status and expiration date in the official FDACS Business Lookup."
                     if evidence["status"] == "Law NA - Educational":

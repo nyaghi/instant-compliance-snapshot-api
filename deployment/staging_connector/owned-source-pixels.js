@@ -23,6 +23,15 @@ const CCOwnedSourcePixels=(()=>{
       const layout=await invoke('Page.getLayoutMetrics');
       if(!coversViewport(options,layout)||!alive())throw Error('pixel_capture_not_viewport');
       const v=layout.cssVisualViewport||layout.visualViewport;
+      const actual=(await invoke('Runtime.evaluate',{
+        expression:'({width:innerWidth,height:innerHeight})',returnByValue:true
+      }))?.result?.value;
+      // Chrome metadata includes scrollbars; layout metrics exclude them.
+      // Read the exact owned document viewport rather than allowing a margin
+      // or shrinking the source image to the content width.
+      if(!actual||![actual.width,actual.height].every(Number.isFinite)
+          ||actual.width<v.clientWidth||actual.height<v.clientHeight
+          ||actual.width*actual.height>20000000||!alive())throw Error('pixel_capture_geometry');
       const began=Date.now();
       const frame=new Promise((resolve,reject)=>{
         listener=(source,method,params)=>{
@@ -34,7 +43,7 @@ const CCOwnedSourcePixels=(()=>{
           if(!alive()||Date.now()>=stop)return reject(Error('pixel_capture_stale'));
           if(!m||!Number.isFinite(m.timestamp)||m.timestamp*1000<began-10
               ||m.timestamp*1000>Date.now()+1000||m.pageScaleFactor!==1
-              ||Math.abs(m.deviceWidth-v.clientWidth)>1||Math.abs(m.deviceHeight-v.clientHeight)>1
+              ||Math.abs(m.deviceWidth-actual.width)>1||Math.abs(m.deviceHeight-actual.height)>1
               ||Math.abs(m.scrollOffsetX-v.pageX)>1||Math.abs(m.scrollOffsetY-v.pageY)>1
               ||m.offsetTop!==0||!image(params?.data))return;
           resolve({data:params.data});
@@ -47,7 +56,7 @@ const CCOwnedSourcePixels=(()=>{
       frame.catch(()=>{});
       active=true;
       await invoke('Page.startScreencast',{format:'jpeg',quality:options.quality||75,
-        maxWidth:Math.ceil(v.clientWidth),maxHeight:Math.ceil(v.clientHeight),everyNthFrame:1});
+        maxWidth:Math.ceil(actual.width),maxHeight:Math.ceil(actual.height),everyNthFrame:1});
       const result=await frame;
       if(!alive()||Date.now()>=deadline)throw Error('pixel_capture_stale');
       observe({method:'original-frame',milliseconds:Date.now()-began});

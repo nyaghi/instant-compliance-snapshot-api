@@ -11,8 +11,9 @@ function fixture(caseData,changes={}){
  const chrome={debugger:{onEvent:{addListener:f=>listeners.add(f),removeListener:f=>listeners.delete(f)},sendCommand:async(target,method,params)=>{
   calls.push({target,method,params});
   if(method==='Page.getLayoutMetrics')return {cssVisualViewport:viewport};
+  if(method==='Runtime.evaluate')return {result:{value:{width:1280+(changes.scrollbar?15:0),height:1600}}};
   if(method==='Page.startScreencast'){
-   const meta={timestamp:Date.now()/1000,deviceWidth:1280,deviceHeight:1600,pageScaleFactor:1,scrollOffsetX:0,scrollOffsetY:0,offsetTop:0};
+   const meta={timestamp:Date.now()/1000,deviceWidth:1280+(changes.scrollbar?15:0),deviceHeight:1600,pageScaleFactor:1,scrollOffsetX:0,scrollOffsetY:0,offsetTop:0};
    if(changes.cancel)alive=false;
    for(const f of listeners){
     f({tabId:999},'Page.screencastFrame',{sessionId:1,data,metadata:meta});
@@ -33,7 +34,7 @@ function fixture(caseData,changes={}){
 for(const state of ['AL','NC','NV','DC','WI'])test(state+' 70 recorded identities: same-tab original-frame capture and stale/wrong geometry rejection',async()=>{
  assert.equal(new Set(roster.map(x=>x.ein)).size,70);
  for(const c of roster){
-  const h=fixture(c),deadline=Date.now()+5000;
+  const h=fixture(c,{scrollbar:true}),deadline=Date.now()+5000;
   const image=await h.api.capture(7,{format:'jpeg',quality:80,captureBeyondViewport:false},{deadline,alive:h.alive});
   assert.equal(image.data,h.data);assert.equal(h.listeners.size,0);
   assert.equal(h.calls.at(-1).method,'Page.stopScreencast');

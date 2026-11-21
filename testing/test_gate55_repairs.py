@@ -47,6 +47,28 @@ class Gate55(unittest.TestCase):
             self.assertEqual(c.fl_business_candidate_rows(body.replace('</html>','')),[])
             RESULTS.append(dict(state='FL',**case,passed=True,scenario='explicit educational / absent dates; five other statuses unchanged'))
 
+    def test_FL_70_complete_business_route_without_expiration(self):
+        template=(F/'FL-ITHACA.html').read_text(encoding='utf-8')
+        for case in ROSTER:
+            rows=c.fl_business_candidate_rows(template.replace('ITHACA COLLEGE',html.escape(case['name'])))
+            org=c.checker.Organization(case['name'],case['ein'])
+            with patch.object(c,'trial_identity',return_value=True), patch.object(c,'fl_business_lookup_enabled',return_value=True), patch.object(c,'fl_business_public_rows',return_value=rows), patch.object(c,'CAPTURE_EVIDENCE_SCREENSHOTS',False), patch.object(c,'CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT',False), patch.object(c,'fl_reviewed_alias_address',return_value=None):
+                result=c.search_fl_with_transport(NS(),org,NS())
+            if result.success:
+                self.assertEqual(result.status,'Exempt')
+                self.assertEqual(result.matched_registry_identifier,'CH32432')
+                self.assertEqual(result._cc_registration_date_evidence['initial'],'')
+            else:
+                # Complex DBA identity guard remains authoritative; the new
+                # date exemption must never turn its refusal into approval.
+                self.assertIn(result.status,['Unable to Confirm','Needs Review'])
+                self.assertFalse(result.matched_registry_identifier)
+        for name,ein in [('ITHACA','150532204'),('KENYON','314379507')]:
+            rows=c.fl_business_candidate_rows((F/f'FL-{name}.html').read_text(encoding='utf-8'))
+            with patch.object(c,'trial_identity',return_value=True), patch.object(c,'fl_business_lookup_enabled',return_value=True), patch.object(c,'fl_business_public_rows',return_value=rows), patch.object(c,'CAPTURE_EVIDENCE_SCREENSHOTS',False), patch.object(c,'CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT',False), patch.object(c,'fl_reviewed_alias_address',return_value=None):
+                result=c.search_fl_with_transport(NS(),c.checker.Organization(name+' COLLEGE',ein),NS())
+            self.assertTrue(result.success);self.assertEqual(result.status,'Exempt')
+
     def test_CT_70_parent_candidate_is_not_identity_approval(self):
         for i,case in enumerate(ROSTER):
             name=case['name'];base=c.normalized_match_name(name)
