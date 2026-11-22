@@ -155,7 +155,15 @@ function armRuntimeLatencyProbe(sequence,owners,invoked) {
     if(sample.storage_ms>=250){sample.timer_serviced_before_storage=sample.timer_fired_epoch_ms!==undefined;retain();}
   };
 }
-function saveRuntime() {
+// Consecutive pending job admissions only add entries to the full recovery image.
+let pendingAdmissionBatch = null;
+let lastDurableRuntime = null;
+function isAdditionalAdmission(previous, next) {
+  if (next.queue.length !== previous.queue.length + 1) return false;
+  const priorShape = {...next, queue:next.queue.slice(0, -1)};
+  return JSON.stringify(priorShape) === JSON.stringify(previous);
+}
+function saveRuntime(admission = false) {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
   const runtimeBuildStarted = Date.now();
@@ -166,27 +174,27 @@ function saveRuntime() {
   if (!P.TRIAL_ORIGIN) {
     saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
   }
-  // Passive staging diagnostics: retain sizes/counts only, never payload contents.
-  // No extra Chrome calls, writes, timers, or changes to the saved runtime value.
   const runtimeBuildMs = Date.now() - runtimeBuildStarted;
   const payloadMeasureStarted = Date.now();
-  let payloadJsonChars = null, payloadMeasureFailed = false;
-  try { payloadJsonChars = JSON.stringify(value).length; }
-  catch { payloadMeasureFailed = true; }
+  let payloadJsonChars = null, payloadMeasureFailed = false, serialized = null;
+  try {
+    serialized = JSON.stringify(value);
+    payloadJsonChars = serialized.length;
+  } catch { payloadMeasureFailed = true; }
   const payloadMeasureMs = Date.now() - payloadMeasureStarted;
   const enqueued = Date.now(), owners = allJobs().filter(j => j && !j.closed);
   const sequence = ++runtimeCheckpointSequence, depth = ++runtimeCheckpointPending;
-  const record = (invoked, outcome) => {
+  const record = (invoked, outcome, written = value, chars = payloadJsonChars) => {
     runtimeCheckpointPending--;
     try {
       const finished = Date.now();
       const sample = {sequence, enqueued_epoch_ms:enqueued, invoked_epoch_ms:invoked,
         finished_epoch_ms:finished, queue_ms:invoked-enqueued, api_ms:finished-invoked,
         pending_at_enqueue:depth, outcome, runtime_build_ms:runtimeBuildMs,
-        latency_probe_schema:1, payload_json_chars:payloadJsonChars, payload_measure_ms:payloadMeasureMs,
+        latency_probe_schema:1, payload_json_chars:chars, payload_measure_ms:payloadMeasureMs,
         payload_measure_failed:payloadMeasureFailed,
-        active_job_count:value.queue.filter(j => j.active).length,
-        queued_job_count:value.queue.filter(j => !j.active).length};
+        active_job_count:written.queue.filter(j => j.active).length,
+        queued_job_count:written.queue.filter(j => !j.active).length};
       for (const job of owners) {
         if (!job.workflowObservation) continue;
         const samples = job.workflowObservation.runtime_checkpoints ||= [];
@@ -194,17 +202,41 @@ function saveRuntime() {
       }
     } catch { /* Observation must never change a checkpoint result. */ }
   };
-  saving = saving.catch(() => {}).then(() => {
+  // Freeze the payload at enqueue time. Later jobs can mutate nested job fields.
+  const snapshot = serialized === null ? value : structuredClone(value);
+  if (admission && pendingAdmissionBatch && serialized !== null &&
+      isAdditionalAdmission(pendingAdmissionBatch.snapshot, snapshot)) {
+    pendingAdmissionBatch.snapshot = snapshot;
+    pendingAdmissionBatch.key = serialized;
+    const durable = pendingAdmissionBatch.durable;
+    durable.then(() => record(Date.now(), 'admission-batched'), () => record(Date.now(), 'rejected'));
+    return durable;
+  }
+  const batch = {snapshot, key:serialized, durable:null};
+  pendingAdmissionBatch = admission && serialized !== null ? batch : null;
+  saving = saving.catch(() => {}).then(async () => {
+    if (pendingAdmissionBatch === batch) pendingAdmissionBatch = null;
     const invoked = Date.now();
-    let finishProbe=()=>{};
-    try {finishProbe=armRuntimeLatencyProbe(sequence,owners,invoked);} catch {}
-    const finish=(outcome)=>{try{finishProbe(outcome);}catch{}record(invoked,outcome);};
+    if (batch.key !== null && batch.key === lastDurableRuntime) {
+      record(invoked, 'already-durable');
+      return;
+    }
+    let finishProbe = () => {};
+    try { finishProbe = armRuntimeLatencyProbe(sequence, owners, invoked); } catch {}
+    let outcome = 'rejected';
     try {
-      return Promise.resolve(chrome.storage.session.set({ccnyRuntime:value})).then(
-        result => {finish('returned');return result;},
-        error => {finish('rejected');throw error;});
-    } catch(error) {finish('threw');throw error;}
+      await chrome.storage.session.set({ccnyRuntime:batch.snapshot});
+      lastDurableRuntime = batch.key;
+      outcome = 'returned';
+    } catch (error) {
+      lastDurableRuntime = null;
+      throw error;
+    } finally {
+      try { finishProbe(outcome); } catch {}
+      record(invoked, outcome, batch.snapshot, batch.key?.length ?? null);
+    }
   });
+  batch.durable = saving;
   return saving;
 }
 function newJob(sender, id, refreshOnly, saved = {}) {
@@ -1069,7 +1101,7 @@ chrome.runtime.onConnect.addListener(port => {
       if (job) { port.postMessage({ action: "closed", reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); port.disconnect(); return null; }
       job = newJob(port.sender, id, prefix === "cc-ny-refresh-v1:", {registryState}); job.port = port;
       job.tnRetryAttempt = takeTnRetry(job);
-      arm(job); queue.push(job); await saveRuntime();
+      arm(job); queue.push(job); await saveRuntime(true);
     }
     notifyQueue(); pump(); return job;
   });

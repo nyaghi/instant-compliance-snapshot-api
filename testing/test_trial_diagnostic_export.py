@@ -1,9 +1,12 @@
 """The isolated lab export preserves a first-pass trace without changing rows."""
+import base64
+import io
 import json
 from pathlib import Path
 import re
 import subprocess
 import unittest
+import zipfile
 from unittest.mock import patch
 
 from deployment import performance_lab
@@ -48,34 +51,39 @@ console.log('TN message-to-DOM trace and mature-state controls passed');'''.repl
         # Parse just the declared function body, avoiding unrelated page code.
         match = re.search(r'    function downloadExcel\(\) \{[\s\S]*?\n    \}', function)
         self.assertIsNotNone(match)
+        begin = page.index('      window.__CCLabStateTrace = [];')
+        end = page.index('      startElapsedTimer();', begin)
+        reset = page[begin:end]
+        exporter = (ROOT / 'web-staging/excel-export.js').read_text(encoding='utf-8')
         program = r'''const vm=require('node:vm'), assert=require('node:assert/strict');
-let downloaded;
-const link={click(){}};
+let downloaded, removed=false, hidden=false, cleared=false;
 const context={
-  latestResults:[{organization_name:'Example Charity',ein:'012345678',state:'MS',status:'Unable to Confirm',comments:'Search incomplete'}],
-  formatEin:()=> '01-2345678', commentsWithRegistryFooter:r=>r.comments,
-  window:{__CCLabStateTrace:[{at:1000,state:'MS',stage:'browser query started',query:'Example Charity'},
-    {at:4500,state:'MS',stage:'browser query returned',reason:'NY_CONNECTOR_INCOMPLETE'}]},
-  document:{createElement:()=>link}, URL:{createObjectURL:blob=>(downloaded=blob,'blob:test'),revokeObjectURL(){}},
-  Blob,Date,encodeURIComponent,JSON,String
+  latestResults:[{organization_name:'Example Charity',ein:'012345678',state:'MS',status:'Current',
+    evidence_url:'/state-snapshots/'+'a'.repeat(64)+'.pdf'}],
+  commentsWithRegistryFooter:()=>'',window:{__CCLabStateTrace:[{state:'OLD'}]},
+  document:{createElement:()=>({click(){}}),getElementById:()=>({remove(){removed=true}})},
+  resultPanel:{classList:{add(name){hidden=name==='hidden'}}},resultRows:{replaceChildren(){cleared=true}},
+  URL, location:{origin:'https://fixture-final-four.onrender.com'}, Blob,TextEncoder,Uint8Array,DataView,
+  setTimeout:()=>{}, Date,JSON,
 };
-vm.createContext(context);vm.runInContext(FUNCTION+'\ndownloadExcel();',context);
-(async()=>{
-  const output=await downloaded.text();
-  const match=output.match(/^<!--CC_LAB_TRACE_V1:([\s\S]*?)-->/);
-  assert.ok(match,'trace is embedded in the existing download');
-  const trace=JSON.parse(decodeURIComponent(match[1]));
-  assert.equal(trace.schema,'cc-lab-trace-v1');
-  assert.equal(trace.events.length,2);
-  assert.equal(trace.events[1].reason,'NY_CONNECTOR_INCOMPLETE');
-  assert.equal((output.match(/<table>/g)||[]).length,1);
-  assert.ok(output.includes('<td>MS</td><td>Unable to Confirm</td>'));
-  assert.ok(output.includes('<td>01-2345678</td>'));
-  process.stdout.write('trace export and results table passed');
-})().catch(e=>{console.error(e);process.exitCode=1});'''.replace('FUNCTION', json.dumps(match.group(0)))
-        result = subprocess.run([str(NODE), '-e', program], capture_output=True, text=True, timeout=20)
+const urls={createObjectURL(blob){downloaded=blob;return 'blob:test'},revokeObjectURL(){}};
+const sandbox=vm.createContext(context);
+vm.runInContext(EXPORTER,sandbox);
+vm.runInContext(RESET,sandbox);
+assert.ok(removed&&hidden&&cleared);
+context.window.__CCLabStateTrace.push({state:'MS',stage:'first pass'},{state:'MS',stage:'row retry'});
+context.URL=Object.assign(class extends URL {},urls);
+vm.runInContext(FUNCTION+'\ndownloadExcel();',sandbox);
+downloaded.arrayBuffer().then(b=>process.stdout.write(Buffer.from(b).toString('base64')));
+'''.replace('EXPORTER', json.dumps(exporter)).replace('RESET', json.dumps(reset)).replace('FUNCTION', json.dumps(match.group(0)))
+        result = subprocess.run([str(NODE)], input=program, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('passed', result.stdout)
+        with zipfile.ZipFile(io.BytesIO(base64.b64decode(result.stdout))) as book:
+            diagnostics = json.loads(book.read('cc-diagnostics.json'))
+            self.assertEqual([e['stage'] for e in diagnostics['events']], ['first pass', 'row retry'])
+            self.assertIn(b'01-2345678', book.read('xl/worksheets/sheet1.xml'))
+            self.assertIn(b'Current', book.read('xl/worksheets/sheet1.xml'))
+            self.assertIn(b'/state-snapshots/', book.read('xl/worksheets/_rels/sheet2.xml.rels'))
 
 
 if __name__ == '__main__':

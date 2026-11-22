@@ -299,6 +299,13 @@ def final_four_asset(name, text):
                 }
                 traceNode.textContent = JSON.stringify(events);
               }''')
+        # A new main run replaces the displayed results. Its diagnostics should
+        # start at the same boundary. Row retries continue using the current run.
+        replace('      startElapsedTimer();', '''      window.__CCLabStateTrace = [];
+      document.getElementById("cc-lab-state-trace")?.remove();
+      resultPanel.classList.add("hidden");
+      resultRows.replaceChildren();
+      startElapsedTimer();''')
         # Preserve first-pass diagnostics outside the human-facing worksheets.
         replace('      const diagnostics = null;', '''      const diagnostics = {
         schema:"cc-lab-trace-v1",exported_at:new Date().toISOString(),
