@@ -13,7 +13,7 @@ def ct_parenthetical_candidate(name, targets, normalize):
 def wi_delimiter_variants(plan,required=()):
     """One delimiter alternative; retain required identities and time allowance."""
     if len(plan)<2:return plan
-    alternative=next((re.sub(r',\s+(?=(?:inc\.?|incorporated|corp\.?|corporation)\s*$)',' ',q,flags=re.I)
+    alternative=next((re.sub(r',\s+(?=(?:inc\.?|incorporated|corp\.?|corporation)\s*$)',' ',q,flags=re.I).rstrip('.')
         for q in plan[1:] if re.search(r',\s+(?:inc\.?|incorporated|corp\.?|corporation)\s*$',q,re.I)),None)
     if not alternative or alternative.casefold() in {q.casefold() for q in plan}:return plan
     result=[plan[0],alternative,*plan[1:]]

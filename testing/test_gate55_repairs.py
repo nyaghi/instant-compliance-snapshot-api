@@ -2,7 +2,8 @@
 
 These are offline tests, not seventy live registry adjudications per state.
 """
-import ast, html, json, socket, subprocess, sys, unittest
+import ast, html, json, socket, subprocess, sys, unittest, io, time
+from urllib.parse import urlsplit,parse_qs
 from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import patch
@@ -90,6 +91,27 @@ class Gate55(unittest.TestCase):
             elif ein:self.assertTrue(result.success);self.assertNotEqual(result.status,'Needs Review')
             else:self.assertFalse(result.success);self.assertTrue(result._cc_identity_review)
 
+    def test_WI_actual_successful_query_reaches_actual_selected_record(self):
+        name="JEWISH BOARD OF FAMILY & CHILDREN'S SERVICES, INC"
+        aliases=[name,"JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES, INC.",'Jewish Board of Family & Children Services, Inc.']
+        org=c.checker.Organization(name,'135564937')
+        token=c.REVIEWED_NAME_CONTEXT.set({'135564937':tuple(aliases)})
+        try:
+            with patch.object(c,'known_names_for_ein',return_value=aliases):plan=c.wi_direct_search_names(org)
+            positive=(F/'WI-JEWISH-BOARD.html').read_text(encoding='utf-8')
+            empty='<html>There are no query results</html>'
+            attempted=[]
+            def response(open_,request,**kwargs):
+                query=parse_qs(urlsplit(request.full_url).query)['FirmName'][0];attempted.append(query)
+                return positive if query=="JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES INC" else empty
+            opener=NS(open=lambda *a,**k:io.BytesIO(b'<html></html>'))
+            with patch.object(c,'wi_request_opener',return_value=opener),patch('deployment.wi_query_history.read_wi_response',side_effect=response):
+                selected,reached=c.wi_http_search_best_match(plan,[name,*aliases],deadline=time.perf_counter()+15,original_name=name,ein=org.ein)
+            self.assertTrue(reached);self.assertIsNotNone(selected)
+            self.assertEqual(selected['license_number'],'20308-800')
+            self.assertEqual(attempted[1],"JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES INC")
+        finally:c.REVIEWED_NAME_CONTEXT.reset(token)
+
     def test_WI_70_full_required_plan_still_has_delimiter_recovery(self):
         for case in ROSTER:
             plan=[case['name']+', INC',case['name']+" CHILDREN'S SERVICES, INC."]
@@ -97,7 +119,7 @@ class Gate55(unittest.TestCase):
             self.assertEqual(out[0],plan[0])
             self.assertEqual(len(out),len(plan)+1)
             self.assertTrue(set(plan)<=set(out))
-            self.assertIn(case['name']+" CHILDREN'S SERVICES INC.",out)
+            self.assertIn(case['name']+" CHILDREN'S SERVICES INC",out)
             self.assertEqual(len(set(out)),len(out))
         name="JEWISH BOARD OF FAMILY & CHILDREN'S SERVICES, INC"
         aliases=[name,"JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES, INC.",'Jewish Board of Family & Children Services, Inc.']
@@ -105,8 +127,8 @@ class Gate55(unittest.TestCase):
         try:
             with patch.object(c,'known_names_for_ein',return_value=aliases):
                 plan=c.wi_direct_search_names(c.checker.Organization(name,'135564937'))
-            self.assertIn("JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES INC.",plan)
-            self.assertEqual(plan[1],"JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES INC.")
+            self.assertIn("JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES INC",plan)
+            self.assertEqual(plan[1],"JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES INC")
             self.assertTrue(set(aliases[:2])<=set(plan))
         finally:c.REVIEWED_NAME_CONTEXT.reset(token)
 
@@ -114,7 +136,7 @@ class Gate55(unittest.TestCase):
         for case in ROSTER:
             n=case['name'];plan=[n+", INC",n+" CHILDREN'S SERVICES, INC.",n+' Other Identity',n+' Optional fragment']
             new=g.wi_delimiter_variants(plan,plan[:3])
-            self.assertEqual(new[0],plan[0]);self.assertIn(n+" CHILDREN'S SERVICES INC.",new)
+            self.assertEqual(new[0],plan[0]);self.assertIn(n+" CHILDREN'S SERVICES INC",new)
             self.assertIn(n+' Other Identity',new);self.assertLessEqual(len(new),len(plan))
             self.assertEqual(g.wi_delimiter_variants(new,plan[:3]),new)
             RESULTS.append(dict(state='WI',**case,passed=True,scenario='comma removal without apostrophe loss / no additional queries'))
