@@ -11,7 +11,7 @@ def ct_parenthetical_candidate(name, targets, normalize):
 
 
 def wi_delimiter_variants(plan,required=()):
-    """One delimiter alternative, without losing any required literal identity."""
+    """One delimiter alternative; retain required identities and time allowance."""
     if len(plan)<2:return plan
     alternative=next((re.sub(r',\s+(?=(?:inc\.?|incorporated|corp\.?|corporation)\s*$)',' ',q,flags=re.I)
         for q in plan[1:] if re.search(r',\s+(?:inc\.?|incorporated|corp\.?|corporation)\s*$',q,re.I)),None)
@@ -20,7 +20,7 @@ def wi_delimiter_variants(plan,required=()):
     protected={q.casefold() for q in [plan[0],alternative,*required]}
     while len(result)>len(plan):
         index=next((i for i in range(len(result)-1,0,-1) if result[i].casefold() not in protected),None)
-        if index is None:return plan
+        if index is None:return result  # At most one extra query; original shared deadline still applies.
         result.pop(index)
     return result
 

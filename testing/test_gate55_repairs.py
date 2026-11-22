@@ -90,6 +90,26 @@ class Gate55(unittest.TestCase):
             elif ein:self.assertTrue(result.success);self.assertNotEqual(result.status,'Needs Review')
             else:self.assertFalse(result.success);self.assertTrue(result._cc_identity_review)
 
+    def test_WI_70_full_required_plan_still_has_delimiter_recovery(self):
+        for case in ROSTER:
+            plan=[case['name']+', INC',case['name']+" CHILDREN'S SERVICES, INC."]
+            out=g.wi_delimiter_variants(plan,plan)
+            self.assertEqual(out[0],plan[0])
+            self.assertEqual(len(out),len(plan)+1)
+            self.assertTrue(set(plan)<=set(out))
+            self.assertIn(case['name']+" CHILDREN'S SERVICES INC.",out)
+            self.assertEqual(len(set(out)),len(out))
+        name="JEWISH BOARD OF FAMILY & CHILDREN'S SERVICES, INC"
+        aliases=[name,"JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES, INC.",'Jewish Board of Family & Children Services, Inc.']
+        token=c.REVIEWED_NAME_CONTEXT.set({'135564937':tuple(aliases)})
+        try:
+            with patch.object(c,'known_names_for_ein',return_value=aliases):
+                plan=c.wi_direct_search_names(c.checker.Organization(name,'135564937'))
+            self.assertIn("JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES INC.",plan)
+            self.assertEqual(plan[1],"JEWISH BOARD OF FAMILY AND CHILDREN'S SERVICES INC.")
+            self.assertTrue(set(aliases[:2])<=set(plan))
+        finally:c.REVIEWED_NAME_CONTEXT.reset(token)
+
     def test_WI_70_literal_variants_preserve_apostrophes_and_budget(self):
         for case in ROSTER:
             n=case['name'];plan=[n+", INC",n+" CHILDREN'S SERVICES, INC.",n+' Other Identity',n+' Optional fragment']
