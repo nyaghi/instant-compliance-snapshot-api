@@ -30,8 +30,18 @@ function wfStart(job,stage) {
 }
 function wfEnd(job,span,outcome='returned',error=null) {
   try {
-    wfEvent(job,span.stage,outcome,{span_id:span.seq,duration_seconds:(Date.now()-span.started)/1000,
+    const duration=(Date.now()-span.started)/1000;
+    wfEvent(job,span.stage,outcome,{span_id:span.seq,duration_seconds:duration,
       error_type:error?(error.name||'Error'):null});
+    // Preserve the longest waits even when routine readiness polls fill the
+    // ordinary bounded trace. Existing clocks/calls/decisions stay unchanged.
+    if(duration>=1 && job.workflowObservation) {
+      const waits=job.workflowObservation.longest_waits ||= [];
+      waits.push({stage:span.stage,outcome,span_id:span.seq,duration_seconds:duration,
+        at_epoch_seconds:Date.now()/1000,error_type:error?(error.name||'Error'):null});
+      waits.sort((a,b)=>b.duration_seconds-a.duration_seconds);
+      if(waits.length>64)waits.length=64;
+    }
     if(span.seq!=null)delete job.workflowObservation.pending[span.seq];
   } catch {}
 }

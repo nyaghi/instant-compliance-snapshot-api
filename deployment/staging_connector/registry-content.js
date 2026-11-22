@@ -2056,6 +2056,20 @@
       selected:!!option && profession.value===option.value,
       name:!!name && !name.disabled,search:!!search && !search.disabled && visible(search)};
   }
+  // Observation only: no requests, retries, timers, page changes or decisions.
+  function ncSourceObservation() {
+    try {
+      const nav=performance.getEntriesByType('navigation')[0];
+      const verification=/^Just a moment/i.test(document.title||'')
+        && /Performing security verification|verifies you are not a bot/i.test(text(document.body));
+      const out={document_state:document.readyState,verification,
+        route:/\/charities_filings\//.test(location.pathname)?'filings':/\/charities_profile\//.test(location.pathname)?'profile':'search',
+        source_status:Number.isInteger(nav?.responseStatus)&&nav.responseStatus>=100&&nav.responseStatus<=599?nav.responseStatus:0};
+      for(const key of ['requestStart','responseStart','responseEnd','domInteractive','loadEventEnd'])
+        if(Number.isFinite(nav?.[key])&&nav[key]>=0)out[key+'_ms']=Math.round(nav[key]);
+      return out;
+    }catch{return null;}
+  }
   function registryDocumentReady() {
     if (document.readyState === 'loading') return false;
     if (AL) {
@@ -2206,7 +2220,7 @@
       ...((NV||NC) ? {page_visibility:document.visibilityState} : {}),
       ...(NV ? {nv_readiness:nvReadiness(),
         nv_startup_unreachable:document.documentElement.hasAttribute('data-cc-nv-config-unavailable')} : {}),
-      ...(NC ? {...(ncPublishedProfileError()?{source_failure:'REGISTRY_NC_PROFILE_SOURCE_ERROR'}:{}),verification_pending:/^Just a moment/i.test(document.title||'')
+      ...(NC ? {nc_source_observation:ncSourceObservation(),...(ncPublishedProfileError()?{source_failure:'REGISTRY_NC_PROFILE_SOURCE_ERROR'}:{}),verification_pending:/^Just a moment/i.test(document.title||'')
         && /Performing security verification|verifies you are not a bot/i.test(text(document.body)),
         ...(m.query ? {nc_search_idle:ncIdleSearch(m.query),nc_readiness:ncReadiness(m.query)} : {})} : {}),
       ...(TN ? {verification_pending:!!document.querySelector('div[id^="recaptcha_"]') && !registryDocumentReady()} : {})};

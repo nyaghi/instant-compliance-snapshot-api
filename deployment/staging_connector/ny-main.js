@@ -37,7 +37,9 @@ const CCNYProtocol = /* Public search evidence only. No cookies, credentials, or
         return (ordinary || verification || narrowed) && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 500;
       }
       if (value.state === "AL") return false;
-      if (value.state === "NC") return value.operation === "detail" && keys === "identifier,operation,state,url"
+      if (value.state === "NC") return value.operation === "detail" && (keys === "identifier,operation,state,url"
+        || !!TRIAL_ORIGIN && keys==='history,identifier,operation,state,url' && ['profile','selected'].includes(value.history))
+        && (value.history!=='selected'||/^(SL|EX)\d+$/.test(value.identifier||''))
         && typeof value.identifier === "string" && typeof value.url === "string"
         && /^https:\/\/www\.sosnc\.gov\/online_services\/search\/charities_profile\/\d+$/.test(value.url)
         && (/^(SL|EX)\d+$/.test(value.identifier) || !!TRIAL_ORIGIN && /^NCAPP-\d+$/.test(value.identifier)

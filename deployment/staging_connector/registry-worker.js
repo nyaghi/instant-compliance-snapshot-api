@@ -818,6 +818,15 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
           throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
       }
       const value=await wfAwait(job,"registry-worker.js:registryReady:629:18:await",()=>(registryReadinessMessage(job,{action:"registry-ready",...(ncSubmittedQuery ? {query:ncSubmittedQuery} : {})},deadline)));
+      if(P.TRIAL_ORIGIN && job.registryState==='NC' && value?.nc_source_observation) {
+        const source=value.nc_source_observation;
+        const signature=JSON.stringify({ready:value.ready===true,document_id:value.documentId,
+          document_state:source.document_state,verification:source.verification,route:source.route,source_status:source.source_status});
+        if(signature!==job.ncSourceSignature && (job.ncSourceObservationCount||0)<64) {
+          job.ncSourceSignature=signature;job.ncSourceObservationCount=(job.ncSourceObservationCount||0)+1;
+          diagnostic('nc-source-observation',job,JSON.stringify({ready:value.ready===true,...source}));
+        }
+      }
       if(P.TRIAL_ORIGIN && job.registryState==='NC' && !ncSubmittedQuery) {
         const observed={phase:'readiness',ready:value?.ready===true,
           visible:value?.page_visibility==='visible',verification_pending:value?.verification_pending===true,
@@ -1485,6 +1494,24 @@ async function performRegistryQueryInner(job, query) {
   }
   return wfReturn(job,"registry-worker.js:performRegistryQuery:1217:2:return",(registryGaSearch(job,query)));
 }
+async function registryNcSelectedHistory(job,query,profile) {
+  const fields=profile?.evidence?.fields;
+  if(!fields || fields['Registration #']!==query.identifier || fields.profile_url!==query.url)
+    throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+  const evidence={...profile.evidence,query:{...query},fields:{...fields}};
+  delete evidence.filings;
+  const expected=query.url.replace('/charities_profile/','/charities_filings/');
+  if(profile.filings_url===expected) {
+    evidence.filings={url:expected,complete:false,rows:[]};
+    if(!job.closed && job.activeExpiresAt-Date.now()>5000)try {
+      await registryNavigate(job,expected,Math.min(8000,job.activeExpiresAt-Date.now()-1000));
+      const history=await registryMessage(job,{action:'registry-nc-filings',query});
+      if(history?.ok)evidence.filings=history.filings;
+    }catch{/* Optional history cannot invalidate the already confirmed profile. */}
+  }
+  diagnostic('nc-selected-history',job,'one selected record; no candidate filing-history requests');
+  return {ok:true,evidence};
+}
 async function registryNorthCarolinaQuery(job,query) {
   const started=Date.now();
   const phase=stage=>diagnostic('nc-phase',job,`${query.operation}:${stage} total_ms=${Date.now()-started}`);
@@ -1518,6 +1545,8 @@ async function registryNorthCarolinaQuery(job,query) {
     return wfReturn(job,"registry-worker.js:registryNorthCarolinaQuery:1248:4:return",(result));
   }
   if(job.ncProfiles?.[query.identifier]!==query.url)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+  if(P.TRIAL_ORIGIN && query.history==='selected' && job.ncProfileEvidence?.[query.identifier])
+    return registryNcSelectedHistory(job,query,job.ncProfileEvidence[query.identifier]);
   try {
     await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1251:2:await",()=>(registryNavigate(job,query.url)));
   } catch(error) {
@@ -1535,6 +1564,11 @@ async function registryNorthCarolinaQuery(job,query) {
   const profile=await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1253:16:await",()=>(registryMessage(job,{action:'registry-nc-profile',query})));
   phase(`profile-${profile?.ok?'complete':profile?.reason||'incomplete'}`);
   if(!profile?.ok)return wfReturn(job,"registry-worker.js:registryNorthCarolinaQuery:1255:18:return",(profile));
+  if(P.TRIAL_ORIGIN && ['profile','selected'].includes(query.history)) {
+    job.ncProfileEvidence ||= Object.create(null);
+    job.ncProfileEvidence[query.identifier]=JSON.parse(JSON.stringify(profile));
+    if(query.history==='selected')return registryNcSelectedHistory(job,query,profile);
+  }
   const expected=query.url.replace('/charities_profile/','/charities_filings/');
   const needsFilings=!/^NCAPP-\d+$/.test(query.identifier)&&profile.filings_url===expected;
   // Save the selected original profile while it is still on screen. The
@@ -1549,6 +1583,10 @@ async function registryNorthCarolinaQuery(job,query) {
       job.ncProfileSnapshot={commandId,generation,query:JSON.parse(JSON.stringify(query)),snapshot};
   }
 
+  if(P.TRIAL_ORIGIN && query.history==='profile') {
+    diagnostic('nc-profile-history-deferred',job,'identity profile and original pixels retained; optional history deferred');
+    return {ok:true,evidence:profile.evidence};
+  }
   if(!/^NCAPP-\d+$/.test(query.identifier)&&profile.filings_url===expected) {
     profile.evidence.filings={url:expected,complete:false,rows:[]};
     if(job.activeExpiresAt-Date.now()>5000) {

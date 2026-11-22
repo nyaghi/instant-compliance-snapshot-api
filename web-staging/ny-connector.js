@@ -206,7 +206,8 @@
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
       const evidenceProtocol = registryState === "NV" && connection.capabilities?.includes("nv-contains-empty-v1")
-        ? "nv-contains-empty-v1" : alEvidenceProtocol;
+        ? "nv-contains-empty-v1" : registryState === "NC" && connection.capabilities?.includes("nc-selected-history-v1")
+        ? "nc-selected-history-v1" : alEvidenceProtocol;
       let state = await api({ action: "start", state: registryState, ...(evidenceProtocol ? {evidence_protocol:evidenceProtocol}:{}), organization_name, ein, purpose, ...(officeEvidence ? {office_evidence:officeEvidence} : {}), ...(identity_review_token ? {identity_review_token} : {}), recovery_protocol: "il-fresh-page-v1", ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
       checkToken = state.check_token || "";
       if (!supported(connection) && state.phase === "search") {

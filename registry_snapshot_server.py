@@ -8345,7 +8345,7 @@ def nv_empty_contains_probe(required, generated):
     return max(candidates, default=(0, 0, ""))[2]
 
 
-def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specific_names=False,
+def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specific_names=False, nc_selected_history=False,
                               nv_contains=False):
     """Master-owned name plan and identity selection for the four new sources.
 
@@ -8789,7 +8789,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     seen.add(row["identifier"])
                     continue
                 detail_query = {"state": state, "operation": "detail", "identifier": row["identifier"]}
-                if state == "NC": detail_query["url"] = row["url"]
+                if state == "NC":
+                    detail_query["url"] = row["url"]
+                    if trial_identity() and nc_selected_history:detail_query["history"] = "profile"
                 if (state == "NC" and trial_identity()
                         and nc_short_historical_cancellation(row, nc_primary_name)):
                     primary = next((known for known in records
@@ -8899,6 +8901,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state],
                                       selection=nc_confirmed_selection)
+    if state == "NC" and trial_identity() and nc_selected_history:
+        from deployment.nc_selected_history import enrich
+        enrich(sys.modules[__name__],result,collect)
     if nc_historical_cancellations:
         if (not result.success or any(
                 expected != result.matched_registry_identifier
@@ -10056,6 +10061,7 @@ def final_four_connector_advance(record):
                   nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
                   final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining,
                       nc_specific_names=bool(record.get("nc_specific_name_recovery")),
+                      nc_selected_history=record.get("nc_selected_history") is True,
                       nv_contains=record.get("nv_contains") is True))
     except NYConnectorQueryNeeded as pending:
         required, generated = licensed_charity_names(org)
@@ -10261,6 +10267,9 @@ def final_four_connector_request(payload, origin):
                   "issued": now, "expires": now + (cutoff if mode == "sales" else NY_CONNECTOR_TTL_SECONDS),
                   "version": APP_VERSION, "completed": [], "pending": None,
                   "alternate_names": alternate_names, "protocol": "final-four-public-v1"}
+        if (state == "NC" and mode == "standard" and trial_identity()
+                and payload.get("evidence_protocol") == "nc-selected-history-v1"):
+            record["nc_selected_history"] = True
         if (state == "NV" and mode == "standard" and trial_identity()
                 and payload.get("evidence_protocol") == "nv-contains-empty-v1"):
             record["nv_contains"] = True
