@@ -88,6 +88,32 @@ const CCOwnedSourcePixels=(()=>{
       lanes.delete(tabId);
     }
   }
-  if(typeof module!=='undefined')module.exports={coversViewport,image,capture,pendingCount:()=>receivers.size};
-  return {capture,coversViewport};
+  // The DOM can be clear while Chrome still supplies the previous ORION frame.
+  // Measure a small copy solely for quality control; publish the original JPEG.
+  function nvVeilInPixels(rgba,width,height) {
+    const pixels=width*height;
+    let dark=0,blueCenter=0;
+    for(let i=0;i<pixels;i++) {
+      const k=i*4,r=rgba[k],g=rgba[k+1],b=rgba[k+2];
+      if(Math.max(r,g,b)<130 && ++dark>pixels*.00015)return false;
+      const x=i%width,y=Math.floor(i/width);
+      if(x>width*.43&&x<width*.57&&y>height*.39&&y<height*.61
+          &&b>120&&b-r>75&&b-g>45)blueCenter++;
+    }
+    return blueCenter>=Math.max(8,pixels*.00005);
+  }
+  async function nvDetailVeiled(data) {
+    if(!image(data))throw Error('invalid_nv_detail_image');
+    const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));
+    const bitmap=await createImageBitmap(new Blob([bytes],{type:'image/jpeg'}));
+    try {
+      const scale=Math.min(1,768/Math.max(bitmap.width,bitmap.height));
+      const w=Math.max(1,Math.round(bitmap.width*scale)),h=Math.max(1,Math.round(bitmap.height*scale));
+      const ctx=new OffscreenCanvas(w,h).getContext('2d',{willReadFrequently:true});
+      ctx.drawImage(bitmap,0,0,w,h);
+      return nvVeilInPixels(ctx.getImageData(0,0,w,h).data,w,h);
+    } finally {bitmap.close();}
+  }
+  if(typeof module!=='undefined')module.exports={coversViewport,image,capture,nvDetailVeiled,nvVeilInPixels,pendingCount:()=>receivers.size};
+  return {capture,coversViewport,nvDetailVeiled};
 })();

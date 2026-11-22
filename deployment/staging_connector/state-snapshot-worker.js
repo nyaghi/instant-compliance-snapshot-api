@@ -187,6 +187,9 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
   const allowed=state==='NY' ? P.NY : registryOrigin(state);
 
   let attached=false, cancelled=false, timeoutId,expireCapture,restoreModal=false,desktopViewport=false,ilPaintActive=false,msOriginalScroll=null,timeoutDetach=null;
+  const gaOptionalSearch=state==='GA'&&!gaRequiredDetail&&Object.hasOwn(query,'orgName');
+  let cancelGaPixels, retriedNvPixels=false;
+  const gaDetached=gaOptionalSearch?new Promise(resolve=>{cancelGaPixels=resolve;}):null;
   let validatedResult=null, publishRestored;
   const restoredImage=new Promise(resolve=>{publishRestored=resolve;});
 
@@ -712,7 +715,8 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
                 if(cancelled||!alive())throw error;
               }
             }
-            return chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',options);
+            const command=chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',options);
+            return gaOptionalSearch?Promise.race([command,gaDetached]):command;
           }));
         let image;
         if((nyRequiredDetail||ncSelectedDetail)&&gaFullViewport) {
@@ -724,6 +728,20 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             image=await captureImage(screenshotOptions);
         } else image=await captureImage(screenshotOptions);
 
+        if(boundNvDetail&&image?.data&&typeof CCOwnedSourcePixels!=='undefined'
+            &&await CCOwnedSourcePixels.nvDetailVeiled(image.data)) {
+          observed.phase='NV-loading-frame';
+          if(retriedNvPixels||cancelled||!alive()||started+captureBudgetMs-Date.now()<1200)return null;
+          retriedNvPixels=true;
+          await new Promise(resolve=>setTimeout(resolve,120));
+          const fresh=await chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0});
+          if(cancelled||!alive()||!fresh||fresh.url!==meta.url||fresh.document_id!==meta.document_id
+              ||fresh.source_binding!==meta.source_binding||fresh.source_loading_visible!==false
+              ||fresh.source_detail!==true||JSON.stringify(fresh.source_view_shape)!==JSON.stringify(meta.source_view_shape))return null;
+          image=await sampled('NV-fresh-pixels',()=>chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',screenshotOptions));
+          if(!image?.data||cancelled||!alive()||await CCOwnedSourcePixels.nvDetailVeiled(image.data))return null;
+          observed.phase='NV-fresh-pixels-verified';
+        }
         if(state==='NM')wfEvent(job,'NM image validation','started',{image_characters:typeof image?.data==='string'?image.data.length:null});
         if(typeof image?.data!=='string'||image.data.length>4000000||!/^[A-Za-z0-9+/]+={0,2}$/.test(image.data))return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:397:112:return",(null));
 
@@ -935,6 +953,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       if(workerSettledDetail&&validatedResult&&!cancelled&&alive()&&Date.now()-started<captureBudgetMs) {
         observed.phase='restored-image-validated';publishRestored(validatedResult);
       }
+      if(gaOptionalSearch&&timeoutDetach)await timeoutDetach;
       if(attached)try{await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:545:22:await",()=>(sampled('detach',()=>chrome.debugger.detach({tabId}))));}catch{}
       // A timeout may have started a second detach. Its acknowledgement also
       // belongs to this capture and must settle before admitting another command.
@@ -980,7 +999,13 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
     // screenshot. Clear this invocation's ownership before detaching, so its
     // late finally cannot detach a later capture. The busy flag remains until
     // the old Chrome operation has actually settled.
-    if(state==='AL'&&attached){attached=false;timeoutDetach=chrome.debugger.detach({tabId}).catch(()=>{});}
+    if(gaOptionalSearch&&attached&&observed.waiting==='capture:0'&&!desktopViewport) {
+      // Keep the lease until Chrome confirms detach. An old pending capture
+      // cannot publish pixels or issue a second detach after the next command.
+      timeoutDetach=chrome.debugger.detach({tabId}).then(()=>{
+        attached=false;cancelGaPixels(null);
+      },()=>{}); // If detach fails, wait for original completion and cleanup.
+    } else if(state==='AL'&&attached){attached=false;timeoutDetach=chrome.debugger.detach({tabId}).catch(()=>{});}
     else if((desktopViewport||ilDetail||state==='NV')&&attached)timeoutDetach=chrome.debugger.detach({tabId}).catch(()=>{});
 
     resolve(completedImage);
