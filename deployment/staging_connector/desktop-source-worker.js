@@ -42,10 +42,24 @@
   // Attach a handler before any source operation so an early cancellation is contained.
   cancelled.catch(()=>{});
   const check=()=>{if(signal?.aborted)throw Error('source_cancelled');};
+    function operationBudget(label) {
+      const remaining = end - Date.now();
+      switch (label) {
+        case 'create': return remaining - 6000;
+        case 'Page.captureScreenshot': return remaining - 3000;
+        case 'Page.enable': return Math.min(6000, remaining - 10000);
+        case 'initial_metadata': return Math.min(5000, remaining - 4000);
+        case 'attach':
+          // Give the original attachment time to finish while preserving
+          // six seconds for checking identity and capturing the detail.
+          if (d.operation === 'detail') return Math.min(6000, remaining - 6000);
+      }
+      return Math.min(3000, remaining);
+    }
     function limit(p,label,late) {
       const begin=Date.now();let timer;
       const operation=Promise.resolve(p).then(v=>{if(closed||signal?.aborted){late?.(v);throw Error('closed');}return v;});
-      return Promise.race([cancelled,operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout:'+label)),Math.max(1,Math.min(label==='create'?end-Date.now()-6000:label==='Page.captureScreenshot'?end-Date.now()-3000:label==='Page.enable'?Math.min(6000,end-Date.now()-10000):label==='initial_metadata'?Math.min(5000,end-Date.now()-4000):3000,end-Date.now())));})])
+      return Promise.race([cancelled,operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout:'+label)),Math.max(1,operationBudget(label)));})])
         .finally(()=>{clearTimeout(timer);steps.push({phase:label,seconds:(Date.now()-begin)/1000});});
     }
     const command=(method,params={},label=method)=>{check();return limit((async()=>{

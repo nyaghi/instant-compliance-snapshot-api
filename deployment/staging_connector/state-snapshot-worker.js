@@ -106,14 +106,14 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
     observed.prior_capture_ms=spent;
   }
   if(state==='NC') {
-    // Detail metadata took 6.3s in the retained full-state trace. Bound that
-    // original-image work to 10s / 12s aggregate, without changing state expiry.
-    // Search images keep their prior limits and one-second completion reserve.
+    // Slow layout and metadata reads on an already selected NC profile can
+    // consume nine seconds before pixels are available. Preserve an independent
+    // detail budget inside the state deadline and keep the search cap unchanged.
     const selected=query.operation==='detail';
     const spent=Number.isFinite(job.ncSnapshotSpentMs)?Math.max(0,job.ncSnapshotSpentMs):0;
-    const remaining=Math.max(0,(selected?12000:6000)-spent);
+    const remaining=Math.max(0,(selected?20000:6000)-spent);
     if(remaining<1000){observed.phase='capture-budget-exhausted';trace();return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:66:73:return",(null));}
-    captureBudgetMs=Math.min(selected?10000:3000,remaining,job.activeExpiresAt-started-1000);
+    captureBudgetMs=Math.min(selected?16000:3000,remaining,job.activeExpiresAt-started-1000);
     observed.prior_capture_ms=spent;
   }
 

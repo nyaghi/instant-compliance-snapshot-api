@@ -253,7 +253,7 @@ function awaitReconnect(job) {
 }
 async function saveRepair(value) { await chrome.storage.local.set({ ccnyRepair: value }); repair = value; }
 const ownedCleanupRetries = new Map();
-async function removeOwned(tabId) {
+async function removeOwned(tabId, persist = true) {
   if (tabId === null || !owned.has(tabId)) return;
   try {
     const tab = await chrome.tabs.get(tabId), url = new URL(tab.url);
@@ -278,7 +278,7 @@ async function removeOwned(tabId) {
       }
     }
   }
-  await saveRuntime();
+  if (persist) await saveRuntime();
 }
 const boot = (async () => {
   await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
@@ -373,6 +373,29 @@ function takeTnRetry(job) {
   return expires > Date.now();
 }
 
+// Hold the just-released position briefly for a pending same-document TN
+// retry. Without this handoff other collectors fill it during page cleanup.
+let tnHandoff = null;
+function holdTnPosition(job) {
+  if (job.registryState !== 'TN' || ![0,1].includes(job.duoSlot) ||
+      !auroraBackgroundTrial(job.sender)) return;
+  const owner = tnOwner(job);
+  const queued = queue.some(j=>!j.closed && j.tnRetryAttempt && tnOwner(j)===owner);
+  const remainingGrant = tnRetryGrants.get(owner) || 0;
+  if (!queued && remainingGrant <= Date.now()) return;
+  const expires = queued ? Date.now()+6000 : Math.min(Date.now()+6000, remainingGrant);
+  const handoff = {owner, slot:job.duoSlot, expires};
+  tnHandoff = handoff;
+  setTimeout(() => {
+    if (tnHandoff === handoff) { tnHandoff=null; pump(); }
+  }, expires-Date.now());
+}
+function heldTnPositions(job) {
+  if (!tnHandoff || tnHandoff.expires <= Date.now() ||
+      job?.tnRetryAttempt && tnOwner(job) === tnHandoff.owner) return [];
+  return [tnHandoff.slot];
+}
+
 function pump() {
   CCSourceRail.notify();
   if(!CCSourceRail.isReady())return;
@@ -386,7 +409,7 @@ function pump() {
     const job=queue[i];
     if(job.closed)continue;
     if(P.TRIAL_ORIGIN && activeLanes.has(job.registryState))continue;
-    if(isDuoJob(job) && usedDuoSlots.size>=2)continue;
+    if(isDuoJob(job) && [0,1].every(slot=>usedDuoSlots.has(slot)||heldTnPositions(job).includes(slot)))continue;
     // Preserve FIFO within a registry, even while its old page reconnects.
     if(P.TRIAL_ORIGIN && queue.slice(0,i).some(j=>!j.closed&&j.registryState===job.registryState))continue;
     if(!job.port)continue;
@@ -418,7 +441,10 @@ function pump() {
     close(job,repair.reason||'NY_CONNECTOR_RECOVERY_REJECTED');return;
   }
   if(P.TRIAL_ORIGIN)activeLanes.set(job.registryState,job);else active=job;
-  if(isDuoJob(job))job.duoSlot=[0,1].find(slot=>!usedDuoSlots.has(slot));
+  if(isDuoJob(job)) {
+    job.duoSlot=[0,1].find(slot=>!usedDuoSlots.has(slot)&&!heldTnPositions(job).includes(slot));
+    if(job.tnRetryAttempt && tnHandoff?.owner===tnOwner(job))tnHandoff=null;
+  }
   diagnostic('admitted',job,`${job.registryState} queue_ms=${Date.now()-job.enqueuedAt}`);
   job.activeExpiresAt ??= Date.now()+ACTIVE_TTL;
   arm(job);
@@ -444,35 +470,39 @@ async function close(job, reason, finishId) {
     if (job.registryState==='NV') try {await registryNevadaBackgroundEnd(job);}catch{}
     if (P.TRIAL_ORIGIN && job.registryState==='NV') try { await wfAwait(job,"worker.js:close:294:52:await",()=>(registryRestoreNevadaVisibility(job))); } catch { diagnostic('visibility-restore-failed',job,'Continuing owned-page cleanup'); }
     const tabId = job.tab; job.tab = null;
-    if (tabId !== null) await wfAwait(job,"worker.js:close:321:31:await",()=>(removeOwned(tabId)));
+    if (tabId !== null) await wfAwait(job,"worker.js:close:321:31:await",()=>(removeOwned(tabId, !P.TRIAL_ORIGIN)));
     // A failed Chrome remove acknowledgement retains ownership. Keep the slot
     // reserved while retrying only that same owned tab; never open a replacement.
     while (P.TRIAL_ORIGIN && tabId !== null && owned.has(tabId)) {
       await new Promise(resolve=>setTimeout(resolve,1000));
-      await removeOwned(tabId);
+      await removeOwned(tabId, !P.TRIAL_ORIGIN);
     }
   })();
   // Returning from finish and releasing a physical slot are separate events.
   // Late cleanup may free this job's slot, but cannot free a newer owner's slot.
-  const release = () => {
-    cleanupDone=true;
+  const release = async () => {
     if (isActive(job)) {
-      if (P.TRIAL_ORIGIN) {activeLanes.delete(job.registryState);laneStarts.set(job.registryState,Date.now()+PACE_MS);}
+      if (P.TRIAL_ORIGIN) {holdTnPosition(job);activeLanes.delete(job.registryState);laneStarts.set(job.registryState,Date.now()+PACE_MS);}
       else {active=null;nextStart=Date.now()+PACE_MS;}
     }
-    notifyQueue();pump();saveRuntime().catch(()=>{});
+    // Chrome has acknowledged removal. Persist removal and lane pacing together
+    // before reporting cleanup complete, while the next slot can be admitted.
+    const checkpoint = saveRuntime();
+    notifyQueue();pump();
+    await checkpoint;
+    cleanupDone=true;
   };
-  cleanup.then(release,()=>diagnostic('owned-slot-cleanup-pending',job,'Slot retained until cleanup is acknowledged'));
+  const released = cleanup.then(release);
   // Browser tab/storage acknowledgements can stall. Finish stays bounded;
   // any late cleanup still refers only to this job's own tab.
-  try { await wfAwait(job,"worker.js:close:325:8:await",()=>(Promise.race([cleanup, new Promise(resolve => { cleanupTimer = setTimeout(resolve, 10000); })]))); }
+  try { await wfAwait(job,"worker.js:close:325:8:await",()=>(Promise.race([released, new Promise(resolve => { cleanupTimer = setTimeout(resolve, 10000); })]))); }
   catch { /* Closing a vanished tab must not strand other organizations. */ }
   finally { clearTimeout(cleanupTimer); }
   if (finishId) post(job, { id: finishId, ok: true, cleanup_complete: cleanupDone });
   try { job.port.disconnect(); } catch {}
   notifyQueue();
   pump();
-  saveRuntime().catch(() => {});
+  if (!P.TRIAL_ORIGIN) saveRuntime().catch(() => {});
 }
 async function lookupTab(job) {
   if (job.tab !== null) return wfReturn(job,"worker.js:lookupTab:339:24:return",undefined);

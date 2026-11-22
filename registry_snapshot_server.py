@@ -7403,7 +7403,7 @@ def al_charity_search_evidence(payload):
     return list(grouped.values())
 
 
-def nc_charity_record_evidence(fields):
+def nc_charity_record_evidence(fields, *, search_card=False):
     """Interpret the charity result card, keeping an explicit extension distinct.
 
     Profile identity and filing-history acquisition remain separate from these
@@ -7511,6 +7511,14 @@ def nc_charity_record_evidence(fields):
         return dict(name=name, identifier=identifier, aliases=aliases, raw_status=raw,
                     url=fields["profile_url"], license_category=kind, non_charity_scope=True)
     extended = bool(re.fullmatch(r"Current Active\s*[–-]\s*Filing Extension Granted", raw, re.I))
+    if extended and extension is None and search_card:
+        # This card can be matched by name and license. Only the selected
+        # profile may resolve the missing date. Never use the old expiry.
+        return dict(name=name, identifier=identifier, ein="", aliases=aliases,
+                    raw_status=raw, status="Unable to Confirm", expiration=None,
+                    base_expiration=expiration, extension_end=None, initial=None,
+                    renewal=None, street="", location="", url=fields["profile_url"],
+                    license_category=kind)
     if extended and extension is None:
         raise ValueError("North Carolina extension was granted but its end date is incomplete")
     # User-confirmed policy, 2026-09-29: an explicit extension end date takes
@@ -8097,7 +8105,7 @@ def final_four_search_evidence(payload, state, query):
         if not isinstance(raw, dict):
             raise ValueError(f"{state} search row is incomplete")
         if state == "NC":
-            row = nc_charity_record_evidence(raw)
+            row = nc_charity_record_evidence(raw, search_card=bool(trial_identity()))
         else:
             required = {"name", "identifier", "city", "region", "aliases"} if state == "TN" else {"name", "identifier", "entity_type"}
             if not required.issubset(raw) or not all(isinstance(raw[k], str) for k in required - {"aliases"}):
@@ -8702,6 +8710,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     and not any(item["reason"] == "REVIEW_TN_HISTORICAL_NAME" for item in candidates)):
                 continue
             if not candidates or all(c["decision"] == "rejected" for c in candidates):
+                seen.add(row["identifier"])
+                continue
+            if (state == "NV" and trial_identity() and
+                    nv_acronym_partnership(org.organization_name, row)
+                    and not any(complete_name_identity_key(alias) == complete_name_identity_key(row["name"])
+                                for alias in known_names_for_ein(org.ein))):
+                excluded_nv_entities.append({"name": row["name"], "identifier": row["identifier"],
+                    "entity_type": row["entity_type"], "basis": "Acronym followed by LP on a domestic limited partnership record"})
                 seen.add(row["identifier"])
                 continue
             if state == "NV" and row["entity_type"] in {
@@ -9627,6 +9643,17 @@ def final_four_clean_evidence(payload, query):
     else:
         raise ValueError("Unsupported final-four query")
     return json.loads(json.dumps(payload))
+
+
+def nv_acronym_partnership(primary, row):
+    """Exclude only an explicitly identified LP using another entity's initials."""
+    if row.get("entity_type") != "Domestic Limited Partnership (88)" or row.get("ein"):
+        return False
+    name = re.fullmatch(r"([A-Z]{2,6}),?\s+L\.?P\.?", row["name"].strip(), re.I)
+    if not name or not re.fullmatch(r"NV\d+", row["identifier"]):
+        return False
+    words = [w for w in normalized_match_name(primary).upper().split() if w not in {"AND", "&", "OF"}]
+    return len(words) >= 2 and "".join(w[0] for w in words) == name[1].upper()
 
 
 def final_four_compact_search_evidence(record, evidence):
@@ -11269,6 +11296,23 @@ def licensed_charity_identity(org, row, state, deadline):
             row['address_evidence'] = proof or {'decision': 'unavailable', 'basis':
                 'The complete name appears in a compound Georgia label, without a confirming EIN or office. Confirm or reject the identity.'}
             return outcome
+    if (state == "TN" and trial_identity() and decision["decision"] == "possible"
+            and not row.get("ein") and re.fullmatch(r"CO\d+", row.get("identifier", ""))):
+        primary = normalized_match_name(org.organization_name).split()
+        candidate = normalized_match_name(row["name"]).split()
+        if (len(primary) >= 3 and candidate.count("of") == 1 and "of" not in primary
+                and [word for word in candidate if word != "of"] == primary):
+            # A single preposition may differ, but require the full EIN-linked
+            # street and postal code and retain any affirmative different-EIN finding.
+            foreign = licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+            office = foreign or licensed_charity_street_evidence(org, row, deadline) or {}
+            if office.get("decision") in {"corroborated", "different_ein"}:
+                accepted = office["decision"] == "corroborated"
+                row["address_evidence"] = office
+                row["match"] = {"decision": "accepted" if accepted else "rejected",
+                                "score": 95 if accepted else 0,
+                                "reason": "TN_FULL_NAME_AND_OFFICE" if accepted else "DIFFERENT_EIN_CORROBORATED"}
+                return row["match"]["decision"]
     if state == "TN" and not row.get("ein"):
         primary_name = normalized_match_name(org.organization_name)
         candidate_name = normalized_match_name(row["name"])

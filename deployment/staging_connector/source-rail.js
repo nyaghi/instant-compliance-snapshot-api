@@ -50,7 +50,7 @@ const CCSourceRail=(()=>{
  // A pending evidence request gets the next free position before another
  // registry job, so polling cannot lose every slot to synchronous admission.
  function admissionSlots(){
-  const used=new Set(activeSlots().concat(slots()));
+  const used=new Set(activeSlots().concat(slots(), heldTnPositions()));
   const held=slots();let count=waiting.filter(x=>x.end>Date.now()+3000).length;
   for(const s of [0,1])if(count>0&&!used.has(s)){held.push(s);count--;}
   return held;
@@ -69,7 +69,7 @@ const CCSourceRail=(()=>{
    while(Date.now()<end-3000){
     if(signal?.aborted)throw Error("source_cancelled");
     const seen=revision;
-    const occupied=new Set(activeSlots().concat(slots()));
+    const occupied=new Set(activeSlots().concat(slots(), heldTnPositions()));
     const slot=waiting[0]===request?[0,1].find(s=>!occupied.has(s)):undefined;
     if(slot!==undefined){
      const job={registryState:state,lookupId:runId,sender,duoSlot:slot,activeExpiresAt:end,sourceRailLease:true};

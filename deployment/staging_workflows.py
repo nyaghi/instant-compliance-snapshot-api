@@ -140,6 +140,17 @@ def public_result(master, job, record):
     return data
 
 
+def poll_results(master, jobs, record, received):
+    # Receipts acknowledge only this client’s in-memory copy. Full polls are
+    # still used for recovery and late Wisconsin / D.C. evidence reconciliation.
+    if not isinstance(received, list) or len(received) > 38 or any(
+            not isinstance(state, str) or state not in record['states'] for state in received):
+        raise ValueError('Invalid received states')
+    wanted = set(record['states']).difference(received)
+    return [row for job in jobs if job['state'] in wanted
+            and (row := public_result(master, job, record)) is not None]
+
+
 def connector_identity(status, record):
     """Expose only master-reviewed names from this workflow's settled preparation."""
     if record['mode'] != 'sales': return None
@@ -216,8 +227,7 @@ def handle(master, handler, *, trial_queue=None):
                 if (status.get('source_version') != os.environ.get('CE_STAGING_WORKFLOW_VERSION')
                         or status.get('ein') != record['ein']): raise ValueError('Worker release mismatch')
                 data = {key: status[key] for key in ('phase','completed','total','submitted','deadline','started','finished')}
-                data['results'] = [r for job in status['jobs'] if job['state'] in record['states']
-                                   and (r := public_result(master, job, record)) is not None]
+                data['results'] = poll_results(master, status['jobs'], record, payload.get('received_states', []))
                 identity = connector_identity(status, record)
                 if identity is not None: data['connector_identity'] = identity
             elif action in ('cancel', 'release-external'):

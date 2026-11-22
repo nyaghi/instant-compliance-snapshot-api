@@ -2818,11 +2818,37 @@ function ilObserveReadiness(outcome, formWaitMs) {
       {...data,attribution_ambiguous:wfcActive.size>1});
   } catch { /* Observation must never change readiness or the search result. */ }
 }
+// One bounded, passive sample per owned search document. Use the same
+// performance clock as ResourceTiming to line up renderer work with delays.
+let rendererWindow;
+function observeRendererWindow(action) {
+  if (rendererWindow || !(TN || IL || NV || MS || NC || GA) || action !== 'registry-ready') return;
+  rendererWindow = {start:performance.now(), count:0, total:0, longest:0, supported:false};
+  if (!globalThis.PerformanceObserver?.supportedEntryTypes?.includes('longtask')) return;
+  const sample = rendererWindow;
+  const accept = entries => {
+    for (const entry of entries) {
+      if (entry.startTime < sample.start || entry.startTime >= sample.start + 120000) continue;
+      sample.count++;
+      sample.total += entry.duration;
+      if (entry.duration > sample.longest) {
+        sample.longest = entry.duration;
+        sample.longestStart = entry.startTime;
+      }
+    }
+  };
+  const observer = new PerformanceObserver(list => accept(list.getEntries()));
+  observer.observe({type:'longtask'});
+  sample.supported = true;
+  sample.drain = () => accept(observer.takeRecords());
+  setTimeout(() => {sample.drain(); observer.disconnect();}, 120000);
+}
 function wfcBegin(action) {
   const trace={id:++wfcSequence,action,received_epoch_seconds:Date.now()/1000,
     document_id:documentId,visibility_at_receive:document.visibilityState,
     overlapping_messages:[...wfcActive.keys()],events:[],failures:[],dropped_events:0};
   try {
+    observeRendererWindow(action);
     const entry=performance.getEntriesByType('navigation')[0];
     if(entry)trace.navigation=wfcTiming(entry);
   } catch {trace.navigation_unavailable=true;}
@@ -2842,6 +2868,18 @@ function wfcAwait(stage,operation) {
   catch(error){end('exception',error);throw error;}
 }
 function wfcReply(trace,reply,value) {
+  try {
+    const sample = rendererWindow;
+    if (sample && ['registry-tn','registry-il','registry-nv','registry-ms','registry-nc','registry-ga'].includes(trace.action)) {
+      sample.drain?.();
+      wfcEvent(trace,'renderer.long-tasks','observed',{
+        supported:sample.supported, window_start_epoch_ms:Math.round(performance.timeOrigin+sample.start),
+        window_ms:Math.round(Math.min(120000,performance.now()-sample.start)),
+        count:sample.count, total_ms:Math.round(sample.total), longest_ms:Math.round(sample.longest),
+        longest_start_offset_ms:sample.count?Math.round(sample.longestStart-sample.start):null
+      });
+    }
+  } catch { /* A missing timing observation must never affect the reply. */ }
   wfcActive.delete(trace.id);
   reply({...value,wf_content:{...trace,finished_epoch_seconds:Date.now()/1000,
     visibility_at_reply:document.visibilityState,active_messages_at_reply:[...wfcActive.keys()]}});

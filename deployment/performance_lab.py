@@ -325,6 +325,11 @@ def final_four_asset(name, text):
         # at 30 seconds so a stalled transport cannot extend discovery.
         replace('setTimeout(() => controller.abort(), 70000)', 'setTimeout(() => controller.abort(), 30000)')
     elif name == 'optimized-workflows.js':
+        # Only regular progress polls acknowledge rows already in the page.
+        # The final evidence reconciliation and stop polls still request a full snapshot.
+        replace("try{progress=await call('poll',update);",
+                "const received_states=[...results.keys()].filter(state=>!external.includes(state));\n"
+                "          try{progress=await call('poll',{...update,received_states});")
         # User-approved Sales contract: entered name/EIN, no alias preparation.
         # Keep the protected staging template unchanged.
         replace("states, aliases=[], mode='standard', credentials,", "states, aliases:providedAliases=[], mode='standard', credentials,")
