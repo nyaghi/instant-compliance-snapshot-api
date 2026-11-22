@@ -35,8 +35,15 @@ const CCOwnedSourcePixels=(()=>{
       // Read the exact owned document viewport rather than allowing a margin
       // or shrinking the source image to the content width.
       if(!actual||![actual.width,actual.height].every(Number.isFinite)
-          ||actual.width<v.clientWidth||actual.height<v.clientHeight
+          ||actual.width+1<v.clientWidth||actual.height+1<v.clientHeight
           ||actual.width*actual.height>20000000||typeof actual.focused!=='boolean'||!alive())throw Error('pixel_capture_geometry');
+      // Layout metrics are CSS pixels; screencast metadata is in DIP.
+      // Browser zoom and the scrollbar gutter belong to that conversion.
+      const zoom=v.zoom===undefined?1:v.zoom;
+      if(!Number.isFinite(zoom)||zoom<=0||zoom>5)throw Error('pixel_capture_zoom');
+      const expected={width:(v.clientWidth+actual.width-Math.round(v.clientWidth))*zoom,
+        height:(v.clientHeight+actual.height-Math.round(v.clientHeight))*zoom};
+      if(expected.width*expected.height>20000000)throw Error('pixel_capture_geometry');
       // Quiet tabs can have a loaded DOM but no compositor frames. This
       // emulates focus only in the owned renderer; it never activates a tab
       // or window. Preserve an existing focused renderer and restore only
@@ -55,7 +62,7 @@ const CCOwnedSourcePixels=(()=>{
           if(!alive()||Date.now()>=stop)return reject(Error('pixel_capture_stale'));
           if(!m||!Number.isFinite(m.timestamp)||m.timestamp*1000<began-10
               ||m.timestamp*1000>Date.now()+1000||m.pageScaleFactor!==1
-              ||Math.abs(m.deviceWidth-actual.width)>1||Math.abs(m.deviceHeight-actual.height)>1
+              ||Math.abs(m.deviceWidth-expected.width)>1||Math.abs(m.deviceHeight-expected.height)>1
               ||Math.abs(m.scrollOffsetX-v.pageX)>1||Math.abs(m.scrollOffsetY-v.pageY)>1
               ||m.offsetTop!==0||!image(params?.data))return;
           resolve({data:params.data});
@@ -68,7 +75,7 @@ const CCOwnedSourcePixels=(()=>{
       frame.catch(()=>{});
       active=true;
       await invoke('Page.startScreencast',{format:'jpeg',quality:options.quality||75,
-        maxWidth:Math.ceil(actual.width),maxHeight:Math.ceil(actual.height),everyNthFrame:1});
+        maxWidth:Math.ceil(expected.width),maxHeight:Math.ceil(expected.height),everyNthFrame:1});
       const result=await frame;
       if(!alive()||Date.now()>=deadline)throw Error('pixel_capture_stale');
       observe({method:'original-frame',milliseconds:Date.now()-began});

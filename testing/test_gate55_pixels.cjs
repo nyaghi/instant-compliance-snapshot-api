@@ -7,17 +7,17 @@ function fixture(caseData,changes={}){
  const listeners=new Set(),calls=[];
  let alive=true,rendering=!!changes.focused;
  const data=Buffer.from((caseData.name+' '+caseData.ein+' ').repeat(20)).toString('base64');
- const viewport={clientWidth:1280,clientHeight:1600,pageX:0,pageY:0};
+ const viewport={clientWidth:1280,clientHeight:1600,pageX:0,pageY:0,zoom:changes.zoom||1,...changes.viewport};
  const chrome={debugger:{onEvent:{addListener:f=>listeners.add(f),removeListener:f=>listeners.delete(f)},sendCommand:async(target,method,params)=>{
   assert.equal(listeners.size,1,'Chrome event handler must exist synchronously before the first asynchronous command');
   calls.push({target,method,params});
   if(method==='Page.getLayoutMetrics')return {cssVisualViewport:viewport};
-  if(method==='Runtime.evaluate')return {result:{value:{width:1280+(changes.scrollbar?15:0),height:1600,focused:!!changes.focused}}};
+  if(method==='Runtime.evaluate')return {result:{value:{width:changes.inner?.width??1280+(changes.scrollbar?15:0),height:changes.inner?.height??1600,focused:!!changes.focused}}};
   if(method==='Emulation.setFocusEmulationEnabled')rendering=params.enabled;
   if(method==='Page.startScreencast'){
    if(!rendering)return {};
    if(changes.startFailure)throw Error('Chrome command failed');
-   const meta={timestamp:Date.now()/1000,deviceWidth:1280+(changes.scrollbar?15:0),deviceHeight:1600,pageScaleFactor:1,scrollOffsetX:0,scrollOffsetY:0,offsetTop:0};
+   const meta={timestamp:Date.now()/1000,deviceWidth:changes.device?.width??(1280+(changes.scrollbar?15:0))*(changes.zoom||1),deviceHeight:changes.device?.height??1600*(changes.zoom||1),pageScaleFactor:1,scrollOffsetX:0,scrollOffsetY:0,offsetTop:0};
    if(changes.cancel)alive=false;
    for(const f of listeners){
     f({tabId:999},'Page.screencastFrame',{sessionId:1,data,metadata:meta});
@@ -37,8 +37,8 @@ function fixture(caseData,changes={}){
 }
 for(const state of ['AL','NC','NV','DC','WI'])test(state+' 70 recorded identities: same-tab original-frame capture and stale/wrong geometry rejection',async()=>{
  assert.equal(new Set(roster.map(x=>x.ein)).size,70);
- for(const c of roster){
-  const h=fixture(c,{scrollbar:true}),deadline=Date.now()+5000;
+ for(const c of roster)for(const zoom of [1,1.25]){
+  const h=fixture(c,{scrollbar:true,zoom}),deadline=Date.now()+5000;
   const image=await h.api.capture(7,{format:'jpeg',quality:80,captureBeyondViewport:false},{deadline,alive:h.alive});
   assert.equal(image.data,h.data);assert.equal(h.listeners.size,1);assert.equal(h.api.pendingCount(),0);
   assert.equal(h.calls.at(-1).method,'Emulation.setFocusEmulationEnabled');
@@ -59,6 +59,12 @@ test('cancel, near deadline and oversized source never publish a frame',async()=
   assert.equal(h.listeners.size,1);assert.equal(h.api.pendingCount(),0);
  }
 });
+test('actual D.C. 125 percent fractional CSS viewport preserves the full rendered dimensions',async()=>{
+ const h=fixture(roster[0],{zoom:1.25,viewport:{clientWidth:662.4000244140625,clientHeight:628.7999877929688},inner:{width:662,height:629},device:{width:828,height:786}});
+ const result=await h.api.capture(7,{captureBeyondViewport:false},{deadline:Date.now()+5000,alive:h.alive});assert.equal(result.data,h.data);
+ const started=h.calls.find(x=>x.method==='Page.startScreencast').params;assert.ok(started.maxWidth>=828&&started.maxWidth<=829);assert.equal(started.maxHeight,786);assert.equal(h.api.pendingCount(),0);
+});
+
 test('already-focused renderer is preserved and failed capture restores only its own rendering',async()=>{
  const focused=fixture(roster[0],{focused:true});await focused.api.capture(7,{captureBeyondViewport:false},{deadline:Date.now()+5000,alive:focused.alive});
  assert.ok(!focused.calls.some(x=>x.method==='Emulation.setFocusEmulationEnabled'));assert.equal(focused.api.pendingCount(),0);
