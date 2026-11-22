@@ -16878,8 +16878,10 @@ def co_light_name_fallback(page, org, result, requested_ein):
                 raise
             return limited()
         if public_status(fallback) == "Site Not Reachable":
+            error = str(getattr(fallback, "error", ""))
             if (time.monotonic() >= STOP.get() and not possible_match
-                    and "Colorado lookup allowance exhausted" in str(getattr(fallback, "error", ""))):
+                    and ("Colorado lookup allowance exhausted" in error
+                         or re.search(r"CO error: (?:Page|Locator)\.[a-z_]+: Timeout \d+ms exceeded", error))):
                 return limited()
             return copy_name_fallback_result(org, fallback)
         if public_status(fallback) == "Not Registered":
@@ -20538,7 +20540,6 @@ def search_fl_with_transport(page, org, transport):
             if not input_box:
                 result.error = "FL: Could not find Business Name input"
                 return result
-            input_box.fill("", timeout=remaining_ms(4000))
             input_box.fill(variant, timeout=remaining_ms(4000))
             # Check-A-Charity submits an ASP.NET postback. A short network-idle
             # wait can leave the old form visible; require the submitted response.
@@ -20553,7 +20554,19 @@ def search_fl_with_transport(page, org, transport):
                 raise
             if submitted.value is None or submitted.value.status >= 400:
                 raise ValueError("Florida search submission did not return a successful document")
-            time.sleep(min(0.5, remaining_seconds()))
+            # Skip the rendering pause only on the submitted official form with
+            # this exact search term and a completed, unambiguous empty result.
+            settled_empty = False
+            if page.url.split("?", 1)[0] == FL_CHECK_A_CHARITY_URL:
+                try:
+                    current_text = page.locator("body").inner_text(timeout=remaining_ms(500))
+                    settled_empty = (isinstance(current_text, str) and no_registry_results_seen(current_text)
+                                     and not re.search(r"\bCH\d+\b", current_text, re.I)
+                                     and input_box.input_value(timeout=remaining_ms(500)) == variant)
+                except Exception:
+                    pass
+            if not settled_empty:
+                time.sleep(min(0.5, remaining_seconds()))
             text = readable_page_text(page)
             if transport.error:
                 raise transport.error
