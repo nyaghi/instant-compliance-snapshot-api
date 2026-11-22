@@ -48,17 +48,23 @@ class PublicationTest(unittest.TestCase):
                         packed.update(record)
                         return "test-token"
                     master = SimpleNamespace(ny_connector_pack=pack, final_four_clean_evidence=lambda payload,query:payload)
-                    self.assertIs(quality.prepare(master,dict(rec,expires=time.time()+2),response),response)
-                    self.assertEqual(quality.prepare(master,rec,dict(phase="complete",result=dict(result,evidence_url="original")))["result"]["evidence_url"],"original")
-                    request=quality.prepare(master,rec,response)
+                    self.assertIsNone(quality.prepare(master, dict(rec, expires=time.time()+2)))
+                    self.assertIsNone(quality.prepare(master, dict(rec, nv_image_recovery_attempted=True)))
+                    self.assertIsNone(quality.prepare(master, dict(rec, source_snapshots=[
+                        dict(operation="detail", identifier=ident)])))
+                    request = quality.prepare(master, rec)
                     self.assertEqual(q, request["query"])
                     self.assertEqual(5500, request["nv_followup_ms"])
-                    self.assertEqual(409,quality.finish(master,packed,reply,"advance")[0])
-                    reply["query_id"]=request["query_id"]
-                    for action,data in [("fail",reply),("advance",dict(reply,evidence={})),("advance",reply)]:
-                        self.assertEqual((200,response),quality.finish(master,packed,data,action))
-                    snap["image"]=clean
-                    _, complete=quality.finish(master,packed,reply,"advance")
-                    self.assertEqual(result["status"], complete["result"]["status"])
-                    self.assertTrue(complete["result"]["evidence_url"].startswith("/state-snapshots/"))
-
+                    self.assertFalse(quality.finish(master, packed.copy(), reply, "advance"))
+                    reply["query_id"] = request["query_id"]
+                    for action, data in [("fail",reply), ("advance",dict(reply,evidence={})), ("advance",reply)]:
+                        retry = packed.copy()
+                        self.assertTrue(quality.finish(master, retry, data, action))
+                        self.assertEqual(retry["completed"], rec["completed"])
+                        self.assertFalse(retry.get("source_snapshots"))
+                        self.assertIsNone(quality.prepare(master, retry))
+                    snap["image"] = clean
+                    self.assertTrue(quality.finish(master, packed, reply, "advance"))
+                    linked = snapshots.attach_links(result, packed["source_snapshots"])
+                    self.assertEqual(result["status"], linked["status"])
+                    self.assertTrue(linked["evidence_url"].startswith("/state-snapshots/"))

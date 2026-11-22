@@ -25,51 +25,46 @@ def is_loading_frame(source):
     return blue_pixels >= max(8, width * height * .00005)
 
 
-def prepare(master, record, response):
-    """Recapture by exact state ID only after ordinary matching has finished."""
-    result = response["result"]
-    identifier = result.get("matched_registry_identifier")
-    if (result.get("evidence_url") or result.get("identity_review") or
-            record["expires"] - time.time() < 12 or
-            identifier not in record.get("nv_loading_frames", ())):
-        return response
-    selected = next((item for item in record["completed"]
-                     if item["query"].get("operation") == "detail"
-                     and item["query"].get("identifier") == identifier), None)
-    if not selected:
-        return response
+def prepare(master, record):
+    """Take a single second look while the connector still owns the selected detail."""
+    item = record["completed"][-1]
+    query = item["query"]
+    identifier = query.get("identifier")
+    if (query.get("operation") != "detail" or record.get("nv_image_recovery_attempted")
+            or identifier not in record.get("nv_loading_frames", ())
+            or record["expires"] - time.time() < 12
+            or any(ref.get("identifier") == identifier and ref.get("operation") == "detail"
+                   for ref in record.get("source_snapshots", ()))):
+        return None
     query_id = secrets.token_urlsafe(18)
-    signed = {**record, "nv_pixel_receipt": {"result": result, "query_id": query_id,
-                                          "identifier": identifier}}
+    signed = {**record, "nv_pixel_receipt": {"query_id": query_id, "identifier": identifier},
+              "nv_image_recovery_attempted": True}
     try:
         token = master.ny_connector_pack(signed)
     except ValueError:
-        return response
+        return None
     remaining = record["expires"] - time.time()
     if remaining < 10:
-        return response
-    return {"phase": "search", "query": selected["query"], "query_id": query_id,
+        return None
+    return {"phase": "search", "query": query, "query_id": query_id,
             "nv_followup_ms": 5500, "lookup_remaining_ms": int(remaining*1000),
             "expires_in": int(remaining), "check_token": token}
 
 
 def finish(master, record, payload, action):
-    from deployment.state_snapshots import attach_links, connector_archive
+    from deployment.state_snapshots import connector_archive
 
     receipt = record["nv_pixel_receipt"]
-    if payload.get("query_id") != receipt["query_id"]:
-        return 409, {"error": "The capture belongs to another registry query."}
-    result = receipt["result"]
+    item = record["completed"][-1]
+    if (payload.get("query_id") != receipt["query_id"]
+            or item["query"].get("identifier") != receipt["identifier"]):
+        return False
     if action == "advance":
-        item = next(i for i in record["completed"] if i["query"].get("operation") == "detail"
-                    and i["query"].get("identifier") == receipt["identifier"])
         try:
             evidence = master.final_four_clean_evidence(payload.get("evidence"), item["query"])
         except (TypeError, KeyError, ValueError):
             evidence = None
         if evidence == item["evidence"] and evidence is not None:
             connector_archive(record, payload, item["query"], evidence)
-            linked = attach_links(result, record.get("source_snapshots", []))
-            if linked.get("evidence_url"):
-                result = linked
-    return 200, {"phase": "complete", "result": result}
+    del record["nv_pixel_receipt"]
+    return True

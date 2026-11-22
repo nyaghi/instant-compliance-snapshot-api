@@ -10344,7 +10344,9 @@ def final_four_connector_request(payload, origin):
             return 400, {"error": "Invalid registry connector action."}
         if record["state"] == "NV" and record.get("nv_pixel_receipt"):
             from deployment.nv_snapshot_quality import finish
-            return finish(sys.modules[__name__], record, payload, action)
+            if not finish(sys.modules[__name__], record, payload, action):
+                return 409, {"error": "The capture belongs to another registry query."}
+            action = "nv_capture_finished"
         if action == "fail":
             from deployment.search_history import failed_receipt
             failed_receipt(record,payload,time.time())
@@ -10475,6 +10477,11 @@ def final_four_connector_request(payload, origin):
             from deployment.search_history import safe_complete_receipt
             record["completed"].append({"query": pending["query"], "evidence": evidence, **safe_complete_receipt(record,pending,history_evidence,time.time())})
             record["pending"] = None
+            if record["state"] == "NV" and record.get("nv_loading_frames"):
+                from deployment.nv_snapshot_quality import prepare as prepare_nevada_image
+                recovery = prepare_nevada_image(sys.modules[__name__], record)
+                if recovery:
+                    return 200, recovery
     names = {canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
     context = REVIEWED_NAME_CONTEXT.set(names)
     identity_context = USER_IDENTITY_CONTEXT.set(record.get("identity_context", {}))
@@ -10514,9 +10521,6 @@ def final_four_connector_request(payload, origin):
         if record.get('_al_scope_row'):
             from deployment.state_snapshots import attach_al_scope_original
             response['result'] = attach_al_scope_original(record, response['result'])
-    if response.get('phase') == 'complete' and record.get('nv_loading_frames') and record['state']=='NV':
-        from deployment.nv_snapshot_quality import prepare as prepare_nevada_image
-        return 200, prepare_nevada_image(sys.modules[__name__], record, response)
     from deployment.al_final_empty import prepare
     response = prepare(sys.modules[__name__],record,response)
     return 200, response
