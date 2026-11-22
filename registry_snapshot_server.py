@@ -10342,6 +10342,9 @@ def final_four_connector_request(payload, origin):
             return 200, {"phase": "canceled"}
         if action not in {"advance", "fail"}:
             return 400, {"error": "Invalid registry connector action."}
+        if record["state"] == "NV" and record.get("nv_pixel_receipt"):
+            from deployment.nv_snapshot_quality import finish
+            return finish(sys.modules[__name__], record, payload, action)
         if action == "fail":
             from deployment.search_history import failed_receipt
             failed_receipt(record,payload,time.time())
@@ -10511,6 +10514,9 @@ def final_four_connector_request(payload, origin):
         if record.get('_al_scope_row'):
             from deployment.state_snapshots import attach_al_scope_original
             response['result'] = attach_al_scope_original(record, response['result'])
+    if response.get('phase') == 'complete' and record.get('nv_loading_frames') and record['state']=='NV':
+        from deployment.nv_snapshot_quality import prepare as prepare_nevada_image
+        return 200, prepare_nevada_image(sys.modules[__name__], record, response)
     from deployment.al_final_empty import prepare
     response = prepare(sys.modules[__name__],record,response)
     return 200, response

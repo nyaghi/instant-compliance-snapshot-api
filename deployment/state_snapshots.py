@@ -119,6 +119,9 @@ def validate_asset(asset, *, ein, state, run_id):
             with Image.open(io.BytesIO(page)) as im:
                 low,high=im.convert('L').getextrema()
                 if high-low<8:raise ValueError('Blank source screenshot')
+                if state=='NV' and asset.get('operation')=='detail':
+                    from deployment.nv_snapshot_quality import LoadingFrame, is_loading_frame
+                    if is_loading_frame(im):raise LoadingFrame('Nevada detail is covered by its loading indicator')
     elif kind=='source_pdf':
         from pypdf import PdfReader
         page_limit=100 if state=='NM' and asset.get('operation')=='detail_registration' else 12
@@ -1426,7 +1429,14 @@ def _connector_archive(record,payload,query,evidence):
             if record['state']=='NM' and query.get('operation')=='detail':
                 from deployment.nm_registration_document import append_to_asset
                 asset=append_to_asset(asset,incoming.get('registration_document'),record,query,evidence)
-            ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id,provisional=True)
+            from deployment.nv_snapshot_quality import LoadingFrame
+            try:
+                ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id,provisional=True)
+            except LoadingFrame:
+                if re.fullmatch(r'NV[0-9]{1,16}',ident):
+                    seen=record.setdefault('nv_loading_frames',[])
+                    if ident not in seen and len(seen)<8:seen.append(ident)
+                continue
             # The complete metadata stays in persistent storage. Continuations
             # carry short references, never images or repeated source URLs.
             record.setdefault('source_snapshots',[]).append({
