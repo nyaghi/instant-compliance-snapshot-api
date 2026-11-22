@@ -1,6 +1,11 @@
 /* One original Chrome-rendered frame; callers still own identity and postchecks. */
 const CCOwnedSourcePixels=(()=>{
-  const lanes=new Set();
+  const lanes=new Set(),receivers=new Map();
+  // Manifest V3 requires synchronous registration while the worker loads.
+  // Per-capture registrations can miss the first Chrome debugger event.
+  chrome.debugger.onEvent.addListener((source,method,params)=>{
+    receivers.get(source.tabId)?.(source,method,params);
+  });
   const image=value=>typeof value==='string'&&value.length>100&&value.length<=4000000
     &&/^[A-Za-z0-9+/]+={0,2}$/.test(value);
   function coversViewport(options,layout){
@@ -17,21 +22,28 @@ const CCOwnedSourcePixels=(()=>{
     const stop=Math.min(deadline-500,Date.now()+2500);
     if(stop-Date.now()<250)throw Error('pixel_capture_deadline');
     lanes.add(tabId);
-    let timer,listener,active=false;
+    let timer,listener,active=false,rendering=false;
     const invoke=(method,params={})=>chrome.debugger.sendCommand({tabId},method,params);
     try{
       const layout=await invoke('Page.getLayoutMetrics');
       if(!coversViewport(options,layout)||!alive())throw Error('pixel_capture_not_viewport');
       const v=layout.cssVisualViewport||layout.visualViewport;
       const actual=(await invoke('Runtime.evaluate',{
-        expression:'({width:innerWidth,height:innerHeight})',returnByValue:true
+        expression:'({width:innerWidth,height:innerHeight,focused:document.hasFocus()})',returnByValue:true
       }))?.result?.value;
       // Chrome metadata includes scrollbars; layout metrics exclude them.
       // Read the exact owned document viewport rather than allowing a margin
       // or shrinking the source image to the content width.
       if(!actual||![actual.width,actual.height].every(Number.isFinite)
           ||actual.width<v.clientWidth||actual.height<v.clientHeight
-          ||actual.width*actual.height>20000000||!alive())throw Error('pixel_capture_geometry');
+          ||actual.width*actual.height>20000000||typeof actual.focused!=='boolean'||!alive())throw Error('pixel_capture_geometry');
+      // Quiet tabs can have a loaded DOM but no compositor frames. This
+      // emulates focus only in the owned renderer; it never activates a tab
+      // or window. Preserve an existing focused renderer and restore only
+      // the emulation enabled by this exact capture.
+      if(!actual.focused){
+        await invoke('Emulation.setFocusEmulationEnabled',{enabled:true});rendering=true;
+      }
       const began=Date.now();
       const frame=new Promise((resolve,reject)=>{
         listener=(source,method,params)=>{
@@ -48,7 +60,7 @@ const CCOwnedSourcePixels=(()=>{
               ||m.offsetTop!==0||!image(params?.data))return;
           resolve({data:params.data});
         };
-        chrome.debugger.onEvent.addListener(listener);
+        receivers.set(tabId,listener);
         timer=setTimeout(()=>reject(Error('pixel_capture_frame_timeout')),Math.max(1,stop-Date.now()));
       });
       // Attach rejection handling before start so command failure cannot leave
@@ -63,11 +75,12 @@ const CCOwnedSourcePixels=(()=>{
       return result;
     }finally{
       clearTimeout(timer);
-      if(listener)chrome.debugger.onEvent.removeListener(listener);
+      receivers.delete(tabId);
       if(active)await invoke('Page.stopScreencast').catch(()=>{});
+      if(rendering)await invoke('Emulation.setFocusEmulationEnabled',{enabled:false}).catch(()=>{});
       lanes.delete(tabId);
     }
   }
-  if(typeof module!=='undefined')module.exports={coversViewport,image,capture};
+  if(typeof module!=='undefined')module.exports={coversViewport,image,capture,pendingCount:()=>receivers.size};
   return {capture,coversViewport};
 })();
