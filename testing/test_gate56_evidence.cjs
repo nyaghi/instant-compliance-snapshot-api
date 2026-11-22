@@ -68,3 +68,39 @@ test('70 recorded identities, WI original slow attach resolves once and checks i
     const late=await wisconsin(org,7000);assert.equal(late.ok,false);assert.equal(late.reason,'timeout:attach');
   }
 });
+
+for (const state of ['NY','GA']) test(state+' selected-detail capture on 70 recorded organizations',async()=>{
+  assert.equal(new Set(roster.map(org=>org.ein)).size,70);
+  for(const org of roster) for(const scenario of ['fresh','stale','fallback']){
+    const c=clock(), ny=state==='NY';
+    const origin=ny?'https://charities-search.ag.ny.gov':'https://verify.sos.ga.gov';
+    const query=ny?{orgID:'12-34-56'}:{identifier:'CH12345',record_name:org.name};
+    const url=origin+(ny?'/RegistrySearch/12-34-56':'/verification/Details.aspx');
+    const job={registryState:state,tab:7,generation:1,pending:'q',command:{id:'q',query},activeExpiresAt:130000};
+    let captured=false,direct=0,frames=0,height=600;
+    const meta=()=>({url,public_text:org.name+' '+(ny?query.orgID:query.identifier),
+      document_id:captured&&scenario==='stale'?'replacement':'original',source_binding:org.ein,
+      source_viewport_width:1024,source_page_fits:true,source_ga_primary_ready:true,
+      source_ga_primary_fits:true,source_ga_primary_bottom:900});
+    const ctx={...c.env,URL,Promise,owned:new Set([7]),isActive:()=>true,registryOrigin:()=>origin,
+      P:{TRIAL_ORIGIN:'https://staging.invalid',NY:origin,sameQuery:(a,b)=>a===b},
+      wfAwait:(_j,_s,fn)=>fn(),wfEvent(){},wfReturn:(_j,_s,v)=>v,
+      CCOwnedSourcePixels:{capture:async(tab,opts,scope)=>{
+        assert.equal(tab,7);assert.ok(scope.alive());frames++;
+        if(scenario==='fallback')throw Error('no fresh frame');
+        captured=true;return {data:'AQ=='};
+      }},
+      chrome:{tabs:{get:async()=>({url}),sendMessage:async()=>meta()},debugger:{attach:async()=>{},detach:async()=>{},
+        sendCommand:async(_t,cmd,options)=>{
+          if(cmd==='Emulation.setDeviceMetricsOverride')height=options.height;
+          if(cmd==='Page.getLayoutMetrics')return {cssContentSize:{width:1024,height:900},cssLayoutViewport:{clientWidth:1024,clientHeight:height,pageX:0,pageY:0}};
+          if(cmd==='Page.captureScreenshot'){direct++;captured=true;return {data:'AA=='};}
+          return {};
+        }}}};
+    vm.createContext(ctx);vm.runInContext(source('state-snapshot-worker.js'),ctx);
+    const out=await c.finish(ctx.captureStateSnapshot(job,query,'q'));
+    assert.equal(frames,1);assert.equal(direct,scenario==='fallback'?1:0);
+    assert.equal(out?.image,scenario==='stale'?undefined:scenario==='fresh'?'AQ==':'AA==');
+    assert.equal(job.snapshotCleanupBusy,undefined);
+  }
+});

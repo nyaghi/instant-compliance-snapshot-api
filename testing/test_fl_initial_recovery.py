@@ -36,7 +36,13 @@ def run_case(case,first_error=None,unavailable=False,negative=False,wrong_ein=Fa
         return SimpleNamespace(status=200)
     page.goto.side_effect=goto
     page.expect_navigation.return_value.__enter__.return_value.value=SimpleNamespace(status=200)
-    if post_timeout:page.expect_navigation.return_value.__exit__.side_effect=TimeoutError('Submission response timeout')
+    if post_timeout:
+        attempts = []
+        def finish_submit(*args):
+            attempts.append(True)
+            if post_timeout != 'once' or len(attempts) == 1:
+                raise TimeoutError('Submission response timeout')
+        page.expect_navigation.return_value.__exit__.side_effect = finish_submit
     row=case['name']+' License/Registration Number CH12345 Expiration Date 12/31/2027 Status Current EIN '+('999999999' if wrong_ein else case['ein'])
     page.evaluate.return_value=[{'index':0,'text':row}]
     with patch.object(master.time,'monotonic',side_effect=lambda:now[0]),patch.object(master.time,'sleep',side_effect=lambda seconds:now.__setitem__(0,now[0]+seconds)),patch.object(master,'fl_business_lookup_enabled',return_value=False),patch.object(master,'reviewed_queries_first',return_value=[case['name']]),patch.object(master.checker,'find_visible_input',return_value=page),patch.object(master,'readable_page_text',return_value='No records found' if negative else row),patch.object(master,'no_registry_results_seen',return_value=negative),patch.object(master,'registry_candidate_fields',return_value={'status':'Current'}),patch.object(master.urllib.request,'build_opener',return_value=opener):
@@ -73,9 +79,20 @@ class InitialRecovery(unittest.TestCase):
                 with self.subTest(ein=case['ein'],negative=negative):
                     r,*_=run_case(case,first_error=TimeoutError('Initial timeout'),negative=negative,wrong_ein=wrong)
                     self.assertTrue(r.success);self.assertEqual(r.status,c.checker.STATUS_NOT_REGISTERED);self.assertFalse(r.matched_registry_identifier)
-    def test_post_timeout_does_not_enable_alternative_transport(self):
-        r,_,wire,*_=run_case(CASES[0],post_timeout=True)
-        self.assertFalse(r.success);self.assertEqual(wire,[])
+    def test_70_submit_stalls_recover_on_fresh_get_and_double_transport_failure_stops(self):
+        for case in CASES:
+            with self.subTest(ein=case['ein']):
+                healthy, *_ = run_case(case)
+                recovered, _, wire, *_ = run_case(case, post_timeout='once')
+                self.assertEqual((recovered.status, recovered.matched_registry_identifier),
+                                 (healthy.status, healthy.matched_registry_identifier))
+                self.assertTrue(recovered.success)
+                self.assertEqual([x['method'] for x in wire], ['GET'])
+                failed, _, wire, seconds, *_ = run_case(case, first_error=TimeoutError('entry'), unavailable=True)
+                self.assertEqual(failed.reason_code, 'FL_SOURCE_NOT_RESPONDING')
+                self.assertFalse(failed.success)
+                self.assertEqual(len(wire), 1)
+                self.assertLess(seconds, 25)
     def test_only_recognized_pre_response_transport_errors_qualify(self):
         for e in [TimeoutError(),RuntimeError('net::ERR_CONNECTION_RESET'),RuntimeError('net::ERR_EMPTY_RESPONSE')]:self.assertTrue(initial_transport_failure(e))
         for e in [ValueError('HTTP 403'),ValueError('HTTP 503'),RuntimeError('net::ERR_CERT_AUTHORITY_INVALID'),RuntimeError('net::ERR_BLOCKED_BY_CLIENT'),RuntimeError('Browser closed'),ValueError('parse failed')]:self.assertFalse(initial_transport_failure(e))

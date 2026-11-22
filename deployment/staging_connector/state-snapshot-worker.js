@@ -154,11 +154,11 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
     if(captureBudgetMs<500){observed.phase='capture-budget-exhausted';trace();return null;}
     observed.prior_capture_ms=spent;
   }
-  if(['NV','NC','GA','IL','AL','TN','NM','MS'].includes(state)){observed.budget_ms=captureBudgetMs;observed.steps=[];}
+  if(['NV','NC','GA','IL','AL','TN','NM','MS','NY'].includes(state)){observed.budget_ms=captureBudgetMs;observed.steps=[];}
 
   function sampled(label,operation) {
 
-    if(state==='NC'||state==='GA'||state==='IL'||state==='AL'||state==='TN'||state==='NM'||state==='MS') {
+    if(state==='NY'||state==='NC'||state==='GA'||state==='IL'||state==='AL'||state==='TN'||state==='NM'||state==='MS') {
       const begin=Date.now();observed.waiting=label;observed.wait_started_ms=begin-started;
       const finished=()=>{
         if(observed.steps.length<20)observed.steps.push({api:label,ms:Math.max(0,Date.now()-begin)});
@@ -706,7 +706,11 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             :{x:0,y:0,width:size.width,height:size.height,scale:1}};
         const captureImage=options=>wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:389:45:await",
           ()=>sampled('capture:'+images.length,async()=>{
-            if(['AL','NC','NV'].includes(state)&&typeof CCOwnedSourcePixels!=='undefined'){
+            // NY and GA have already verified that the selected record fits
+            // the owned viewport. Request a fresh frame before a potentially
+            // stalled screenshot consumes the entire detail allowance.
+            if((['AL','NC','NV'].includes(state)||gaFullViewport&&(nyRequiredDetail||gaRequiredDetail))
+                &&typeof CCOwnedSourcePixels!=='undefined'){
               try{return await CCOwnedSourcePixels.capture(tabId,options,{
                 deadline:started+captureBudgetMs-500,alive:()=>!cancelled&&alive(),
                 observe:value=>{observed.pixel_method=value.method;observed.pixel_ms=value.milliseconds;}

@@ -28,7 +28,31 @@ class PatientPublic(unittest.TestCase):
         for enabled,flag in ((True,'0'),(False,'1')):
             with self.subTest(enabled=enabled,flag=flag):
                 op=self.opener(slow=True);self.assertEqual(self.lookup(op,enabled,flag),[])
-                self.assertTrue(all(c.kwargs['timeout']<=4 for c in op.open.call_args_list))
+                for call in op.open.call_args_list:
+                    limit = 8 if enabled and call.args[0].data is None else 4
+                    self.assertLessEqual(call.kwargs['timeout'], limit)
+
+    def test_70_slow_entry_forms_finish_on_the_original_connection(self):
+        import json
+        roster=json.loads((Path(__file__).parents[1]/'fixtures/gate55/LOCAL-70.json').read_text())
+        self.assertEqual(len({org['ein'] for org in roster}),70)
+        for org in roster:
+            op=self.opener()
+            read=op.open.side_effect
+            def slow_entry(request,timeout):
+                if request.data is None and timeout < 6:
+                    raise TimeoutError('headers arrive in six seconds')
+                return read(request,timeout)
+            op.open.side_effect=slow_entry
+            with self.subTest(ein=org['ein']), patch.object(m,'fl_business_lookup_enabled',return_value=True), patch.object(m.urllib.request,'build_opener',return_value=op), patch.object(m,'fl_verified_ssl_context',return_value='verified'):
+                rows=m.fl_business_public_rows(org['name'],time.monotonic()+30)
+                self.assertEqual(rows[0]['business_evidence']['identifier'],'CH12345')
+                self.assertEqual(op.open.call_count,2)
+                self.assertTrue(op.open.call_args_list[0].args[0].data is None)
+                op.open.reset_mock()
+                op.open.side_effect=TimeoutError('no entry headers')
+                self.assertEqual(m.fl_business_public_rows(org['name'],time.monotonic()+30),[])
+                self.assertEqual(op.open.call_count,1)
 
     def test_remaining_lookup_deadline_still_wins(self):
         with patch.object(m.time,'monotonic',return_value=100):

@@ -20020,6 +20020,10 @@ def _fl_transient_public_error(exc):
                             http.client.RemoteDisconnected, http.client.IncompleteRead))
 
 
+class FloridaEntryTimeout(TimeoutError):
+    """A fresh registry form did not return headers within its lookup allowance."""
+
+
 def fl_business_public_rows(query: str, deadline: float) -> list:
     """One fresh transient recovery, sharing the existing overall lookup deadline."""
     attempts = 2 if fl_business_lookup_enabled() else 1
@@ -20029,7 +20033,7 @@ def fl_business_public_rows(query: str, deadline: float) -> list:
         try:
             return _fl_business_public_rows_once(query, deadline)
         except Exception as exc:
-            if not _fl_transient_public_error(exc) or attempt + 1 == attempts:
+            if isinstance(exc, FloridaEntryTimeout) or not _fl_transient_public_error(exc) or attempt + 1 == attempts:
                 return []
     return []
 
@@ -20038,7 +20042,10 @@ def _fl_business_public_rows_once(query: str, deadline: float) -> list:
     """One TLS-verified public search, bounded by the remaining lookup time."""
     url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
     http_seconds = 8.0 if fl_business_lookup_enabled() and os.environ.get("CE_LAB_FL_HTTP_PATIENT") == "1" else 4.0
-    deadline = min(deadline, time.monotonic() + 2 * http_seconds)
+    # One continuous wait for the entry form can finish where two four-second
+    # connections both abandon the same slow response. Preserve time for the POST.
+    entry_seconds = 8.0 if fl_business_lookup_enabled() else http_seconds
+    deadline = min(deadline, time.monotonic() + entry_seconds + http_seconds)
     try:
         opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=fl_verified_ssl_context()), FloridaNoRedirect(),
@@ -20049,7 +20056,14 @@ def _fl_business_public_rows_once(query: str, deadline: float) -> list:
                 raise TimeoutError("Florida alternate public search deadline")
             request = urllib.request.Request(url, data=data, headers={
                 "User-Agent": BROWSER_USER_AGENT, "Accept-Encoding": "identity"})
-            with fl_access_call("business_post" if data is not None else "business_get", opener.open, request, timeout=min(http_seconds, remaining)) as response:
+            try:
+                response = fl_access_call("business_post" if data is not None else "business_get", opener.open, request,
+                                          timeout=min(entry_seconds if data is None else http_seconds, remaining))
+            except (TimeoutError, urllib.error.URLError) as exc:
+                if data is None and fl_business_lookup_enabled() and isinstance(getattr(exc, "reason", exc), TimeoutError):
+                    raise FloridaEntryTimeout("Florida Business Lookup entry timed out") from exc
+                raise
+            with response:
                 if response.status != 200 or response.geturl() != url:
                     raise ValueError("Unexpected Florida alternate response")
                 chunks, size = [], 0
@@ -20257,6 +20271,9 @@ def search_fl_with_transport(page, org, transport):
                 return
             except Exception as exc:
                 if transport.error:
+                    cause = getattr(transport.error, "reason", transport.error)
+                    if transport.initial_timeout_recovery and initial_transport_failure(cause):
+                        raise FloridaEntryTimeout("Florida Check-A-Charity recovery form did not respond") from transport.error
                     raise transport.error
                 if "ERR_CERT_AUTHORITY_INVALID" in str(exc):
                     if transport.enabled:
@@ -20521,8 +20538,15 @@ def search_fl_with_transport(page, org, transport):
             input_box.fill(variant, timeout=remaining_ms(4000))
             # Check-A-Charity submits an ASP.NET postback. A short network-idle
             # wait can leave the old form visible; require the submitted response.
-            with fl_access_step("browser_submit"), page.expect_navigation(wait_until="domcontentloaded", timeout=remaining_ms(12000)) as submitted:
-                page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=remaining_ms(4000), no_wait_after=True)
+            try:
+                with fl_access_step("browser_submit"), page.expect_navigation(wait_until="domcontentloaded", timeout=remaining_ms(12000)) as submitted:
+                    page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=remaining_ms(4000), no_wait_after=True)
+            except Exception as exc:
+                # A timed-out public search can leave its document unusable.
+                # Recover on the next fresh GET. Never promote the old page.
+                if not transport.enabled and initial_transport_failure(exc):
+                    transport.recover_initial_timeout()
+                raise
             if submitted.value is None or submitted.value.status >= 400:
                 raise ValueError("Florida search submission did not return a successful document")
             time.sleep(min(0.5, remaining_seconds()))
@@ -20573,6 +20597,13 @@ def search_fl_with_transport(page, org, transport):
             completed_search_form = False
             last_error = exc
             result.error = f"FL error: {exc}"
+            if isinstance(exc, FloridaEntryTimeout):
+                result.status = "Site Not Reachable"
+                result.reason_code = "FL_SOURCE_NOT_RESPONDING"
+                result.raw_status_text = "Florida registry did not respond"
+                result.source_note = "The Florida registry did not return a usable response on the original connection or the fresh connection. No registration status could be verified."
+                result.success = False
+                return result
             if isinstance(exc, FloridaCertificateError):
                 result.status = "Site Not Reachable"
                 result.reason_code = "FL_CERTIFICATE_ERROR"
@@ -40715,7 +40746,7 @@ def _run_single_state_lookup_reliably_core(organization_name: str, ein: str, sta
             ):
                 best_ak_identity_result = dict(result)
         retryable_statuses = {"site not reachable"}
-        if state == "FL" and result.get("reason_code") == "FL_CERTIFICATE_ERROR":
+        if state == "FL" and result.get("reason_code") in {"FL_CERTIFICATE_ERROR", "FL_SOURCE_NOT_RESPONDING"}:
             return result  # Chain recovery was already attempted; repetition cannot repair trust.
         if state == "MI" and mi_transient_lookup_result(result):
             retryable_statuses.add(status)
