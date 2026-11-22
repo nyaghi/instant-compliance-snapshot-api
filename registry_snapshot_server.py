@@ -9931,7 +9931,11 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     nv_search_timeout = (state == "NV" and reason == "NY_CONNECTOR_REGISTRY_NV_SEARCH_RESPONSE_TIMEOUT"
                          and ((record.get("pending") or {}).get("query") or {}).get("operation") == "search")
     nm_http_error = state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR'
-    if nv_startup_failure:
+    if state == "MS" and reason == "NY_CONNECTOR_REGISTRY_MS_HOST_ERROR":
+        result.status = "Site Not Reachable"
+        result.success = False
+        result.source_note = "Mississippi's public search page displayed a host error (520). No registration status was established."
+    elif nv_startup_failure:
         result.status = "Site Not Reachable"
         result.success = False
         if reason == "NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT":

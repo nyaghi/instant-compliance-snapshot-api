@@ -54,3 +54,12 @@ test('Georgia: only acknowledged detach releases expired optional screenshot; la
  }
 });
 
+test('Nevada: fresh original frame after a veil succeeds even when the direct screenshot would hang',async()=>{
+ for(const org of organizations){
+  const f=fixture('NV',org);let n=0;
+  f.ctx.CCOwnedSourcePixels.capture=async()=>({data:++n===1?'AA==':'AQ=='});
+  const old=f.ctx.chrome.debugger.sendCommand;
+  f.ctx.chrome.debugger.sendCommand=async(t,c,o)=>{if(c==='Page.captureScreenshot')throw Error('direct path unavailable');return old(t,c,o);};
+  const v=await f.run();assert.equal(v?.image,'AQ==');assert.equal(n,2);
+ }
+});

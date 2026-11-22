@@ -29,7 +29,8 @@
         || result.state === 'OK' && result.success === false && !result.confirmation_required
            && result.reason_code === 'PORTAL_ERROR' && result.error === 'Could not select Oklahoma Search by Name.'
         || result.state === 'WI' && ['WI_SOURCE_UNREACHABLE', 'WI_SOURCE_ALLOWANCE_EXHAUSTED'].includes(result.reason_code)
-        || result.state === 'FL' && result.reason_code === 'FL_INCOMPLETE_SEARCH'
+        || result.state === 'MS' && result.status_reason === 'NY_CONNECTOR_REGISTRY_MS_HOST_ERROR'
+        || result.state === 'FL' && ['FL_INCOMPLETE_SEARCH','FL_SOURCE_NOT_RESPONDING'].includes(result.reason_code)
         || ['ND','CO'].includes(result.state) && result.reason_code === 'RUNNER_TIMEOUT');
   }
   function add(parent, tag, value, classes = '') {

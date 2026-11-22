@@ -301,6 +301,23 @@ def ca_exempt_entity_core(text,name,ein,expected_status='Exempt'):
      or re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I)):return None
  return heading[0]+'\nFEIN: '+(fein[1] if fein else '')+'\n'+core[0]
 
+def wait_ca_exempt_status(page,locator,url,timeout,fact):
+ # An empty, fully loaded public app shell cannot supply a record image.
+ try:
+  locator.wait_for(state='visible',timeout=min(14000,timeout()))
+  return
+ except Exception as exc:
+  if type(exc).__name__!='TimeoutError':raise
+ if page.url==url and timeout()>=9000:
+  blank=page.evaluate("""() => document.readyState === 'complete' && document.body
+   && !document.body.innerText.trim() && !document.querySelector('form,iframe,input,canvas,.formio-form')""")
+  if blank and page.url==url:
+   fact['blank_entity_reload']=1
+   response=page.reload(wait_until='commit',timeout=min(4000,timeout()))
+   if response is None or response.status!=200 or page.url!=url:raise ValueError('CA entity reload unavailable')
+ locator.wait_for(state='visible',timeout=timeout())
+
+
 def capture_ca_exempt_entity(master,result,run,deadline,hint):
  identifier=str(result.get('matched_registry_identifier') or '')
  url='https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/'+identifier
@@ -328,7 +345,9 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     fact['phase']='selected_entity_ready'
     for field in ['entityStatus','entityName']:
      fact['waiting_for_field']=field
-     page.locator('.formio-component-'+field).wait_for(state='visible',timeout=timeout())
+     locator=page.locator('.formio-component-'+field)
+     if field=='entityStatus':wait_ca_exempt_status(page,locator,url,timeout,fact)
+     else:locator.wait_for(state='visible',timeout=timeout())
     fact['waiting_for_field']=''
     # Form containers can be visible before their bound values arrive. Keep the
     # exact identity predicate and wait for its values within the existing cap.
@@ -986,6 +1005,27 @@ def va_widget_initialization_stalled(fact):
      and 5<=p['age_seconds']<=elapsed+.01<float('inf') for p in obs.get('pending',[]))
 
 
+def va_reloaded_widget_stop(fact,old_stop,deadline,now):
+ """Let a different, still-loading official widget finish on the existing page."""
+ if fact.get('initialization_continuation') or fact.get('widget_initialization_reload',{}).get('count')!=1:return None
+ before=fact.get('widget_initialization_boundary',{});obs=fact.get('selected_readiness_observation',{})
+ terminal=obs.get('terminal',{})
+ if (obs.get('route_matches') is not True or obs.get('terminal_read')!='completed'
+     or terminal.get('document_state')!='complete' or terminal.get('body_text_chars')!=0
+     or terminal.get('form_count')!=0 or terminal.get('verification_present') is not False
+     or terminal.get('error_present') is not False or obs.get('pending_overflow')!=0
+     or obs.get('errors') or obs.get('observer_error')):return None
+ def widget(item):
+  return (item.get('type')=='script' and item.get('host')=='vdacs.evokeplatform.com'
+          and re.fullmatch(r'/api/webContent/plugins/out-of-the-box-widgets/files/[0-9]+\.js',item.get('path','')))
+ original={i['path'] for i in before.get('pending',[]) if widget(i)}
+ failures=obs.get('failures',[])
+ if not original or obs.get('failed')!=len(failures) or any(not widget(i) or i.get('path') not in original or i.get('code')!='net::ERR_ABORTED' for i in failures):return None
+ if not any(widget(i) and i['path'] not in original and 'status' not in i for i in obs.get('pending',[])):return None
+ stop=min(old_stop+10,deadline-1)
+ return stop if stop-now>=6 else None
+
+
 def wait_va_selected_heading(page,fact,finish_readiness,url,stop):
  """Probe halfway through the existing capture allowance; never extend it."""
  heading=page.get_by_role('heading',name='Registration Information',exact=True)
@@ -1040,9 +1080,9 @@ def capture_selected_va_source(master,result,run,deadline):
     except Exception as ready_error:
      if type(ready_error).__name__!='TimeoutError':raise
      getattr(finish_readiness,'checkpoint',finish_readiness)()
-     proposed_stop=initialization_completion_stop(fact,stop,deadline,time.monotonic())
+     proposed_stop=initialization_completion_stop(fact,stop,deadline,time.monotonic()) or va_reloaded_widget_stop(fact,stop,deadline,time.monotonic())
      if proposed_stop is None:raise
-     fact['initialization_continuation']={'count':1,'extra_cap_seconds':15,'extra_granted_seconds':round(proposed_stop-stop,3),'completion_reserve_seconds':5}
+     fact['initialization_continuation']={'count':1,'extra_cap_seconds':round(proposed_stop-stop,3),'extra_granted_seconds':round(proposed_stop-stop,3),'completion_reserve_seconds':5}
      fact['initialization_boundary_observation']=json.loads(json.dumps(fact['selected_readiness_observation']))
      stop=proposed_stop
      getattr(finish_readiness,'continue_until',lambda value:None)(stop)

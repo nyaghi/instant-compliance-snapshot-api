@@ -613,6 +613,12 @@ async function registryMessage(job, message) {
     const gaTabAt = gaTimed ? Date.now() : 0;
     const tnTabAt=tnTimed?Date.now():0;
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    // The public portal can return a completed Cloudflare 520 document at
+    // the exact search URL. No content script can make that into a form.
+    if (P.TRIAL_ORIGIN && job.registryState==='MS' && message.action==='registry-ready'
+        && tab.status==='complete' && tab.url===registryStart('MS')
+        && /^sos\.ms\.gov\s*\|\s*520:\s*Web server is returning an unknown error$/i.test(tab.title||''))
+      throw new Error('NY_CONNECTOR_REGISTRY_MS_HOST_ERROR');
     const response = await wfAwait(job,"registry-worker.js:registryMessage:492:21:await",()=>(chrome.tabs.sendMessage(job.tab, {...message,...(tnTimed?{tnTiming:true}:{}),...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,includeSnapshotMetadata:message.query?.operation==='detail',captureDeadline:job.activeExpiresAt,skipHistory:message.query?.operation==='detail' && !/^E\d{7,14}-\d$/.test(message.query.identifier)}:{})}, {frameId:0})));
     if(tnTimed){
       const at=Date.now(),t=response?.tn_transport;
@@ -928,7 +934,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
         throw new Error('NY_CONNECTOR_NC_SEARCH_NOT_STARTED');
     } catch(error) {
       if(error?.message==='NY_CONNECTOR_READINESS_DEADLINE') throw new Error(readinessFailure());
-      if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED','NY_CONNECTOR_NC_RATE_LIMITED','NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE'].includes(error?.message))throw error;
+      if(['NY_CONNECTOR_REGISTRY_MS_HOST_ERROR','NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_REGISTRY_NC_PROFILE_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED','NY_CONNECTOR_NC_RATE_LIMITED','NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE'].includes(error?.message))throw error;
       if(job.registryState==='NM' && await registryNmHttpFailure(job,deadline))
         throw new Error('NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR');
       // The public challenge can precede content-script readiness. Its visible

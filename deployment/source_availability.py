@@ -17,7 +17,8 @@ _SOURCE_ERRORS = _INITIAL_SOURCE_ERRORS | {
     'NH_DATASET_UNAVAILABLE', 'AR_SOURCE_MAINTENANCE',
     'OR_SOURCE_UNREACHABLE', 'OR_SOURCE_ACCESS_REFUSED',
     'DC_LICENSE_SOURCE_UNREACHABLE', 'WI_SOURCE_UNREACHABLE',
-    'ME_SOURCE_APPLICATION_ERROR', 'FL_CERTIFICATE_ERROR',
+    'ME_SOURCE_APPLICATION_ERROR', 'FL_CERTIFICATE_ERROR', 'FL_SOURCE_NOT_RESPONDING',
+    'NY_CONNECTOR_REGISTRY_MS_HOST_ERROR',
     'NY_CONNECTOR_REGISTRY_NM_HTTP_ERROR', 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR',
     'NY_CONNECTOR_REGISTRY_NV_STARTUP_UNREACHABLE',
     'NY_CONNECTOR_REGISTRY_NV_FORM_LOAD_TIMEOUT',
@@ -63,6 +64,10 @@ def classify(data):
             return {'kind': 'deadline_exhausted', 'signal': code, 'terminal': True}
         if code in _RATE_LIMITS:
             return {'kind': 'rate_limited', 'signal': code, 'terminal': False}
+        if code == 'NY_CONNECTOR_REGISTRY_MS_HOST_ERROR' and data.get('state') != 'MS':
+            continue
+        if code == 'FL_SOURCE_NOT_RESPONDING' and data.get('state') != 'FL':
+            continue
         if code in _SOURCE_ERRORS:
             return {'kind': 'source_error', 'signal': code,
                     'terminal': code in _INITIAL_SOURCE_ERRORS}
@@ -109,6 +114,8 @@ def apply(data):
     }[fact['kind']]
     if data.get('status_reason') == 'AR_SOURCE_MAINTENANCE':
         explanation = 'Arkansas reports scheduled registry maintenance. CharityClarity stopped searching.'
+    elif data.get('status_reason') == 'NY_CONNECTOR_REGISTRY_MS_HOST_ERROR':
+        explanation = "Mississippi's public search page displayed a host error (520)."
     elif data.get('status_reason') == 'NH_DATASET_UNAVAILABLE':
         explanation = 'The verified New Hampshire registry download is unavailable or needs refresh.'
     # Do not claim the entire site is down, nor publish raw exception payloads.

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity — Gate 56 Detail Capture",
+  "name": "CharityClarity — Gate 56 Source and Detail Repair",
   "version": "0.6.135",
   "minimum_chrome_version": "132",
   "description": "Existing quiet registry collectors plus explicitly requested, read-only Tennessee account history checks.",

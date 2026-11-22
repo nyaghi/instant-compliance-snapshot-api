@@ -738,11 +738,21 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
           if(retriedNvPixels||cancelled||!alive()||started+captureBudgetMs-Date.now()<1200)return null;
           retriedNvPixels=true;
           await new Promise(resolve=>setTimeout(resolve,120));
-          const fresh=await chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0});
+          const fresh=await sampled('NV-fresh-metadata',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}));
           if(cancelled||!alive()||!fresh||fresh.url!==meta.url||fresh.document_id!==meta.document_id
               ||fresh.source_binding!==meta.source_binding||fresh.source_loading_visible!==false
               ||fresh.source_detail!==true||JSON.stringify(fresh.source_view_shape)!==JSON.stringify(meta.source_view_shape))return null;
-          image=await sampled('NV-fresh-pixels',()=>chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',screenshotOptions));
+          // Recover on the same verified viewport within the existing deadline.
+          // The direct screenshot remains available when a new frame is veiled.
+          let freshFrame;
+          try {
+            freshFrame=await sampled('NV-fresh-frame',()=>CCOwnedSourcePixels.capture(tabId,screenshotOptions,{
+              deadline:started+captureBudgetMs-500,alive:()=>!cancelled&&alive()
+            }));
+          } catch { /* The existing direct screenshot remains available. */ }
+          if(cancelled||!alive())return null;
+          if(freshFrame?.data&&!await CCOwnedSourcePixels.nvDetailVeiled(freshFrame.data))image=freshFrame;
+          else image=await sampled('NV-fresh-pixels',()=>chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',screenshotOptions));
           if(!image?.data||cancelled||!alive()||await CCOwnedSourcePixels.nvDetailVeiled(image.data))return null;
           observed.phase='NV-fresh-pixels-verified';
         }
