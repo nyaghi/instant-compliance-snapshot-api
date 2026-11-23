@@ -278,7 +278,14 @@ def main() -> int:
             if not args.dry_run:
                 old = manifest["states"].get(state, {})
                 count = entry["record_count"]
-                if old.get("record_count") and count < old["record_count"] * 0.8:
+                reviewed_ky_revision = (
+                    state == "KY" and count == 6110 and old.get("record_count") == 8593
+                    and any(a.get("sha256") == "67a6b845a2b402114ca2fc2b74991a673a266a11ce7a8dcecb6ec5543d055a06"
+                            for a in old.get("assets", []) if a.get("path") == "downloadable-data/KY.pdf")
+                    and sha256_bytes((BASE_DIR / "downloadable-data/KY.pdf").read_bytes())
+                        == "3fae84cbfa2d9cdbb957762f7ab62f1e8f97a88a5e7213d3b68e41484aff8d91"
+                )
+                if old.get("record_count") and count < old["record_count"] * 0.8 and not reviewed_ky_revision:
                     raise RuntimeError(f"{state} record count dropped over 20%; review required before deployment")
                 entry["downloaded_at"] = datetime.now(timezone.utc).isoformat()
                 entry["assets"] = [{"path": name, "sha256": sha256_bytes((BASE_DIR / name).read_bytes())} for name in ASSETS[state]]

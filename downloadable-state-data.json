@@ -3,81 +3,81 @@
   "states": {
     "KY": {
       "state": "KY",
-      "record_count": 8593,
+      "record_count": 6110,
       "source_url": "https://www.ag.ky.gov/Resources/Consumer-Resources/charity/Documents/charity.pdf",
-      "source_date": "11/9/2026",
-      "downloaded_at": "2026-11-15T13:35:01.419203+00:00",
+      "source_date": "11/16/2026",
+      "downloaded_at": "2026-11-23T13:58:40.972673+00:00",
       "assets": [
         {
           "path": "downloadable-data/KY.pdf",
-          "sha256": "67a6b845a2b402114ca2fc2b74991a673a266a11ce7a8dcecb6ec5543d055a06"
+          "sha256": "3fae84cbfa2d9cdbb957762f7ab62f1e8f97a88a5e7213d3b68e41484aff8d91"
         },
         {
           "path": "downloadable-data/KY-records.json",
-          "sha256": "95bedc0698c1199d76a25f89daf2eb8aebea420655003ae27a95033a78c7dcec"
+          "sha256": "beb2fe3c060323903e5c74f0df4d37486649777c0d6554261a29cfaab89d1448"
         }
       ]
     },
     "LA": {
       "state": "LA",
-      "record_count": 426,
+      "record_count": 417,
       "source_url": "https://www.ag.state.la.us/Charity/Registration/Listing",
       "source_date": "",
-      "downloaded_at": "2026-11-15T13:49:46.542885+00:00",
+      "downloaded_at": "2026-11-23T14:02:01.642386+00:00",
       "assets": [
         {
           "path": "downloadable-data/LA.xlsx",
-          "sha256": "2612c8cca57daa969618d9a0a21ce4337e107b6704fc24503cf1ffa6f8c6ad58"
+          "sha256": "af6699c369999bdcfab62888f3125d3798e769fa7ea60f44a4e60241f2c12726"
         },
         {
           "path": "downloadable-data/LA-original-row-images.json",
-          "sha256": "5f6b9890122c73e22020a40f4ab71fdaa0b31e572e602e96dcdcca16c1a4f1f7"
+          "sha256": "a19246324a48d5b671c7d04755eb5e6204e1ebde6debce135b7b77097da870ab"
         },
         {
           "path": "downloadable-data/LA-original-row-images.zip",
-          "sha256": "c1e6019c5538ec23fc7f95cf99944f99e9eaf5f78e0592fdbbdb1bd233a465dc"
+          "sha256": "3c69cd4f806f0389eef630e8baa501dad199e920244ce0ba7394d49a11d229f7"
         }
       ]
     },
     "NH": {
       "state": "NH",
       "status": "changed",
-      "record_count": 14118,
-      "updated_label": "November 13, 2026",
-      "checksum": "b0522dc9aaaac934384867e7c1a96dcc51322f5b72fe0d528087ba58bff453dd",
+      "record_count": 14132,
+      "updated_label": "November 23, 2026",
+      "checksum": "28579823bf7ceffb2d185f86b5701f501033c93a6ef985aed27a5d28552c2aed",
       "source_url": "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
-      "source_date": "November 13, 2026",
-      "downloaded_at": "2026-11-20T00:56:52.124719+00:00",
+      "source_date": "November 23, 2026",
+      "downloaded_at": "2026-11-23T14:00:16.577211+00:00",
       "assets": [
         {
           "path": "registered-charities.pdf",
-          "sha256": "b0522dc9aaaac934384867e7c1a96dcc51322f5b72fe0d528087ba58bff453dd"
+          "sha256": "28579823bf7ceffb2d185f86b5701f501033c93a6ef985aed27a5d28552c2aed"
         },
         {
           "path": "downloadable-data/NH-records.json",
-          "sha256": "36f22e1b32ede4dd466ff5ca6b1a187633fe3d76932f680bbd02aae00900fb69"
+          "sha256": "e141e6e8184ba2039f2ded11545394bd0ddd26759055efe96be18bcbf889963d"
         }
       ]
     },
     "KS": {
       "state": "KS",
-      "record_count": 6879,
-      "source_url": "https://www.ag.ks.gov/home/showpublisheddocument/24722/639264656285470000",
+      "record_count": 6984,
+      "source_url": "https://www.ag.ks.gov/home/showpublisheddocument/24722/639306962007983796",
       "source_date": "",
-      "content_last_changed_at": "2026-10-05T10:50:25",
-      "downloaded_at": "2026-11-15T13:32:04.334164+00:00",
+      "content_last_changed_at": "2026-11-23T09:12:18",
+      "downloaded_at": "2026-11-23T14:12:18.699224+00:00",
       "assets": [
         {
           "path": "KS_weekly_checker.py",
-          "sha256": "023526f09ba79679432a92595653c16c9603e27afc395e39f0c9d9aa4bc2bc34"
+          "sha256": "ed11d137be1b20806610f1a28e2f7311b2b84aefb2a9cebb13038f6a7d0d144d"
         },
         {
           "path": "downloadable-data/KS-original-row-images.json",
-          "sha256": "ce77a44ab6d91600464617c9d07cb30cc82ea383be2c43ef459652c5760ccffa"
+          "sha256": "7b21cc4f3cb48f5fb1ef98da48ebd9d6b9194096148c83330f25868e1145574b"
         },
         {
           "path": "downloadable-data/KS-original-row-images.zip",
-          "sha256": "5e93ab2e298e650e62d522083349c6d5f3e0b97c7aa227df881fc58da68e6933"
+          "sha256": "8312c35ee7b0de1f64f824a3619357fa7df598eb381ba044a219207c49255fb2"
         }
       ]
     },
@@ -86,7 +86,7 @@
       "record_count": 24115,
       "source_url": "https://justice.oregon.gov/Charities/Charity/GetZip",
       "source_date": "",
-      "downloaded_at": "2026-11-15T13:37:56.886674+00:00",
+      "downloaded_at": "2026-11-23T14:00:27.025412+00:00",
       "assets": [
         {
           "path": "Charity_OR.txt",
@@ -96,7 +96,7 @@
     }
   },
   "last_run": {
-    "at": "2026-11-20T00:56:57.404224+00:00",
+    "at": "2026-11-23T14:12:18.790192+00:00",
     "errors": []
   }
 }
