@@ -4547,6 +4547,14 @@ def discovered_organization_addresses(ein: str, sources: list[dict]) -> list[dic
     return list(merged.values())[:12]
 
 
+def discovery_non_name(value: str) -> bool:
+    words = re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).strip()
+    return bool(re.fullmatch(
+        r"(?:(?:a|an|the) )?(?:inc|incorporated|corp|corporation|llc|ltd|limited)"
+        r"|e g|i e|any individual school that constitutes .+", words,
+    ))
+
+
 def discover_organization_names(organization_name: str, ein: str) -> dict:
     start = time.monotonic(); deadline = start + IDENTITY_DEADLINE_SECONDS
     if not isinstance(ein, str) or not re.fullmatch(r"\d{2}-?\d{7}", ein.strip()):
@@ -4625,7 +4633,8 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
                 target["historical"] = target["historical"] or item["historical"]
                 for proof in item["evidence"]:
                     if proof not in target["evidence"]: target["evidence"].append(proof)
-    names = list(merged.values())
+    # Provider-specific collectors may supply candidates without using identity_candidate().
+    names = [item for item in merged.values() if not discovery_non_name(item["name"])]
     for item in names:
         conflict_source = (item.get("identity_conflict") or {}).get("source", "WA")
         if item.get("identity_conflict") and any(proof.get("source") not in {conflict_source, identity_source_label(conflict_source)} for proof in item["evidence"]):
@@ -19176,6 +19185,15 @@ def ct_shortened_identity_review(org, result, detail_text="", *, source_name="")
     return result
 
 
+def ct_numeric_colon_search_first(original_name: str, variants: list[str]) -> list[str]:
+    """The registry can omit a colon following a numeral from its legal name."""
+    if not re.fullmatch(r"[\w .&'-]+\b\d+:\s+[\w .&'-]+", original_name):
+        return variants
+    query = re.sub(r"\s+", " ", original_name.replace(":", " ")).strip()
+    # Use the first slot and keep the route's existing request limit.
+    return [query, *(value for value in variants if value.casefold() != query.casefold())][:len(variants)]
+
+
 def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> list[str]:
     prioritized: list[str] = []
     seen: set[str] = set()
@@ -19335,6 +19353,7 @@ def _search_ct_direct(org):
     variants = list(dict.fromkeys([*primary_forms, *variants]))
     if trial_identity() and LAB_LOOKUP_MODE_CONTEXT.get() == "standard":
         variants = focused_generated_name_queries([original_name, *known_names_for_ein(org.ein)], variants)
+    variants = ct_numeric_colon_search_first(original_name, variants)
     service_variant = ""
     if trial_identity():
         from deployment.gate41_repairs import ct_service_variant
@@ -19520,6 +19539,7 @@ def search_ct(page, org):
         [*equivalent_name_queries(original_name, org.ein, preserve_at=True),
          *ct_shortened_institutional_queries(original_name, org.ein), *variants], limit=CT_NAME_VARIANT_LIMIT,
         transform=lambda value: (equivalent_name_queries(value, "", preserve_at=True) or [value])[0])
+    variants = ct_numeric_colon_search_first(original_name, variants)
     last_error = ""
     for variant in variants:
         if time.perf_counter() >= deadline:
@@ -20952,6 +20972,9 @@ def search_mn(page, org):
                 result.source_url = detail_url
                 result.reason_code = "MN_EXACT_EIN_DETAIL_STATUS"
                 result.source_note = "Minnesota's public detail page confirmed the requested EIN, organization name and explicit status."
+                if raw_status.casefold() == "undefined":
+                    result.source_note = ("Minnesota confirmed the exact organization and EIN, but shows Undefined status "
+                                          "and a blank fiscal period. CharityClarity reports Delinquent under its missing-filing rule.")
                 return result
 
         from deployment.mn_empty_response import complete as mn_completed_empty_response
