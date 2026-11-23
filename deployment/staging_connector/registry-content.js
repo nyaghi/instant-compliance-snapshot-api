@@ -2777,12 +2777,17 @@
       snapshotMsScroll=null;
       return {ok:true};
     }
-    if(views.length!==2||!views.includes(m.view)||!['prepare','observe'].includes(m.worker_step))return {ok:false};
-    const targets=m.view==='top'?[heading]:fields;
+    if(!views.includes(m.view)||!['prepare','observe'].includes(m.worker_step))return {ok:false};
+    const targets=views.length===1?[heading,...fields]:m.view==='top'?[heading]:fields;
     if(m.worker_step==='prepare') {
-      if(m.view==='top')snapshotMsScroll={modal,command:m.command_id,binding,originalTop:modal.scrollTop};
+      if(m.view==='top'&&!matches())snapshotMsScroll={modal,command:m.command_id,binding,originalTop:modal.scrollTop};
       if(!matches())return {ok:false};
-      modal.scrollTop=m.view==='top'?0:modal.scrollTop+fields[0].getBoundingClientRect().top-modal.getBoundingClientRect().top-12;
+      const top=Math.min(...targets.map(el=>el.getBoundingClientRect().top));
+      const bottom=Math.max(...targets.map(el=>el.getBoundingClientRect().bottom));
+      const clip=modal.getBoundingClientRect();
+      // Scroll the smallest distance that exposes this view, keeping all fields inside.
+      const delta=top<clip.top ? top-clip.top : Math.max(0,bottom-clip.bottom);
+      modal.scrollTop+=delta>0?Math.ceil(delta):Math.floor(delta);
       snapshotMsScroll.view=m.view;
     }
     if(!matches()||snapshotMsScroll.view!==m.view)return {ok:false};

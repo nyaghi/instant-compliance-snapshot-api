@@ -525,7 +525,14 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       const gaBinding=gaRequiredDetail?meta.source_binding:null,gaDocument=gaRequiredDetail?meta.document_id:null;
       if(gaRequiredDetail&&(!meta.source_ga_primary_ready||!gaBinding||!gaDocument
         ||!Number.isInteger(meta.source_ga_primary_bottom)||!Number.isInteger(meta.source_viewport_width)))return null;
-      if(gaRequiredDetail||nmRequiredDetail||alRequiredGrid||msRequiredDetail||nyRequiredDetail||ncSelectedDetail) {
+      const msBoundDialog=msRequiredDetail && meta.source_ms_detail_ready===true &&
+        ['["top"]','["top","filing"]'].includes(JSON.stringify(meta.source_ms_views)) &&
+        typeof meta.document_id==='string' && meta.document_id.length>0 && meta.document_id.length<=100 &&
+        typeof meta.source_ms_binding==='string' && meta.source_ms_binding.length>0 && meta.source_ms_binding.length<=20000;
+      const msModal=msBoundDialog && (meta.source_ms_views.length===2 || !meta.source_ms_summary_visible);
+      // An inner, scrollable state dialog already defines the views to capture.
+      // Resizing the outer document cannot expose fields clipped by that dialog.
+      if(gaRequiredDetail||nmRequiredDetail||alRequiredGrid||(msRequiredDetail&&!msBoundDialog)||nyRequiredDetail||ncSelectedDetail) {
         const originalText=meta.public_text,content=layout.cssContentSize,view=layout.cssLayoutViewport;
         // Use the existing complete NY schema binding across responsive cards
         // and tables. Raw source text must still settle before the screenshot.
@@ -629,10 +636,6 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         &&meta.capture_views.every(view=>['top','expiration','financial'].includes(view));
       if(ilDetail&&!ilModal)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:334:28:return",(null));
       if(state==='TN'&&query.operation==='detail'&&!tnModal)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:335:60:return",(null));
-      const msModal=msRequiredDetail&&meta.source_ms_detail_ready===true&&
-        JSON.stringify(meta.source_ms_views)==='["top","filing"]'&&
-        typeof meta.document_id==='string'&&meta.document_id.length>0&&meta.document_id.length<=100&&
-        typeof meta.source_ms_binding==='string'&&meta.source_ms_binding.length>0&&meta.source_ms_binding.length<=20000;
       const modal=tnModal||nvModal||ilModal||msModal;
 
       const viewport=layout.cssLayoutViewport;
@@ -668,7 +671,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
           let changed;
           if(workerSettledDetail||boundNvDetail||msModal) {
-            let previous=null,stable=0;
+            let previous=null,stable=0,unready=0,realigned=false,previousMsProof=null;
             // Preserve the half-second completion reserve inside the existing state expiry.
             const end=started+captureBudgetMs-500;
             let step='prepare';
@@ -679,6 +682,14 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
               if(changed?.ok!==true||changed.view_protocol!=='worker-settle-1')return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:365:79:return",(null));
               const proof=JSON.stringify([changed.view_shape,changed.view_text]);
               stable=changed.view_ready===true&&proof===previous?stable+1:0;previous=proof;
+              if(msModal) {
+                unready=!changed.view_ready && proof===previousMsProof ? unready+1 : 0;
+                previousMsProof=proof;
+                if(unready>=3) {
+                  if(realigned)return null;
+                  realigned=true;unready=0;step='prepare';
+                }
+              }
               if(stable>=2)break;
               await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:369:14:await",()=>(new Promise(resolve=>setTimeout(resolve,40))));
             }
@@ -709,8 +720,8 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
         if(ilPaintActive&&attached){await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:388:36:await",()=>(sampled('IL-paint-restored',()=>chrome.debugger.sendCommand({tabId},'Emulation.setFocusEmulationEnabled',{enabled:false}))));ilPaintActive=false;if(cancelled||!alive())return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:388:208:return",(null));}
         observed.phase='capture';
-        const screenshotOptions={format:'jpeg',quality:75,captureBeyondViewport:!modal&&!gaFullViewport,fromSurface:true,
-          clip:(modal||(gaRequiredDetail||nmRequiredDetail||nyRequiredDetail||ncSelectedDetail)&&gaFullViewport)
+        const screenshotOptions={format:'jpeg',quality:75,captureBeyondViewport:!modal&&!msBoundDialog&&!gaFullViewport,fromSurface:true,
+          clip:(modal||msBoundDialog||(gaRequiredDetail||nmRequiredDetail||nyRequiredDetail||ncSelectedDetail)&&gaFullViewport)
             ?{x:viewport.pageX||0,y:viewport.pageY||0,width:viewport.clientWidth,height:viewport.clientHeight,scale:1}
             :{x:0,y:0,width:size.width,height:size.height,scale:1}};
         const captureImage=options=>wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:389:45:await",
@@ -718,7 +729,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             // NY and GA have already verified that the selected record fits
             // the owned viewport. Request a fresh frame before a potentially
             // stalled screenshot consumes the entire detail allowance.
-            if((['AL','NC','NV'].includes(state)||gaFullViewport&&(nyRequiredDetail||gaRequiredDetail))
+            if((msBoundDialog||['AL','NC','NV'].includes(state)||gaFullViewport&&(nyRequiredDetail||gaRequiredDetail))
                 &&typeof CCOwnedSourcePixels!=='undefined'){
               try{return await CCOwnedSourcePixels.capture(tabId,options,{
                 deadline:started+captureBudgetMs-500,alive:()=>!cancelled&&alive(),
