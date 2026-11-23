@@ -44,14 +44,23 @@
     return completedNegative && !selectedCANonregistration(result)
       || result.identity_review_evidence_final === true && allRejected;
   }
+  function usesIncompleteSearchHistory(result) {
+    return result.success === false && (
+      result.state === 'AR' && result.status_reason === 'AR_REQUIRED_SEARCH_INCOMPLETE'
+      || result.state === 'NC' && result.status_reason === 'NY_CONNECTOR_NC_RATE_LIMITED'
+      || result.state === 'TN' && [
+        'NY_CONNECTOR_TN_OPTIONAL_CAPTURE_CLEANUP_TIMEOUT',
+        'NY_CONNECTOR_TN_SEARCH_DELIVERY_TIMEOUT',
+        'NY_CONNECTOR_REGISTRY_TN_RESPONSE_PENDING',
+        'NY_CONNECTOR_REGISTRY_TN_PAGINATION_INCOMPLETE',
+      ].includes(result.status_reason));
+  }
   function renderEvidence(parent, result) {
     const source = /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(result.evidence_url || '');
     const bundle = /^\/state-evidence\/([a-f0-9]{64})\/evidence\.zip$/.exec(result.evidence_bundle_url || '');
     const history = /^\/state-evidence\/([a-f0-9]{64})\/search-history\.pdf$/.exec(result.search_history_url || '');
     const validHistory = history && (!result.evidence_bundle_url || bundle && bundle[1] === history[1]);
-    const incompleteAttempts = result.success === false && (
-      result.state === 'AR' && result.status_reason === 'AR_REQUIRED_SEARCH_INCOMPLETE'
-      || result.state === 'NC' && result.status_reason === 'NY_CONNECTOR_NC_RATE_LIMITED');
+    const incompleteAttempts = usesIncompleteSearchHistory(result);
     if (validHistory && (incompleteAttempts || result.identity_review_evidence_final === true || result.success === true && (result.status === 'Not Registered' || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant'))) {
       const namesOnly = result.state === 'CT' && result.rejected_search_history === true || result.success === true && (result.status === 'Not Registered' || result.state === 'IL' && result.status === 'Not Registered / Non-Compliant');
       const log = add(parent, 'a', incompleteAttempts ? 'View Search Attempts (PDF)' : namesOnly ? 'View Names Searched (PDF)' : 'View Search History (PDF)', 'mt-2 block text-xs underline whitespace-normal');
@@ -180,5 +189,5 @@
     }
     return inconclusive ? 'Review required' : result.status || 'Unknown';
   }
-  window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel, usesSearchHistoryOnly});
+  window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel, usesSearchHistoryOnly, usesIncompleteSearchHistory});
 })();

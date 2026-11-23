@@ -105,9 +105,21 @@ def reportable_result(result):
             and 1<=len(result['status'])<=100 and type(result.get('success')) is bool)
 
 
+TN_INCOMPLETE_NOTES = {
+    'NY_CONNECTOR_TN_OPTIONAL_CAPTURE_CLEANUP_TIMEOUT':
+        'Chrome did not release an optional Tennessee search screenshot in time to continue safely.',
+    'NY_CONNECTOR_TN_SEARCH_DELIVERY_TIMEOUT':
+        'The Tennessee browser search did not provide a completed response within its original time allowance.',
+    'NY_CONNECTOR_REGISTRY_TN_RESPONSE_PENDING':
+        'Tennessee was still processing a submitted search when the wait ended.',
+    'NY_CONNECTOR_REGISTRY_TN_PAGINATION_INCOMPLETE':
+        'Tennessee returned rows, but the full set of result pages could not be verified.',
+}
+
 def incomplete_search_attempts(result):
-    reasons = {'AR': 'AR_REQUIRED_SEARCH_INCOMPLETE', 'NC': 'NY_CONNECTOR_NC_RATE_LIMITED'}
-    return (result.get('state') in reasons and result.get('status_reason') == reasons[result['state']]
+    reasons = {'AR': {'AR_REQUIRED_SEARCH_INCOMPLETE'}, 'NC': {'NY_CONNECTOR_NC_RATE_LIMITED'},
+               'TN': TN_INCOMPLETE_NOTES}
+    return (result.get('status_reason') in reasons.get(result.get('state'), ())
             and result.get('success') is False
             and result.get('status') in {'Unable to Verify', 'Unable to Confirm', 'Needs Review'})
 

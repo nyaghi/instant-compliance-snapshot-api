@@ -1769,6 +1769,10 @@ def capture_owned_fl_empty(master,run,result,page,deadline):
  fact={'adapter':'FL-owned-completed-empty','outcome':'not_started','phase':'admission',
        'navigation_ms':0,'visual_query_count':0,'query_ms':0,'capture_ms':0,'total_ms':0}
  run.visual_adapter_facts.append(fact)
+ from deployment.validated_search_history import fl_has_complete_history
+ if fl_has_complete_history(run):
+  fact.update(outcome='completed_search_history',phase='retained_primary_queries')
+  return None
  url='https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx'
  name=run.name
  try:

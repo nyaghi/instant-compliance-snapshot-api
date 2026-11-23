@@ -9928,6 +9928,9 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     attempts = record.get('al_verification_attempts', 0) if state == 'AL' else 0
     from deployment.registry_validation_reason import public_validation_reason
     validation_note = public_validation_reason(state, diagnostic)
+    if state == "TN" and not validation_note:
+        from deployment.search_history import TN_INCOMPLETE_NOTES
+        validation_note = TN_INCOMPLETE_NOTES.get(reason, "")
     why = (validation_note if validation_note else
            "Nevada did not finish checking another candidate within the time allowed after saving the primary record." if state == "NV" and reason == "NY_CONNECTOR_NV_FOLLOWUP_TIMEOUT" else
            "The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
@@ -20508,6 +20511,7 @@ def search_fl_with_transport(page, org, transport):
     # parser may be retained; failure/verification pages never enter it.
     completed_queries = {}
     shared_run = None
+    progress = {}
     if trial_identity():
         from deployment.state_snapshots import CURRENT
         candidate_run = CURRENT.get()
@@ -20526,12 +20530,28 @@ def search_fl_with_transport(page, org, transport):
             fl_ein_checks = progress.setdefault('ein_checks', {})
             rejected_eins = progress.setdefault('rejected_eins', {})
             progress['attempts'].append({'reused_queries': list(completed_queries), 'completed_queries': [], 'failed_queries': []})
-    def confirmed_business_result(rows):
+    def confirmed_business_result(rows, completed_negative=None):
         excluded_credentials = {identifier for _, identifier in rejected_eins if identifier}
         exact = [row for row in rows if normalized_match_name(row["business_evidence"]["name"])
                  in {normalized_match_name(name) for name in safe_targets}
                  and row["business_evidence"]["identifier"] not in excluded_credentials]
-        # Extra/inactive names cannot displace the requested legal entity.
+        # A single matched historical card cannot displace a current result.
+        # Retain the official label and credential on the existing negative.
+        if (completed_negative is not None and len(exact) == 1
+                and exact[0]["business_evidence"]["status"].casefold() == "not operating in fl"):
+            candidate = select_fl_candidate(exact)
+            if candidate is not None:
+                evidence = exact[0]["business_evidence"]
+                expiration = first_date_near_label(candidate["row_text"], ["Expiration Date"])
+                if expiration and expiration < date.today():
+                    note = (
+                        f' The matched historical FDACS Business Lookup card {evidence["identifier"]} '
+                        f'for {evidence["name"]} says "{evidence["status"]}" '
+                        f'and shows expiration {format_date(expiration)}.'
+                    )
+                    if note not in completed_negative.source_note:
+                        completed_negative.source_note += note
+                    progress['historical_business_note'] = note
         # Multiple exact credentials remain on the existing browser path.
         if len(exact) == 1 and exact[0]["business_evidence"]["status"] in {
                 "Registered", "Active Small Charity", "Suspended", "Revoked", "Law NA - Educational", "Denied"}:
@@ -20615,6 +20635,8 @@ def search_fl_with_transport(page, org, transport):
             # Check-A-Charity submits an ASP.NET postback. A short network-idle
             # wait can leave the old form visible; require the submitted response.
             try:
+                from deployment.validated_search_history import begin_query, finish_fl
+                history_query = begin_query("FL", variant, url)
                 with fl_access_step("browser_submit"), page.expect_navigation(wait_until="domcontentloaded", timeout=remaining_ms(12000)) as submitted:
                     page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=remaining_ms(4000), no_wait_after=True)
             except Exception as exc:
@@ -20643,6 +20665,8 @@ def search_fl_with_transport(page, org, transport):
                 raise transport.error
             completed_search_form = True
             if no_registry_results_seen(text):
+                if settled_empty:
+                    finish_fl(history_query)
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
                 result.source_note = "Florida Check-A-Charity returned no matching record for the generated name variants."
@@ -20664,6 +20688,12 @@ def search_fl_with_transport(page, org, transport):
             )
             best_candidate = select_fl_candidate(candidate_rows)
             if not best_candidate:
+                if page.url.split("?", 1)[0] == url:
+                    try:
+                        if input_box.input_value(timeout=remaining_ms(500)) == variant:
+                            finish_fl(history_query, empty=False)
+                    except Exception:
+                        pass  # A receipt read must neither change status nor submit another search.
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
                 result.source_note = "Florida Check-A-Charity returned search results, but none safely matched the requested organization."
@@ -20744,13 +20774,18 @@ def search_fl_with_transport(page, org, transport):
                 # the existing lookup deadline, using the retained response
                 # for evidence when a positive is corroborated.
                 query = (literal_name_retrieval_forms(original_name) or [original_name])[0]
-                try:
-                    rows = _fl_business_public_rows_once(query, min(deadline, time.monotonic() + 5.0))
-                except (OSError, ValueError, http.client.HTTPException):
-                    rows = []
-                confirmed = confirmed_business_result(rows)
-                if confirmed is not None:
-                    return confirmed
+                historical_note = progress.get('historical_business_note')
+                if historical_note:
+                    if historical_note not in best_result.source_note:
+                        best_result.source_note += historical_note
+                else:
+                    try:
+                        rows = _fl_business_public_rows_once(query, min(deadline, time.monotonic() + 5.0))
+                    except (OSError, ValueError, http.client.HTTPException):
+                        rows = []
+                    confirmed = confirmed_business_result(rows, completed_negative=best_result)
+                    if confirmed is not None:
+                        return confirmed
             if rejected_eins and best_result.success and best_result.status == checker.STATUS_NOT_REGISTERED:
                 best_result.source_note += " Candidates verified under a different EIN were excluded."
                 best_result.rejected_candidates = [{"name": name, "identifier": identifier, **proof}
@@ -36475,6 +36510,16 @@ def ar_user_accepted_name_match(candidate_name: str, original_name: str, ein: st
     )
 
 
+def ar_truncated_legal_name(row_name: str, full_name: str) -> bool:
+    """Recognize a long legal name clipped at the observed AR display boundary."""
+    if len(full_name) <= 51 or not (len(row_name) == 50 or len(row_name) == 49 and row_name.endswith("&")):
+        return False
+    def key(name):
+        return re.sub(r"\s+", " ", canonical_name_punctuation(name).casefold().replace("&", " and ")).strip()
+    prefix, legal = key(row_name), key(full_name)
+    return len(distinctive_match_tokens(prefix)) >= 2 and len(legal) > len(prefix) and legal.startswith(prefix)
+
+
 def ar_candidate_identity(row: dict, original_name: str, targets: list[str], ein: str) -> str:
     """Use same-record EIN evidence when supplied; never borrow an EIN by name."""
     candidate_ein = re.sub(r"\D", "", str(row.get("ein") or row.get("fein") or ""))
@@ -36683,6 +36728,15 @@ def ar_reviewed_search_plan(org, generated):
         priority = [org.organization_name, *halves]
         queries = list(dict.fromkeys([*priority, *queries]))
     queries = list(dict.fromkeys([*extra, *queries]))
+    if len(literal) > 51 and not halves:
+        # Promote a literal whole-word prefix that already exists in the plan.
+        # It retrieves a clipped label without becoming a separate identity.
+        prefix = next((query for query in queries if 21 <= len(query) <= 38
+                       and literal.casefold().startswith(query.casefold() + " ")
+                       and len(query.split()[-1]) >= 4
+                       and len(distinctive_match_tokens(query)) >= 2), None)
+        if prefix:
+            queries = [prefix, *(query for query in queries if query != prefix)]
     return (queries[:AR_NAME_SEARCH_MAX_VARIANTS] if not known_names_for_ein(org.ein) else queries), prefixes
 
 
@@ -36937,6 +36991,7 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
             elif result_shell_seen and not explicit_no_results:
                 result_shell_without_rows = True
             limit_candidate_name = ""
+            clipped_legal_name = False
             for row in parsed_rows:
                 row_name = row.get("name", "")
                 if not row_name:
@@ -36949,6 +37004,16 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                         and not (row.get("ein") or row.get("fein"))):
                     identity = "unconfirmed_scope"
                     limit_candidate_name = row_name
+                elif (not unusable_read and len(parsed_rows) == 1
+                        and canonical_name_punctuation(identity_name).casefold().startswith(variant.casefold() + " ")
+                        and 21 <= len(variant) <= 45 and len(distinctive_match_tokens(variant)) >= 2
+                        and ar_truncated_legal_name(row_name, identity_name)
+                        and row.get("type", "").casefold() in {"charity", "charity registration"}
+                        and ar_status_from_text(row.get("status", "")) != checker.STATUS_UNKNOWN
+                        and not (row.get("ein") or row.get("fein"))):
+                    identity = "unconfirmed_scope"
+                    limit_candidate_name = row_name
+                    clipped_legal_name = True
                 elif identity_name != original_name and distinct_foundation_name_scope(identity_name, row_name):
                     identity = ar_candidate_identity(row, identity_name, variant_targets, getattr(org, "ein", ""))
                 else:
@@ -36988,9 +37053,13 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 pending = scope_identity_review_result(org, "AR", [scope_candidates[limit_candidate_name]], False, AR_SEARCH_URL)
                 if getattr(pending, "_cc_identity_review", None):
                     pending.status_reason = "AR_NAME_LENGTH_IDENTITY_REVIEW"
-                    pending.source_note = ("The Arkansas registry returned one record matching the first 50 characters "
-                        "of the entered name, but its displayed name omits the final character "
-                        "and has no EIN. Confirm or reject the original state record before applying its status.")
+                    pending.source_note = (
+                        "Arkansas returned one charity row whose displayed name is a truncated prefix of the entered legal name."
+                        if clipped_legal_name else
+                        "The Arkansas registry returned one record matching the first 50 characters of the entered name, "
+                        "but its displayed name omits the final character."
+                    ) + (" The public row has no EIN. Confirm the original state record before applying its status. "
+                         "Rejecting this result does not establish non-registration.")
                     return pending
             if best:
                 break

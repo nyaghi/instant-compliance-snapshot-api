@@ -50,8 +50,9 @@
       const history=/^\/state-evidence\/([a-f0-9]{64})\/search-history\.pdf$/.exec(r.search_history_url||'');
       const completedNegative=r.success===true&&(r.status==='Not Registered'||r.state==='IL'&&r.status==='Not Registered / Non-Compliant');
       const validHistory=history&&(!r.evidence_bundle_url||r.evidence_bundle_url===`/state-evidence/${history[1]}/evidence.zip`);
-      const incompleteAttempts=r.success===false&&(r.state==='AR'&&r.status_reason==='AR_REQUIRED_SEARCH_INCOMPLETE'
-        ||r.state==='NC'&&r.status_reason==='NY_CONNECTOR_NC_RATE_LIMITED');
+      const incompleteAttempts = window.CCIdentityReview?.usesIncompleteSearchHistory?.(r)
+        ?? (r.success === false && (r.state === 'AR' && r.status_reason === 'AR_REQUIRED_SEARCH_INCOMPLETE'
+          || r.state === 'NC' && r.status_reason === 'NY_CONNECTOR_NC_RATE_LIMITED'));
       const historyOnly = window.CCIdentityReview?.usesSearchHistoryOnly?.(r)
         ?? (completedNegative && r.state !== 'CA');
       const historyPath = validHistory && (historyOnly || completedNegative || incompleteAttempts

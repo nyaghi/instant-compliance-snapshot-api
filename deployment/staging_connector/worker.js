@@ -643,6 +643,8 @@ async function prepareNySearchForm(job, query) {
   await wfAwait(job,"worker.js:prepareNySearchForm:474:2:await",()=>(saveRuntime()));
 }
 async function awaitSnapshotCleanup(job,id) {
+  const tnReleaseFailure='NY_CONNECTOR_TN_OPTIONAL_CAPTURE_CLEANUP_TIMEOUT';
+  if(job.tnOptionalSnapshotDetachFailed)throw new Error(tnReleaseFailure);
   if(!job.snapshotCleanupBusy)return;
   const completion=job.snapshotCleanupCompletion;
   const tab=job.tab,generation=job.generation,deadline=job.activeExpiresAt;
@@ -650,12 +652,18 @@ async function awaitSnapshotCleanup(job,id) {
   if(!completion||typeof completion.then!=='function'||remaining<=0)
     throw new Error('NY_CONNECTOR_INCOMPLETE');
   let timer;
+  const optionalTn=job.registryState==='TN'&&job.tnOptionalSnapshotCleanup===true;
+  const cleanupAllowance=optionalTn?Math.min(1500,remaining):remaining;
   diagnostic('capture-cleanup-wait',job,'Waiting for original owned capture cleanup');
   try {
     await Promise.race([completion,new Promise((_,reject)=>{
-      timer=setTimeout(()=>reject(new Error('NY_CONNECTOR_INCOMPLETE')),remaining);
+      // The existing failed-command path closes the owned tab. Do not send a
+      // new search on a target whose optional screenshot has not detached.
+      const reason=optionalTn?tnReleaseFailure:'NY_CONNECTOR_INCOMPLETE';
+      timer=setTimeout(()=>reject(new Error(reason)),cleanupAllowance);
     })]);
   } finally {clearTimeout(timer);}
+  if(job.tnOptionalSnapshotDetachFailed)throw new Error(tnReleaseFailure);
   if(job.closed||!isActive(job)||job.pending!==id||job.command?.id!==id
     ||job.tab!==tab||job.generation!==generation||job.activeExpiresAt!==deadline
     ||Date.now()>=deadline||job.snapshotCleanupBusy)

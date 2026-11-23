@@ -14,7 +14,8 @@ URLS={'WV':'https://erls.wvsos.gov/OnlineCharitiesSearch/Search',
       'AR':'https://sos-corp-search.ark.org/index.php/charity',
       'CT':'https://www.elicense.ct.gov/lookup/licenselookup.aspx',
       'OK':OK_SEARCH_URL,
-      'ME':'https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx'}
+      'ME':'https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx',
+      'FL':'https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx'}
 AR_RESULTS_URL='https://sos-corp-search.ark.org/charity/results'
 
 def ar_results_bound(url,name):
@@ -45,6 +46,7 @@ class Query:
                                 if self.run.state=='ME' else 'Name field; source name comparison not specified')}
     def complete(self,rows):
         if self.done:return
+        count = None if rows is None else len(rows)
         # A navigation with multiple matching submissions is ambiguous. Keep
         # its separate transport receipts rather than assign one row set twice.
         if len(self.receipts)>1:return
@@ -54,16 +56,16 @@ class Query:
                         if e['query_id']==receipt.query_id),None)
             if entry is None and not receipt.saved:
                 receipt.query['filter_label']=self.query()['filter_label']
-                receipt.complete(len(rows),rows=rows)
+                receipt.complete(count,rows=rows)
                 self.done=True;self.pending.clear();return
             if entry is None or entry.get('observation_kind')!='transport_response':return
-            entry.update(outcome='Completed source response',returned_rows=len(rows),
+            entry.update(outcome='Completed source response',returned_rows=count,
                          completed_at=time.time(),observation_kind='validated_source_rows',
                          **returned_record_details({'rows':rows}))
             entry['query']['filter_label']=self.query()['filter_label']
         else:
             receipt=SourceQueryReceipt(self.run,self.query())
-            receipt.issued=self.issued;receipt.complete(len(rows),rows=rows)
+            receipt.issued=self.issued;receipt.complete(count,rows=rows)
         self.done=True;self.pending.clear()
 
 def begin_query(state,name,url):
@@ -87,6 +89,26 @@ def bind_transport(run,receipts):
                 and url_matches and q.get('operation')=='search'):
                 active.receipts.append(receipt)
     except Exception:pass
+
+def finish_fl(active, *, empty=True):
+    """Bind a parsed postback to its search field. Record zero only if proven."""
+    if active is not None and active.run.state == "FL":
+        active.complete([] if empty else None)
+        if active.done:
+            names = getattr(active.run, 'fl_validated_history_names', None)
+            if names is None:
+                names = active.run.fl_validated_history_names = set()
+            names.add(active.name)
+
+
+def fl_has_complete_history(run):
+    """Skip optional pixels only after every original query has its own receipt."""
+    progress = getattr(run, 'fl_query_progress', {})
+    binding = progress.get('binding', ())
+    planned = binding[2] if len(binding) == 4 else ()
+    return bool(planned and not getattr(run, 'search_history_overflow', False)
+                and set(planned) <= getattr(run, 'fl_validated_history_names', set()))
+
 
 def finish_me(active,rows,all_pages=False):
     try:

@@ -41,6 +41,8 @@ const cases = [
     {name:'Second candidate', identifier:'RI2', evidence_url:snapshot},
     {name:'Rejected candidate', identifier:'RI3', evidence_url:snapshot, decision:'reject'},
     {name:'Untrusted candidate', identifier:'RI4', evidence_url:'https://wrong.example/file.pdf'}] }},
+  {...both, state: 'TN', success: false, status: 'Unable to Confirm', evidence_url: '',
+    status_reason: 'NY_CONNECTOR_REGISTRY_TN_RESPONSE_PENDING'},
 ];
 window.CCExcelExport.build(cases).arrayBuffer()
   .then(bytes => process.stdout.write(Buffer.from(bytes)));
@@ -50,15 +52,16 @@ window.CCExcelExport.build(cases).arrayBuffer()
             sheet = ElementTree.fromstring(workbook.read("xl/worksheets/sheet2.xml"))
             candidates = ElementTree.fromstring(workbook.read("xl/worksheets/sheet3.xml"))
             self.assertEqual([c.attrib["ref"] for c in candidates.findall(".//{*}hyperlink")], ["E2", "E3", "E4"])
-            self.assertEqual([c.attrib["ref"] for c in sheet.findall(".//{*}hyperlink")][-1], "C9")
+            self.assertEqual([c.attrib["ref"] for c in sheet.findall(".//{*}hyperlink")][-1], "C11")
         cells = {cell.attrib["r"]: "".join(cell.itertext()) for cell in sheet.findall(".//{*}c")}
         snapshots = "https://staging.example.test/state-snapshots/" + "a" * 64 + ".pdf"
         history = "https://staging.example.test/state-evidence/" + "b" * 64 + "/search-history.pdf"
         self.assertEqual(
-            [(cells[f"C{row}"], cells[f"I{row}"]) for row in range(2, 11)],
+            [(cells[f"C{row}"], cells[f"I{row}"]) for row in range(2, 12)],
             [(history, "Search history"), ("Names searched unavailable", ""), (history, "Search history"),
              (snapshots, "State snapshot"), (snapshots, "State snapshot"), (history, "Search history"),
-             (history, "Search attempts"), (snapshots, "Candidate snapshot"), ("See Candidate Evidence tab", "")],
+             (history, "Search attempts"), (snapshots, "Candidate snapshot"), ("See Candidate Evidence tab", ""),
+             (history, "Search attempts")],
         )
 
     def test_alerts_hyperlinks_stay_in_the_evidence_column(self):

@@ -149,7 +149,7 @@ def start_transport(url,body=None,params=None,run=None):
         receipts = [SourceQueryReceipt(run,{'state':run.state,'operation':'search',kind:value,
                     'filter_label':label,'source_kind':'state_portal','url':public})
                 for kind,value,label in observed]
-        if run.state in {'WV','AR','CT','OK','ME'}:
+        if run.state in {'WV','AR','CT','OK','ME','FL'}:
             from deployment.validated_search_history import bind_transport
             bind_transport(run,receipts)
         return receipts

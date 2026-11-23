@@ -188,8 +188,10 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
   let attached=false, cancelled=false, timeoutId,expireCapture,restoreModal=false,desktopViewport=false,ilPaintActive=false,msOriginalScroll=null,timeoutDetach=null;
   const gaOptionalSearch=state==='GA'&&!gaRequiredDetail&&Object.hasOwn(query,'orgName');
-  let cancelGaPixels, retriedNvPixels=false;
-  const gaDetached=gaOptionalSearch?new Promise(resolve=>{cancelGaPixels=resolve;}):null;
+  const tnOptionalSearch=state==='TN'&&query.operation==='search';
+  const optionalGridCapture=gaOptionalSearch||tnOptionalSearch;
+  let cancelOptionalPixels, retriedNvPixels=false;
+  const optionalDetached=optionalGridCapture?new Promise(resolve=>{cancelOptionalPixels=resolve;}):null;
   let validatedResult=null, publishRestored;
   const restoredImage=new Promise(resolve=>{publishRestored=resolve;});
 
@@ -203,6 +205,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
     try {
 
       job.snapshotCleanupBusy=true;
+      if(tnOptionalSearch)job.tnOptionalSnapshotCleanup=true;
 
       observed.phase='tab';const tab=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:120:37:await",()=>(sampled('tab',()=>chrome.tabs.get(tabId))));
 
@@ -726,7 +729,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
               }
             }
             const command=chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',options);
-            return gaOptionalSearch?Promise.race([command,gaDetached]):command;
+            return optionalGridCapture?Promise.race([command,optionalDetached]):command;
           }));
         let image;
         if((nyRequiredDetail||ncSelectedDetail)&&gaFullViewport) {
@@ -992,8 +995,12 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       if(workerSettledDetail&&validatedResult&&!cancelled&&alive()&&Date.now()-started<captureBudgetMs) {
         observed.phase='restored-image-validated';publishRestored(validatedResult);
       }
-      if(gaOptionalSearch&&timeoutDetach)await timeoutDetach;
-      if(attached)try{await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:545:22:await",()=>(sampled('detach',()=>chrome.debugger.detach({tabId}))));}catch{}
+      if(optionalGridCapture&&timeoutDetach)await timeoutDetach;
+      if(attached)try{
+        await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:545:22:await",()=>sampled('detach',()=>chrome.debugger.detach({tabId})));
+      }catch{
+        if(tnOptionalSearch)job.tnOptionalSnapshotDetachFailed=true;
+      }
       // A timeout may have started a second detach. Its acknowledgement also
       // belongs to this capture and must settle before admitting another command.
       if(timeoutDetach)await timeoutDetach;
@@ -1002,6 +1009,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       if(desktopViewport)delete job.snapshotViewportBusy;
       if(state==='AL')delete job.alSnapshotCaptureBusy;
       delete job.snapshotCleanupBusy;
+      if(tnOptionalSearch)delete job.tnOptionalSnapshotCleanup;
       if(job.snapshotCleanupCompletion===cleanupCompletion)delete job.snapshotCleanupCompletion;
       settleCleanup();
 
@@ -1038,11 +1046,11 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
     // screenshot. Clear this invocation's ownership before detaching, so its
     // late finally cannot detach a later capture. The busy flag remains until
     // the old Chrome operation has actually settled.
-    if(gaOptionalSearch&&attached&&observed.waiting==='capture:0'&&!desktopViewport) {
+    if(optionalGridCapture&&attached&&observed.waiting==='capture:0'&&!desktopViewport) {
       // Keep the lease until Chrome confirms detach. An old pending capture
       // cannot publish pixels or issue a second detach after the next command.
       timeoutDetach=chrome.debugger.detach({tabId}).then(()=>{
-        attached=false;cancelGaPixels(null);
+        attached=false;cancelOptionalPixels(null);
       },()=>{}); // If detach fails, wait for original completion and cleanup.
     } else if(state==='AL'&&attached){attached=false;timeoutDetach=chrome.debugger.detach({tabId}).catch(()=>{});}
     else if((desktopViewport||ilDetail||state==='NV')&&attached)timeoutDetach=chrome.debugger.detach({tabId}).catch(()=>{});

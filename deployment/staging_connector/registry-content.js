@@ -1198,6 +1198,7 @@
     try { search=await wfcAwait("content:tnSearch:984:17",()=>(wait(button,Math.max(1,Math.min(12000,deadline-Date.now()))))); }
     catch { throw new Error('NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'); }
     // Normal page readiness only: never click verification or read its token.
+    if(Date.now()>=deadline)throw new Error('NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING');
     set(document.querySelector('input[id^="Name_"]'),query.name);
     set(document.querySelector('input[id^="Filenumber_"]'),'');
     set(document.querySelector('input[id^="City_"]'),'');
@@ -1205,6 +1206,11 @@
     tnAbsentDetailProof=null;
     let page=await wfcAwait("content:tnSearch:991:13",()=>(tnChanged(()=>search.click(),deadline))),total=page.total;
     if (total > 1000) throw new Error('REGISTRY_TN_RESULT_LIMIT');
+    const nextPage=async(action,previous)=>{
+      if(Date.now()>=deadline)throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+      try {return await tnChanged(action,deadline,previous);}
+      catch {throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');}
+    };
     if (total > 500) {
       // The state resets to ten rows after every search. Use the registry's
       // own page-size selector to cover a large result without 50+ requests.
@@ -1213,7 +1219,7 @@
       selector.click();
       const option=await wait(()=>[...document.querySelectorAll('[role="option"]')]
         .find(el=>visible(el)&&text(el)==='100'),Math.max(1,Math.min(3000,deadline-Date.now())));
-      page=await tnChanged(()=>option.click(),deadline,JSON.stringify(page.values));
+      page=await nextPage(()=>option.click(),JSON.stringify(page.values));
       if(page.total!==total||page.page!==1||page.values.length!==100)
         throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
     }
@@ -1231,7 +1237,7 @@
       if(rows.length===total)return {query,state:'TN',complete:true,verification_pending:false,total,rows};
       const next=page.grid.querySelector('button[aria-label="Go to the next page"]');
       if(rows.length>total||!next||next.getAttribute('aria-disabled')==='true')throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
-      page=await wfcAwait("content:tnSearch:1003:11",()=>(tnChanged(()=>next.click(),deadline,JSON.stringify(page.values))));
+      page=await wfcAwait("content:tnSearch:1003:11",()=>nextPage(()=>next.click(),JSON.stringify(page.values)));
     }
     throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
   }
@@ -2235,7 +2241,9 @@
     if (NV && m.action==='registry-nv-return')
       return nvReturnSearch(Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000));
     if (TN && m.action === 'registry-tn') {
-      const deadline=Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000);
+      const allowance=Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000);
+      const deadline=m.query?.operation==='search'&&Number.isFinite(m.searchDeadline)
+        ?Math.min(allowance,m.searchDeadline):allowance;
       tnLastDiagnostics=[];
       const evidence=m.query?.operation==='search'?await wfcAwait("content:handle:1902:51",()=>(tnSearch(m.query,deadline))):await wfcAwait("content:handle:1902:84",()=>(tnDetail(m.query,deadline,m.quietDetail===true)));
       return {ok:true,evidence,tn_diagnostics:tnLastDiagnostics};

@@ -613,6 +613,8 @@ async function registryMessage(job, message) {
     const gaTabAt = gaTimed ? Date.now() : 0;
     const tnTabAt=tnTimed?Date.now():0;
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    if(tnTimed&&Number.isFinite(message.searchDeadline)&&Date.now()>=message.searchDeadline)
+      return {ok:false,reason:'NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'};
     // The public portal can return a completed Cloudflare 520 document at
     // the exact search URL. No content script can make that into a form.
     if (P.TRIAL_ORIGIN && job.registryState==='MS' && message.action==='registry-ready'
@@ -682,6 +684,19 @@ async function registryMessage(job, message) {
   }
   if(P.TRIAL_ORIGIN&&job.registryState==='TN'&&(message.action==='registry-ready'||message.action==='registry-tn'&&message.query?.operation==='detail'))
     return registryTnPendingDelivery(job,message,send);
+  if(P.TRIAL_ORIGIN&&job.registryState==='TN'&&message.action==='registry-tn'
+      && message.query?.operation==='search'&&Number.isFinite(message.searchDeadline)) {
+    const remaining=message.searchDeadline-Date.now();
+    if(remaining<=0)return {ok:false,reason:'NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'};
+    let timer;
+    try {
+      // A hidden tab can report its own timeout late. Cut off only this
+      // search, without replaying the command or counting it as an empty grid.
+      return await Promise.race([send(),new Promise(resolve=>{
+        timer=setTimeout(()=>resolve({ok:false,reason:'NY_CONNECTOR_TN_SEARCH_DELIVERY_TIMEOUT'}),remaining);
+      })]);
+    } finally {clearTimeout(timer);}
+  }
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return wfReturn(job,"registry-worker.js:registryMessage:553:70:return",(send()));
   // Keep the overall job deadline as the transport bound. A second timer at
   // exactly the page's allowance races its normal timeout reply and prevents
@@ -1354,7 +1369,16 @@ async function performRegistryQueryInner(job, query) {
     if(query.state==='TN'){
       const blocked=await wfAwait(job,"registry-worker.js:performRegistryQuery:1104:20:await",()=>(registryTnBeforeCommand(job)));if(blocked)return wfReturn(job,"registry-worker.js:performRegistryQuery:1104:66:return",(blocked));
     }
-    let response = await wfAwait(job,"registry-worker.js:performRegistryQuery:1106:19:await",()=>(registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now())),
+    // The normal initial source connection and verification keep their existing
+    // allowance. Once the search is dispatched, ready form, data and pagination
+    // share this same clock across the worker and the quiet page.
+    const tnSearchDeadline=P.TRIAL_ORIGIN&&query.state==='TN'&&query.operation==='search'
+      ?Math.min(job.activeExpiresAt,Date.now()+allowance):null;
+    const commandDeadline=tnSearchDeadline??job.activeExpiresAt;
+    if(tnSearchDeadline!==null&&commandDeadline<=Date.now())
+      return {ok:false,reason:'NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'};
+    let response = await wfAwait(job,"registry-worker.js:performRegistryQuery:1106:19:await",()=>(registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,commandDeadline-Date.now())),
+      ...(tnSearchDeadline!==null?{searchDeadline:tnSearchDeadline}:{}),
       ...(query.state==='TN'&&query.operation==='detail'&&auroraBackgroundTrial(job.sender)?{quietDetail:true}:{})})));
     if(query.state==='TN')await wfAwait(job,"registry-worker.js:performRegistryQuery:1107:26:await",()=>(registryTnAfterCommand(response)));
     if(P.TRIAL_ORIGIN && query.state==='TN') {
