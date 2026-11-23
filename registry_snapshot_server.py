@@ -4551,6 +4551,7 @@ def discovery_non_name(value: str) -> bool:
     words = re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).strip()
     return bool(re.fullmatch(
         r"(?:(?:a|an|the) )?(?:inc|incorporated|corp|corporation|llc|ltd|limited)"
+        r"(?: english translation of legal name)?"
         r"|e g|i e|any individual school that constitutes .+", words,
     ))
 
