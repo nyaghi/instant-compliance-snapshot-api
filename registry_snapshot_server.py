@@ -36766,27 +36766,31 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
         components = []
     combined_form_returned = False
     reviewed_names = known_names_for_ein(org.ein)
-    slash_searches = ar_reviewed_slash_searches(original_name, reviewed_names)
-    if slash_searches:
+    slash_names = ar_reviewed_slash_searches(original_name, reviewed_names)
+    slash_queries = []
+    retrieval_names = [original_name, *reviewed_names]
+    if slash_names:
         joined_key = identity_name_key(original_name)
         required_identities = list(dict.fromkeys([
-            *slash_searches, *(name for name in reviewed_names
-                               if identity_name_key(name) != joined_key),
+            *slash_names, *(name for name in reviewed_names
+                            if identity_name_key(name) != joined_key),
         ]))
-        # Keep all reviewed identities. The concatenated display label is not
-        # an additional registry identity and can exceed the portal limit.
+        retrieval_names = required_identities
+        # Search the full legal names without their corporate suffixes; a
+        # query-bound empty result then covers both suffix spellings.
+        slash_queries = [(literal_name_retrieval_forms(name) or [name])[0] for name in slash_names]
+        for name, query in zip(slash_names, slash_queries):
+            empty_prefixes.setdefault(query.casefold(), []).append(name)
+        # The concatenated display label is not an additional source name.
         planned_variants = list(dict.fromkeys([
-            *slash_searches, *(name for name in planned_variants
-                               if identity_name_key(name) != joined_key),
+            *slash_queries, *(name for name in planned_variants if identity_name_key(name) != joined_key),
         ]))
 
-    # Arkansas searches literal text. Completing "Name, Inc." does not prove
-    # that the suffix-free query completed, even though both identify the same
-    # organization. Require the useful literal form before certifying absence.
+    # A no-match result from the full name including the suffix cannot cover
+    # the corresponding suffix-free query. Require the literal useful form.
     required_retrieval_queries = list(dict.fromkeys(
         (literal_name_retrieval_forms(name) or [name])[0]
-        for name in (required_identities if slash_searches else [original_name, *reviewed_names]) if name
-        and (not slash_searches or identity_name_key(name) not in {identity_name_key(part) for part in slash_searches})
+        for name in retrieval_names if name
     ))
 
     def missing_retrieval_queries():
@@ -36921,9 +36925,9 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                         and variant.casefold() not in {q.casefold() for q in _completed_empty_queries}):
                     _completed_empty_queries.append(variant)
             record_progress()
-            if (slash_searches and not result_shell_without_rows and not rows_seen
+            if (slash_queries and not result_shell_without_rows and not rows_seen
                     and all(any(part.casefold() == empty.casefold() for empty in empty_variants)
-                            for part in slash_searches)
+                            for part in slash_queries)
                     and not missing_retrieval_queries()
                     and reviewed_identity_queries_completed(completed_variants + ar_completed_empty_identities(
                         empty_variants, empty_prefixes, planned_variants), required_identities)):

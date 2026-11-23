@@ -851,7 +851,15 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       if(gaRequiredDetail&&(!afterMeta?.source_ga_primary_ready||!afterMeta.source_ga_primary_fits
         ||afterMeta.source_binding!==gaBinding||afterMeta.document_id!==gaDocument
         ||afterMeta.source_ga_primary_bottom!==meta.source_ga_primary_bottom))return null;
-      if(msRequiredDetail&&(afterMeta?.source_ms_detail_ready!==true||afterMeta?.source_ms_summary_visible!==true))return null;
+      if(msRequiredDetail&&(afterMeta?.source_ms_detail_ready!==true||afterMeta?.source_ms_summary_visible!==true)) {
+        if(typeof diagnostic==='function')try {
+          diagnostic('source-snapshot-phase',job,JSON.stringify({operation:'detail',phase:'MS-summary-postvalidation',
+            ready:afterMeta?.source_ms_detail_ready===true,
+            hidden_fields:afterMeta?.source_ms_hidden_summary_fields||null,
+            same_url:afterMeta?.url===meta.url,text_same:afterMeta?.public_text===meta.public_text}));
+        } catch { /* Evidence still requires a complete original summary. */ }
+        return null;
+      }
       if(state==='NV'&&typeof diagnostic==='function')diagnostic('source-snapshot-phase',job,JSON.stringify({operation:query.operation,phase:'postvalidation-check',alive:alive(),url_same:after.url===tab.url,document_same:afterMeta?.document_id===meta.document_id,body_same:afterMeta?.public_text===meta.public_text,binding_present:boundNvDetail,binding_same:afterMeta?.source_binding===meta.source_binding}));
 
       let ilHeadingLabelsOnly=false;

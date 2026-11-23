@@ -1394,9 +1394,12 @@ def _connector_archive(record,payload,query,evidence):
             # Archive once as search evidence. This marker cannot be selected
             # as a positive credential or used to manufacture a zero count.
             rows=[('@completed-search',record['organization_name']),*rows]
-        if al_completed_results_snapshot(record,query,evidence,url,text):
-            rows=[('@completed-search',''),*rows]
-            # Retain exact reviewed-name references before the existing12-row archive cap.
+        if record['state']=='AL':
+            if al_completed_results_snapshot(record,query,evidence,url,text):
+                rows=[('@completed-search',''),*rows]
+            # A mixed search grid can fail the numbered-row guard for a
+            # negative result and still contain a visible, selected credential.
+            # Prioritize reviewed names before the existing 12-reference cap.
             reviewed={key(v) for v in [record.get('organization_name',''),*record.get('alternate_names',[])] if isinstance(v,str) and key(v)}
             rows=sorted(rows,key=lambda row:key(row[1]) not in reviewed)
         if ga_completed_results_snapshot(record,query,evidence,url,text):

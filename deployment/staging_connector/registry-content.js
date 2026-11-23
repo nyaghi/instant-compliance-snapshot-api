@@ -2717,19 +2717,37 @@
     if(!MS||query?.state!=='MS'||query.operation!=='detail')return null;
     const panel=document.querySelector('#printDiv1'),modal=document.querySelector('#modalwindow');
     if(!panel||!modal||!visible(panel)||!visible(modal))return {source_ms_detail_ready:false};
-    const fields={},required=[panel.querySelector('font')];
+    const heading=panel.querySelector('font');
+    const required=['Filing Number','Filing Status','Initial Date Filed','Expiration Date'];
+    const rows=new Map();
     for(const tr of panel.querySelectorAll('tr')) {
       const label=tr.querySelector('td.infoText');
-      if(label&&tr.cells.length>=2) {
-        const key=text(label).replace(/:$/,'');fields[key]=text(tr.cells[1]);
-        if(['Filing Number','Filing Status','Initial Date Filed','Expiration Date'].includes(key))required.push(tr);
+      if(!label||tr.cells.length<2)continue;
+      const key=text(label).replace(/:$/,'');
+      if(required.includes(key)) {
+        if(rows.has(key))return {source_ms_detail_ready:false};
+        rows.set(key,[label,tr.cells[1]]);
       }
     }
-    const ready=fields['Filing Number']===query.identifier&&!!fields['Filing Status']&&!!text(required[0])&&required.length===5;
+    const ready=rows.size===required.length&&text(rows.get('Filing Number')[1])===query.identifier
+      &&!!text(rows.get('Filing Status')[1])&&!!text(heading);
+    if(!ready)return {source_ms_detail_ready:false};
     const clip=modal.getBoundingClientRect();
-    return {source_ms_detail_ready:ready,source_ms_summary_visible:ready&&required.every(el=>{
-      const r=el.getBoundingClientRect();return visible(el)&&r.top>=Math.max(0,clip.top)&&r.bottom<=Math.min(innerHeight,clip.bottom)&&r.left>=Math.max(0,clip.left)&&r.right<=Math.min(innerWidth,clip.right);
-    })};
+    const fits=el=>{
+      if(!visible(el))return false;
+      const range=document.createRange();
+      range.selectNodeContents(el);
+      const rectangles=[...range.getClientRects()].filter(r=>r.width>0&&r.height>0);
+      if(!rectangles.length)return !text(el);
+      // The actual labels and values must fit. Blank cells to the right of
+      // those fields can extend beyond the viewport without hiding any text.
+      return rectangles.every(r=>r.top>=Math.max(0,clip.top)&&r.bottom<=Math.min(innerHeight,clip.bottom)
+        &&r.left>=Math.max(0,clip.left)&&r.right<=Math.min(innerWidth,clip.right));
+    };
+    const hidden=required.filter(key=>!rows.get(key).every(fits));
+    if(!fits(heading))hidden.unshift('Organization name');
+    return {source_ms_detail_ready:true,source_ms_summary_visible:!hidden.length,
+      source_ms_hidden_summary_fields:hidden};
   }
   function snapshotNcDetail(query) {
     if(!NC||query?.state!=='NC'||query.operation!=='detail')return null;
