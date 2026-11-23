@@ -20746,7 +20746,7 @@ def search_fl_with_transport(page, org, transport):
                 query = (literal_name_retrieval_forms(original_name) or [original_name])[0]
                 try:
                     rows = _fl_business_public_rows_once(query, min(deadline, time.monotonic() + 5.0))
-                except (OSError, ValueError, TimeoutError):
+                except (OSError, ValueError, http.client.HTTPException):
                     rows = []
                 confirmed = confirmed_business_result(rows)
                 if confirmed is not None:
