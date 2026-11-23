@@ -1631,9 +1631,11 @@ def capture_owned_me_page(run,result,page,context,deadline):
 
 def allow_owned_mn_screenshot(master, run, result, page, deadline):
  """Extend the selected EIN detail's screenshot within the existing task deadline."""
+ reason = getattr(result, 'reason_code', '')
  if (run is None or run.state != 'MN' or not result.success
-     or getattr(result, 'reason_code', '') != 'MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE'
-     or not result.matched_registry_name or not getattr(result, 'fiscal_year_end', '')
+     or reason not in ('MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE', 'MN_EXACT_EIN_DETAIL_STATUS')
+     or not result.matched_registry_name
+     or (reason == 'MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE' and not getattr(result, 'fiscal_year_end', ''))
      or re.sub(r'\D', '', result.ein) != run.ein):
   return
  url = urlsplit(page.url)
@@ -1645,6 +1647,10 @@ def allow_owned_mn_screenshot(master, run, result, page, deadline):
  from deployment.state_snapshots import key
 
  def matches_text(text):
+  if reason == 'MN_EXACT_EIN_DETAIL_STATUS':
+   return (bool(re.search(r'(?im)^\s*Federal ID#\s*' + run.ein[:2] + r'-?' + run.ein[2:] + r'\s*$', text))
+           and any(key(line) == key(result.matched_registry_name) for line in text.splitlines())
+           and bool(re.search(r'(?im)^\s*Status\s+' + re.escape(result.raw_status_text) + r'\s*$', text)))
   year_end = master.mn_latest_fiscal_year_end_from_text(text)
   return (year_end is not None and master.format_date(year_end) == result.fiscal_year_end
           and key(result.matched_registry_name) in key(text)

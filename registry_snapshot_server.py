@@ -20923,9 +20923,38 @@ def search_mn(page, org):
                 return True
             return registry_name_is_safe_against_targets(row_text, safe_targets, org.organization_name, org.ein)
 
-        from deployment.mn_empty_response import complete as mn_completed_empty_response
         name_fallback_started = time.perf_counter()
         mn_name_stop = name_fallback_started + 20.0
+        if len(ein_digits) == 9 and result.success and public_status(result) == "Not Registered":
+            from deployment.mn_exact_detail import find as mn_find_exact_detail
+            from playwright.sync_api import Error as PlaywrightError
+            exact_detail_stop = min(mn_name_stop, time.perf_counter() + 1.5)
+
+            def mn_detail_timeout():
+                remaining_ms = int((exact_detail_stop - time.perf_counter()) * 1000)
+                if remaining_ms <= 0:
+                    raise TimeoutError("Minnesota exact EIN detail allowance exhausted")
+                return remaining_ms
+
+            try:
+                exact_detail = mn_find_exact_detail(
+                    page, ein_digits, [org.organization_name, *known_names_for_ein(org.ein)],
+                    complete_name_identity_key, mn_detail_timeout,
+                )
+            except (TimeoutError, PlaywrightError):
+                exact_detail = None
+            if exact_detail:
+                registry_name, status, raw_status, detail_url = exact_detail
+                result.status = status
+                result.raw_status_text = raw_status
+                result.matched_registry_name = registry_name
+                result.matched_registry_identifier = ein_digits
+                result.source_url = detail_url
+                result.reason_code = "MN_EXACT_EIN_DETAIL_STATUS"
+                result.source_note = "Minnesota's public detail page confirmed the requested EIN, organization name and explicit status."
+                return result
+
+        from deployment.mn_empty_response import complete as mn_completed_empty_response
         mn_light_search_active = True
         def mn_name_timeout(cap):
             remaining = int((mn_name_stop - time.perf_counter()) * 1000)
