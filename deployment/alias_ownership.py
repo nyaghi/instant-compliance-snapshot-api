@@ -43,8 +43,8 @@ def records(master, name, deadline, offices=()):
     return matches
 
 
-def office(master, street, region, postal):
-    street = master.registry_street_key(street)
+def office(master, street, region, postal, *, street_key=None):
+    street = (street_key or master.registry_street_key)(street)
     region = str(region or "").upper()
     postal = str(postal or "")[:5]
     if not re.match(r"^\d+\s", street) or not re.fullmatch(r"[A-Z]{2}", region) or not re.fullmatch(r"\d{5}", postal):
@@ -52,7 +52,7 @@ def office(master, street, region, postal):
     return street, region, postal
 
 
-def conflict(master, name, ein, offices, deadline):
+def conflict(master, name, ein, offices, deadline, *, street_key=None):
     requested = master.canonical_ein_digits(ein)
     valid_offices = {value for value in offices if value is not None}
     if len(requested) != 9 or not valid_offices:
@@ -60,7 +60,7 @@ def conflict(master, name, ein, offices, deadline):
     try:
         matched = [row for row in records(master, name, deadline, valid_offices)
                    if office(master, row.get("principaladdress"), row.get("principalstate"),
-                             row.get("principalzipcode")) in valid_offices]
+                             row.get("principalzipcode"), street_key=street_key) in valid_offices]
     except (OSError, ValueError, TypeError, TimeoutError, RuntimeError):
         return {}
     owners = {master.canonical_ein_digits(str(row.get("fein") or "")) for row in matched}
@@ -82,12 +82,13 @@ def candidate_conflict(master, org, name, deadline, row=None, *, state=''):
     started = time.monotonic()
     stop = min(deadline, started + max(0.0, 3.0 - budgets.get(state, 0.0)))
     try:
-        return _candidate_conflict(master, org, name, stop, row)
+        return _candidate_conflict(master, org, name, stop, row,
+                                   street_key=master.al_ownership_street_key if state == "AL" else None)
     finally:
         budgets[state] = budgets.get(state, 0.0) + time.monotonic() - started
 
 
-def _candidate_conflict(master, org, name, deadline, row=None):
+def _candidate_conflict(master, org, name, deadline, row=None, *, street_key=None):
     if (master.normalized_match_name(name) == master.normalized_match_name(org.organization_name)
             or not master.is_reviewed_alias(org.ein, name)):
         return {}
@@ -96,17 +97,17 @@ def _candidate_conflict(master, org, name, deadline, row=None):
     stop = min(deadline, time.monotonic() + 3.0)
     offices = []
     if row:
-        offices.append(office(master, row.get("street"), row.get("region"), row.get("postal_code")))
+        offices.append(office(master, row.get("street"), row.get("region"), row.get("postal_code"), street_key=street_key))
     if not any(offices):
         try:
             source = master.identity_source_result("CO", master.canonical_ein_digits(org.ein), stop)
         except (OSError, ValueError, TypeError, TimeoutError, RuntimeError):
             return {}
-        offices = [office(master, record.get("street"), record.get("state"), record.get("postal_code"))
+        offices = [office(master, record.get("street"), record.get("state"), record.get("postal_code"), street_key=street_key)
                    for record in source.get("organization_records", [])
                    if record.get("address_role") == "organization"
                    and master.canonical_ein_digits(str(record.get("ein") or "")) == master.canonical_ein_digits(org.ein)]
-    return conflict(master, name, org.ein, offices, stop)
+    return conflict(master, name, org.ein, offices, stop, street_key=street_key)
 
 
 def review_discovery(master, names, sources, organization_name, ein, deadline):

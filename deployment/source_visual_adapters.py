@@ -726,6 +726,21 @@ def capture_selected_ca_source(master,result,run,deadline):
   if held:workflow_call('deployment/source_visual_adapters.py:capture_selected_ca_source:306:10:release',master.BROWSER_LOOKUP_SEMAPHORE.release,locals())
   fact['total_ms']=round((time.perf_counter()-start)*1000,2)
 
+def sc_visual_search_values(master, result, run, identifier):
+ """Reuse a verified lookup's grid label when the display name omits a DBA."""
+ name=result['matched_registry_name']
+ source=getattr(run,'sc_visual_selection',None)
+ if source and source[0]==identifier:
+  _,grid,detail,query=source
+  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
+  def same_identity(label):
+   return norm(master.structured_registry_name(label,run.name,run.ein))==norm(name)
+  if (norm(grid)!=norm(name) and same_identity(grid) and same_identity(detail)
+      and 2<=len(query)<=180):
+   return grid,query,'Contains'
+ return name,name,'BeginsWith'
+
+
 def capture_selected_sc_source(master,result,run,deadline):
  """One visual selected-name query and the actual bound SC public-ID link."""
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:311:5:get',result.get,locals(), 'state')!='SC' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:311:54:get',result.get,locals(), 'ein','')))!=run.ein
@@ -756,20 +771,20 @@ def capture_selected_sc_source(master,result,run,deadline):
     previous_stop=stop;stop=sc_finish_deadline(stop,deadline,time.monotonic())
     fact['finish_allowance_ms']=round(max(0,stop-previous_stop)*1000)
     fact['phase']='visual_selected_name_search';begin=time.perf_counter()
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:336:4:select_option',page.locator('#MainContent_dd_CharitySearchOperator').select_option,locals(), 'BeginsWith',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:337:4:fill',page.locator('#MainContent_txt_CharitySearchName').fill,locals(), result['matched_registry_name'],timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    selected_name,query,mode=sc_visual_search_values(master,result,run,identifier)
+    workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:336:4:select_option',page.locator('#MainContent_dd_CharitySearchOperator').select_option,locals(), mode,timeout=max(1,int((stop-time.monotonic()-1)*1000)))
+    workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:337:4:fill',page.locator('#MainContent_txt_CharitySearchName').fill,locals(), query,timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:338:4:click',page.locator('#MainContent_butt_Search').click,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    fact['visual_name_queries']=1;fact['visual_query_name']=result['matched_registry_name'];fact['visual_query_mode']='BeginsWith'
-    # A credential can have multiple name rows (actual P2775 has both the
-    # current and "The" alias). Match the already selected name as well as ID.
-    link=page.locator('a[href="javascript:CharityInfo('+identifier[1:]+')"]').filter(has_text=re.compile(r'^\s*'+re.escape(result['matched_registry_name'])+r'\s*$',re.I))
+    fact['visual_name_queries']=1;fact['visual_query_name']=query;fact['visual_query_mode']=mode
+    # The visible result row can include a DBA stripped from the public
+    # CharityClarity display name. Require the observed row name and public ID.
+    link=page.locator('a[href="javascript:CharityInfo('+identifier[1:]+')"]').filter(has_text=re.compile(r'^\s*'+re.escape(selected_name)+r'\s*$',re.I))
     workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:343:4:wait_for',link.wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
-    if workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:344:7:count',link.count,locals())!=1 or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:344:31:inner_text',link.inner_text,locals(), timeout=400))!=norm(result['matched_registry_name']):fact['outcome']='selected_result_link_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:344:149:return',None)
+    if workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:344:7:count',link.count,locals())!=1 or norm(workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:344:31:inner_text',link.inner_text,locals(), timeout=400))!=norm(selected_name):fact['outcome']='selected_result_link_not_bound';return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:344:149:return',None)
     fact['search_ms']=round((time.perf_counter()-begin)*1000,2)
     fact['phase']='selected_detail';begin=time.perf_counter();workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:346:62:click',link.click,locals(), timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     panel=page.locator('#MainContent_Panel_CharityDetail');workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:347:59:wait_for',panel.wait_for,locals(), state='visible',timeout=max(1,int((stop-time.monotonic()-1)*1000)))
     text=workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:348:9:inner_text',panel.inner_text,locals(), timeout=400);heading=panel.locator('h4')
-    selected_name_key=norm(re.sub(r'^\s*the\s+','',result['matched_registry_name'],flags=re.I))
     # The exact selected name+public-ID link can open a differently spelled
     # canonical heading. Bind that transition to the unique public ID, not a
     # second name-match decision (actual P54670 includes a typo and DBA).

@@ -2654,9 +2654,19 @@ def search_ca_master(page, org):
         if not plausible:
             # An exact legal name with a conflicting EIN is a source identity
             # conflict, not permission to accept it or infer its status.
-            if any(complete_name_identity_key(checker.ca_evoke_display_name(entity)) == complete_name_identity_key(org.organization_name)
-                   and canonical_ein_digits(str(entity.get("fein") or "")) for entity in entities):
-                raise ValueError("California legal-name record conflicts with the requested EIN")
+            entered_name = complete_name_identity_key(org.organization_name)
+            conflicts = {canonical_ein_digits(str(entity.get("fein") or "")) for entity in entities
+                         if complete_name_identity_key(checker.ca_evoke_display_name(entity)) == entered_name}
+            conflicts = {ein for ein in conflicts if len(ein) == 9 and ein != canonical_ein_digits(org.ein)}
+            if conflicts:
+                displayed = ", ".join(format_ein(ein) for ein in sorted(conflicts))
+                result.status = "Unable to Confirm"
+                result.success = False
+                result.status_reason = "CA_REGISTRY_EIN_CONFLICT"
+                result.raw_status_text = f"Same-name California record displays EIN {displayed}."
+                result.source_note = (f"California found the same legal name under EIN {displayed}. "
+                                      f"The requested EIN is {format_ein(org.ein)}. The displayed registration "
+                                      "status belongs to the state record and cannot be confirmed for the requested EIN.")
             return result
         rows = []
         registrations_by_id = {}
@@ -11042,6 +11052,14 @@ def registry_street_key(value):
     return " ".join(abbreviations.get(word, word) for word in text.split())
 
 
+def al_ownership_street_key(value):
+    street = registry_street_key(value)
+    match = re.fullmatch(r"(\d+) (?:STATE )?HWY (\d+) (NORTH|SOUTH|EAST|WEST|N|S|E|W)", street)
+    if not match:
+        return street
+    return f"{match[1]} HWY {match[2]} {match[3][0]}"
+
+
 def licensed_charity_street_evidence(org, row, deadline):
     """An exact street/state/ZIP can reconcile differing municipal labels.
 
@@ -11068,7 +11086,7 @@ def licensed_charity_street_evidence(org, row, deadline):
     return {}
 
 
-def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
+def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False, street_key=registry_street_key):
     """Reject a related entity only with full name + office + a different EIN.
 
     Colorado's existing official charity feed supplies historical legal names.
@@ -11077,7 +11095,7 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
     """
     key = normalized_match_name(row["name"])
     words = re.findall(r"[A-Z0-9]+", key.upper())
-    street = registry_street_key(row.get("street"))
+    street = street_key(row.get("street"))
     postal, region = str(row.get("postal_code") or "")[:5], row.get("region", "").upper()
     if (not words or (not exact_name and (len(distinctive_match_tokens(key)) < 2 or len(words) < 3))
             or not re.match(r"^\d+\s", street) or not re.fullmatch(r"\d{5}", postal) or len(region) != 2):
@@ -11090,7 +11108,7 @@ def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
         records = json.loads(identity_fetch(url, min(deadline, time.monotonic()+6)))
         if not isinstance(records, list) or len(records) >= 100: return {}
         matching = [r for r in records if isinstance(r, dict) and normalized_match_name(str(r.get("name") or "")) == key
-            and registry_street_key(r.get("principaladdress")) == street
+            and street_key(r.get("principaladdress")) == street
             and str(r.get("principalstate") or "").upper() == region
             and str(r.get("principalzipcode") or "")[:5] == postal]
         eins = {canonical_ein_digits(str(r.get("fein") or "")) for r in matching}
@@ -11174,23 +11192,23 @@ def al_connector_foreign_ein(org, row, deadline):
     """Reuse the Colorado decision for the same Alabama credential in this check."""
     checks = AL_FOREIGN_EIN_CONTEXT.get()
     if checks is None:
-        return licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+        return licensed_charity_foreign_ein(org, row, deadline, exact_name=True, street_key=al_ownership_street_key)
 
     # These are the inputs to the exact source query and its evidence guards.
     # Bind to the credential as well, so another row cannot inherit the result.
     identity = [canonical_ein_digits(org.ein), row.get("identifier"), row["name"],
-                registry_street_key(row.get("street")), str(row.get("postal_code") or "")[:5],
+                al_ownership_street_key(row.get("street")), str(row.get("postal_code") or "")[:5],
                 row.get("region", "").upper()]
     key = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
     if key not in checks:
         row.pop("foreign_ein_check", None)
-        proof = licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+        proof = licensed_charity_foreign_ein(org, row, deadline, exact_name=True, street_key=al_ownership_street_key)
         failure = row.get("foreign_ein_check", {})
         retryable = (failure.get("failure_kind") in {"timeout", "connection_error"}
                      or failure.get("http_status") in {408, 500, 502, 503, 504})
         if retryable and deadline - time.monotonic() >= 1:
             row.pop("foreign_ein_check", None)
-            proof = licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+            proof = licensed_charity_foreign_ein(org, row, deadline, exact_name=True, street_key=al_ownership_street_key)
             failure = row.get("foreign_ein_check", {})
         if proof.get("records"):
             # The matcher already checked every corroborating row for EIN
@@ -12464,6 +12482,19 @@ def scope_identity_review_result(org, state, rows, complete, source, *, freshnes
     if freshness:
         result.source_note += " " + freshness
     return result
+
+
+def institutional_fund_name_requires_proof(original_name, registry_name):
+    """A hospital's associated fundraising entity needs separate EIN proof."""
+    original = complete_name_identity_key(original_name)
+    candidate = complete_name_identity_key(registry_name)
+    institutional = r"\b(?:hospital|hospitals|medical center|health center|clinic|clinics)\b"
+    fundraising = r"\b(?:charitable foundation|foundation|fund)\b"
+    if (not re.search(institutional, original) or re.search(fundraising, original)
+            or not re.search(institutional, candidate)):
+        return False
+    base = re.sub(r"\s+(?:charitable foundation|foundation|fund)$", "", candidate)
+    return bool(base != candidate and len(base.split()) >= 2 and f" {base} " in f" {original} ")
 
 
 def institutional_entity_extension_requires_review(original_name: str, registry_name: str, ein: str = "") -> bool:
@@ -14030,6 +14061,11 @@ def sc_official_detail_lookup(org) -> object | None:
                     elif sc_reviewed_parenthetical_alias(original_name, registry_name, org.ein):
                         result.reason_code = result.identity_anchor = "MATCH_SC_REVIEWED_PARENTHETICAL_ALIAS"
                         result.source_note += " The selected detail displays the complete legal name and its reviewed abbreviation."
+                    if trial_identity():
+                        from deployment.state_snapshots import CURRENT
+                        run = CURRENT.get()
+                        if run is not None and run.state == "SC" and run.ein == canonical_ein_digits(org.ein):
+                            run.sc_visual_selection = (public_id, str(best["name"]), registry_name, query)
                     return result
             complete_paged_query_observed = complete_paged_query_observed or paged
         except Exception:
@@ -20490,15 +20526,15 @@ def search_fl_with_transport(page, org, transport):
             fl_ein_checks = progress.setdefault('ein_checks', {})
             rejected_eins = progress.setdefault('rejected_eins', {})
             progress['attempts'].append({'reused_queries': list(completed_queries), 'completed_queries': [], 'failed_queries': []})
-    if (not completed_queries and fl_business_lookup_enabled() and search_variants and not getattr(org, "evidence_mode", False)
-            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
-        rows = fl_business_public_rows(canonical_name_punctuation(original_name), deadline)
+    def confirmed_business_result(rows):
+        excluded_credentials = {identifier for _, identifier in rejected_eins if identifier}
         exact = [row for row in rows if normalized_match_name(row["business_evidence"]["name"])
-                 in {normalized_match_name(name) for name in safe_targets}]
+                 in {normalized_match_name(name) for name in safe_targets}
+                 and row["business_evidence"]["identifier"] not in excluded_credentials]
         # Extra/inactive names cannot displace the requested legal entity.
         # Multiple exact credentials remain on the existing browser path.
         if len(exact) == 1 and exact[0]["business_evidence"]["status"] in {
-                "Registered", "Active Small Charity", "Suspended", "Revoked", "Law NA - Educational"}:
+                "Registered", "Active Small Charity", "Suspended", "Revoked", "Law NA - Educational", "Denied"}:
             candidate = select_fl_candidate(exact)
             if candidate is not None:
                 evidence = exact[0]["business_evidence"]
@@ -20523,6 +20559,10 @@ def search_fl_with_transport(page, org, transport):
                         confirmed.source_note = ("Florida's identity-confirmed Business Lookup record explicitly lists "
                             "Law NA - Educational. CharityClarity reports Exempt from that state designation; "
                             "a historical license expiration is not treated as a current renewal deadline.")
+                    elif evidence["status"] == "Denied":
+                        confirmed.status = "Delinquent"
+                        confirmed.raw_status_text = f"Status: Denied | {confirmed.raw_status_text}"
+                        confirmed.source_note = "Florida's Business Lookup explicitly marks the matched charity credential Denied."
                     confirmed._cc_registration_date_evidence = evidence
                     confirmed._cc_fl_business_source_verified = True
                     try:
@@ -20531,6 +20571,16 @@ def search_fl_with_transport(page, org, transport):
                     except Exception:
                         pass
                     return confirmed
+        return None
+
+    business_attempted = (not completed_queries and fl_business_lookup_enabled()
+                          and bool(search_variants) and not getattr(org, "evidence_mode", False)
+                          and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT)
+    if business_attempted:
+        confirmed = confirmed_business_result(
+            fl_business_public_rows(canonical_name_punctuation(original_name), deadline))
+        if confirmed is not None:
+            return confirmed
     for variant in search_variants:
         if variant in completed_queries:
             best_result = completed_queries[variant]
@@ -20686,6 +20736,21 @@ def search_fl_with_transport(page, org, transport):
                 ] if part
             )
         if not deadline_expired():
+            if (trial_identity() and not business_attempted and best_result.success
+                    and best_result.status == checker.STATUS_NOT_REGISTERED
+                    and remaining_seconds() >= 1.0):
+                # FDACS states that either official catalog can hold the only
+                # matching license. Attempt one exact legal-name lookup within
+                # the existing lookup deadline, using the retained response
+                # for evidence when a positive is corroborated.
+                query = (literal_name_retrieval_forms(original_name) or [original_name])[0]
+                try:
+                    rows = _fl_business_public_rows_once(query, min(deadline, time.monotonic() + 5.0))
+                except (OSError, ValueError, TimeoutError):
+                    rows = []
+                confirmed = confirmed_business_result(rows)
+                if confirmed is not None:
+                    return confirmed
             if rejected_eins and best_result.success and best_result.status == checker.STATUS_NOT_REGISTERED:
                 best_result.source_note += " Candidates verified under a different EIN were excluded."
                 best_result.rejected_candidates = [{"name": name, "identifier": identifier, **proof}
@@ -27126,7 +27191,7 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
     if (getattr(result, "state", "") != "FL" or not registration_date_result_confirmed(result, final_status)
             or curl_requests is None or not registration_date_budget_available(lookup_started)):
         return
-    if fl_business_lookup_enabled() and getattr(result, "_cc_fl_business_source_verified", False):
+    if getattr(result, "_cc_fl_business_source_verified", False):
         return
     identifier = str(getattr(result, "matched_registry_identifier", "") or "")
     if not re.fullmatch(r"CH\d+", identifier):
@@ -36417,7 +36482,8 @@ def ar_candidate_identity(row: dict, original_name: str, targets: list[str], ein
     if len(candidate_ein) == 9 and len(expected_ein) == 9:
         return "accept" if candidate_ein == expected_ein else "reject"
     name = str(row.get("name") or "")
-    if (distinct_foundation_name_scope(original_name, name)
+    if (institutional_fund_name_requires_proof(original_name, name)
+            or distinct_foundation_name_scope(original_name, name)
             or separator_entity_scope_gap(original_name, name, ein)
             or institutional_entity_extension_requires_review(original_name, name, ein)):
         return "unconfirmed_scope"
@@ -36632,6 +36698,21 @@ def ar_completed_empty_identities(empty_queries, prefixes, planned_queries=()):
     return completed
 
 
+def ar_reviewed_slash_searches(original_name, reviewed_names):
+    """Use both real names in place of their joined display label in Arkansas."""
+    if original_name.count("/") != 1:
+        return []
+    halves = licensed_compound_retrieval_names(original_name)
+    reviewed_keys = {identity_name_key(name) for name in reviewed_names}
+    if len(halves) != 2 or not all(
+            len(name) <= 50 and len(distinctive_match_tokens(name)) >= 2
+            and identity_name_key(name) in reviewed_keys for name in halves):
+        return []
+    if identity_name_key(halves[0]) == identity_name_key(halves[1]):
+        return []
+    return halves
+
+
 def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observations=None):
     result = checker.StateResult(org.organization_name, org.ein, "AR", checker.STATUS_UNKNOWN, AR_SEARCH_URL)
     original_name = getattr(org, "organization_name", "") or ""
@@ -36684,13 +36765,28 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
     else:
         components = []
     combined_form_returned = False
+    reviewed_names = known_names_for_ein(org.ein)
+    slash_searches = ar_reviewed_slash_searches(original_name, reviewed_names)
+    if slash_searches:
+        joined_key = identity_name_key(original_name)
+        required_identities = list(dict.fromkeys([
+            *slash_searches, *(name for name in reviewed_names
+                               if identity_name_key(name) != joined_key),
+        ]))
+        # Keep all reviewed identities. The concatenated display label is not
+        # an additional registry identity and can exceed the portal limit.
+        planned_variants = list(dict.fromkeys([
+            *slash_searches, *(name for name in planned_variants
+                               if identity_name_key(name) != joined_key),
+        ]))
 
     # Arkansas searches literal text. Completing "Name, Inc." does not prove
     # that the suffix-free query completed, even though both identify the same
     # organization. Require the useful literal form before certifying absence.
     required_retrieval_queries = list(dict.fromkeys(
         (literal_name_retrieval_forms(name) or [name])[0]
-        for name in [original_name, *known_names_for_ein(org.ein)] if name
+        for name in (required_identities if slash_searches else [original_name, *reviewed_names]) if name
+        and (not slash_searches or identity_name_key(name) not in {identity_name_key(part) for part in slash_searches})
     ))
 
     def missing_retrieval_queries():
@@ -36825,6 +36921,13 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                         and variant.casefold() not in {q.casefold() for q in _completed_empty_queries}):
                     _completed_empty_queries.append(variant)
             record_progress()
+            if (slash_searches and not result_shell_without_rows and not rows_seen
+                    and all(any(part.casefold() == empty.casefold() for empty in empty_variants)
+                            for part in slash_searches)
+                    and not missing_retrieval_queries()
+                    and reviewed_identity_queries_completed(completed_variants + ar_completed_empty_identities(
+                        empty_variants, empty_prefixes, planned_variants), required_identities)):
+                break
             if parsed_rows:
                 rows_seen += len(parsed_rows)
             elif result_shell_seen and not explicit_no_results:
@@ -38075,8 +38178,10 @@ def search_wv_precise(page, org, *, public_lookup=None):
                     safe_rows.append((row,registry_id,registry_name,status_text,query_targets))
                 article_candidate = wv_unreviewed_indefinite_article_conflict(
                     org.organization_name, registry_name, org.ein)
-                # Status only breaks a tie after safety and name strength.
-                rank = (2 if safe_candidate else 1 if article_candidate else 0,
+                # A reviewed fundraising affiliate ranks below an eligible
+                # institutional record until its own EIN can be corroborated.
+                related_fund = institutional_fund_name_requires_proof(org.organization_name, registry_name)
+                rank = (2 if safe_candidate and not related_fund else 1 if safe_candidate or article_candidate else 0,
                         score, registry_exact_active_tiebreak(registry_name, safe_targets, status_text))
                 if rank > best_rank:
                     best_rank = rank
@@ -38087,7 +38192,9 @@ def search_wv_precise(page, org, *, public_lookup=None):
                 raise TimeoutError("West Virginia returned neither readable results nor its completed no-record message")
             if best is not None and (best_score >= 450 or best_kind == "article"):
                 from deployment.wv_legal_identity import choose
-                bound = choose(sys.modules[__name__],org,best,safe_rows,public_lookup,deadline)
+                viable_rows = [item for item in safe_rows
+                               if not institutional_fund_name_requires_proof(org.organization_name, item[2])]
+                bound = choose(sys.modules[__name__],org,best,viable_rows,public_lookup,deadline)
                 if bound:
                     best,selected_detail_text,result.identity_evidence=bound
                     best_kind='safe';best_score=max(best_score,450)
@@ -38150,6 +38257,30 @@ def search_wv_precise(page, org, *, public_lookup=None):
             raise TimeoutError("West Virginia selected organization detail did not finish loading")
         completed_queries.append(query_name)
         matched_name = detail_name or registry_name
+        if institutional_fund_name_requires_proof(org.organization_name, matched_name):
+            exact_detail_eins = {canonical_ein_digits(v) for v in re.findall(
+                r"\b(?:FEIN|Federal EIN|Employer Identification Number|EIN)\s*:?\s*(\d{2}-?\d{7})\b",
+                detail_text, re.I)}
+            if exact_detail_eins != {canonical_ein_digits(org.ein)}:
+                result.status = "Needs Review"
+                result.success = False
+                result.reason_code = "WV_INSTITUTIONAL_FUND_IDENTITY_REVIEW"
+                result.raw_status_text = "Selected West Virginia record names the associated fundraising entity."
+                result.source_note = ("The West Virginia legal name identifies a fundraising entity associated with the "
+                                      "requested institution. Confirm its EIN before applying the registry status.")
+                result.queries_attempted = completed_queries
+                if exact_detail_eins:
+                    result.source_note = ("West Virginia returned the associated fundraising entity under EIN evidence "
+                                          "that does not establish the requested institution. This record was excluded.")
+                    result.rejection_reason = "West Virginia detail EIN did not confirm the requested institution."
+                else:
+                    result._cc_identity_review = {"search_complete": False, "freshness": "", "records": [{
+                        "name": matched_name, "identifier": registry_id, "ein": "",
+                        "location": text_between_labels(detail_text, "Street Address", ["County", "Purpose", "DBA"]),
+                        "url": WV_SEARCH_URL, "raw_status": row_status, "license_category": "Charity",
+                        "_identity_outcome": "possible",
+                    }]}
+                return result
         normal_identity = location_identity_is_safe(matched_name) and safe_identity(matched_name, selected_targets)
         legal_side_identity = exact_legal_side(matched_name)
         detail_dba = ""

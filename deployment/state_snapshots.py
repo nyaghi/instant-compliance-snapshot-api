@@ -1501,7 +1501,8 @@ def downloaded_record(master,result):
         if not info.get('usable'):return
         identifier=str(result.get('matched_registry_identifier') or '')
         name=str(result.get('matched_registry_name') or '')
-        if run.state=='KY' and result.get('status_reason')=='KY_FOUNDATION_SCOPE_IDENTITY_REVIEW':
+        if run.state=='KY' and result.get('status_reason') in {
+                'KY_FOUNDATION_SCOPE_IDENTITY_REVIEW', 'KY_SINGLE_LETTER_IDENTITY_REVIEW'}:
             candidates=(result.get('_worker_identity_review') or {}).get('records',[])
             if len(candidates)==1 and candidates[0].get('_identity_outcome')=='possible':
                 # Same original-page extraction, bound to the signed candidate

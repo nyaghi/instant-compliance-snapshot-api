@@ -88,7 +88,7 @@ def capture(page, org, result):
         if chosen is None:return
         cells=chosen['cells']
         exempt = (str(result.status).strip().casefold() == 'exempt'
-                  and str(cells[4]).strip().casefold() == 'exempt')
+                  and str(cells[4]).strip().casefold() in {'exempt','excluded'})
         if (not cells[3] or not cells[4]) and not exempt and blank_record is None:
             # An exact-EIN profile can omit both registration fields too. Bind
             # its unique controller record before opening the original detail.
@@ -123,7 +123,7 @@ def capture(page, org, result):
                     or str(fields.get('RegNum') or '').strip() != cells[3].strip()
                     or str(fields.get('Expdt') or '').strip() != cells[4].strip()):
                 return
-        if exempt and str(fields.get('Expdt') or '').strip().casefold() != 'exempt':return
+        if exempt and str(fields.get('Expdt') or '').strip().casefold() not in {'exempt','excluded'}:return
         raw=popup.screenshot(type='jpeg',quality=80,full_page=True,timeout=min(timeout(),3000))
         if blank_record is not None and popup.evaluate(DETAIL_ID) != [str(blank_record['PersonId'])]:return
         if popup.url!=DETAIL or not popup.evaluate(SETTLED) or popup.evaluate(PROBE)!=fields or time.monotonic()>=stop:return

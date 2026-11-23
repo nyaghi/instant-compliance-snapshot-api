@@ -13,7 +13,7 @@ def retain_exemption_notice(page, run, candidates, name):
         if match: rows.add(match.groups())
     if len(rows) != 1: return ''
     number, filed, count = next(iter(rows))
-    if not 1 <= int(count) <= 99: return ''
+    if not 1 <= int(count) <= 150: return ''
     fact = {'adapter':'OK-historical-exemption-notice','outcome':'unavailable','document_number':number}
     run.visual_adapter_facts.append(fact)
     try:
@@ -31,7 +31,7 @@ def retain_exemption_notice(page, run, candidates, name):
         source='https://business.sos.ok.gov/CharityDocs/'+number+'.pdf'
         response=page.request.get(source,timeout=max(1,int((stop-time.monotonic())*1000)),max_redirects=0)
         raw=response.body()
-        if not response.ok or response.url!=source or page.url!=url or not raw.startswith(b'%PDF') or len(raw)>3_000_000:return ''
+        if not response.ok or response.url!=source or page.url!=url or not raw.startswith(b'%PDF') or len(raw)>5_000_000:return ''
         reader=PdfReader(io.BytesIO(raw))
         if reader.is_encrypted or len(reader.pages)!=int(count):return ''
         text=reader.pages[0].extract_text() or ''
@@ -44,6 +44,7 @@ def retain_exemption_notice(page, run, candidates, name):
         # page. A long historical attachment must not exceed the archive bound
         # and suppress the selected main-page snapshot.
         writer=PdfWriter();writer.add_page(reader.pages[0]);out=io.BytesIO();writer.write(out)
+        if len(out.getvalue())>3_000_000:return ''
         if not hasattr(run,'ok_original_certificates'):run.ok_original_certificates={}
         run.ok_original_certificates[(query[0][1],name)]={'pdf':out.getvalue(),'document_number':number,'url':url,
             'captured_at':time.time(),'pages':1,'historical_exemption':True,'filed':filed}
@@ -64,7 +65,7 @@ def retain_certificate(run,url,document_number,name,raw):
             or not re.fullmatch(r'\d+',document_number) or not name
             or not isinstance(raw,bytes) or not raw.startswith(b'%PDF') or len(raw)>20_000_000):return
         reader=PdfReader(io.BytesIO(raw))
-        if not 1<=len(reader.pages)<=200:return
+        if not 1<=len(reader.pages)<=400:return
         # Oklahoma's filing download starts with its issued certificate. Keep
         # that actual page, including scanned certificates; do not redraw/OCR it.
         page=reader.pages[0];text=page.extract_text() or ''

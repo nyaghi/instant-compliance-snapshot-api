@@ -29,9 +29,10 @@ def remember_response(master,source,query):
     run.fl_response_candidate=None
     run.fl_response_proof=None
     run.fl_response_images={}
+    names=master.literal_name_retrieval_forms(run.name)
     if (not isinstance(source,str) or not 0<len(source.encode())<=2_000_000
             or not re.search(r'</html>\s*$',source,re.I)
-            or query!=master.canonical_name_punctuation(run.name)):return False
+            or query not in {master.canonical_name_punctuation(run.name), *names[:1]}):return False
     run.fl_response_candidate={'run_id':run.run_id,'query':query,'html':source,
                                'sha256':hashlib.sha256(source.encode()).hexdigest()}
     return True
