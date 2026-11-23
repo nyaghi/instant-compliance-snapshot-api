@@ -1421,8 +1421,11 @@ def _connector_archive(record,payload,query,evidence):
                 al_scope = record['state'] == 'AL' and (ident, name) in scoped
                 if ident and ident not in text and ident not in url and not bound_application and not bound_nm and not al_scope:continue
             images=incoming.get('images')
-            multi_source=il_detail or (record['state'] in {'TN','NV'} and query.get('operation')=='detail') or (record['state']=='NV' and query.get('operation')=='search' and ident=='@completed-search')
-            multiple=multi_source and isinstance(images,list) and 2<=len(images)<=(8 if record['state']=='NV' and query.get('operation')=='detail' else 3)
+            selected_detail=query.get('operation')=='detail'
+            multi_source=(il_detail or (record['state'] in {'TN','NV','MS'} and selected_detail)
+                          or (record['state']=='NV' and query.get('operation')=='search' and ident=='@completed-search'))
+            max_pages=8 if record['state']=='NV' and selected_detail else 2 if record['state']=='MS' else 3
+            multiple=multi_source and isinstance(images,list) and 2<=len(images)<=max_pages
             if 'images' in incoming and (not multiple or images[0]!=incoming.get('image')):raise ValueError('Invalid snapshot page binding')
             content=base64.b64encode(json.dumps(images).encode()).decode() if multiple else incoming['image']
             asset=dict(kind='image_pages' if multiple else 'image',state=record['state'],ein=record['ein'],run_id=run_id,

@@ -2460,6 +2460,7 @@
 
   async function snapshotView(m) {
     if(NV)return snapshotNvView(m);
+    if(MS)return snapshotMsView(m);
     if(m.worker_step!==undefined)return snapshotWorkerObservedView(m);
     const ilObservation=IL?{view:m.view,samples:0,stable:0,opaque:null,shape_changes:0}:null;
     const observedReply=(ok,reason)=>ilObservation?{ok,il_view_observation:{...ilObservation,reason}}:{ok};
@@ -2713,10 +2714,10 @@
     return {source_page_fits:fits,source_record_bottom:bottom,
       source_page_extent:[innerWidth,bottom]};
   }
-  function snapshotMsDetail(query) {
+  function snapshotMsSource(query) {
     if(!MS||query?.state!=='MS'||query.operation!=='detail')return null;
     const panel=document.querySelector('#printDiv1'),modal=document.querySelector('#modalwindow');
-    if(!panel||!modal||!visible(panel)||!visible(modal))return {source_ms_detail_ready:false};
+    if(!panel||!modal||!visible(panel)||!visible(modal))return null;
     const heading=panel.querySelector('font');
     const required=['Filing Number','Filing Status','Initial Date Filed','Expiration Date'];
     const rows=new Map();
@@ -2725,29 +2726,63 @@
       if(!label||tr.cells.length<2)continue;
       const key=text(label).replace(/:$/,'');
       if(required.includes(key)) {
-        if(rows.has(key))return {source_ms_detail_ready:false};
+        if(rows.has(key))return null;
         rows.set(key,[label,tr.cells[1]]);
       }
     }
-    const ready=rows.size===required.length&&text(rows.get('Filing Number')[1])===query.identifier
-      &&!!text(rows.get('Filing Status')[1])&&!!text(heading);
-    if(!ready)return {source_ms_detail_ready:false};
-    const clip=modal.getBoundingClientRect();
-    const fits=el=>{
-      if(!visible(el))return false;
-      const range=document.createRange();
-      range.selectNodeContents(el);
-      const rectangles=[...range.getClientRects()].filter(r=>r.width>0&&r.height>0);
-      if(!rectangles.length)return !text(el);
-      // The actual labels and values must fit. Blank cells to the right of
-      // those fields can extend beyond the viewport without hiding any text.
-      return rectangles.every(r=>r.top>=Math.max(0,clip.top)&&r.bottom<=Math.min(innerHeight,clip.bottom)
-        &&r.left>=Math.max(0,clip.left)&&r.right<=Math.min(innerWidth,clip.right));
-    };
-    const hidden=required.filter(key=>!rows.get(key).every(fits));
-    if(!fits(heading))hidden.unshift('Organization name');
-    return {source_ms_detail_ready:true,source_ms_summary_visible:!hidden.length,
-      source_ms_hidden_summary_fields:hidden};
+    if(rows.size!==required.length||text(rows.get('Filing Number')[1])!==query.identifier
+        ||!text(rows.get('Filing Status')[1])||!text(heading))return null;
+    const fields=required.flatMap(key=>rows.get(key));
+    const binding=JSON.stringify([text(heading),...fields.map(text)]);
+    const requiredBottom=Math.max(...fields.map(el=>el.getBoundingClientRect().bottom));
+    const views=requiredBottom-heading.getBoundingClientRect().top>modal.clientHeight
+      ?['top','filing']:['top'];
+    return {modal,heading,fields,views,binding};
+  }
+  function snapshotMsFits(modal,el) {
+    if(!snapshotSummaryPainted(el))return false;
+    const clip=modal.getBoundingClientRect(),range=document.createRange();
+    range.selectNodeContents(el);
+    const rectangles=[...range.getClientRects()].filter(r=>r.width>0&&r.height>0);
+    if(!rectangles.length)return !text(el);
+    return rectangles.every(r=>r.top>=Math.max(0,clip.top)&&r.bottom<=Math.min(innerHeight,clip.bottom)
+      &&r.left>=Math.max(0,clip.left)&&r.right<=Math.min(innerWidth,clip.right));
+  }
+  function snapshotMsDetail(query) {
+    if(!MS||query?.state!=='MS'||query.operation!=='detail')return null;
+    const source=snapshotMsSource(query);
+    if(!source)return {source_ms_detail_ready:false};
+    const targets=[source.heading,...source.fields];
+    return {source_ms_detail_ready:true,source_ms_summary_visible:targets.every(el=>snapshotMsFits(source.modal,el)),
+      source_ms_views:source.views,source_ms_binding:source.binding,document_id:documentId};
+  }
+  let snapshotMsScroll=null;
+  function snapshotMsView(m) {
+    const source=snapshotMsSource(m.query);
+    if(!source||typeof m.command_id!=='string'||!m.command_id||m.command_id.length>200)return {ok:false};
+    const {modal,heading,fields,views,binding}=source;
+    const matches=()=>snapshotMsScroll?.modal===modal&&snapshotMsScroll.command===m.command_id
+      &&snapshotMsScroll.binding===binding;
+    if(m.view==='restore') {
+      if(!matches())return {ok:false};
+      modal.scrollTop=snapshotMsScroll.originalTop;
+      snapshotMsScroll=null;
+      return {ok:true};
+    }
+    if(views.length!==2||!views.includes(m.view)||!['prepare','observe'].includes(m.worker_step))return {ok:false};
+    const targets=m.view==='top'?[heading]:fields;
+    if(m.worker_step==='prepare') {
+      if(m.view==='top')snapshotMsScroll={modal,command:m.command_id,binding,originalTop:modal.scrollTop};
+      if(!matches())return {ok:false};
+      modal.scrollTop=m.view==='top'?0:modal.scrollTop+fields[0].getBoundingClientRect().top-modal.getBoundingClientRect().top-12;
+      snapshotMsScroll.view=m.view;
+    }
+    if(!matches()||snapshotMsScroll.view!==m.view)return {ok:false};
+    const shape=[modal.scrollTop,...targets.flatMap(el=>{
+      const r=el.getBoundingClientRect();return [r.x,r.y,r.width,r.height].map(Math.round);
+    })];
+    return {ok:true,view_ready:targets.every(el=>snapshotMsFits(modal,el)),view_shape:shape,
+      view_text:targets.map(text).join('\n'),view_protocol:'worker-settle-1'};
   }
   function snapshotNcDetail(query) {
     if(!NC||query?.state!=='NC'||query.operation!=='detail')return null;

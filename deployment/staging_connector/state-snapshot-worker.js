@@ -1,6 +1,6 @@
-/* Capture only an admitted connector-owned public source tab. Tennessee may use its native desktop-responsive viewport. Nevada scrolls
+/* Capture only an admitted connector-owned public source tab. Tennessee may use its native desktop-responsive viewport.
 
-   only the bound original source panel; both restore their original state.
+   Nevada and Mississippi scroll only their bound source panels and restore the original position.
 
    No navigation, focus, verification, DOM/CSS rewriting or other-window capture. */
 
@@ -626,7 +626,11 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         &&meta.capture_views.every(view=>['top','expiration','financial'].includes(view));
       if(ilDetail&&!ilModal)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:334:28:return",(null));
       if(state==='TN'&&query.operation==='detail'&&!tnModal)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:335:60:return",(null));
-      const modal=tnModal||nvModal||ilModal;
+      const msModal=msRequiredDetail&&meta.source_ms_detail_ready===true&&
+        JSON.stringify(meta.source_ms_views)==='["top","filing"]'&&
+        typeof meta.document_id==='string'&&meta.document_id.length>0&&meta.document_id.length<=100&&
+        typeof meta.source_ms_binding==='string'&&meta.source_ms_binding.length>0&&meta.source_ms_binding.length<=20000;
+      const modal=tnModal||nvModal||ilModal||msModal;
 
       const viewport=layout.cssLayoutViewport;
 
@@ -637,7 +641,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       const images=[];
       let completedViews=0;
 
-      const captureViews=modal?[...meta.capture_views]:[null];
+      const captureViews=msModal?[...meta.source_ms_views]:modal?[...meta.capture_views]:[null];
       // Reuse the just-established three-sample NV geometry
       // only when the entire selected record already fits in one unchanged view.
       const nvReadySingleView=boundNvDetail&&!settleNevada&&meta.source_fields_visible===true
@@ -651,6 +655,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       }
 
       for(const view of captureViews) {
+        let msViewBinding=null;
 
         if(cancelled||!alive())return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:349:31:return",(null));
 
@@ -659,7 +664,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
           restoreModal=true;
 
           let changed;
-          if(workerSettledDetail||boundNvDetail) {
+          if(workerSettledDetail||boundNvDetail||msModal) {
             let previous=null,stable=0;
             // Preserve the half-second completion reserve inside the existing state expiry.
             const end=started+captureBudgetMs-500;
@@ -684,6 +689,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             }
             observed.view_stable=stable;
             if(stable<2||cancelled||!alive())return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:373:45:return",(null));
+            if(msModal)msViewBinding=previous;
           } else {changed=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:374:26:await",()=>(sampled('view:'+view,()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-view',query,command_id:commandId,view,...(boundNvDetail?{source_binding:meta.source_binding}:{})},{frameId:0}))));}
 
           if(state==='IL'&&changed?.il_view_observation) {
@@ -772,6 +778,12 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
           }
         }
 
+        if(msModal) {
+          const afterView=await sampled('MS-verify-view:'+view,()=>chrome.tabs.sendMessage(tabId,
+            {action:'registry-snapshot-view',query,command_id:commandId,view,worker_step:'observe'},{frameId:0}));
+          if(cancelled||!alive()||afterView?.ok!==true||afterView.view_ready!==true||
+              JSON.stringify([afterView.view_shape,afterView.view_text])!==msViewBinding)return null;
+        }
         if(!images.includes(image.data))images.push(image.data);
         completedViews++;
         if(state==='NM')wfEvent(job,'NM image validation','returned');
@@ -851,14 +863,19 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       if(gaRequiredDetail&&(!afterMeta?.source_ga_primary_ready||!afterMeta.source_ga_primary_fits
         ||afterMeta.source_binding!==gaBinding||afterMeta.document_id!==gaDocument
         ||afterMeta.source_ga_primary_bottom!==meta.source_ga_primary_bottom))return null;
-      if(msRequiredDetail&&(afterMeta?.source_ms_detail_ready!==true||afterMeta?.source_ms_summary_visible!==true)) {
-        if(typeof diagnostic==='function')try {
-          diagnostic('source-snapshot-phase',job,JSON.stringify({operation:'detail',phase:'MS-summary-postvalidation',
-            ready:afterMeta?.source_ms_detail_ready===true,
-            hidden_fields:afterMeta?.source_ms_hidden_summary_fields||null,
-            same_url:afterMeta?.url===meta.url,text_same:afterMeta?.public_text===meta.public_text}));
-        } catch { /* Evidence still requires a complete original summary. */ }
-        return null;
+      if(msRequiredDetail) {
+        const summaryBound=msModal?(afterMeta?.document_id===meta.document_id&&
+          afterMeta?.source_ms_binding===meta.source_ms_binding&&
+          JSON.stringify(afterMeta?.source_ms_views)===JSON.stringify(meta.source_ms_views))
+          :afterMeta?.source_ms_summary_visible===true;
+        if(afterMeta?.source_ms_detail_ready!==true||!summaryBound) {
+          if(typeof diagnostic==='function')try {
+            diagnostic('source-snapshot-phase',job,JSON.stringify({operation:'detail',phase:'MS-summary-postvalidation',
+              ready:afterMeta?.source_ms_detail_ready===true,views:meta.source_ms_views||null,
+              same_url:afterMeta?.url===meta.url,text_same:afterMeta?.public_text===meta.public_text}));
+          } catch { /* Evidence still requires a complete original summary. */ }
+          return null;
+        }
       }
       if(state==='NV'&&typeof diagnostic==='function')diagnostic('source-snapshot-phase',job,JSON.stringify({operation:query.operation,phase:'postvalidation-check',alive:alive(),url_same:after.url===tab.url,document_same:afterMeta?.document_id===meta.document_id,body_same:afterMeta?.public_text===meta.public_text,binding_present:boundNvDetail,binding_same:afterMeta?.source_binding===meta.source_binding}));
 
@@ -1013,7 +1030,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
     // session viewport override. Late callbacks cannot publish a source image.
 
-    if(state==='NV'&&restoreModal&&attached)
+    if((state==='NV'||state==='MS')&&restoreModal&&attached)
 
       chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-view',query,command_id:commandId,view:'restore'},{frameId:0}).catch(()=>{});
 
