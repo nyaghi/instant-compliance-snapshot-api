@@ -2652,6 +2652,10 @@ def search_ca_master(page, org):
         if len(plausible) > 5:
             raise ValueError("California name fallback has too many plausible records for bounded confirmation")
         if not plausible:
+            if trial_identity():
+                from deployment.ca_documented_identity import apply as apply_documented_ca_identity
+                if apply_documented_ca_identity(sys.modules[__name__], org, result, entities, ca_name_stop):
+                    return result
             # An exact legal name with a conflicting EIN is a source identity
             # conflict, not permission to accept it or infer its status.
             entered_name = complete_name_identity_key(org.organization_name)
@@ -32850,6 +32854,8 @@ def append_registry_match_comment(result, comment: str, public_facing_status: st
 
 
 def comments_for_result(result, body: str, public_facing_status: str) -> str:
+    if result.state == "CA" and getattr(result, "identity_anchor", "") == "CA_DOCUMENTED_STATE_ID":
+        return append_registry_match_comment(result, result.source_note, public_facing_status)
     comment = append_registry_match_comment(
         result,
         comments_for_result_base(result, body, public_facing_status),

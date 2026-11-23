@@ -276,12 +276,17 @@ def remember_ca_exempt_entity(run,result):
  identifier=str(getattr(result,'matched_registry_identifier','') or '')
  name=str(getattr(result,'matched_registry_name','') or '')
  norm=lambda s:re.sub(r'[^a-z0-9]','',str(s).lower())
+ source_ein=re.sub(r'\D','',str(entity.get('fein') or ''))
+ from deployment.ca_documented_identity import PEPPERDINE
+ documented=(getattr(result,'identity_anchor','')=='CA_DOCUMENTED_STATE_ID'
+             and (run.ein,identifier,source_ein)==PEPPERDINE and entity.get('sosId')=='0171635')
  if (not re.fullmatch(r'\d+',identifier) or str(entity.get('id'))!=identifier
-     or entity.get('entityStatus') not in {'Exempt', 'Exempt 990-PF'} or re.sub(r'\D','',str(entity.get('fein') or ''))!=run.ein
+     or entity.get('entityStatus') not in {'Exempt', 'Exempt 990-PF'} or (source_ein!=run.ein and not documented)
      or not name or norm(entity.get('entityName') or entity.get('legalName') or entity.get('name'))!=norm(name)):return
  run.remember_detail(identifier,name,'https://ca-rcf.evokeplatform.com/app/publicPortal/entityDetails/'+identifier)
  if identifier in run.source_detail_hints:
   run.source_detail_hints[identifier]['exempt_entity_ein']=run.ein
+  if documented:run.source_detail_hints[identifier]['exempt_source_ein']=source_ein
   run.source_detail_hints[identifier]['exempt_entity_status']=entity['entityStatus']
   run.source_detail_hints[identifier]['retired_registration_present']=bool(retired)
 
@@ -324,7 +329,7 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
  if (not re.fullmatch(r'\d+',identifier) or result.get('status')!='Exempt'
      or hint.get('url')!=url
      or not (hint.get('exempt_entity_ein')==run.ein or hint.get('exempt_entity_review') is True)):return
- expected_ein='' if hint.get('exempt_entity_review') is True else run.ein
+ expected_ein='' if hint.get('exempt_entity_review') is True else hint.get('exempt_source_ein',run.ein)
  expected_status=hint.get('exempt_entity_status','Exempt')
  run.selected_visual_attempted=True
  fact={'adapter':'CA-exempt-entity-detail','phase':'admission','outcome':'not_started','total_ms':0}
@@ -377,6 +382,9 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     note=('Original state entity candidate: explicit Exempt standing and organization name. Source EIN is blank; identity confirmation is required.'
           if not expected_ein else ('Original state entity page: explicit Exempt standing, organization name and EIN. A historical Merged Out registration is retained in the search result; the current exemption is on this entity page.'
           if hint.get('retired_registration_present') else 'Original state entity page: explicit Exempt standing, organization name and EIN. No charitable organization registration exists in the completed lookup.'))
+    if hint.get('exempt_source_ein'):
+     note=('Original state entity page with the displayed federal EIN. Pepperdine’s official institutional '
+           'data links the requested EIN to the same California identifier, 0171635.')
     run.document(url,raw,'image',core,note=note)
     fact['outcome']='captured' if len(run.documents)>before else 'capture_failed'
    finally:
