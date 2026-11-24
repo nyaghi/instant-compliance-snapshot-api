@@ -9,7 +9,11 @@
   async function request(payload) {
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
     try {
-      const response=await fetch(API,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});
+      const headers={'Content-Type':'application/json'};
+      const access=window.CCIdentityConfig?.();
+      if(access?.email)headers['X-CC-Aurora-Account']=access.email;
+      if(payload.action==='begin-check'&&access?.admin_passcode)headers.Authorization='Bearer '+access.admin_passcode;
+      const response=await fetch(API,{method:'POST',credentials:'same-origin',headers,body:JSON.stringify(payload),signal:controller.signal});
       const data=await response.json();
       if(!response.ok) { const e=new Error(data.error||'The extension check did not complete.');e.signIn=data.sign_in;throw e; }
       return data;

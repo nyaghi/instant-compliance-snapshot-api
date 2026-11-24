@@ -569,16 +569,32 @@ class Service:
         if action=='receipt':self.reconcile(c,account,r,now);return self.public(r)
         raise Invalid('Unsupported extension action.')
 
-def handle(alerts,handler,*,origin,include_body=True,source_key="",source_version=""):
+def handle(alerts,handler,*,origin,include_body=True,source_key="",source_version="",verify_unlock=None):
     headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}
     try:
         entry=urlsplit(handler.path)
         from deployment.tn_extension_refresh import session_binding
+        from deployment.tn_extension_access import account as extension_account
+        payload=None
+        email=(handler.headers.get('X-CC-Aurora-Account') or '').strip().lower()
+        unlock=False
+        if handler.command not in {'GET','HEAD'}:
+            if handler.command!='POST' or handler.headers.get('Origin')!=origin:return handler._send_json(403,{'error':'Invalid request origin.'},headers)
+            if handler.headers.get('Content-Type','').split(';')[0]!='application/json':raise Invalid('JSON input required.')
+            n=int(handler.headers.get('Content-Length','0'))
+            if not 0<n<=2900000:raise Invalid('Invalid request size.')
+            payload=json.loads(handler.rfile.read(n))
+            if not isinstance(payload,dict) or any(k in payload for k in ['endpoint','url','live','account','owner','facts','as_of']):raise Invalid('Only this account and the fixed test service are supported.')
+            if payload.get('action')=='begin-check' and email:
+                authorization=handler.headers.get('Authorization','')
+                unlock=bool(authorization.startswith('Bearer ') and verify_unlock and verify_unlock(email,authorization[7:]))
+                if not unlock:return handler._send_json(403,{'error':'Unlock Aurora with your staging credentials and try the extension check again.'},headers)
         service=Service(alerts,source_key=source_key,session_binding=session_binding(handler),source_version=source_version)
         with alerts.transaction() as c:
-            account=alerts.account(c,handler)
-            if not account:return handler._send_json(403,{'error':'Sign into your existing CharityClarity account to use the extension demo.','sign_in':'/alerts'},headers)
-            service.initialize(c);now=time.time()
+            now=time.time()
+            account=extension_account(alerts,c,handler,now,email=email,unlock=unlock,response_headers=headers)
+            if not account:return handler._send_json(403,{'error':'This browser needs a verified CharityClarity account connection before it can open private extension records.','sign_in':'/alerts'},headers)
+            service.initialize(c)
             if handler.command in {'GET','HEAD'}:
                 match=re.fullmatch(re.escape(PREFIX)+r'/documents/([a-f0-9]{32})',entry.path)
                 if not match:return handler._send_json(404,{'error':'Not found.'},headers)
@@ -590,14 +606,8 @@ def handle(alerts,handler,*,origin,include_body=True,source_key="",source_versio
                 handler.end_headers()
                 if include_body:handler.wfile.write(body)
                 return
-            if handler.command!='POST' or handler.headers.get('Origin')!=origin:return handler._send_json(403,{'error':'Invalid request origin.'},headers)
-            if handler.headers.get('Content-Type','').split(';')[0]!='application/json':raise Invalid('JSON input required.')
-            n=int(handler.headers.get('Content-Length','0'))
-            if not 0<n<=2900000:raise Invalid('Invalid request size.')
-            p=json.loads(handler.rfile.read(n))
-            if not isinstance(p,dict) or any(k in p for k in ['endpoint','url','live','account','owner','facts','as_of']):raise Invalid('Only this account and the fixed test service are supported.')
-            if p.get('action')=='create':raise Invalid('Use Check for extensions and the Tennessee File Extension button.')
-            result=service.dispatch(c,account,p,now)
+            if payload.get('action')=='create':raise Invalid('Use Check for extensions and the Tennessee File Extension button.')
+            result=service.dispatch(c,account,payload,now)
         return handler._send_json(200,result,headers)
     except Conflict as exc:return handler._send_json(409,{'error':str(exc)},headers)
     except (Invalid,ValueError,TypeError,KeyError,UnicodeError) as exc:return handler._send_json(400,{'error':str(exc)[:240]},headers)

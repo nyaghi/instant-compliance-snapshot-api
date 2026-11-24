@@ -174,7 +174,7 @@ def final_four_asset(name, text):
     if name == 'index.html':
         import re
         if os.environ.get('CE_PERMANENT_STAGING') == '1':
-            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RZ"><script src="/tn-extension-portal-rehearsal.js?v=29.2RZ"></script><script src="/tn-extensions-demo.js?v=29.2RZ"></script></body>')
+            replace('</body>', '<link rel="stylesheet" href="/tn-extensions-demo.css?v=29.2RZ"><script src="/tn-extension-portal-rehearsal.js?v=29.2RZ"></script><script src="/tn-extensions-demo.js?v=29.2TJ"></script></body>')
             replace('      resultPanel.classList.remove("hidden");', '      resultPanel.classList.remove("hidden");\n      window.CCTennesseeExtensions?.render(results);')
         replace('id="errorBox" class=', 'id="errorBox" role="alert" class=')
         replace('      if (nyResultRefresh) return;', '      if (nyResultRefresh || connectorPreflightPending) return;')
@@ -909,7 +909,7 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
                 return handle_source(alerts,master,self,LAB_ORIGIN)
             if alerts is not None and os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity() and self.path == '/api/tn-extension-demo':
                 from deployment.tn_extensions_demo import handle
-                return handle(alerts,self,origin=LAB_ORIGIN,source_key=master.NY_CONNECTOR_SIGNING_KEY,source_version=master.APP_VERSION)
+                return handle(alerts,self,origin=LAB_ORIGIN,source_key=master.NY_CONNECTOR_SIGNING_KEY,source_version=master.APP_VERSION,verify_unlock=master.is_verified_internal_passcode)
             if alerts is not None and self.path.startswith('/api/alerts/'):
                 if self.path == '/api/alerts/runner/lookup':
                     from deployment.alerts_browser import lookup

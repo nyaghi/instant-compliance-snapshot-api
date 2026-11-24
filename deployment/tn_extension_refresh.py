@@ -18,10 +18,15 @@ PROOF_FIELDS=('state','ein','organization_name','success','status','source_url',
 
 def session_binding(handler):
     from deployment.alerts import COOKIE
+    from deployment.tn_extension_access import COOKIE as EXTENSION_COOKIE
     try:
-        value=SimpleCookie(handler.headers.get('Cookie',''))[COOKIE].value
-        return hashlib.sha256(value.encode()).hexdigest() if re.fullmatch('[A-Za-z0-9_-]{43}',value) else ''
-    except (CookieError,KeyError,ValueError):return ''
+        cookies=SimpleCookie(handler.headers.get('Cookie',''))
+        for name in (COOKIE,EXTENSION_COOKIE):
+            item=cookies.get(name)
+            if item and re.fullmatch('[A-Za-z0-9_-]{43}',item.value):
+                return hashlib.sha256(item.value.encode()).hexdigest()
+    except (CookieError,ValueError):pass
+    return ''
 
 def issue_public_proof(master,handler,result,now):
     """Stateless receipt for a completed main-run TN result; no DB or lookup."""
@@ -167,7 +172,8 @@ def handle_source(alerts,master,handler,origin):
         if not 0<n<=2900000:raise Invalid('Invalid public check size.')
         p=json.loads(handler.rfile.read(n));identifier=ein(p.get('extension_ein'));nonce=p.pop('extension_refresh',None);p.pop('extension_ein',None)
         with alerts.transaction() as c:
-            owner=alerts.account(c,handler)
+            from deployment.tn_extension_access import account as extension_account
+            owner=extension_account(alerts,c,handler,time.time(),email=str(p.get('email') or '').strip().lower())
             if not owner:return handler._send_json(403,{'error':'Sign into CharityClarity to refresh extension eligibility.'},headers)
             service=Service(alerts);service.initialize(c);data=context(c,owner,identifier,nonce,time.time())
             if p.get('action')=='start':
