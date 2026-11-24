@@ -736,7 +736,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             // NY and GA have already verified that the selected record fits
             // the owned viewport. Request a fresh frame before a potentially
             // stalled screenshot consumes the entire detail allowance.
-            if((msBoundDialog||['AL','NC','NV'].includes(state)||gaFullViewport&&(nyRequiredDetail||gaRequiredDetail))
+            if((msBoundDialog||['AL','NC','NV'].includes(state)||gaFullViewport&&(nyRequiredDetail||gaRequiredDetail||nmRequiredDetail))
                 &&typeof CCOwnedSourcePixels!=='undefined'){
               try{return await CCOwnedSourcePixels.capture(tabId,options,{
                 deadline:started+captureBudgetMs-500,alive:()=>!cancelled&&alive(),
@@ -750,7 +750,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             return optionalGridCapture?Promise.race([command,optionalDetached]):command;
           }));
         let image;
-        if((nyRequiredDetail||ncSelectedDetail)&&gaFullViewport) {
+        if((nyRequiredDetail||ncSelectedDetail||nmRequiredDetail)&&gaFullViewport) {
           // The selected source already fits its owned viewport. Request
           // viewport pixels directly and retain every existing post-check.
           const {clip,...viewportOptions}=screenshotOptions;

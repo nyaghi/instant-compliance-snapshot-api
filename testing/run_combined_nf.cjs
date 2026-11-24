@@ -4,11 +4,12 @@ const root=path.join(__dirname,'..'),file='deployment/staging_connector/state-sn
 const candidate=fs.readFileSync(path.join(root,file),'utf8');
 const baseline=cp.execFileSync('git',['show','412f58a7e997e121435ce58d3793d43e5393d8f1:'+file],{cwd:root,encoding:'utf8'});
 function fixture(source,options={}){
- const calls=[],q={state:'NM',operation:'detail',identifier:'86-0481941',name:'Make-A-Wish Foundation of America'};
- const url='https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN=86-0481941';
+ const org=options.org||{ein:'86-0481941',name:'Make-A-Wish Foundation of America'};
+ const calls=[],q={state:'NM',operation:'detail',identifier:org.ein,name:org.name};
+ const url='https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN='+org.ein;
  const job={tab:1,generation:2,pending:'command123',command:{id:'command123',query:q},registryState:'NM',activeExpiresAt:Date.now()+30000,snapshotCaptures:options.captures??4,requiredCaptureSpentByState:{NM:options.spent??0}};
  let width=1000,height=1200;
- const meta=()=>({url,document_id:'retained-local-document',public_text:'LOCAL MODELED FIXTURE Make-A-Wish Foundation of America 86-0481941 Registration History',source_detail:true,source_fields_visible:true,source_viewport_width:width,source_record_bottom:1200,source_page_fits:true,...options.meta});
+ const meta=()=>({url,document_id:'retained-local-document',public_text:'LOCAL MODELED FIXTURE '+org.name+' '+org.ein+' Registration History',source_detail:true,source_fields_visible:true,source_viewport_width:width,source_record_bottom:1200,source_page_fits:true,...options.meta});
  const ctx={URL,Date,JSON,Promise,setTimeout,clearTimeout,owned:new Set([1]),isActive:()=>true,
   wfAwait:(_job,_stage,fn)=>fn(),wfReturn:(_job,_stage,value)=>value,wfEvent:()=>{},
   P:{TRIAL_ORIGIN:'https://local-fixture.onrender.com',sameQuery:(a,b)=>JSON.stringify(a)===JSON.stringify(b)},registryOrigin:()=> 'https://secure.nmdoj.gov',
@@ -47,4 +48,29 @@ test('DC real detail date ordering is accepted only with typed effective-period 
   const old={...d};delete old.prior_renewal_date_type;assert.equal(current.fields(entry.source.url,entry.source.text,old),null);
   for(const type of ['other',true,1])assert.equal(current.valid({...d,issued_at:Date.now()/1000-1,expires_at:Date.now()/1000+50,prior_renewal_date_type:type}),false);
  }
+});
+
+test('NM full original frame preserves the selected record, postchecks and existing time limit', async()=>{
+ const roster=require('./fixtures/gate55/LOCAL-70.json');
+ assert.equal(new Set(roster.map(o=>o.ein)).size,70);
+ await Promise.all(roster.map(async org=>{
+  for(const mode of ['frame','direct fallback','source changed','lost ownership']){
+   const f=fixture(candidate,{org,meta:{source_record_bottom:5638}});
+   const deadline=f.job.activeExpiresAt;
+   let frames=0;
+   f.ctx.CCOwnedSourcePixels={capture:async(tabId,options,guard)=>{
+    assert.equal(tabId,1);assert.equal(options.captureBeyondViewport,false);assert.equal(options.clip,undefined);
+    assert.ok(guard.alive());frames++;
+    if(mode==='direct fallback')throw Error('frame unavailable');
+    if(mode==='source changed')f.ctx.chrome.tabs.sendMessage=async()=>({url:'https://secure.nmdoj.gov/other',public_text:'different'});
+    if(mode==='lost ownership')f.ctx.owned.clear();
+    return {data:'AQ=='};
+   }};
+   const result=await f.run();
+   assert.equal(frames,1,org.name);
+   assert.equal(result?.image||null,mode==='frame'?'AQ==':mode==='direct fallback'?'AA==':null,org.name);
+   assert.equal(f.job.activeExpiresAt,deadline);
+   assert.equal(f.calls.filter(c=>c==='Page.captureScreenshot').length,mode==='direct fallback'?1:0);
+  }
+ }));
 });
