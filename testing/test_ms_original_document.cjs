@@ -10,9 +10,16 @@ async function check(org,mode) {
   const binding=JSON.stringify([org.name,'Filing Number:',q.identifier,'Filing Status:','Current','Initial Date Filed:','','Expiration Date:','05/15/2027']);
   const meta={url:base+'Portal.aspx'+({'empty anchor':'#','other anchor':'#other','appended query':'?q=1'}[mode]||''),source_ms_detail_ready:true,source_ms_binding:binding,source_ms_document_url:url,document_id:'doc',public_text:org.name};
   const job={activeExpiresAt:Date.now()+30000,tab:3,generation:1,pending:'a',command:{id:'a',query:q},msSnapshotSpentMs:400,requiredCaptureSpentByState:{MS:400}};
-  let created=0,closed=0,reads=0,captures=0,detached=0;
+  let created=0,closed=0,reads=0,captures=0,detached=0,frameCalls=0;
   const ctx={Date,JSON,Math,Promise,setTimeout,clearTimeout,P:{TRIAL_ORIGIN:true,sameQuery:(a,b)=>a===b},isActive:()=>true,owned:new Set([3]),
     saveRuntime:async()=>{},removeOwned:async id=>{assert.equal(id,4);ctx.owned.delete(id);closed++;},diagnostic(){},
+    CCOwnedSourcePixels:{capture:async(tab,options,controls)=>{
+      assert.equal(tab,4);assert.equal(options.captureBeyondViewport,false);assert.equal(controls.alive(),true);
+      frameCalls++;
+      if(mode==='frame fails')throw Error('frame unavailable');
+      if(mode==='frame loses owner')job.closed=true;
+      return {data:image};
+    }},
     chrome:{tabs:{get:async id=>id===3?{url:meta.url,windowId:1}:{status:'complete',url:mode==='redirect'?'https://example.org':url},
       create:async opts=>{assert.deepEqual({...opts},{windowId:1,url,active:false});created++;return {id:4};},
       sendMessage:async()=>mode==='wrong endpoint'?{...meta,source_ms_document_url:url+'&other=1'}:
@@ -20,18 +27,22 @@ async function check(org,mode) {
       debugger:{attach:async()=>{},detach:async()=>{detached++},sendCommand:async({tabId},op)=>{
         assert.equal(tabId,4);
         if(op==='Page.captureScreenshot'){captures++;if(mode==='lost job')job.closed=true;return {data:image};}
-        if(op==='Runtime.evaluate'){reads++;return {result:{value:{url,binding:mode==='wrong filing'?'other':binding,
+        if(op==='Runtime.evaluate'){reads++;return {result:{value:{url,binding:(mode==='wrong filing'||mode==='frame wrong after'&&reads===2)?'other':binding,
+          fitsViewport:['quiet viewport','frame fails','frame loses owner','frame wrong after'].includes(mode),
           width:1294,height:mode==='moved'&&reads===2?425:439}}};}
         throw Error(op);
       }}}};
   if(mode==='no time')job.msSnapshotSpentMs=19900;
   const helper=vm.runInNewContext(js+'\nCCMsOriginalDocument',ctx);
   const result=await helper.capture(job,q,'a',{tab:3,generation:1});
-  assert.equal(result?.image||null,['success','empty anchor'].includes(mode)?image:null,org.name+' '+mode);
+  assert.equal(result?.image||null,['success','empty anchor','quiet viewport','frame fails'].includes(mode)?image:null,org.name+' '+mode);
   assert.equal(closed,created);assert.equal(created,['wrong endpoint','no time','other anchor','appended query'].includes(mode)?0:1);
+  if(['quiet viewport','frame fails','frame loses owner','frame wrong after'].includes(mode)){
+    assert.equal(frameCalls,1);assert.equal(captures,mode==='frame fails'?1:0);assert.equal(detached,1);
+  } else assert.equal(frameCalls,0);
   if(['success','empty anchor'].includes(mode)){assert.equal(captures,1);assert.equal(detached,1);assert.equal(job.snapshotCaptures,1);}
 }
 test('Original Mississippi filing capture, 70 organizations, with exact source, identity, geometry, expiry and cleanup controls',async()=>{
   assert.equal(new Set(roster.map(x=>x.ein)).size,70);
-  for(const org of roster)for(const mode of ['success','empty anchor','other anchor','appended query','wrong endpoint','redirect','wrong filing','moved','source changed','lost job','no time'])await check(org,mode);
+  for(const org of roster)for(const mode of ['success','empty anchor','other anchor','appended query','wrong endpoint','redirect','wrong filing','moved','source changed','lost job','no time','quiet viewport','frame fails','frame loses owner','frame wrong after'])await check(org,mode);
 });

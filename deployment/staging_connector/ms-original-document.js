@@ -34,7 +34,7 @@ const CCMsOriginalDocument=(()=>{
     }
     const width=Math.ceil(Math.max(innerWidth,right)),height=Math.ceil(bottom+12);
     if(width<200||height<80||width>3000||height>6000||width*height>8000000)return null;
-    return {url:location.href,binding,width,height};
+    return {url:location.href,binding,width,height,fitsViewport:width<=innerWidth&&height<=innerHeight};
   }
   async function capture(job,query,id,original) {
     const start=Date.now(),spent=job.msSnapshotSpentMs;
@@ -77,14 +77,29 @@ const CCMsOriginalDocument=(()=>{
       const frame=await read();
       if(!live()||frame?.url!==source||frame.binding!==before.source_ms_binding)return null;
       phase='original pixels';
-      const image=await command('Page.captureScreenshot',{format:'jpeg',quality:82,fromSurface:true,
-        captureBeyondViewport:true,clip:{x:0,y:0,width:frame.width,height:frame.height,scale:1}});
+      let image;
+      // A verified filing can finish loading before an inactive Chrome tab
+      // produces screenshot pixels. Ask its own renderer for a fresh frame.
+      if(frame.fitsViewport&&typeof CCOwnedSourcePixels!=='undefined') {
+        try {
+          image=await CCOwnedSourcePixels.capture(extra,
+            {format:'jpeg',quality:82,captureBeyondViewport:false},
+            {deadline:end,alive:live});
+        } catch { /* The clipped original remains available inside the same deadline. */ }
+      }
+      if(!live())return null;
+      if(!image?.data) {
+        image=await command('Page.captureScreenshot',{format:'jpeg',quality:82,fromSurface:true,
+          captureBeyondViewport:true,clip:{x:0,y:0,width:frame.width,height:frame.height,scale:1}});
+      } else {
+        phase='verified viewport frame';
+      }
       if(!live()||typeof image?.data!=='string'||image.data.length<100||image.data.length>4000000||!image.data.startsWith('/9j/'))return null;
       const after=await read(),current=await metadata();
       if(!live()||JSON.stringify(frame)!==JSON.stringify(after)||current?.url!==before.url
         ||current.document_id!==before.document_id||current.source_ms_binding!==frame.binding
         ||current.source_ms_document_url!==source||current.public_text!==before.public_text)return null;
-      phase='verified';return {query:{...query},source_url:portal,public_text:before.public_text,
+      phase=phase==='verified viewport frame'?'verified original frame':'verified';return {query:{...query},source_url:portal,public_text:before.public_text,
         image:image.data,captured_at:Date.now()/1000,capture_ms:Date.now()-start};
     }
     try {
