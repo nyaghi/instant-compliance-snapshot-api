@@ -50,12 +50,15 @@ const CCMsOriginalDocument=(()=>{
     const read=async()=> (await command('Runtime.evaluate',{expression:'('+measure.toString()+')()',returnByValue:true})).result?.value;
     async function run() {
       const before=await metadata();
-      if(!live()||before?.url!==portal||!before.source_ms_detail_ready||!validUrl(before.source_ms_document_url)
+      // The registry's Details link appends an empty fragment to the search page.
+      if(!live()||(before?.url!==portal&&before?.url!==portal+'#')||!before.source_ms_detail_ready||!validUrl(before.source_ms_document_url)
           ||!before.document_id||!before.source_ms_binding||!before.public_text)return null;
+      phase='filing fields';
       const fields=JSON.parse(before.source_ms_binding);
       if(!Array.isArray(fields)||fields.length!==9||fields[2]!==query.identifier||!fields[0]||!fields[4])return null;
+      phase='parent tab';
       const source=before.source_ms_document_url,parent=await chrome.tabs.get(original.tab);
-      if(!live()||parent.url!==portal)return null;
+      if(!live()||parent.url!==before.url)return null;
       phase='document navigation';
       const tab=await chrome.tabs.create({windowId:parent.windowId,url:source,active:false});
       extra=tab.id;owned.add(extra);
@@ -78,7 +81,7 @@ const CCMsOriginalDocument=(()=>{
         captureBeyondViewport:true,clip:{x:0,y:0,width:frame.width,height:frame.height,scale:1}});
       if(!live()||typeof image?.data!=='string'||image.data.length<100||image.data.length>4000000||!image.data.startsWith('/9j/'))return null;
       const after=await read(),current=await metadata();
-      if(!live()||JSON.stringify(frame)!==JSON.stringify(after)||current?.url!==portal
+      if(!live()||JSON.stringify(frame)!==JSON.stringify(after)||current?.url!==before.url
         ||current.document_id!==before.document_id||current.source_ms_binding!==frame.binding
         ||current.source_ms_document_url!==source||current.public_text!==before.public_text)return null;
       phase='verified';return {query:{...query},source_url:portal,public_text:before.public_text,
