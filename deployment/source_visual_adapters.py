@@ -306,6 +306,42 @@ def ca_exempt_entity_core(text,name,ein,expected_status='Exempt'):
      or re.search(r'verify you are human|user validation required|access denied|just a moment',text,re.I)):return None
  return heading[0]+'\nFEIN: '+(fein[1] if fein else '')+'\n'+core[0]
 
+def ca_tabbed_exempt_demographics(text, name, status):
+ # Public portal layout with the FEIN on a separate Entity IDs tab.
+ if status not in {'Exempt','Exempt 990-PF'} or re.search(r'verify you are human|access denied|just a moment',text,re.I):return None
+ lines=[line.strip() for line in text.splitlines() if line.strip()]
+ if 'Entity Detail' not in lines or 'Entity IDs' not in lines:return None
+ for key,expected in [('Entity Name',name),('Entity Status',status)]:
+  if lines.count(key)!=1:return None
+  at=lines.index(key)+1
+  if at>=len(lines) or lines[at].casefold()!=expected.strip().casefold():return None
+ match=re.search(r'Entity Type\b[\s\S]*?Out of State\?\s*(?:Yes|No)\b',text)
+ return match[0] if match else None
+
+
+def ca_tabbed_exempt_ids(page,url,number,expected_ein,timeout):
+ # Both fields must exist. A missing FEIN control is distinct from an empty field.
+ ids=page.get_by_role('tab',name='Entity IDs',exact=True)
+ demographics=page.get_by_role('tab',name='Demographics',exact=True)
+ if ids.count()!=1 or demographics.count()!=1 or page.url!=url:return False
+ ids.click(timeout=timeout())
+ try:
+  panel=page.locator('[role="tabpanel"]:visible').filter(has=page.locator('.formio-component-entityId'))
+  if panel.count()!=1:return False
+  values=[]
+  for field,label in [('entityId','Entity Id'),('fein','FEIN')]:
+   control=panel.locator('.formio-component-'+field)
+   if control.count()!=1:return False
+   content=control.inner_text(timeout=timeout()).strip().splitlines()
+   if not content or content[0].strip()!=label:return False
+   values.append(' '.join(x.strip() for x in content[1:] if x.strip()))
+  if page.url!=url or values[0]!=number:return False
+  if not expected_ein:return values[1]==''
+  return bool(re.fullmatch(r'\d{2}-?\d{7}',values[1])) and values[1].replace('-','')==expected_ein
+ finally:
+  if page.url==url:demographics.click(timeout=timeout())
+
+
 def wait_ca_exempt_status(page,locator,url,timeout,fact):
  # An empty, fully loaded public app shell cannot supply a record image.
  try:
@@ -356,11 +392,18 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     fact['waiting_for_field']=''
     # Form containers can be visible before their bound values arrive. Keep the
     # exact identity predicate and wait for its values within the existing cap.
-    core=None
+    core=None;tabbed=False
     while time.monotonic()+1<stop:
      text=page.inner_text('body',timeout=timeout())
      core=ca_exempt_entity_core(text,result['matched_registry_name'],expected_ein,expected_status)
      if core:break
+     demographic=ca_tabbed_exempt_demographics(text,result['matched_registry_name'],expected_status)
+     if demographic:
+      if not ca_tabbed_exempt_ids(page,url,identifier,expected_ein,timeout):
+       fact['outcome']='entity_id_fields_do_not_match';return
+      core=ca_tabbed_exempt_demographics(page.inner_text('body',timeout=timeout()),result['matched_registry_name'],expected_status)
+      if core!=demographic:fact['outcome']='source_changed_during_identity_check';return
+      tabbed=True;break
      fact['waiting_for_field']='bound_entity_values'
      page.wait_for_timeout(min(100,timeout()))
     if not core:fact['outcome']='selected_entity_not_bound';return
@@ -375,7 +418,10 @@ def capture_ca_exempt_entity(master,result,run,deadline,hint):
     fact['phase']='capture';begin=time.perf_counter()
     raw=page.screenshot(type='jpeg',quality=80,clip={'x':0,'y':0,'width':1600,'height':height},timeout=max(1,min(5000,timeout())))
     run.capture_ms+=(time.perf_counter()-begin)*1000
-    if page.url!=url or ca_exempt_entity_core(page.inner_text('body',timeout=timeout()),result['matched_registry_name'],expected_ein,expected_status)!=core:
+    after=page.inner_text('body',timeout=timeout())
+    verified_core=(ca_tabbed_exempt_demographics(after,result['matched_registry_name'],expected_status) if tabbed
+                   else ca_exempt_entity_core(after,result['matched_registry_name'],expected_ein,expected_status))
+    if page.url!=url or verified_core!=core or (tabbed and not ca_tabbed_exempt_ids(page,url,identifier,expected_ein,timeout)):
      fact['outcome']='source_changed_during_capture';return
     if time.monotonic()+.5>=stop:fact['outcome']='capture_completed_too_late';return
     before=len(run.documents)
