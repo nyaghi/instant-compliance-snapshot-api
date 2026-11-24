@@ -767,10 +767,21 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
           await new Promise(resolve=>setTimeout(resolve,120));
           const fresh=await sampled('NV-fresh-metadata',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}));
           if(cancelled||!alive()||!fresh||fresh.url!==meta.url||fresh.document_id!==meta.document_id
-              ||fresh.source_binding!==meta.source_binding||fresh.source_loading_visible!==false
-              ||fresh.source_detail!==true)return null;
+              ||fresh.source_binding!==meta.source_binding||fresh.source_detail!==true) {
+            observed.phase='NV-fresh-record-unverified';
+            return null;
+          }
+          if(fresh.source_loading_visible!==false) {
+            observed.phase='NV-fresh-loader';
+            if(fresh.source_loading_visible===true&&!settleNevada)job.nvGeometryRetryCommand=commandId;
+            return null;
+          }
           if(nvReadySingleView) {
-            if(JSON.stringify(fresh.source_view_shape)!==JSON.stringify(meta.source_view_shape))return null;
+            if(JSON.stringify(fresh.source_view_shape)!==JSON.stringify(meta.source_view_shape)) {
+              observed.phase='NV-fresh-layout-changed';
+              if(!settleNevada)job.nvGeometryRetryCommand=commandId;
+              return null;
+            }
           } else {
             // Scrolling the owned panel legitimately changes whole-record geometry.
             // Recheck the exact group settled for this image, at its current scroll.

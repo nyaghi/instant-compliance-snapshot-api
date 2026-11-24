@@ -1498,6 +1498,12 @@ def capture_owned_md_page(run,result,page,context,deadline):
   def same_record():
    actual=urlsplit(detail.url)
    return actual.scheme=='https' and actual.hostname=='onestop.md.gov' and actual.path==u.path and not actual.username and not actual.password
+  # The listing already proved the identity. A redirect to a different page
+  # cannot supply that record's General Information panel.
+  redirected=getattr(getattr(response,'request',None),'redirected_from',None) is not None
+  if redirected and not same_record():
+   fact['outcome']='selected_detail_redirected'
+   return None
   # A slow successful response from the retained selected URL may finish
   # rendering and capture within five extra seconds. All visible identity
   # checks below remain mandatory; never retry navigation or extend the task.
@@ -1562,6 +1568,9 @@ def capture_owned_md_page(run,result,page,context,deadline):
   # Recover only access failures, never a rejected identity/status or blocked view.
   if (not run.documents and 'recovery_stop' in locals() and
       ((fact.get('outcome')=='detail_navigation_rejected' and (fact.get('detail_http_status') or 0)>=500)
+       or fact.get('outcome')=='selected_detail_redirected'
+       or (fact.get('phase')=='general_information' and fact.get('error_type')=='TimeoutError'
+           and locals().get('redirected') is True)
        or (fact.get('phase')=='navigation' and fact.get('error_type')=='TimeoutError'))):
    from deployment.md_listing_evidence import capture as capture_md_listing
    capture_md_listing(run,result,hint,context,recovery_stop)

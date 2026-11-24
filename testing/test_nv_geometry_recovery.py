@@ -1,4 +1,6 @@
 import unittest
+import html
+import json
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -10,15 +12,24 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
         connector = Path(__file__).resolve().parents[1] / "deployment/staging_connector"
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
-            for fault in ("geometry", "identity", "loader", "loader-identity", "none"):
-                with self.subTest(fault=fault):
+            faults = ("veil-geometry", "veil-loader", "veil-identity", "veil-document", "none")
+            roster = json.loads((connector.parents[1] / "testing/fixtures/gate55/LOCAL-70.json").read_text())
+            self.assertEqual(len({org["ein"] for org in roster}), 70)
+            cases = [(org, faults[index % len(faults)]) for index, org in enumerate(roster)]
+            cases.extend((roster[0], fault) for fault in ("geometry", "identity", "loader", "loader-identity"))
+            for org, fault in cases:
+                with self.subTest(fault=fault, organization=org["name"]):
                     page = await browser.new_page(viewport={"width": 1680, "height": 927})
-                    await page.route("**/*", lambda route: route.fulfill(content_type="text/html", body=HTML))
+                    fixture = HTML.replace("LOCAL ORGANIZATION", html.escape(org["name"]))
+                    await page.route("**/*", lambda route: route.fulfill(content_type="text/html", body=fixture))
                     await page.goto("https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=local")
                     cdp = await page.context.new_cdp_session(page)
                     await page.expose_function("localCDP", lambda method, params: cdp.send(method, params))
                     await page.evaluate("""fault => {
                       window.localFault=fault;window.shots=0;
+                      if(fault.startsWith('veil-'))window.CCOwnedSourcePixels={
+                        nvDetailVeiled:async()=>shots===1&&!window.veilSeen&&(window.veilSeen=true)
+                      };
                       window.wfAwait=(_,__,call)=>call();window.wfReturn=(_,__,value)=>value;
                       window.wfEvent=()=>{};window.diagnostic=()=>{};
                       window.P={TRIAL_ORIGIN:'local',sameQuery:(a,b)=>JSON.stringify(a)===JSON.stringify(b)};
@@ -29,7 +40,8 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
                           if(m.action==='registry-snapshot-metadata'&&shots===1&&localFault!=='none'){
                             reply.source_view_shape=[...reply.source_view_shape];reply.source_view_shape[0]+=1;
                             if(localFault.includes('identity'))reply.source_binding+='changed';
-                            if(localFault.startsWith('loader')&&!window.loaderSeen){reply.source_loading_visible=true;window.loaderSeen=true;}
+                            if(localFault.includes('document'))reply.document_id+='changed';
+                            if(localFault.includes('loader')&&!window.loaderSeen){reply.source_loading_visible=true;window.loaderSeen=true;}
                           }
                           return reply;
                         }},
@@ -53,8 +65,9 @@ class NevadaGeometryRecovery(unittest.IsolatedAsyncioTestCase):
                     }""")
                     self.assertTrue(result["ready"])
                     self.assertEqual(result["first"], fault == "none", result)
-                    self.assertEqual(result["retry"], fault in ("geometry", "loader"), result)
-                    self.assertEqual(result["second"], fault in ("geometry", "loader"), result)
-                    self.assertEqual(result["shots"], 2 if fault in ("geometry", "loader") else 1, result)
+                    recovered = fault in ("geometry", "loader", "veil-geometry", "veil-loader")
+                    self.assertEqual(result["retry"], recovered, result)
+                    self.assertEqual(result["second"], recovered, result)
+                    self.assertEqual(result["shots"], 2 if recovered else 1, result)
                     await page.close()
             await browser.close()
