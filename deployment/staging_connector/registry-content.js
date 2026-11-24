@@ -1991,6 +1991,7 @@
     }
     throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
   }
+  let msDocumentRequest=null;
   async function msDetail(query,deadline) {
     if(query?.operation!=='detail'||query.state!=='MS'||!Array.isArray(msLastRows)
         ||!msLastRows.some(row=>row.identifier===query.identifier))throw new Error('REGISTRY_COMMAND_INVALID');
@@ -2011,6 +2012,7 @@
     const link=row?.querySelector('a.k-grid-Details');
     if(!link||!visible(link))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
     const detailStart=Date.now();
+    msDocumentRequest={identifier:query.identifier,start:performance.now()};
     const observation={phase:'before-click',click_dispatched:false,checks:0};
     msLastDiagnostic={...msLastDiagnostic,detail:observation};
     const result=await wfcAwait("content:msDetail:1726:17",()=>(wait(()=>{
@@ -2762,7 +2764,16 @@
     if(!source)return {source_ms_detail_ready:false};
     const targets=[source.heading,...source.fields];
     return {source_ms_detail_ready:true,source_ms_summary_visible:targets.every(el=>snapshotMsFits(source.modal,el)),
-      source_ms_views:source.views,source_ms_binding:source.binding,document_id:documentId};
+      source_ms_views:source.views,source_ms_binding:source.binding,document_id:documentId,
+      source_ms_document_url:msFilingResource(query.identifier)};
+  }
+  function msFilingResource(identifier) {
+    if(typeof msDocumentRequest==='undefined'||msDocumentRequest?.identifier!==identifier)return null;
+    const matches=performance.getEntriesByType('resource').filter(entry=>
+      entry.initiatorType==='xmlhttprequest'&&entry.startTime>=msDocumentRequest.start
+      &&entry.name.startsWith(location.origin+'/online/portal/ch/page/charities-search/~/ViewXSLTFileByName.aspx?providerName=CH_EntityBasedFilingDetails&FilingId='));
+    const urls=new Set(matches.map(entry=>entry.name));
+    return urls.size===1?matches[0].name:null;
   }
   let snapshotMsScroll=null;
   function snapshotMsView(m) {

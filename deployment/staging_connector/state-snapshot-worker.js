@@ -425,6 +425,12 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       const ncDocument=ncSelectedDetail?meta.document_id:null;
       const nmRequiredDetail=state==='NM'&&query.operation==='detail';
       const msRequiredDetail=state==='MS'&&query.operation==='detail';
+      const msHasDocument=msRequiredDetail&&typeof CCMsOriginalDocument!=='undefined'
+        &&CCMsOriginalDocument.validUrl(meta.source_ms_document_url);
+      if(msHasDocument&&captureBudgetMs>12000){
+        captureBudgetMs=12000;observed.budget_ms=captureBudgetMs;
+        clearTimeout(timeoutId);timeoutId=setTimeout(expireCapture,Math.max(1,started+captureBudgetMs-Date.now()));
+      }
       if(msRequiredDetail&&typeof diagnostic==='function')try {
         const c=layout?.cssContentSize,v=layout?.cssLayoutViewport;
         diagnostic('ms-capture-admission',job,JSON.stringify({
@@ -529,10 +535,9 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         ['["top"]','["top","filing"]'].includes(JSON.stringify(meta.source_ms_views)) &&
         typeof meta.document_id==='string' && meta.document_id.length>0 && meta.document_id.length<=100 &&
         typeof meta.source_ms_binding==='string' && meta.source_ms_binding.length>0 && meta.source_ms_binding.length<=20000;
-      const msModal=msBoundDialog && (meta.source_ms_views.length===2 || !meta.source_ms_summary_visible);
-      // An inner, scrollable state dialog already defines the views to capture.
-      // Resizing the outer document cannot expose fields clipped by that dialog.
-      if(gaRequiredDetail||nmRequiredDetail||alRequiredGrid||(msRequiredDetail&&!msBoundDialog)||nyRequiredDetail||ncSelectedDetail) {
+      // Preserve the previously working desktop layout before evaluating a quiet
+      // dialog. Native inner scrolling is still required for longer filings.
+      if(gaRequiredDetail||nmRequiredDetail||alRequiredGrid||msRequiredDetail||nyRequiredDetail||ncSelectedDetail) {
         const originalText=meta.public_text,content=layout.cssContentSize,view=layout.cssLayoutViewport;
         // Use the existing complete NY schema binding across responsive cards
         // and tables. Raw source text must still settle before the screenshot.
@@ -551,7 +556,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         // A bound MS detail can spend the existing completion reserve on its
         // first post-resize layout read. Stable text/geometry is still required
         // below before any image is admitted; no new viewport or query is added.
-        if(msRequiredDetail&&!cancelled&&alive()
+        if(msRequiredDetail&&!msHasDocument&&!cancelled&&alive()
             &&Date.now()<started+captureBudgetMs&&started+captureBudgetMs-Date.now()<4000) {
           const extended=Math.min(16000-(observed.prior_capture_ms||0),job.activeExpiresAt-started-1000);
           if(extended>captureBudgetMs) {
@@ -592,7 +597,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
           if(fresh?.url!==tab.url||!textSame||(nyRequiredDetail&&fresh.document_id!==meta.document_id)||!c||!v||v.pageX||v.pageY)return null;
           const shape=JSON.stringify([c.width,c.height,v.clientWidth,v.clientHeight]);
           stable=(gaRequiredDetail?fresh.source_ga_primary_fits===true:nyRequiredDetail?fresh.source_page_fits===true:c.width<=v.clientWidth&&(nmRequiredDetail?fresh.source_page_fits===true&&fresh.source_record_bottom===height:c.height<=v.clientHeight))&&shape===previous?stable+1:0;previous=shape;
-          if(msRequiredDetail&&stable>=1&&!cancelled&&alive()
+          if(msRequiredDetail&&!msHasDocument&&stable>=1&&!cancelled&&alive()
               &&Date.now()<started+captureBudgetMs&&started+captureBudgetMs-Date.now()<4000) {
             const extended=Math.min(16000-(observed.prior_capture_ms||0),job.activeExpiresAt-started-1000);
             if(extended>captureBudgetMs) {
@@ -636,6 +641,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         &&meta.capture_views.every(view=>['top','expiration','financial'].includes(view));
       if(ilDetail&&!ilModal)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:334:28:return",(null));
       if(state==='TN'&&query.operation==='detail'&&!tnModal)return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:335:60:return",(null));
+      const msModal=msBoundDialog && (meta.source_ms_views.length===2 || !meta.source_ms_summary_visible);
       const modal=tnModal||nvModal||ilModal||msModal;
 
       const viewport=layout.cssLayoutViewport;
@@ -661,7 +667,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
       }
 
       for(const view of captureViews) {
-        let msViewBinding=null;
+        let msViewBinding=null,nvViewBinding=null;
 
         if(cancelled||!alive())return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:349:31:return",(null));
 
@@ -704,6 +710,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             observed.view_stable=stable;
             if(stable<2||cancelled||!alive())return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:373:45:return",(null));
             if(msModal)msViewBinding=previous;
+            if(boundNvDetail)nvViewBinding=previous;
           } else {changed=await wfAwait(job,"state-snapshot-worker.js:captureStateSnapshot:374:26:await",()=>(sampled('view:'+view,()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-view',query,command_id:commandId,view,...(boundNvDetail?{source_binding:meta.source_binding}:{})},{frameId:0}))));}
 
           if(state==='IL'&&changed?.il_view_observation) {
@@ -761,7 +768,19 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
           const fresh=await sampled('NV-fresh-metadata',()=>chrome.tabs.sendMessage(tabId,{action:'registry-snapshot-metadata',query},{frameId:0}));
           if(cancelled||!alive()||!fresh||fresh.url!==meta.url||fresh.document_id!==meta.document_id
               ||fresh.source_binding!==meta.source_binding||fresh.source_loading_visible!==false
-              ||fresh.source_detail!==true||JSON.stringify(fresh.source_view_shape)!==JSON.stringify(meta.source_view_shape))return null;
+              ||fresh.source_detail!==true)return null;
+          if(nvReadySingleView) {
+            if(JSON.stringify(fresh.source_view_shape)!==JSON.stringify(meta.source_view_shape))return null;
+          } else {
+            // Scrolling the owned panel legitimately changes whole-record geometry.
+            // Recheck the exact group settled for this image, at its current scroll.
+            const held=await sampled('NV-fresh-current-view',()=>chrome.tabs.sendMessage(tabId,{
+              action:'registry-snapshot-view',query,command_id:commandId,view,
+              worker_step:'observe',source_binding:meta.source_binding},{frameId:0}));
+            if(cancelled||!alive()||!nvViewBinding||held?.view_ready!==true
+                ||held.view_protocol!=='worker-settle-1'
+                ||JSON.stringify([held.view_shape,held.view_text])!==nvViewBinding)return null;
+          }
           // Recover on the same verified viewport within the existing deadline.
           // The direct screenshot remains available when a new frame is veiled.
           let freshFrame;

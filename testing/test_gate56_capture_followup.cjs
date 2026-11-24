@@ -63,3 +63,22 @@ test('Nevada: fresh original frame after a veil succeeds even when the direct sc
   const v=await f.run();assert.equal(v?.image,'AQ==');assert.equal(n,2);
  }
 });
+test('Nevada rechecks the settled visible group when a stale frame follows a scroll',async()=>{
+  for(const org of organizations)for(const moved of [false,true]){
+    const f=fixture('NV',org);f.meta.source_fields_visible=false;
+    const settled=[0,1000,1200,1000,40,60,15,130];let painted=0,observed=0;
+    f.ctx.chrome.tabs.sendMessage=async(_,m)=>{
+      if(m.action==='registry-snapshot-view'&&m.view!=='restore'){
+        observed++;
+        const shape=moved&&painted?settled.map(a=>a+15):settled;
+        return {ok:true,view_protocol:'worker-settle-1',view_ready:true,view_text:[org.name],view_shape:shape};
+      }
+      if(m.view==='restore')return {ok:true,snapshot_metadata:f.meta};
+      return painted?{...f.meta,source_view_shape:settled}:f.meta;
+    };
+    f.ctx.CCOwnedSourcePixels.capture=async()=>({data:++painted===1?'AA==':'AQ=='});
+    const image=await f.run();
+    assert.equal(image?.image||null,moved?null:'AQ==',org.name);
+    assert.ok(observed>=4);
+  }
+});

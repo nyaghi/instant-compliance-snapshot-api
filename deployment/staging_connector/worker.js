@@ -1,4 +1,4 @@
-importScripts("protocol.js", "workflow-observation.js", "recovery.js", "registry-worker.js", "owned-source-pixels.js", "state-snapshot-worker.js", "dc-boss-source.js", "source-rail.js", "desktop-source-worker.js");
+importScripts("protocol.js", "workflow-observation.js", "recovery.js", "registry-worker.js", "owned-source-pixels.js", "ms-original-document.js", "state-snapshot-worker.js", "dc-boss-source.js", "source-rail.js", "desktop-source-worker.js");
 const P = CCNYProtocol;
 // Public diagnostic correlation only; never a credential or authorization key.
 const nvHandoffWorkerTag=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
@@ -261,7 +261,7 @@ async function removeOwned(tabId, persist = true) {
       || (url.origin === "https://ago.igovsolution.net" && url.pathname === "/online/Lookups/Business.aspx")
       || (url.origin === "https://tncab.tnsos.gov" && url.pathname === "/portal/registered-charities-search")
       || (url.origin === "https://secure.nmdoj.gov" && /^\/CharitySearch\/(?:CharityDetail\.aspx|GenericError\.htm)?$/i.test(url.pathname))
-      || (url.origin === "https://charities.sos.ms.gov" && url.pathname === "/online/portal/ch/page/charities-search/Portal.aspx")
+      || (url.origin === "https://charities.sos.ms.gov" && (url.pathname === "/online/portal/ch/page/charities-search/Portal.aspx" || CCMsOriginalDocument.validUrl(url.href)))
       || (url.origin === "https://www.sosnc.gov" && /^\/online_services\/search\/(?:by_title\/search_charities|Charities_Results|charities_(?:profile|filings)\/\d+)$/.test(url.pathname)));
     if (trialRegistry || (["https://charitable.illinoisattorneygeneral.gov", "https://verify.sos.ga.gov"].includes(url.origin)) || url.origin === P.NY && /^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) await chrome.tabs.remove(tabId);
     owned.delete(tabId);
@@ -940,6 +940,10 @@ async function performSearch(job, query, id) {
     // A failed profile capture is not retried against the later filings page.
     const snapshotContext={tab:job.tab,generation:job.generation};
     let snapshot=useNc?preparedNc.snapshot:await wfAwait(job,"worker.js:performSearch:674:45:await",()=>(captureStateSnapshot(job,query,id,job.registryState==='AL'&&alCompletedSource&&Number.isInteger(response.evidence.total)&&response.evidence.total>0&&Array.isArray(response.evidence.rows)&&response.evidence.rows.length===response.evidence.total?{kind:'al-completed-record',command_id:id,query}:preparedNvMetadata)));
+    if(!snapshot&&P.TRIAL_ORIGIN&&job.registryState==='MS'&&query.operation==='detail'
+        &&!job.snapshotCleanupBusy&&Number.isFinite(job.msSnapshotSpentMs)) {
+      snapshot=await CCMsOriginalDocument.capture(job,query,id,snapshotContext);
+    }
     const retryNvGeometry=job.nvGeometryRetryCommand===id;
     delete job.nvGeometryRetryCommand;
     if(!snapshot&&retryNvGeometry&&preparedNvMetadata
