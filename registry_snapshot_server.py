@@ -10638,18 +10638,21 @@ def final_four_connector_request(payload, origin):
             from deployment.search_history import safe_complete_receipt
             record["completed"].append({"query": pending["query"], "evidence": evidence, **safe_complete_receipt(record,pending,history_evidence,time.time())})
             record["pending"] = None
-            if record["state"] == "NV" and record.get("nv_loading_frames"):
-                from deployment.nv_snapshot_quality import prepare as prepare_nevada_image
-                recovery = prepare_nevada_image(sys.modules[__name__], record)
-                if recovery:
-                    return 200, recovery
     names = {canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
     context = REVIEWED_NAME_CONTEXT.set(names)
     identity_context = USER_IDENTITY_CONTEXT.set(record.get("identity_context", {}))
     from deployment.state_snapshots import REFERENCES
     snapshot_context = REFERENCES.set(record.get('source_snapshots', []))
     try:
-        response = final_four_connector_advance(record)
+        if action == "nv_capture_finished" and "nv_settled_result" in record:
+            response = {"phase": "complete", "result": record.pop("nv_settled_result")}
+        else:
+            response = final_four_connector_advance(record)
+        if record["state"] == "NV" and response.get("phase") == "complete":
+            from deployment.nv_snapshot_quality import recover_selected
+            recovery = recover_selected(sys.modules[__name__], record, response["result"])
+            if recovery:
+                return 200, recovery
     finally:
         REFERENCES.reset(snapshot_context)
         REVIEWED_NAME_CONTEXT.reset(context)

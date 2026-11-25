@@ -37,9 +37,9 @@ def is_loading_frame(source, *, check_detail_panel=False):
     return blue_pixels >= max(8, width * height * .00005)
 
 
-def prepare(master, record):
+def prepare(master, record, *, selected=None, result=None):
     """Take a single second look while the connector still owns the selected detail."""
-    item = record["completed"][-1]
+    item = selected or record["completed"][-1]
     query = item["query"]
     identifier = query.get("identifier")
     if (query.get("operation") != "detail" or record.get("nv_image_recovery_attempted")
@@ -51,6 +51,8 @@ def prepare(master, record):
     query_id = secrets.token_urlsafe(18)
     signed = {**record, "nv_pixel_receipt": {"query_id": query_id, "identifier": identifier},
               "nv_image_recovery_attempted": True}
+    if result is not None:
+        signed["nv_settled_result"] = result
     try:
         token = master.ny_connector_pack(signed)
     except ValueError:
@@ -59,15 +61,40 @@ def prepare(master, record):
     if remaining < 10:
         return None
     return {"phase": "search", "query": query, "query_id": query_id,
-            "nv_followup_ms": 5500, "lookup_remaining_ms": int(remaining*1000),
+            "nv_followup_ms": min(14000, int(remaining * 1000)) if result is not None else 5500, "lookup_remaining_ms": int(remaining*1000),
             "expires_in": int(remaining), "check_token": token}
+
+
+def recover_selected(master, record, result):
+    """Retry the original image only after every search and selection is settled."""
+    if record.get("nv_image_recovery_attempted") or not record.get("nv_loading_frames"):
+        return None
+    identifier = result.get("matched_registry_identifier")
+    if not identifier and record.get("_nv_scope_detail"):
+        identifier = record["_nv_scope_detail"][0]
+    if not identifier:
+        candidates = (result.get("identity_review") or {}).get("candidates") or []
+        if len(candidates) == 1:
+            identifier = candidates[0].get("identifier")
+    if not identifier or identifier not in record["nv_loading_frames"]:
+        return None
+    item = next((entry for entry in reversed(record["completed"])
+                 if entry["query"].get("operation") == "detail"
+                 and entry["query"].get("identifier") == identifier), None)
+    if not item:
+        return None
+    return prepare(master, record, selected=item, result=result)
 
 
 def finish(master, record, payload, action):
     from deployment.state_snapshots import connector_archive
 
     receipt = record["nv_pixel_receipt"]
-    item = record["completed"][-1]
+    item = next((entry for entry in reversed(record["completed"])
+                 if entry["query"].get("operation") == "detail"
+                 and entry["query"].get("identifier") == receipt["identifier"]), None)
+    if item is None:
+        return False
     if (payload.get("query_id") != receipt["query_id"]
             or item["query"].get("identifier") != receipt["identifier"]):
         return False
