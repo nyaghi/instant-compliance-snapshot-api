@@ -1467,6 +1467,9 @@
     // request, query rewrite or timer that outlives the worker's deadline.
     button.click();return {ok:true,phase:'submitted'};
   }
+  function ncChangedCard(field) {
+    return Object.assign(new Error('REGISTRY_NC_CARD_CHANGED'), {ncCardField:field});
+  }
   async function ncRows(query,budgetMs=45000) {
     const deadline=Date.now()+Math.max(1,Math.min(45000,budgetMs));
     if(location.pathname!=='/online_services/search/Charities_Results')throw new Error('REGISTRY_NC_RESULTS_CHANGED');
@@ -1494,7 +1497,7 @@
     for(const button of buttons) {
       if(Date.now()>=deadline)throw new Error('REGISTRY_NC_RESPONSE_TIMEOUT');
       const panel=document.getElementById(button.getAttribute('aria-controls'));
-      if(!panel)throw new Error('REGISTRY_NC_CARD_CHANGED');
+      if(!panel)throw ncChangedCard('panel');
       if(button.getAttribute('aria-expanded')!=='true')button.click();
       await wfcAwait("content:ncRows:1248:6",()=>(wait(()=>visible(panel)&&panel,Math.max(1,Math.min(3000,deadline-Date.now())))));
       const fields=ncLabeled(panel,['CSL Type','Status','License','Expiration Date','Extension End Date']);
@@ -1507,7 +1510,7 @@
         const key=text(label).replace(/:$/,'').trim();
         if(!['CSL Legal Name','CSL DBA Name'].includes(key))continue;
         const value=text(label.parentElement).slice(text(label).length).trim();
-        if(!value||value.length>500)throw new Error('REGISTRY_NC_CARD_CHANGED');
+        if(!value||value.length>500)throw ncChangedCard('name-value');
         (key==='CSL Legal Name'?legal:other).push(value);
       }
       const headerText=text(button.querySelector('.searchHeader'));
@@ -1522,17 +1525,19 @@
       const unsupportedInactive=!fields.License&&fields['CSL Type']==='In-Process'&&fields.Status==='Expired Inactive';
       const numberless=pending||unsupportedDenied;
       if((unsupportedDenied||unsupportedInactive)&&(fields['Expiration Date']||fields['Extension End Date']))
-        throw new Error('REGISTRY_NC_CARD_CHANGED');
+        throw ncChangedCard('numberless-dates');
       const header=headerText.match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
       const displayName=numberless?headerText:header?.[1].trim();
       const names=[...new Set([...legal,...other])];
-      if(!legal.length||names.length>32||(!numberless&&(!header||header[2]!==fields.License))||!names.includes(displayName))
-        throw new Error('REGISTRY_NC_CARD_CHANGED');
+      if(!legal.length||names.length>32)throw ncChangedCard('name-count');
+      if(!numberless&&(!header||header[2]!==fields.License))throw ncChangedCard('license-header');
+      if(!names.includes(displayName))throw ncChangedCard('display-name');
       fields['CSL Legal Name']=legal[0];fields.display_name=displayName;fields.aliases=names.filter(n=>n!==fields.display_name);
       const links=[...panel.querySelectorAll('a[href]')].filter(a=>/^\/online_services\/search\/charities_profile\/\d+$/.test(a.getAttribute('href')));
-      if(links.length!==1||!fields['CSL Legal Name']||!fields['CSL Type']||!fields.Status||(!numberless&&!fields.License))throw new Error('REGISTRY_NC_CARD_CHANGED');
+      if(links.length!==1)throw ncChangedCard('profile-link');
+      if(!fields['CSL Legal Name']||!fields['CSL Type']||!fields.Status||(!numberless&&!fields.License))throw ncChangedCard('required-fields');
       const identity=numberless?links[0].getAttribute('href'):fields.License;
-      if(seen.has(identity))throw new Error('REGISTRY_NC_CARD_CHANGED');
+      if(seen.has(identity))throw ncChangedCard('duplicate-identifier');
       if(numberless)fields.License='';
       if(!Object.hasOwn(fields,'Expiration Date')) {
         // NC retains an EX/SL number on some explicitly In-Process cards.
@@ -3010,6 +3015,7 @@ try {
         ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState,
           ...(error.nvReturnDiagnostic ? {return_to_results:error.nvReturnDiagnostic} : {})}} : {}),
         ...(MS ? {ms_diagnostic:{...msLastDiagnostic,source_error:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'}} : {}),
+        ...(NC && code==='REGISTRY_NC_CARD_CHANGED' && error.ncCardField ? {nc_card_field:error.ncCardField} : {}),
         ...(TN ? {tn_diagnostics:tnLastDiagnostics} : {}),
         ...(TN&&code==='REGISTRY_TN_RATE_LIMITED'&&Number.isSafeInteger(error.retryAfterMs)&&error.retryAfterMs>=0?{tn_retry_after_ms:error.retryAfterMs}:{}),
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});

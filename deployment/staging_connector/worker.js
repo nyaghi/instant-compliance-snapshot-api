@@ -900,9 +900,12 @@ async function performSearch(job, query, id) {
   const alRepeatedEmpty=alEmptySource&&(job.alEmptySnapshotSaved===true||job.alFinalEmptyProtocol===true);
   const msRows=response.evidence?.rows;
   const msDuplicateExemptGrid=job.registryState==='MS'&&query.operation==='search'
-    &&response.ok===true&&response.evidence?.complete===true&&response.evidence.total===2
-    &&Array.isArray(msRows)&&msRows.length===2&&msRows[0].name===msRows[1].name
-    &&msRows[0].identifier===msRows[1].identifier&&msRows[0].raw_status===msRows[1].raw_status
+    &&response.ok===true&&response.evidence?.complete===true
+    &&Array.isArray(msRows)&&msRows.length===response.evidence.total
+    &&typeof query.name==='string'&&msRows.every(row=>row&&typeof row.name==='string')
+    &&((msRows.length===1&&msRows[0].name.trim().toLowerCase()===query.name.trim().toLowerCase())
+       ||(msRows.length===2&&msRows[0].name===msRows[1].name
+          &&msRows[0].identifier===msRows[1].identifier&&msRows[0].raw_status===msRows[1].raw_status))
     &&/^(?:Current\s*[-\u2013\u2014]\s*)?Exempt(?:ed)?$/i.test(msRows[0].raw_status);
   // A complete one-row TN search with a credential will get its own detail
   // command. Do not attach a debugger to the intermediate grid as well.

@@ -89,13 +89,14 @@ def completed_update(result,payload):
     standing=master.licensed_charity_status(observed['License Status'],expiry)
     if 'exempt'in observed['License Activity'].lower()and standing in {'Current','Upcoming Filing'}:standing='Exempt'
     if standing not in {'Current','Upcoming Filing','Delinquent','Exempt'}:raise ValueError('DC period interpretation incomplete')
-    comments=(f"DC BOSS lists {observed['Licensee']} ({request['identifier']}) as {observed['License Status']}. "
+    source_name=observed['Trade Name'] if observed['Licensee']=='N/A' else observed['Licensee']
+    comments=(f"DC BOSS lists {source_name} ({request['identifier']}) as {observed['License Status']}. "
         f"The selected license expires {expiry.isoformat()}. CharityClarity reports {standing}. "
         f"The exact license number and the previously corroborated organization identity were retained. "
         f"BOSS detail captured during this run supersedes the public extract's expiration of {request['expiration']}. "
         f"License activity: {observed['License Activity']}. Registry match: {result['matched_registry_name']} (ID: {request['identifier']}).")
     proof={'schema':1,'ein':request['ein'],'identifier':request['identifier'],'selected_name':request['name'],
-        'source_name':observed['Licensee'],'prior_status':request['prior_status'],'prior_expiration':request['expiration'],
+        'source_name':source_name,'prior_status':request['prior_status'],'prior_expiration':request['expiration'],
         'prior_renewal_date':request['prior_renewal_date'],'prior_comments_sha256':request['prior_comments_sha256'],
         'issue_date':issue.isoformat(),'expiration':expiry.isoformat(),'status':standing,
         'captured_at':payload['captured_at'],'source_url':payload['url']}

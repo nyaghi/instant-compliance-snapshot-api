@@ -60,17 +60,23 @@ def describe(result):
 def fields(url,text,d):
  if url not in DETAILS or not isinstance(text,str) or not 1<=len(text)<=20000:return None
  if re.search(r'user validation required|recaptcha timeout|verify you are human|access denied',text,re.I):return None
- if text.count('License Information')!=1 or text.count('Licensee Information')!=1:return None
- lines=[v.strip() for v in text.split('License Information',1)[1].split('Licensee Information',1)[0].splitlines() if v.strip()]
+ end='Licensee Information' if 'Licensee Information' in text else 'Registered/Resident Agent Information'
+ if text.count('License Information')!=1 or text.count(end)!=1:return None
+ lines=[v.strip() for v in text.split('License Information',1)[1].split(end,1)[0].splitlines() if v.strip()]
  if any(lines.count(label)!=1 for label in LABELS):return None
  positions=[lines.index(v) for v in LABELS]
  if positions!=sorted(positions):return None
  f={label:' '.join(lines[positions[i]+1:positions[i+1] if i+1<len(positions) else len(lines)]) for i,label in enumerate(LABELS)}
  undated=d.get('expiration')=='' and str(d.get('raw_status','')).casefold() in {'cancelled','canceled','closed','withdrawn','revoked','expired'}
- if any(not v or v=='N/A' for k,v in f.items() if k not in ({'Trade Name','Premise Address','Expiration Date'} if undated else {'Trade Name','Premise Address'})):return None
+ trade_only=(end=='Registered/Resident Agent Information' and f['Licensee']=='N/A'
+             and not d.get('review_candidate') and not d.get('corporate_continuity_schema')
+             and norm(f['Trade Name'])==norm(d['name']) and f['Trade Name']!='N/A')
+ if end!='Licensee Information' and not trade_only:return None
+ if any(not v or v=='N/A' for k,v in f.items() if not (k=='Licensee' and trade_only) and k not in ({'Trade Name','Premise Address','Expiration Date'} if undated else {'Trade Name','Premise Address'})):return None
  from deployment.dc_period_reconciliation import name_matches,period_allowed
- if f['License Number']!=d['identifier'] or not name_matches(f['Licensee'],d['name'],d) or f['License Activity'].lower() not in {'charitable solicitation','charitable exempt'} or f['License Status']!=d['raw_status']:return None
+ if f['License Number']!=d['identifier'] or not (trade_only or name_matches(f['Licensee'],d['name'],d)) or f['License Activity'].lower() not in {'charitable solicitation','charitable exempt'} or f['License Status']!=d['raw_status']:return None
  try:
+  if trade_only and datetime.strptime(f['Expiration Date'],'%m/%d/%Y').date().isoformat()!=d['expiration']:return None
   if not period_allowed(f,d):return None
   datetime.strptime(f['Issue Date'],'%m/%d/%Y')
  except ValueError:return None

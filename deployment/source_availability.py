@@ -102,6 +102,13 @@ def classify(data):
 def apply(data):
     fact = classify(data)
     if fact is None:
+        if (isinstance(data, dict) and data.get("state") == "WA"
+                and data.get("status") == "Site Not Reachable" and data.get("success") is False
+                and data.get("reason_code") == "RUNNER_TIMEOUT" and not data.get("source_availability")
+                and not data.get("matched_registry_identifier") and not data.get("matched_registry_name")
+                and not data.get("identity_review") and not data.get("confirmation_required")):
+            data.update(status="Unable to Confirm",
+                        comments="The Washington check reached its time limit before a registration result was confirmed. Retry Washington.")
         return data
     prior = (data.get('source_availability') or {}).get('prior_status', data['status'])
     data['source_availability'] = {'schema': 1, **fact, 'prior_status': prior}

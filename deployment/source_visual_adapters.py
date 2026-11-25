@@ -797,6 +797,14 @@ def sc_visual_search_values(master, result, run, identifier):
 
 def capture_selected_sc_source(master,result,run,deadline):
  """One visual selected-name query and the actual bound SC public-ID link."""
+ if result.get('reason_code')=='SC_EXEMPT_OFFICE_IDENTITY_REVIEW':
+  candidates=(result.get('_worker_identity_review') or {}).get('records',[])
+  if len(candidates)==1 and candidates[0].get('sc_exempt_office') is True:
+   candidate=candidates[0]
+   # Scope the capture to the candidate. The caller's result stays unsigned
+   # until the existing identity workflow records the user's choice.
+   result={**result,'success':True,'status':candidate['status'],
+           'matched_registry_name':candidate['name'],'matched_registry_identifier':candidate['identifier']}
  if (workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:311:5:get',result.get,locals(), 'state')!='SC' or re.sub(r'\D','',str(workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:311:54:get',result.get,locals(), 'ein','')))!=run.ein
      or workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:312:8:get',result.get,locals(), 'success') is not True or workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:312:45:get',result.get,locals(), 'status') in {'Not Registered','Unable to Confirm','Site Not Reachable'}
      or not workflow_call('deployment/source_visual_adapters.py:capture_selected_sc_source:313:12:get',result.get,locals(), 'matched_registry_name') or getattr(run,'selected_visual_attempted',False)):return trace_return('deployment/source_visual_adapters.py:capture_selected_sc_source:313:99:return',None)
@@ -1694,8 +1702,9 @@ def capture_owned_me_page(run,result,page,context,deadline):
   text=workflow_call('deployment/source_visual_adapters.py:capture_owned_me_page:977:7:inner_text',page.inner_text,locals(), 'body',timeout=max(1,int(min(1,stop-time.monotonic()-4)*1000)))
   norm=lambda value:re.sub(r'[^a-z0-9]','',value.lower())
   from deployment.state_snapshots import me_detail_name_bound
-  if ((norm(result['matched_registry_name']) not in norm(text) and not me_detail_name_bound(result['matched_registry_name'],text,result['matched_registry_identifier']))
-      or not re.search(r'License\s+Number:\s*'+re.escape(result['matched_registry_identifier'])+r'(?!\w)',text,re.I)
+  bound=me_detail_name_bound(result['matched_registry_name'],text,result['matched_registry_identifier'])
+  if ((not bound and (norm(result['matched_registry_name']) not in norm(text)
+      or not re.search(r'License\s+Number:\s*'+re.escape(result['matched_registry_identifier'])+r'(?!\w)',text,re.I)))
       or re.search('verify you are human|user validation required|access denied|just a moment',text,re.I)):
    fact['outcome']='record_binding_failed';return trace_return('deployment/source_visual_adapters.py:capture_owned_me_page:982:43:return',None)
   if time.monotonic()+1>=stop:fact['outcome']='capture_reserve';return trace_return('deployment/source_visual_adapters.py:capture_owned_me_page:983:64:return',None)

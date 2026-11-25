@@ -2068,7 +2068,12 @@ def plain_registry_query(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[<>]", " ", value)).strip()
 
 
-def normalize_reviewed_names(value) -> list[str]:
+def is_attachment_instruction(value: str) -> bool:
+    return bool(re.fullmatch(r"see\s+(?:the\s+)?(?:attachment|attached)\.?", value.strip(), re.I))
+
+
+def normalize_reviewed_names(value, ein="") -> list[str]:
+    from deployment.corroborated_identity import separate_owner
     if not isinstance(value, list) or len(value) > IDENTITY_MAX_NAMES:
         raise ValueError(f"Provide at most {IDENTITY_MAX_NAMES} alternate names.")
     result, seen = [], set()
@@ -2076,6 +2081,8 @@ def normalize_reviewed_names(value) -> list[str]:
         if not isinstance(item, str) or len(item) > 300 or re.search(r"[\x00-\x1f]", item):
             raise ValueError("Each alternate name must be plain text of at most 300 characters.")
         name = re.sub(r"\s+", " ", item).strip()
+        if is_attachment_instruction(name) or separate_owner(ein, name):
+            continue
         key = reviewed_retrieval_key(name)
         if key and key not in seen:
             result.append(name); seen.add(key)
@@ -3317,7 +3324,7 @@ def sales_names_from_evidence(ein: str, evidence: dict) -> list[str]:
             if item.get("verified") is True and not item.get("identity_conflict") and item.get("evidence"):
                 names.append(item["name"])
     # Keep every verified distinct spelling up to the normal reviewed-name cap.
-    return normalize_reviewed_names(list(dict.fromkeys(names))[:IDENTITY_MAX_NAMES])
+    return normalize_reviewed_names(list(dict.fromkeys(names))[:IDENTITY_MAX_NAMES], ein)
 
 
 
@@ -4562,6 +4569,8 @@ def discovered_organization_addresses(ein: str, sources: list[dict]) -> list[dic
 
 
 def discovery_non_name(value: str) -> bool:
+    if is_attachment_instruction(value):
+        return True
     words = re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).strip()
     return bool(re.fullmatch(
         r"(?:(?:a|an|the) )?(?:inc|incorporated|corp|corporation|llc|ltd|limited)"
@@ -4669,6 +4678,15 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
         if proof := nj_conflicts.get(identity_name_key(item['name'])):
             item['verified'] = False
             item['identity_conflict'] = proof
+    from deployment.corroborated_identity import separate_owner
+    for item in names:
+        owner = separate_owner(ein, item["name"])
+        if owner:
+            item["verified"] = False
+            item["identity_conflict"] = {"source": "IRS", "candidate_ein": owner[0],
+                "candidate_name": item["name"], "reason": "Separate legal entity",
+                "explanation": "IRS filing records identify a separate filer at this name.",
+                "source_url": owner[1]}
     selected_names = prioritized_discovery_names(organization_name, names)
     answer = {"organization_name": organization_name.strip(), "ein": format_ein(ein),
             "names": selected_names, "addresses": discovered_organization_addresses(ein, results),
@@ -6980,6 +6998,10 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         names = list(dict.fromkeys(required)) if state == "IL" else required + generated
         if state == "GA":
             from deployment.gate28_repairs import ga_article_queries
+            # Georgia's own name alone opens a registry-wide prefix search.
+            # Preserve the literal name and all reviewed aliases in required.
+            if trial_identity() and required:
+                generated = [term for term in generated if term.strip().casefold() != "georgia"]
             names = ga_article_queries(sys.modules[__name__], required, generated)
             if trial_identity() and required:
                 from deployment.gate41_repairs import ga_possessive_variant, replace_low_value_slot
@@ -8258,6 +8280,18 @@ def nv_reviewed_compound_names(value, name, ein):
     return list(dict.fromkeys(targets[k] for k in split(whole, [])))
 
 
+def tn_national_headquarters_name(primary, row):
+    """A headquarters qualifier permits identity review for the national filer."""
+    if row.get("ein") or not re.fullmatch(r"CO\d+", row.get("identifier", "")):
+        return False
+    words = complete_name_identity_key(primary).removeprefix("the ").split()
+    if words.count("national") != 1 or len(distinctive_match_tokens(primary)) < 2:
+        return False
+    words.remove("national")
+    displayed = complete_name_identity_key(row["name"]).removeprefix("the ").split()
+    return displayed == [*words, "national", "headquarters"]
+
+
 def final_four_search_candidate_scores(name, ein, state, row):
     """Shortlist source identities without changing master acceptance rules."""
     names = [row["name"], *row.get("aliases", [])]
@@ -8292,7 +8326,9 @@ def final_four_search_candidate_scores(name, ein, state, row):
         candidates.append({"score": 55, "decision": "possible", "reason": "REVIEW_NV_POSSIBLE_DOMICILE"})
     if state == "TN" and not row.get("ein") and candidates and all(c['decision']=='rejected' for c in candidates):
         from deployment.gates2930_repairs import tn_historical_prefix
-        if tn_historical_prefix([name, *known_names_for_ein(ein)], row['name']):
+        if tn_national_headquarters_name(name, row):
+            candidates.append({'score':55,'decision':'possible','reason':'TN_NATIONAL_HEADQUARTERS'})
+        elif tn_historical_prefix([name, *known_names_for_ein(ein)], row['name']):
             candidates.append({'score':55,'decision':'possible','reason':'REVIEW_TN_HISTORICAL_NAME'})
     if (state == "AL" and not row.get("ein") and candidates
             and all(c["decision"] == "rejected" for c in candidates)
@@ -8327,7 +8363,8 @@ def prioritized_registry_candidates(name, ein, state, rows):
         return max((({"accepted": 2, "possible": 1}.get(score["decision"], 0),
                      exact_ein,
                      normalized_match_name(row["name"]) == normalized_match_name(name),
-                     score["score"]) for score in scores), default=(0, False, False, 0))
+                     state == "TN" and score["decision"] == "possible" and tn_national_headquarters_name(name, row),
+                     score["score"]) for score in scores), default=(0, False, False, False, 0))
     return sorted(rows, key=priority, reverse=True)
 
 
@@ -9257,12 +9294,18 @@ def ms_duplicate_exempt_detail_fallback(record, payload):
         return None
     search = record["completed"][-1]
     evidence = search["evidence"]
-    if (search["query"].get("operation") != "search" or evidence["total"] != 2
-            or len(evidence["rows"]) != 2):
+    rows=evidence["rows"]
+    if (search["query"].get("operation") != "search" or evidence["total"] not in (1,2)
+            or len(rows)!=evidence["total"]):
         return None
-    row, duplicate = evidence["rows"]
+    row=rows[0]
     name, identifier = row["name"], row["identifier"]
-    if (row != duplicate or identifier != query.get("identifier")
+    single=len(rows)==1
+    if single and (evidence.get("complete") is not True or not re.fullmatch(r"\d+",identifier)
+            or name.strip().casefold()!=record["organization_name"].strip().casefold()
+            or name.strip().casefold()!=search["query"].get("name","").strip().casefold()):
+        return None
+    if (row != rows[-1] or identifier != query.get("identifier")
             or normalized_match_name(name) != normalized_match_name(record["organization_name"])
             or not re.fullmatch(r"(?:Current\s*[-\u2013\u2014]\s*)?Exempt(?:ed)?",
                                 row["raw_status"].strip(), re.I)):
@@ -9273,7 +9316,7 @@ def ms_duplicate_exempt_detail_fallback(record, payload):
     result.matched_registry_name = name
     result.matched_registry_identifier = identifier
     result.raw_status_text = row["raw_status"]
-    result.status_reason = "MS_DUPLICATE_EXEMPT_DETAIL_UNAVAILABLE"
+    result.status_reason = "MS_EXACT_EXEMPT_DETAIL_UNAVAILABLE" if single else "MS_DUPLICATE_EXEMPT_DETAIL_UNAVAILABLE"
     result.source_note = "Mississippi lists this filing as exempt. The detail page is not available."
     started = time.perf_counter() - max(0, time.time() - record["issued"])
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "MS", started)
@@ -10312,7 +10355,7 @@ def final_four_connector_request(payload, origin):
                 or ein.replace("-", "") == "000000000"):
             return 400, {"error": "Enter a supported state, mode, organization name and nine-digit EIN."}
         try:
-            alternate_names = normalize_reviewed_names([] if mode == "sales" else payload.get("alternate_names", []))
+            alternate_names = normalize_reviewed_names([] if mode == "sales" else payload.get("alternate_names", []), ein)
         except ValueError as exc:
             return 400, {"error": str(exc)}
         from deployment.lab_identity import trial_sales_cutoff
@@ -10345,7 +10388,7 @@ def final_four_connector_request(payload, origin):
                             if prior["decisions"].get(row["id"], {}).get("decision") == "reject"]
                 if not rejected:
                     raise ValueError("No rejected identity to retain")
-                record["alternate_names"] = normalize_reviewed_names(base.get("reviewed_alternate_names", []))
+                record["alternate_names"] = normalize_reviewed_names(base.get("reviewed_alternate_names", []), ein)
                 record["identity_context"] = {"state": state, "ein": canonical_ein_digits(ein),
                     "rejected": sorted(set(prior.get("rejected", []) + rejected)), "history": prior["history"]}
                 record["identity_retry_review"] = prior
@@ -11286,6 +11329,15 @@ def ga_possessive_candidate(org, displayed):
 
 def licensed_charity_identity(org, row, state, deadline):
     """Shared master name/EIN and cross-state office checks; never address-only."""
+    if state in {"TN", "DC"}:
+        from deployment.corroborated_identity import dc_separate_owner, separate_owner
+        owner = separate_owner(org.ein, row["name"]) if state == "TN" else dc_separate_owner(org.ein, row, complete_name_identity_key)
+        if owner:
+            row["address_evidence"] = {"decision": "different_ein", "source": "IRS",
+                "ein": canonical_ein_digits(owner[0]), "registry_name": row["name"],
+                "source_url": owner[1], "basis": "The federal filing identifies the separate legal entity."}
+            row["match"] = {"decision": "rejected", "score": 0, "reason": "DIFFERENT_EIN_CORROBORATED"}
+            return "rejected"
     names = [row["name"], *row.get("aliases", [])]
     if state == "NC" and trial_identity():
         names += nc_apostrophe_comparison_names(names, org.organization_name, org.ein)
@@ -11691,6 +11743,15 @@ def select_licensed_charity(org, rows, state, deadline):
         if time.monotonic() >= deadline:
             raise TimeoutError("Registry candidate evaluation did not finish within this lookup's budget")
         outcome = licensed_charity_identity(org, row, state, deadline)
+        if (state == "TN" and outcome == "rejected"
+                and row.get("match", {}).get("reason") not in {
+                    "USER_REJECTED_IDENTITY", "DIFFERENT_EIN_CORROBORATED", "REJECT_DIFFERENT_EIN"}
+                and (row.get("address_evidence") or {}).get("decision") not in {"different_ein", "conflict"}
+                and tn_national_headquarters_name(org.organization_name, row)):
+            outcome = "possible"
+            row["match"] = {"decision": outcome, "score": 55, "reason": "TN_NATIONAL_HEADQUARTERS"}
+            row["address_evidence"] = {"decision": "unavailable", "basis":
+                "Tennessee lists the national headquarters under a reordered name and shows no EIN. Confirm this identity to apply the record."}
         if (state == "AL" and row.get("_al_multiple_addresses") is True
                 and outcome == "accepted" and row.get("_user_identity_decision") != "accept"):
             # An agreeing credential core does not identify a main office.
@@ -13625,6 +13686,17 @@ def sc_reviewed_parenthetical_alias(original: str, candidate: str, ein: str) -> 
                 and is_reviewed_alias(ein, suffix[2]))
 
 
+def sc_exempt_office_review(original, registry_name, raw_status, detail):
+    """A state-exempt office may have no filed return. Offer a qualified name choice."""
+    if raw_status.casefold() != "exempt" or not re.search(
+            r"\bnot required to file annual financial reports\b", detail, re.I):
+        return False
+    target = complete_name_identity_key(original).removeprefix("the ").split()
+    label = complete_name_identity_key(registry_name).removeprefix("the ").split()
+    return (target.count("national") == 1 and len(distinctive_match_tokens(registry_name)) >= 2
+            and [word for word in target if word != "national"] == label)
+
+
 def sc_related_entity_requires_ein(original: str, candidate: str, ein: str = "") -> bool:
     markers = {"alumni", "auxiliary", "chapter", "affiliate"}
     # Retrieval reductions are not additional reviewed identities. Preserve full
@@ -13979,6 +14051,9 @@ def sc_official_detail_lookup(org) -> object | None:
                     if changed_heading or sc_related_entity_requires_ein(original_name, registry_name, org.ein):
                         filing_ein = sc_detail_filing_ein(detail_html, min(deadline, time.monotonic() + 10), fetch_bytes=fetch_filing_bytes)
                         if filing_ein != canonical_ein_digits(org.ein):
+                            if (trial_identity() and not changed_heading and not filing_ein
+                                    and sc_exempt_office_review(original_name, registry_name, raw_status, detail_text)):
+                                scope_review = True
                             if changed_heading and not filing_ein:
                                 identity_unconfirmed = True
                             unrelated_alias = sc_unrelated_alias_prefix(original_name, registry_name, org.ein)
@@ -14042,6 +14117,8 @@ def sc_official_detail_lookup(org) -> object | None:
                         scope_candidates[public_id] = dict(name=registry_name, identifier=public_id, ein="", location="",
                             url=url, raw_status=raw_status, status=interpreted, expiration=due_date, initial=None,
                             _identity_outcome="possible")
+                        if sc_exempt_office_review(original_name, registry_name, raw_status, detail_text):
+                            scope_candidates[public_id]["sc_exempt_office"] = True
                         continue
                     if re.search(r"\bexempt\b", raw_status or "", re.I):
                         result.source_note = (
@@ -14082,7 +14159,13 @@ def sc_official_detail_lookup(org) -> object | None:
                 break
             continue
     if scope_candidates:
-        return scope_identity_review_result(org, "SC", list(scope_candidates.values()), not lookup_incomplete, url)
+        result = scope_identity_review_result(org, "SC", list(scope_candidates.values()), not lookup_incomplete, url)
+        if len(scope_candidates) == 1 and getattr(result, "_cc_identity_review", None):
+            candidate = next(iter(scope_candidates.values()))
+            if candidate.get("sc_exempt_office"):
+                result.reason_code = "SC_EXEMPT_OFFICE_IDENTITY_REVIEW"
+                result.source_note += " South Carolina lists this office as Exempt and says it need not file annual financial reports. A filing EIN was unavailable."
+        return result
     if identity_unconfirmed:
         return checker.StateResult(original_name, org.ein, "SC", "Unable to Confirm", url,
             raw_status_text="Similar organization found; its filing EIN did not confirm the requested entity",
@@ -31367,7 +31450,7 @@ def ny_connector_request(payload, origin):
             record["recovery_protocol"] = "il-fresh-page-v1"
         if "alternate_names" in payload:
             try:
-                record["alternate_names"] = normalize_reviewed_names(payload["alternate_names"])
+                record["alternate_names"] = normalize_reviewed_names(payload["alternate_names"], ein)
             except ValueError as exc:
                 return 400, {"error": str(exc)}
         if trial_identity() and purpose == "registration" and payload.get("mode") == "sales":
@@ -32412,6 +32495,8 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if result.state == "AR" and getattr(result, "status_reason", "") == "AR_OPEN_STANDING_UNVERIFIED":
+        return result.source_note
     if result.state == "MN" and getattr(result, "status_reason", "") == "MN_CONFIRMED_CHARITY_EXTENSION":
         return result.source_note
     if result.state == "WA" and getattr(result, "reason_code", "") == "WA_CORROBORATED_EIN_CONFLICT_REVIEW":
@@ -33227,10 +33312,14 @@ def search_ky_strict_snapshot(org):
     from deployment.gates4243_repairs import ky_reviewed_alias
     from deployment.search_observation import dataset_scope as _history_dataset_scope
     _history_ky_records = load_ky_snapshot_records()
+    from deployment.corroborated_identity import excluded_registrations
+    excluded = excluded_registrations(org.ein, "KY")
     with _history_dataset_scope(targets,
             records=[{'Registration Number':r[0],'Name':r[1]} for r in _history_ky_records],
             record_name=lambda r:r['Name'], name_score=target_name_score):
         for registry_id, registry_name, filed_year, record_text in _history_ky_records:
+            if excluded and excluded.get(registry_id) == registry_name.casefold():
+                continue
             registry_norm = normalized_match_name(registry_name)
             registry_words = registry_norm.split()
             exact_target = registry_norm in original_target_norms
@@ -33763,9 +33852,13 @@ def search_nh_live_pdf(org):
     def find_best_nh_record(candidate_records: list[dict]) -> tuple[dict, str] | None:
         best_candidate = None
         best_score = (-1000, -1000)
+        from deployment.corroborated_identity import excluded_registrations
+        excluded = excluded_registrations(org.ein, "NH")
         for record in candidate_records:
             registry_name = record.get("registry_name") or nh_registry_name_from_live_body(record.get("body", ""))
             if not registry_name:
+                continue
+            if excluded and excluded.get(record["registry_id"]) == registry_name.casefold():
                 continue
             registry_words = record.get("registry_words") or set(normalized_match_name(registry_name).split())
             # Each reviewed name is an alternative identity, not extra words
@@ -36363,6 +36456,8 @@ def search_bundled_name_state(page, org, state: str):
 
 def ar_status_from_text(status_text: str) -> str:
     status = re.sub(r"\s+", " ", status_text or "").strip()
+    if status.casefold() == "open":
+        return "Unable to Confirm"
     if re.search(r"\bnot\s+current\b|\b(delinquent|expired|past\s+due|non[-\s]?compliant)\b", status, re.I):
         return "Delinquent"
     if re.search(r"\b(close|closed|withdrawn|cancel(?:ed|led)|terminated|inactive|revoked)\b", status, re.I):
@@ -36729,7 +36824,14 @@ def ar_reviewed_search_plan(org, generated):
     extra = ([possessive] if "'" in literal and len(distinctive_match_tokens(possessive)) >= 2
              and possessive.casefold() != literal.casefold() else [])
     if not known_names_for_ein(org.ein) and len(org.organization_name) <= 50 and not halves:
-        return list(dict.fromkeys([*extra, *planned]))[:AR_NAME_SEARCH_MAX_VARIANTS], {}
+        probes = list(dict.fromkeys([*extra, *planned]))[:AR_NAME_SEARCH_MAX_VARIANTS]
+        # Arkansas treats a dotted leading initial literally. A completed
+        # search for "T ROWE PRICE" cannot cover "T. ROWE PRICE ...".
+        if re.match(r"^[A-Za-z]\.\s", literal):
+            required = (literal_name_retrieval_forms(literal) or [literal])[0]
+            if not any(required.casefold().startswith(q.casefold()) for q in probes if q):
+                probes.append(required)
+        return probes, {}
     if halves:
         priority = [org.organization_name, *halves]
         queries = list(dict.fromkeys([*priority, *queries]))
@@ -36871,7 +36973,11 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
 
     if _completed_empty_queries:
         record_progress()
+    bounded_dotted_plan = (len(planned_variants) > AR_NAME_SEARCH_MAX_VARIANTS and not reviewed_names
+                           and len(original_name) <= 50 and re.match(r"^[A-Za-z]\.\s", original_name))
     for requested_variant in planned_variants:
+        if bounded_dotted_plan and len(attempted_variants) >= AR_NAME_SEARCH_MAX_VARIANTS:
+            break
         variant = ar_one_character_limit_query(identity_name, requested_variant)
         used_limit_query = variant != requested_variant
         # Empty retrieval evidence is literal, not the more permissive name
@@ -36925,6 +37031,17 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
                 return result
             page.locator('input[name="name"]').fill("")
             page.locator('input[name="name"]').fill(variant)
+            if len(variant)>50:
+                field=page.locator('input[name="name"]')
+                entered=field.input_value() if field.get_attribute('maxlength')=='50' else None
+                if entered==variant[:50] and len(distinctive_match_tokens(entered))>=2:
+                    # Bind the receipt to the literal the registry actually took.
+                    # The unchanged identity rules still evaluate the full names.
+                    observed['requested_full_name']=requested_variant
+                    variant=entered
+                    observed['query']=variant
+                    attempted_variants[-1]=variant
+                    record_progress()
             from deployment.validated_search_history import begin_query, finish_ar, ar_results_bound
             _cc_history = begin_query('AR', variant, AR_SEARCH_URL)
             phase_started = time.perf_counter()
@@ -37144,6 +37261,11 @@ def search_ar_precise(page, org, *, _completed_empty_queries=None, _query_observ
     ] if attempted_variants else []
     result.raw_status_text = f"Type: {best.get('type', '')} | Status: {best.get('status', '')} | Registration Date: {best.get('registration_date', '')}"
     result.status = ar_status_from_text(best.get("status", ""))
+    if str(best.get("status") or "").strip().casefold() == "open":
+        result.status_reason = "AR_OPEN_STANDING_UNVERIFIED"
+        result.source_note = 'Arkansas lists the matched charity as “Open.” Its registration standing could not be verified from that label.'
+        result.success = False
+        return result
     result.source_note = "Arkansas public charity search matched a safe registry name; CharityClarity maps Not Current to Delinquent."
     if best.get("_cc_identity") == "accept_with_ein_caution":
         result.reason_code = "AR_APPROVED_NAME_EIN_CONFIRMATION"
@@ -38580,7 +38702,14 @@ def wa_light_name_fallback(page, org):
                 if decision.get('_cc_ein_conflict') is True:
                     page._cc_wa_name_conflict = decision
                 name = module.normalize_spaces(decision['EntityName'])
-                links = page.locator('#tblCFSearch tbody a').filter(has_text=re.compile(r'^\s*'+re.escape(name)+r'\s*$'))
+                aliases = decision.get('AKANames')
+                suffix = ''
+                if isinstance(aliases, str) and aliases.strip():
+                    # The registry sometimes appends its complete AKA field to the
+                    # anchor. Only the exact selected response row can supply it.
+                    suffix = r'(?:\s*\(\s*' + re.escape(module.normalize_spaces(aliases)) + r'\s*\))?'
+                links = page.locator('#tblCFSearch tbody a').filter(
+                    has_text=re.compile(r'^\s*' + re.escape(name) + suffix + r'\s*$'))
                 links.wait_for(state='visible', timeout=wa_name_timeout(page, 5000))
                 return links if links.count() == 1 else None
             time.sleep(min(.2, max(0, page._cc_wa_light_name_stop-time.monotonic())))
@@ -41794,13 +41923,13 @@ def normalize_organization_requests(payload: dict, privileged: bool) -> list[dic
                 continue
             name = resolved_organization_name(ein, item.get("organization_name") or organization_name)
             organizations.append({"organization_name": name, "ein": ein,
-                                  **({"alternate_names": normalize_reviewed_names(item["alternate_names"])} if "alternate_names" in item else {})})
+                                  **({"alternate_names": normalize_reviewed_names(item["alternate_names"], ein)} if "alternate_names" in item else {})})
     else:
         ein = format_ein(payload.get("ein") or "")
         if len(re.sub(r"\D", "", ein)) == 9:
             name = resolved_organization_name(ein, organization_name)
             organizations.append({"organization_name": name, "ein": ein,
-                                  **({"alternate_names": normalize_reviewed_names(payload["alternate_names"])} if "alternate_names" in payload else {})})
+                                  **({"alternate_names": normalize_reviewed_names(payload["alternate_names"], ein)} if "alternate_names" in payload else {})})
 
     deduped = []
     seen = set()

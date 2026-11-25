@@ -269,12 +269,20 @@ def matching_reference(result, refs):
                         and r.get('identifier')!='@completed-search']
         else:
             candidates=sorted(candidates,key=lambda r:r.get('operation')=='detail')
-    if state=='MS' and result.get('status_reason')!='MS_DUPLICATE_EXEMPT_DETAIL_UNAVAILABLE':
+    if state=='MS' and result.get('status_reason') not in {'MS_DUPLICATE_EXEMPT_DETAIL_UNAVAILABLE','MS_EXACT_EXEMPT_DETAIL_UNAVAILABLE'}:
         candidates=[r for r in candidates if r.get('operation')=='detail']
+    if state=='MS' and result.get('status_reason')=='MS_EXACT_EXEMPT_DETAIL_UNAVAILABLE' and ident and name:
+        return next((r for r in reversed(candidates) if r.get('operation')=='search' and r.get('identifier')==ident
+                     and (key(r.get('record_name'))==key(name) or source_dba_legal_name_matches(r.get('record_name'),name))),None)
     if state=='NC':
         # A result list may contain another expanded record. Only the original
         # selected profile is evidence for a positive or review credential.
         candidates=[r for r in candidates if r.get('operation')=='detail']
+        if name and re.fullmatch(r'(?:EX|SL)\d+',ident):
+            exact=next((r for r in reversed(candidates) if r.get('identifier')==ident and key(r.get('record_name'))==key(name)),None)
+            if exact:return exact
+            candidates=[r for r in candidates if r.get('identifier')==ident and source_dba_legal_name_matches(r.get('record_name'),name)]
+            return candidates[-1] if candidates else None
     if state=='NM' and re.fullmatch(r'\d{2}-?\d{7}',ident) and digits(ident)==ein:
         # The connector uses the nine-digit FEIN while the public result keeps
         # New Mexico's displayed hyphen. This is one already-bound credential.
@@ -542,10 +550,16 @@ def ma_selected_originals(run, ordered, row, *, require_bound=False):
     run.errors.append('MA_selected_form_pc_original_unavailable')
     return [] if require_bound else ordered
 
+def source_dba_legal_name_matches(displayed, selected):
+    """Require the entire legal name preceding one explicit DBA designation."""
+    parts=re.split(r'\s+(?:d/b/a|dba|doing business as)\s+',str(displayed or '').strip(),flags=re.I)
+    return len(parts)==2 and bool(parts[1].strip()) and bool(key(selected)) and key(parts[0])==key(selected)
+
+
 def ak_selected_cycle_matches(binding, ein, name, status_text):
     cycle = re.search(r'\bRegistration Cycle:\s*(20\d{2})\b', str(status_text or ''))
     source_name = binding['name']
-    same_name = not name or key(name) == key(source_name)
+    same_name = not name or key(name) == key(source_name) or source_dba_legal_name_matches(source_name,name)
     repeated_ein = (binding.get('name_is_ein') is True
                     and re.fullmatch(r'\d{2}-?\d{7}', source_name) and digits(source_name) == ein)
     return bool(cycle and int(cycle[1]) == binding['year'] and binding['ein'] == ein
@@ -664,6 +678,10 @@ def me_detail_name_bound(name,text,identifier):
   value=re.sub(r',\s*THE\s*$','',str(value),flags=re.I)
   value=re.sub(r'^THE\s+','',value.strip(),flags=re.I)
   return re.sub(r'[^a-z0-9]','',value.lower())
+ pending=re.search(r'CHARITABLE SOLICITATIONS\s+(.*?)\s+CHARITABLE ORGANIZATION\s+Pending Number:\s*(CO\d+)\s+Status:\s*Pending\b',text,re.S|re.I)
+ if pending and pending[2].casefold()==str(identifier).casefold():
+  numbers=re.findall(r'\b(?:License|Pending)\s+Number:\s*(CO\d+)\b',text,re.I)
+  return len(numbers)==1 and bool(canonical(name)) and canonical(pending[1])==canonical(name)
  headings=re.findall(r'CHARITABLE SOLICITATIONS\s+(.*?)\s+CHARITABLE ORGANIZATION\s+License Number:\s*(CO\d+)\b',text,re.S|re.I)
  credentials=re.findall(r'License\s+Number:\s*(CO\d+)\b',text,re.I)
  if (not re.fullmatch(r'CO\d+',str(identifier),re.I) or len(headings)!=1
@@ -1354,7 +1372,10 @@ def _connector_archive(record,payload,query,evidence):
         if not isinstance(text,str) or len(text)>20000:return
         if record['state']=='MS' and query.get('operation')=='search':
             ms_rows=evidence.get('rows',[])
-            if (len(ms_rows)!=2 or ms_rows[0]!=ms_rows[1]
+            exact_single=(len(ms_rows)==1 and evidence.get('complete') is True and evidence.get('total')==1
+                and ms_rows[0].get('name','').strip().casefold()==query.get('name','').strip().casefold()==record['organization_name'].strip().casefold()
+                and re.fullmatch(r'(?:Current\s*[-–—]\s*)?Exempt(?:ed)?',ms_rows[0].get('raw_status','').strip(),re.I))
+            if ((not exact_single and (len(ms_rows)!=2 or ms_rows[0]!=ms_rows[1]))
                     or not re.search(r'\bExempt(?:ed)?\b',text,re.I)):
                 return
         rows=[]

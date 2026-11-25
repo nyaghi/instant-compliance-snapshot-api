@@ -29,12 +29,25 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
   if(job.registryState==='GA'&&!Object.hasOwn(query,'identifier')&&(job.snapshotCaptures||0)>=3){observed.phase='detail-slot-reserved';trace();return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:29:143:return",(null));}
   const ilDetail=job.registryState==='IL'&&Object.hasOwn(query,'identifier');
   if(job.registryState==='IL'&&!ilDetail&&(job.snapshotCaptures||0)>=3){observed.phase='detail-slot-reserved';trace();return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:31:118:return",(null));}
-  if(!alive() || job.snapshotCleanupBusy || job.snapshotViewportBusy || job.ilTnSnapshotCleanupBusy || (job.registryState==='AL'&&job.alSnapshotCaptureBusy) || !chrome.debugger || (job.snapshotCaptures||0)>=(((job.registryState==='GA'&&Object.hasOwn(query,'identifier'))||(['NC','TN','NM'].includes(job.registryState)&&query.operation==='detail'))?24:4)
+  const nvExactDetail=job.registryState==='NV' && query.operation==='detail' && job.nvPrimaryCaptureCommand===commandId;
+  const imageLimit=((job.registryState==='GA'&&Object.hasOwn(query,'identifier'))||(['NC','TN','NM'].includes(job.registryState)&&query.operation==='detail'))?24:(nvExactDetail?5:4);
+  if(!alive() || job.snapshotCleanupBusy || job.snapshotViewportBusy || job.ilTnSnapshotCleanupBusy || (job.registryState==='AL'&&job.alSnapshotCaptureBusy) || !chrome.debugger || (job.snapshotCaptures||0)>=imageLimit
 
       || job.activeExpiresAt-Date.now()<4000){observed.phase='entry-rejected';trace();return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:34:86:return",(null));}
 
   // A late rendering attachment must finish its own cleanup before the
   // screenshot debugger can attach. Preserve the status if Chrome is stalled.
+  const nvLease=job.registryState==='NV' && job.nvBackgroundLease;
+  if(nvLease && query.operation==='detail' && nvLease.released && nvLease.tabId===tabId && nvLease.cleanupPromise){
+    let timer;
+    try{
+      await Promise.race([nvLease.cleanupPromise,new Promise(resolve=>{timer=setTimeout(resolve,Math.min(1500,Math.max(0,job.activeExpiresAt-Date.now()-4000)));})]);
+    }catch{ /* The owner retains its lease if detach failed. */ }
+    finally{clearTimeout(timer);}
+    observed.cleanup_wait_ms=Date.now()-started;
+    if(!alive() || job.snapshotCleanupBusy || job.snapshotViewportBusy || job.ilTnSnapshotCleanupBusy
+        || (job.snapshotCaptures||0)>=imageLimit || job.activeExpiresAt-Date.now()<4000)return null;
+  }
   if(job.registryState==='NV' && job.nvBackgroundLease){observed.phase='background-cleanup-pending';trace();return null;}
   const state=job.registryState;
   if(state==='AL')job.alSnapshotCaptureBusy=true;
@@ -809,10 +822,9 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         if(state==='NM')wfEvent(job,'NM image validation','started',{image_characters:typeof image?.data==='string'?image.data.length:null});
         if(typeof image?.data!=='string'||image.data.length>4000000||!/^[A-Za-z0-9+/]+={0,2}$/.test(image.data))return wfReturn(job,"state-snapshot-worker.js:captureStateSnapshot:397:112:return",(null));
 
-        // A completed NM image still needs fresh identity/geometry validation.
-        // Use only the unspent existing aggregate allowance for that final step;
-        // do not admit late images or bypass any post-capture checks.
-        if(nmRequiredDetail&&!cancelled&&alive()&&Date.now()<started+captureBudgetMs
+        // A completed image may need the remaining post-validation allowance.
+        // The original search, image admission and job deadlines still apply.
+        if((nmRequiredDetail||gaRequiredDetail)&&!cancelled&&alive()&&Date.now()<started+captureBudgetMs
             &&started+captureBudgetMs-Date.now()<3000) {
           const extended=Math.min(12000-(observed.prior_capture_ms||0),job.activeExpiresAt-started-1000);
           if(extended>captureBudgetMs) {
@@ -1098,7 +1110,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
 
     resolve(completedImage);
 
-  };timeoutId=setTimeout(expireCapture,captureBudgetMs);});
+  };timeoutId=setTimeout(expireCapture,nvLease?Math.max(0,captureBudgetMs-(Date.now()-started)):captureBudgetMs);});
 
   let captured=null;
 

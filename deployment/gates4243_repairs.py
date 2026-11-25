@@ -18,6 +18,12 @@ def _ein(value):
 
 
 def ky_reviewed_alias(ein, original, registry_id, registry_name):
+    # KY 11880 and the university's 2024 federal return agree on total
+    # revenue ($3,574,990,567). The UPMC affiliate is a separate filer.
+    if registry_id == "11880" and _ein(ein) == "250965591":
+        return (_name(original) in {"university of pittsburgh",
+                                    "university of pittsburgh of the commonwealth system of higher education"}
+                and _name(registry_name) == "university of pittsburgh")
     # KY row 3717's FY2024 revenue and contributions independently match the
     # same-EIN IRS return. Row 3718 is a separate AARP Foundation filing.
     return (registry_id == "3717" and _ein(ein) == "951985500"

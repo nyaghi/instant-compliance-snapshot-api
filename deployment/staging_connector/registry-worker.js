@@ -1556,6 +1556,11 @@ async function registryNorthCarolinaQuery(job,query) {
     await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1230:4:await",()=>(registryReady(job,prior.documentId,'/online_services/search/Charities_Results',45000,query)));
     phase('results-ready');
     const result=await wfAwait(job,"registry-worker.js:registryNorthCarolinaQuery:1232:17:await",()=>(registryMessage(job,{action:'registry-nc-rows',query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))})));
+    if(result?.reason==='NY_CONNECTOR_REGISTRY_NC_CARD_CHANGED'
+        && /^(?:panel|name-value|numberless-dates|name-count|license-header|display-name|profile-link|required-fields|duplicate-identifier)$/.test(result.nc_card_field)) {
+      diagnostic('nc-card-changed',job,result.nc_card_field);
+    }
+    if(result && Object.hasOwn(result,'nc_card_field'))delete result.nc_card_field;
     phase(`rows-${result?.ok?'complete':result?.reason||'incomplete'}`);
     if(result?.ok && result.evidence?.complete===true) {
       for(const entry of Array.isArray(result.diagnostics)?result.diagnostics.slice(0,1):[]) {

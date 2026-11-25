@@ -34,9 +34,12 @@ def tn_contains_coverage_order(names):
         if len(words)<3 or len(name)<12 or '(' in name:continue
         count=sum(name.casefold() in other.casefold() for other in names[1:])
         if count>=3:scored.append((-count,index,name))
-    if not scored:return names
-    _,index,_=min(scored)
-    return [names[0],names[index],*names[1:index],*names[index+1:]]
+    if scored:
+        _,index,_=min(scored)
+        names=[names[0],names[index],*names[1:index],*names[index+1:]]
+    # Keep a reviewed acronym. Broad two-letter Contains queries can hit the
+    # source's result cap before more distinctive required names get a turn.
+    return [names[0], *sorted(names[1:],key=lambda name: bool(re.fullmatch(r'[a-zA-Z]{1,2}',name.strip())))]
 
 
 def ak_completed_recent_ein_years(master,result):

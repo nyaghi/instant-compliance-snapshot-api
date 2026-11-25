@@ -13,16 +13,20 @@ const CCDCSource=(()=>{
  function valid(d){return d?.state==='DC'&&d.operation==='detail'&&d.url===SEARCH&&/^\d{9}$/.test(d.ein)&&/^[a-f0-9]{32}$/.test(d.run_id)&&/^\d{5,16}$/.test(d.identifier)&&typeof d.name==='string'&&d.name.length>0&&d.name.length<=300&&typeof d.raw_status==='string'&&d.raw_status.length>0&&d.raw_status.length<=100&&(/^\d{4}-\d\d-\d\d$/.test(d.expiration)||terminalUndated(d))&&Number.isFinite(d.issued_at)&&Number.isFinite(d.expires_at)&&d.expires_at>d.issued_at&&(!Object.hasOwn(d,'deadline_schema')||d.deadline_schema===1)&&d.expires_at-d.issued_at<=(d.deadline_schema===1?300.1:60.1)&&Date.now()/1000>=d.issued_at-5&&Date.now()/1000<d.expires_at&&(!Object.hasOwn(d,'boss_reconcile_schema')||reconcileRequest(d));}
  function fields(url,text,d){
   if(!DETAILS.includes(url)||typeof text!=='string'||text.length>20000||/user validation required|recaptcha timeout|verify you are human|access denied/i.test(text))return null;
-  if(text.split('License Information').length!==2||text.split('Licensee Information').length!==2)return null;
-  const lines=text.split('License Information')[1].split('Licensee Information')[0].split('\n').map(v=>v.trim()).filter(Boolean);
+  const end=text.includes('Licensee Information')?'Licensee Information':'Registered/Resident Agent Information';
+  if(text.split('License Information').length!==2||text.split(end).length!==2)return null;
+  const lines=text.split('License Information')[1].split(end)[0].split('\n').map(v=>v.trim()).filter(Boolean);
   if(LABELS.some(k=>lines.filter(v=>v===k).length!==1))return null;
   const pos=LABELS.map(k=>lines.indexOf(k));if(pos.some((v,i)=>i&&v<=pos[i-1]))return null;
   const f=Object.fromEntries(LABELS.map((k,i)=>[k,lines.slice(pos[i]+1,pos[i+1]??lines.length).join(' ')]));
-  if(Object.entries(f).some(([k,v])=>!(['Trade Name','Premise Address',...(terminalUndated(d)?['Expiration Date']:[])]).includes(k)&&(!v||v==='N/A')))return null;
+  const tradeOnly=end==='Registered/Resident Agent Information'&&f.Licensee==='N/A'&&!d.review_candidate&&!d.corporate_continuity_schema&&f['Trade Name']!=='N/A'&&norm(f['Trade Name'])===norm(d.name);
+  if(end!=='Licensee Information'&&!tradeOnly)return null;
+  if(Object.entries(f).some(([k,v])=>!(k==='Licensee'&&tradeOnly)&&!(['Trade Name','Premise Address',...(terminalUndated(d)?['Expiration Date']:[])]).includes(k)&&(!v||v==='N/A')))return null;
   const exp=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(f['Expiration Date']);
-  if(f['License Number']!==d.identifier||!sameName(f.Licensee,d.name,d)||!['charitable solicitation','charitable exempt'].includes(f['License Activity'].toLowerCase())||f['License Status']!==d.raw_status||(!exp&&!(terminalUndated(d)&&f['Expiration Date']==='N/A'))||!/^\d\d\/\d\d\/\d{4}$/.test(f['Issue Date']))return null;
+  if(f['License Number']!==d.identifier||!(tradeOnly||sameName(f.Licensee,d.name,d))||!['charitable solicitation','charitable exempt'].includes(f['License Activity'].toLowerCase())||f['License Status']!==d.raw_status||(!exp&&!(terminalUndated(d)&&f['Expiration Date']==='N/A'))||!/^\d\d\/\d\d\/\d{4}$/.test(f['Issue Date']))return null;
   const expiry=exp?`${exp[3]}-${exp[1]}-${exp[2]}`:'',parts=f['Issue Date'].split('/'),issue=`${parts[2]}-${parts[0]}-${parts[1]}`;
   const validDate=value=>{const parsed=new Date(value+'T00:00:00Z');return Number.isFinite(parsed.valueOf())&&parsed.toISOString().slice(0,10)===value;};
+  if(tradeOnly&&expiry!==d.expiration)return null;
   if((expiry&&!validDate(expiry))||!validDate(issue))return null;
   if(reconcileRequest(d)){
    const observedDay=new Date(d.issued_at*1000).toISOString().slice(0,10);
@@ -151,7 +155,12 @@ const CCDCSource=(()=>{
        ||text.replace(/\s+/g,'')!==(label+count).replace(/\s+/g,''))return '';
     return label;
    };
-   const matches=rows.filter(r=>r.querySelector('.mat-column-licenseNumber')?.innerText.trim()===d.identifier&&(clean(r.querySelector('.mat-column-licenseeName')?.innerText)===clean(d.name)||reconcile&&canonical(r.querySelector('.mat-column-licenseeName')?.innerText)===canonical(d.name))&&['Charitable Solicitation','Charitable Exempt'].includes(activity(r))&&(!reconcile||activity(r).toLowerCase()===d.expected_activity));
+   const numbered=rows.filter(r=>r.querySelector('.mat-column-licenseNumber')?.innerText.trim()===d.identifier);
+   const matches=numbered.filter(r=>{
+    const name=r.querySelector('.mat-column-licenseeName')?.innerText.trim();
+    const inspectUnnamed=numbered.length===1&&name==='N/A'&&!d.review_candidate&&!d.corporate_continuity_schema;
+    return (inspectUnnamed||clean(name)===clean(d.name)||reconcile&&canonical(name)===canonical(d.name))&&['Charitable Solicitation','Charitable Exempt'].includes(activity(r))&&(!reconcile||activity(r).toLowerCase()===d.expected_activity);
+   });
    const selection={rows:rows.length,identifier_matches:rows.filter(r=>r.querySelector('.mat-column-licenseNumber')?.innerText.trim()===d.identifier).length,matching_rows:matches.length};
    if(matches.length!==1)return {error:'selected_license_not_unique_or_absent',selection};
    const link=matches[0].querySelector('.mat-column-licenseeName a');if(!visible(link))return {error:'selected_license_link_unavailable'};
