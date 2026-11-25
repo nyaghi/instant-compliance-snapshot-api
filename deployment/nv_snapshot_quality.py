@@ -8,12 +8,24 @@ class LoadingFrame(ValueError):
     pass
 
 
-def is_loading_frame(source):
+def is_loading_frame(source, *, check_detail_panel=False):
     from PIL import Image, ImageChops
 
     small = source.convert("RGB")
     small.thumbnail((768, 768), Image.Resampling.BILINEAR)
     width, height = small.size
+    if check_detail_panel and width >= 320 and height >= 220:
+        # ORION can paint the record header and blue navigation while the
+        # entire information panel is still white. Inspect first-view pixels.
+        def region(left, top, right, bottom):
+            return small.crop((int(width*left), int(height*top),
+                               int(width*right), int(height*bottom)))
+        body = region(.26, .30, .90, .72).convert('L')
+        header = region(.04, .04, .94, .20).convert('L')
+        menu = region(.01, .12, .24, .40)
+        if (sum(body.histogram()[:200]) == 0 and sum(header.histogram()[:150]) >= 40
+                and any(b > 115 and b-r > 65 and b-g > 20 for r,g,b in menu.getdata())):
+            return True
     red, green, blue = small.split()
     brightest = ImageChops.lighter(red, ImageChops.lighter(green, blue))
     if sum(brightest.histogram()[:130]) > width * height * 0.00015:

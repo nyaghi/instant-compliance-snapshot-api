@@ -403,7 +403,9 @@ def final_four_asset(name, text):
               const retrySignal=signal?AbortSignal.any([signal,timeout]):timeout;
               try {
                 const retry=await externalLookup(state,names,retrySignal);
-                if(retry?.state===state && !retrySignal.aborted)result=retry;
+                if(retry?.state===state && (!retrySignal.aborted || (!signal?.aborted &&
+                    retrySignal.reason?.name==='TimeoutError' && retry.identity_review?.candidates?.length &&
+                    retry.lab_diagnostic?.code==='NY_CONNECTOR_TIMEOUT')))result=retry;
               } catch(error) {
                 if(error?.stopCleanupFailed)throw error;
                 signal?.throwIfAborted();

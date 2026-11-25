@@ -111,7 +111,7 @@ def validate_asset(asset, *, ein, state, run_id):
             if not isinstance(encoded,list) or not 2<=len(encoded)<=(8 if state=='NV' and asset.get('operation')=='detail' else 3) or any(not isinstance(v,str) for v in encoded):raise ValueError('Invalid source image pages')
             pages=[base64.b64decode(v,validate=True) for v in encoded]
         pixels=0
-        for page in pages:
+        for page_index,page in enumerate(pages):
             with Image.open(io.BytesIO(page)) as im:
                 pixels+=im.width*im.height
                 if im.format not in {'PNG','JPEG'} or pixels>MAX_PIXELS:raise ValueError('Invalid source image')
@@ -121,7 +121,7 @@ def validate_asset(asset, *, ein, state, run_id):
                 if high-low<8:raise ValueError('Blank source screenshot')
                 if state=='NV' and asset.get('operation')=='detail':
                     from deployment.nv_snapshot_quality import LoadingFrame, is_loading_frame
-                    if is_loading_frame(im):raise LoadingFrame('Nevada detail is covered by its loading indicator')
+                    if is_loading_frame(im,check_detail_panel=page_index==0):raise LoadingFrame('Nevada detail fields have not finished painting')
     elif kind=='source_pdf':
         from pypdf import PdfReader
         page_limit=100 if state=='NM' and asset.get('operation')=='detail_registration' else 12

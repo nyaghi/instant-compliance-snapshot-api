@@ -1087,8 +1087,13 @@ def va_reloaded_widget_stop(fact,old_stop,deadline,now):
  if fact.get('initialization_continuation') or fact.get('widget_initialization_reload',{}).get('count')!=1:return None
  before=fact.get('widget_initialization_boundary',{});obs=fact.get('selected_readiness_observation',{})
  terminal=obs.get('terminal',{})
+ # A reloaded page can paint the bound entity header before its widgets arrive.
+ labels=terminal.get('required') or []
+ selected_shell=(terminal.get('expected_id_present') is True and terminal.get('expected_name_present') is True
+                 and {v.get('label') for v in labels}=={'Registration Information','Registration ID','Initial Registration Date','Current Registration Date'}
+                 and all(v.get('count')==0 and v.get('visible') is False for v in labels))
  if (obs.get('route_matches') is not True or obs.get('terminal_read')!='completed'
-     or terminal.get('document_state')!='complete' or terminal.get('body_text_chars')!=0
+     or terminal.get('document_state')!='complete' or (terminal.get('body_text_chars')!=0 and not selected_shell)
      or terminal.get('form_count')!=0 or terminal.get('verification_present') is not False
      or terminal.get('error_present') is not False or obs.get('pending_overflow')!=0
      or obs.get('errors') or obs.get('observer_error')):return None

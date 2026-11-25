@@ -117,6 +117,7 @@
     if (refreshButton) refreshButton.disabled = true;
     const credentials = { email, admin_passcode, device_id };
     let checkToken = "";
+    let retainedTennesseeReview = null;
     let alEvidenceDeadline = 0;
     let lookupId = crypto.randomUUID().replaceAll("-", "");
     let connected = false, recoveryUsed = false;
@@ -228,6 +229,8 @@
           break;
         }
         checkToken = state.check_token;
+        if (registryState === "TN" && state.tn_partial_review?.state === "TN")
+          retainedTennesseeReview = state.tn_partial_review;
         if (state.recovery) {
           if (Number.isFinite(state.lookup_remaining_ms)) lookupDeadline = Math.min(lookupDeadline, Date.now()+Math.max(0,state.lookup_remaining_ms));
           // The master alone authorizes one fresh Illinois transport. Keep the
@@ -300,6 +303,10 @@
       }
       if (state.phase !== "complete" || !state.result || state.result.state !== registryState) throw new Error(`${label} did not return a complete result.`);
       return state.result;
+    } catch (error) {
+      if (retainedTennesseeReview && signal?.aborted && signal.reason?.name === "TimeoutError")
+        return retainedTennesseeReview;
+      throw error;
     } finally {
       const cleanupReceipt = connected ? await bridge("finish", null, lookupId) : null;
       if (checkToken) api({ action: "cancel", check_token: checkToken }, true).catch(() => {});

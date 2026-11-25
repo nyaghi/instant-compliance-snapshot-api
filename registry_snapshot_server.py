@@ -8844,10 +8844,12 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                 entity_number_detail = state == "NV" and row.get("business_identifier_missing") is True and nv_entity_number_detail_allowed(
                     row["identifier"], row["entity_type"], "", row.get("entity_number", ""))
                 missing_search_type = state == "NV" and nv_untyped_search_row_can_read_detail(row)
+                bound_scope_detail = False
                 if (state == 'NV' and row['entity_type'] == 'NT7 Business License Other'
                         and re.fullmatch(r'NV\d+', row['identifier'])):
                     scope_query={'state':'NV','operation':'detail','identifier':row['identifier']}
                     scope_detail=collect(scope_query)
+                    bound_scope_detail = nv_bound_scope_detail(row, scope_detail, scope_query, org.ein)
                     from deployment.gates3133_repairs import nv_verified_mark_record
                     if (isinstance(scope_detail,dict) and scope_detail.get('query')==scope_query
                             and scope_detail.get('complete') is True and nv_verified_mark_record(row,scope_detail)):
@@ -8862,7 +8864,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     missing_nv_business_id |= row.get("business_identifier_missing") is True
                     unreviewed_scope = True
                     scope_reviews.append({"name": row["name"], "identifier": row["identifier"],
-                                          "category": row["entity_type"], "missing_business_id": bool(row.get("business_identifier_missing"))})
+                                          "category": row["entity_type"], "bound_detail": bound_scope_detail,
+                                          "missing_business_id": bool(row.get("business_identifier_missing"))})
                     seen.add(row["identifier"])
                     continue
                 detail_query = {"state": state, "operation": "detail", "identifier": row["identifier"]}
@@ -9088,6 +9091,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             for row in scope_reviews[:20]]
         if state == "AL" and len(scope_reviews) == 1 and scope_reviews[0]["category"] == "Private Foundation":
             result._al_scope_row = (scope_reviews[0]["_source_row"], scope_reviews[0]["name"])
+        if state == "NV" and not missing_nv_business_id:
+            exact = {(r["identifier"],r["name"]) for r in scope_reviews
+                     if r.get("bound_detail")
+                     and complete_name_identity_key(r["name"]).removeprefix("the ") ==
+                         complete_name_identity_key(org.organization_name).removeprefix("the ")}
+            if len(exact)==1:
+                result._nv_scope_detail = next(iter(exact))
+                result.source_note += " The business license alone does not establish a charitable solicitation registration or exemption."
         labels = [f"{row['name']} ({row['identifier']}; {row['category']})" for row in scope_reviews[:3]]
         if labels:
             result.source_note += " Review candidates: " + "; ".join(labels) + "."
@@ -9841,6 +9852,21 @@ def al_completed_candidates_for_review(record):
         REVIEWED_NAME_CONTEXT.reset(token)
 
 
+def nv_bound_scope_detail(row, detail, query, ein):
+    """Retain an original business record only when its identity matches the request."""
+    if not isinstance(detail, dict) or detail.get("query") != query or detail.get("complete") is not True:
+        return False
+    fields = detail.get("fields")
+    if not isinstance(fields, dict) or not nv_official_detail_url(detail.get("source_url")):
+        return False
+    tax_id = str(fields.get("FEIN") or "").strip()
+    return (fields.get("NV Business ID") == row["identifier"]
+            and normalized_match_name(fields.get("Entity Name") or "") == normalized_match_name(row["name"])
+            and fields.get("Entity Type") == row["entity_type"] == "NT7 Business License Other"
+            and (tax_id in {"", "-", "—"} or (re.fullmatch(r"\d{2}-?\d{7}", tax_id)
+                 and canonical_ein_digits(tax_id) == canonical_ein_digits(ein))))
+
+
 def nv_official_detail_url(value):
     url = urlparse(str(value or ""))
     fragment_path, _, params = url.fragment.partition("?")
@@ -9952,7 +9978,52 @@ def nv_followup_detail_budget(record):
     return None
 
 
-def final_four_connector_failure(record, reason="", diagnostic=""):
+def tn_completed_headquarters(record):
+    """Recover a bound national-office detail for review after a later failure."""
+    if record.get("state") != "TN" or not trial_identity():
+        return []
+    from deployment.state_snapshots import matching_reference
+    org = checker.Organization(record["organization_name"], record["ein"])
+    blocked = set(record.get("identity_context", {}).get("rejected", []))
+    cards, retained, observed_names = {}, {}, {}
+    for item in record.get("completed", []):
+        query, payload = item["query"], item["evidence"]
+        if query.get("state") != "TN":
+            continue
+        try:
+            if query.get("operation") == "search":
+                for card in final_four_search_evidence(payload, "TN", query):
+                    key = card["identifier"]
+                    if observed_names.setdefault(key, card["name"]) != card["name"]:
+                        blocked.add(key)
+                    if tn_national_headquarters_name(org.organization_name, card):
+                        cards[key] = card
+            elif query.get("operation") == "detail":
+                key = query["identifier"]
+                if key in blocked or key not in cards or payload.get("query") != query or payload.get("complete") is not True:
+                    continue
+                row = tn_charity_detail_evidence(payload["fields"], key, cards[key])
+                if not tn_national_headquarters_name(org.organization_name, row):
+                    continue
+                ref = matching_reference({"state":"TN", "ein":org.ein, "matched_registry_name":row["name"],
+                    "matched_registry_identifier":key}, [r for r in record.get("source_snapshots",[]) if r.get("operation")=="detail"])
+                if ref and ref.get("url"):
+                    retained[key] = row
+        except (ValueError, TypeError, KeyError):
+            continue
+    rows = [row for key,row in retained.items() if key not in blocked]
+    if len(rows) != 1:
+        return []
+    # Keep the normal ownership, explicit rejection and address conflict guards.
+    try:
+        select_licensed_charity(org, rows, "TN", time.monotonic()+2)
+    except (TimeoutError, ValueError):
+        return []
+    return [row for row in rows if row.get("_identity_outcome")=="possible"
+            and row.get("match",{}).get("reason")=="TN_NATIONAL_HEADQUARTERS"]
+
+
+def final_four_connector_failure(record, reason="", diagnostic="", *, tn_candidates=None):
     state = record["state"]
     sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
                "NC": "https://www.sosnc.gov/online_services/search/by_title/search_charities",
@@ -10036,11 +10107,13 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     else:
         result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
     candidates = (al_completed_candidates_for_review(record) if state == "AL"
+                  else (tn_completed_headquarters(record) if tn_candidates is None else tn_candidates) if state == "TN"
                   else nv_completed_candidates_for_review(record) if state == "NV"
                   else nc_completed_candidates_for_review(record))
     if candidates:
         result._cc_identity_review = {"records": candidates, "search_complete": False, "freshness": ""}
-        result.source_note += (" Complete North Carolina profiles were retrieved before the later search failed. Their identity remains unconfirmed; use Accept or Reject match to review them. Rejecting them does not establish non-registration because the search is incomplete." if state == "NC" else
+        result.source_note += (" Tennessee returned the national headquarters and its original snapshot. Confirm or reject the identity. The remaining records were not fully checked." if state == "TN" else
+            " Complete North Carolina profiles were retrieved before the later search failed. Their identity remains unconfirmed; use Accept or Reject match to review them. Rejecting them does not establish non-registration because the search is incomplete." if state == "NC" else
             " Nevada returned the primary record before a later lookup failed. Review the captured record and confirm the match if appropriate. Rejecting it does not establish non-registration." if state == "NV" else
             " Complete Alabama records were retrieved before the later search failed. "
             "Their identity remains unconfirmed; use Accept or Reject match to review them. "
@@ -10049,7 +10122,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     # An incomplete later AL query can return before the continuation installs
     # its evidence context. Preserve already validated candidate images in the
     # signed review, without treating the failed search as complete.
-    if state in {"AL", "NC", "NV"} and candidates:
+    if state in {"AL", "NC", "NV", "TN"} and candidates:
         from deployment.state_snapshots import REFERENCES
         snapshot_context = REFERENCES.set(record.get("source_snapshots", []))
         try:
@@ -10089,7 +10162,7 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
                                    if item.get("query", {}).get("operation") == "detail"
                                    and item["query"].get("identifier")],
         )
-    if state in {"AL", "NC", "NV"} and candidates:
+    if state in {"AL", "NC", "NV", "TN"} and candidates:
         from deployment.state_snapshots import attach_links
         from deployment.search_history import attach as attach_search_history
         from deployment.identity_evidence import bind as bind_review_evidence
@@ -10172,6 +10245,18 @@ def final_four_connector_advance(record):
         response = {"phase": "search", **record["pending"]}
         if record.get("state") == "NM" and pending.params.get("name") and pending.params.get("operation") == "search":
             record.setdefault("ein_light_name_started", time.time())
+        if (record["state"]=="TN" and pending.params.get("operation")=="detail"
+                and not record.get("tn_review_checkpoint_sent") and record["completed"]
+                and record["completed"][-1]["query"].get("operation")=="detail"
+                and tn_national_headquarters_name(record["organization_name"], {
+                    "name": (record["completed"][-1]["evidence"].get("fields") or {}).get("Name") or "",
+                    "identifier": record["completed"][-1]["query"].get("identifier", "")})):
+            candidates = tn_completed_headquarters(record)
+            if candidates:
+                checkpoint = final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT", tn_candidates=candidates)
+                if checkpoint.get("identity_review") and any(c.get("evidence_url") for c in checkpoint["identity_review"].get("candidates", [])):
+                    response["tn_partial_review"] = checkpoint
+                    record["tn_review_checkpoint_sent"] = True
         followup_ms = nv_followup_detail_budget(record)
         if followup_ms is not None:
             response["nv_followup_ms"] = followup_ms
@@ -10212,6 +10297,8 @@ def final_four_connector_advance(record):
     if getattr(result, "_al_scope_row", None) and (
             result.status == "Needs Review" or result.status_reason == "AL_CONFIRMED_ACTIVE_PRIVATE_FOUNDATION"):
         record["_al_scope_row"] = result._al_scope_row
+    if record["state"]=="NV" and getattr(result, "_nv_scope_detail", None):
+        record["_nv_scope_detail"] = result._nv_scope_detail
     return {"phase": "complete", "result": preserve_nc_identity_retry(data, record)}
 
 
@@ -10592,6 +10679,14 @@ def final_four_connector_request(payload, origin):
         response['result'] = attach_search_history(record,response['result'])
         from deployment.identity_evidence import bind as bind_review_evidence
         response['result'] = bind_review_evidence(sys.modules[__name__],response['result'])
+        if record.get('_nv_scope_detail') and record['state']=='NV' and not response['result'].get('success'):
+            from deployment.state_snapshots import matching_reference, retain_references
+            identifier,name=record['_nv_scope_detail']
+            refs=[r for r in record.get('source_snapshots',[]) if r.get('operation')=='detail']
+            ref=matching_reference({'state':'NV','ein':record['ein'],'matched_registry_identifier':identifier,
+                                    'matched_registry_name':name},refs)
+            if ref and ref.get('url') and ref['url'] not in retain_references([ref]):
+                response['result'].update(evidence_url=ref['url'],evidence_captured_at=ref['captured_at'],evidence_capture='saved')
         if record.get('_al_scope_row'):
             from deployment.state_snapshots import attach_al_scope_original
             response['result'] = attach_al_scope_original(record, response['result'])
