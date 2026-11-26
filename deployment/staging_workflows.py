@@ -114,11 +114,14 @@ def public_result(master, job, record):
     if job.get('phase') != 'done': return None
     result = job.get('result')
     if not isinstance(result, dict):
-        if job['phase'] != 'done': return None
+        worker_failed = job.get('error') == 'WORKER_TASK_FAILED'
         return {'ein': record['ein'], 'organization_name': record['name'], 'state': job['state'],
             'app_version': master.APP_VERSION, 'status': 'Unable to Confirm', 'success': False,
-            'status_reason': 'SALES_TIME_LIMIT' if record['mode'] == 'sales' else 'WORKFLOW_INCOMPLETE',
-            'comments': 'The state check did not complete within this run. Registration status remains unconfirmed.'}
+            'status_reason': 'WORKER_TASK_FAILED' if worker_failed else
+                'SALES_TIME_LIMIT' if record['mode'] == 'sales' else 'WORKFLOW_INCOMPLETE',
+            'comments': ('The worker stopped before returning a registry result. Retry this state to confirm its status.'
+                         if worker_failed else
+                         'The state check did not complete within this run. Registration status remains unconfirmed.')}
     if (master.canonical_ein_digits(str(result.get('ein', ''))) != record['ein']
             or result.get('state') != job['state'] or job['state'] not in record['states']
             or result.get('app_version') != os.environ.get('CE_STAGING_WORKFLOW_VERSION')):

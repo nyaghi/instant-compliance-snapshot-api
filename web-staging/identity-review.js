@@ -69,6 +69,11 @@
     // A completed absence is documented by actual queries, not an empty image.
     if (usesSearchHistoryOnly(result)) {
       if (!validHistory) add(parent,'p','Names searched unavailable for this check.','mt-2 text-xs text-slate-500 whitespace-normal');
+      if (source && result.state === 'NV' && result.status_reason === 'NV_NON_SOLICITING_BUSINESS_ONLY') {
+        const link = add(parent, 'a', 'View Nevada Business Record (PDF)', 'mt-2 block text-xs underline whitespace-normal');
+        link.href = '/evidence-preview.html?document=' + encodeURIComponent(result.evidence_url);
+        link.target = '_blank'; link.rel = 'noopener noreferrer';
+      }
       return;
     }
     // During a multi-candidate review, keep the status decision pending,

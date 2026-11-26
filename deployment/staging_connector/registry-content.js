@@ -1254,7 +1254,14 @@
     fields['Expiration Date'] ||= '';
     const escaped=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
     const suffix=new RegExp('\\s'+escaped(row.city)+'\\s+'+escaped(row.region)+'\\s+\\d{5}(?:-\\d{4})?$','i');
-    const addresses=[...dialog.querySelectorAll('.col-md-6 > h4')].map(text).filter(s=>suffix.test(s));
+    const printed=[...dialog.querySelectorAll('.col-md-6 > h4')].map(text);
+    const addresses=printed.filter(s=>suffix.test(s));
+    if(addresses.length>1)throw new Error('REGISTRY_TN_ADDRESS_AMBIGUOUS');
+    if(!addresses.length){
+      // The summary can show a different office from the grid. Preserve the
+      // visible, uniquely identifiable address for the master's review.
+      addresses.push(...printed.filter(s=>/^(?:\d+\s+\S+|P\.?\s*O\.?\s+BOX\s+\d+)\s+.*\s[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i.test(s)));
+    }
     if(addresses.length>1)throw new Error('REGISTRY_TN_ADDRESS_AMBIGUOUS');
     fields.Address=addresses[0]||'';
     const purposes=[...dialog.querySelectorAll('h4')].filter(el=>text(el)==='Purpose');

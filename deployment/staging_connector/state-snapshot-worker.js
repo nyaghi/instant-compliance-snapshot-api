@@ -749,7 +749,8 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             // NY and GA have already verified that the selected record fits
             // the owned viewport. Request a fresh frame before a potentially
             // stalled screenshot consumes the entire detail allowance.
-            if((msBoundDialog||['AL','NC','NV'].includes(state)||gaFullViewport&&(nyRequiredDetail||gaRequiredDetail||nmRequiredDetail))
+            if((msBoundDialog||['AL','NC','NV'].includes(state)||state==='TN'&&query.operation==='detail'&&modal
+                ||gaFullViewport&&(nyRequiredDetail||gaRequiredDetail||nmRequiredDetail))
                 &&typeof CCOwnedSourcePixels!=='undefined'){
               try{return await CCOwnedSourcePixels.capture(tabId,options,{
                 deadline:started+captureBudgetMs-500,alive:()=>!cancelled&&alive(),

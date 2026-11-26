@@ -7889,11 +7889,16 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
     city, region = str(search_row.get("city", "")).strip(), str(search_row.get("region", "")).strip().upper()
     address = re.sub(r"\s+", " ", fields["Address"]).strip()
     street, postal, location = "", "", ""
+    detail_office = {}
     if city and re.fullmatch(r"[A-Z]{2}", region) and address:
         full = re.fullmatch(r"(.+?)\s+" + re.escape(city) + r"\s+" + re.escape(region) + r"\s+(\d{5}(?:-\d{4})?)", address, re.I)
-        if not full:
-            raise ValueError("Tennessee search and detail organization addresses disagree")
-        street, postal, location = full[1], full[2], f"{city}, {region}"
+        if full:
+            street, postal, location = full[1], full[2], f"{city}, {region}"
+    if address and not location:
+        printed = re.fullmatch(r"(?:\d+\s+\S+|P\.?\s*O\.?\s+BOX\s+\d+)\s+.*\s([A-Z]{2})\s+(\d{5})(?:-\d{4})?", address, re.I)
+        if not printed:
+            raise ValueError("Tennessee selected detail address is unrecognized")
+        detail_office = {"address": address, "region": printed[1].upper(), "postal_code": printed[2]}
     aliases = search_row.get("aliases", [])
     if not isinstance(aliases, list) or not all(isinstance(n, str) for n in aliases):
         raise ValueError("Tennessee alternate names are malformed")
@@ -7930,7 +7935,7 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
                 raw_status=raw, status=status, expiration=expiration, date_evidence_note=date_note,
                 initial=initial, initial_label="Registration Date", renewal=None,
                 latest_filed_period=latest_period, latest_filed_period_label="Fiscal Year End",
-                street=street, location=location, region=region, postal_code=postal,
+                street=street, location=location, region=region, postal_code=postal, tn_detail_office=detail_office,
                 url="https://tncab.tnsos.gov/portal/registered-charities-search")
 
 
@@ -9148,6 +9153,15 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             if other:
                 result.source_note += " Other records returned: " + "; ".join(
                     f"{row['name']} ({row['identifier']})" for row in other[:3]) + "."
+            if (state == "NV" and trial_identity() and not records and all(
+                    row.get("bound_detail") and row["category"] == "NT7 Business License Other"
+                    and str(row.get("_license_facts", {}).get("Solicits Charitable Contribution?", "")).strip().casefold() == "no"
+                    for row in scope_reviews)):
+                result.status, result.success = "Not Registered", True
+                result.status_reason = "NV_NON_SOLICITING_BUSINESS_ONLY"
+                result.source_note += (" The completed searches found only business licenses marked non-soliciting. "
+                    "Aurora reports Not Registered for charitable solicitation. To confirm, look up the listed business "
+                    "ID in Nevada and check its filings for a separate charitable registration or exemption.")
         elif labels:
             result.source_note += " Review candidates: " + "; ".join(labels) + "."
     if result.status == "Not Registered" and state == "TN":
@@ -10042,11 +10056,15 @@ def nv_followup_detail_budget(record):
 
 
 def tn_completed_headquarters(record):
-    """Recover a bound national-office detail for review after a later failure."""
+    """Recover one bound primary or headquarters detail for incomplete-search review."""
     if record.get("state") != "TN" or not trial_identity():
         return []
     from deployment.state_snapshots import matching_reference
     org = checker.Organization(record["organization_name"], record["ein"])
+    primary = complete_name_identity_key(org.organization_name)
+    def eligible(row):
+        return (tn_national_headquarters_name(org.organization_name, row)
+                or len(primary.split()) >= 3 and complete_name_identity_key(row.get("name", "")) == primary)
     blocked = set(record.get("identity_context", {}).get("rejected", []))
     cards, retained, observed_names = {}, {}, {}
     for item in record.get("completed", []):
@@ -10059,14 +10077,14 @@ def tn_completed_headquarters(record):
                     key = card["identifier"]
                     if observed_names.setdefault(key, card["name"]) != card["name"]:
                         blocked.add(key)
-                    if tn_national_headquarters_name(org.organization_name, card):
+                    if eligible(card):
                         cards[key] = card
             elif query.get("operation") == "detail":
                 key = query["identifier"]
                 if key in blocked or key not in cards or payload.get("query") != query or payload.get("complete") is not True:
                     continue
                 row = tn_charity_detail_evidence(payload["fields"], key, cards[key])
-                if not tn_national_headquarters_name(org.organization_name, row):
+                if not eligible(row):
                     continue
                 ref = matching_reference({"state":"TN", "ein":org.ein, "matched_registry_name":row["name"],
                     "matched_registry_identifier":key}, [r for r in record.get("source_snapshots",[]) if r.get("operation")=="detail"])
@@ -10082,8 +10100,16 @@ def tn_completed_headquarters(record):
         select_licensed_charity(org, rows, "TN", time.monotonic()+2)
     except (TimeoutError, ValueError):
         return []
-    return [row for row in rows if row.get("_identity_outcome")=="possible"
-            and row.get("match",{}).get("reason")=="TN_NATIONAL_HEADQUARTERS"]
+    reviewed = []
+    for row in rows:
+        if row["status"] == "Unable to Confirm":
+            continue
+        if row.get("_identity_outcome") == "accepted" and complete_name_identity_key(row["name"]) == primary:
+            row["_optional_identity_review"] = True
+            reviewed.append(row)
+        elif row.get("_identity_outcome") == "possible" and row.get("match", {}).get("reason") == "TN_NATIONAL_HEADQUARTERS":
+            reviewed.append(row)
+    return reviewed
 
 
 def final_four_connector_failure(record, reason="", diagnostic="", *, tn_candidates=None):
@@ -10184,7 +10210,7 @@ def final_four_connector_failure(record, reason="", diagnostic="", *, tn_candida
                   else nc_completed_candidates_for_review(record))
     if candidates:
         result._cc_identity_review = {"records": candidates, "search_complete": False, "freshness": ""}
-        result.source_note += (" Tennessee returned the national headquarters and its original snapshot. Confirm or reject the identity. The remaining records were not fully checked." if state == "TN" else
+        result.source_note += (" Tennessee returned a matching-name record and its original snapshot. Confirm or reject the identity. The remaining records were not fully checked." if state == "TN" else
             " Complete North Carolina profiles were retrieved before the later search failed. Their identity remains unconfirmed; use Accept or Reject match to review them. Rejecting them does not establish non-registration because the search is incomplete." if state == "NC" else
             " Nevada returned the primary record before a later lookup failed. Review the captured record and confirm the match if appropriate. Rejecting it does not establish non-registration." if state == "NV" else
             " Complete Alabama records were retrieved before the later search failed. "
@@ -10317,12 +10343,9 @@ def final_four_connector_advance(record):
         response = {"phase": "search", **record["pending"]}
         if record.get("state") == "NM" and pending.params.get("name") and pending.params.get("operation") == "search":
             record.setdefault("ein_light_name_started", time.time())
-        if (record["state"]=="TN" and pending.params.get("operation")=="detail"
+        if (record["state"]=="TN"
                 and not record.get("tn_review_checkpoint_sent") and record["completed"]
-                and record["completed"][-1]["query"].get("operation")=="detail"
-                and tn_national_headquarters_name(record["organization_name"], {
-                    "name": (record["completed"][-1]["evidence"].get("fields") or {}).get("Name") or "",
-                    "identifier": record["completed"][-1]["query"].get("identifier", "")})):
+                and record["completed"][-1]["query"].get("operation")=="detail"):
             candidates = tn_completed_headquarters(record)
             if candidates:
                 checkpoint = final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT", tn_candidates=candidates)
@@ -10754,7 +10777,9 @@ def final_four_connector_request(payload, origin):
         response['result'] = attach_search_history(record,response['result'])
         from deployment.identity_evidence import bind as bind_review_evidence
         response['result'] = bind_review_evidence(sys.modules[__name__],response['result'])
-        if record.get('_nv_scope_detail') and record['state']=='NV' and not response['result'].get('success'):
+        if (record.get('_nv_scope_detail') and record['state']=='NV' and (
+                not response['result'].get('success')
+                or response['result'].get('status_reason') == 'NV_NON_SOLICITING_BUSINESS_ONLY')):
             from deployment.state_snapshots import matching_reference, retain_references
             identifier,name=record['_nv_scope_detail']
             refs=[r for r in record.get('source_snapshots',[]) if r.get('operation')=='detail']
@@ -11701,6 +11726,26 @@ def licensed_charity_identity(org, row, state, deadline):
         return "possible"
     if decision["decision"] == "rejected":
         return "rejected"
+    if state == "TN" and trial_identity() and row.get("tn_detail_office") and not row.get("ein"):
+        printed = row["tn_detail_office"]
+        requested = canonical_ein_digits(org.ein)
+        if "_tn_detail_filer" not in row:
+            profile = (PUBLIC_PROFILE_CACHE.get(requested) or SALES_PROFILE_CONTEXT.get().get(requested) or {}).get("organization") or {}
+            if canonical_ein_digits(str(profile.get("ein", ""))) != requested:
+                try:
+                    profile = identity_source_result("IRS", requested, min(deadline, time.monotonic() + 2.5)).get("filer_address", {})
+                except (OSError, TimeoutError, ValueError):
+                    profile = {}
+            row["_tn_detail_filer"] = profile
+        profile = row["_tn_detail_filer"]
+        expected_region = (str(profile.get("state") or "").upper()
+                           if canonical_ein_digits(str(profile.get("ein", ""))) == requested else "")
+        if expected_region and printed["region"] != expected_region:
+            row["location"] = printed["address"]
+            row["address_evidence"] = {"decision": "conflict", "registry_location": printed["address"],
+                "ein_linked_location": ", ".join(p for p in (profile.get("city"), expected_region) if p),
+                "basis": "The visible Tennessee detail address differs from the EIN-linked filing location."}
+            return "conflict"
     if (state in {"AL", "NC", "NV", "TN"} and not row.get("ein")
             and decision["reason"] == "MATCH_REVIEWED_ALTERNATE_NAME"
             and not set(distinctive_match_tokens(org.organization_name)).intersection(distinctive_match_tokens(matched_name))
@@ -32814,6 +32859,9 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if (result.state == "NV" and public_facing_status == "Not Registered"
+            and getattr(result, "status_reason", "") == "NV_NON_SOLICITING_BUSINESS_ONLY"):
+        return result.source_note
     if (result.state == "CT" and public_facing_status == "Not Registered"
             and getattr(result, "reason_code", "") == "CT_VERIFIED_DIFFERENT_EIN"):
         return result.source_note

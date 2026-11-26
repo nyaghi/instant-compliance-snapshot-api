@@ -100,6 +100,11 @@ test('a modal that never closes cannot submit or accept a new search',async()=>{
 test('duplicate CO identifiers make the result set incomplete',async()=>{const f=fixture({rows:[national,national]});await assert.rejects(f.search(),/PAGINATION_INCOMPLETE/);});
 test('detail selects the requested national CO record, not the first local chapter',async()=>{const f=fixture();await f.search();const r=await f.detail();assert.deepEqual(f.opened,['CO2559']);assert.equal(r.fields.Address,'1400 I STREET NW, SUITE 540 WASHINGTON DC 20005');assert.equal(r.fields['Expiration Date'],'12/31/2026');assert.equal(r.fields.financial_count,2);assert.equal(r.fields.financial_periods[1],'06/30/2025');assert.ok(!JSON.stringify(r).includes('ERIC ROSENBERG'));assert.ok(!JSON.stringify(r).includes('$12,345'));});
 test('wrong CO detail is not completed evidence',async()=>{const f=fixture({detailId:'CO999'});await f.search();await assert.rejects(f.detail(),/RESPONSE_INCOMPLETE/);});
+test('a unique printed Tennessee detail address survives a disagreement with the search grid',async()=>{
+ const address='1808 ASTON AVENUE, SUITE 230 CARLSBAD CA 92008';
+ const f=fixture({address});await f.search();const r=await f.detail();
+ if(process.env.CC_TEST_TRIAL_DIR)assert.equal(r.fields.Address,address);
+});
 test('incomplete optional financial table preserves core status but not a filed period',async()=>{const f=fixture({count:25});await f.search();const r=await f.detail();assert.equal(r.complete,true);assert.equal(r.fields.Status,'Active');assert.equal(r.fields.financial_count,-1);assert.equal(r.fields.financial_periods.length,0);});
 test('a fully loaded Mount Mercy detail with only Officers has confirmed empty financial history',async()=>{
  const mount=['Details','','','CO34720','MOUNT MERCY UNIVERSITY','','Active','','','','08/22/2019'];

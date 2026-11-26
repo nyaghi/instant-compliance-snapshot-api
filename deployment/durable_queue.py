@@ -50,6 +50,17 @@ def source_application_retry(job, result, error, now, worker):
                 ('state', 'status', 'reason_code', 'source_note', 'source_attempts')}}
 
 
+def wisconsin_worker_retry(job, result, error, now, worker):
+    """Retry one reaped Wisconsin child with no published result."""
+    if (job['state'] != 'WI' or job['mode'] != 'standard' or job['attempt'] != 1
+            or result is not None or error != 'WORKER_TASK_FAILED' or job['stop_reason']
+            or job['deadline'] - now < 30 or not job['source_version'].endswith('-performance-lab')
+            or not performance_origin_enabled()):
+        return None
+    return {'failed_worker': worker, 'not_before': now,
+            'first_attempt': {'state': 'WI', 'reason_code': error}}
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
@@ -763,7 +774,8 @@ class Queue:
                         raise ValueError('Worker result state mismatch')
                     if result.get('app_version') != j['source_version']:raise ValueError('Worker result release mismatch')
                 if result is None and not error:raise ValueError('Missing result or error')
-                recovery = source_application_retry(j, result, error, now, worker)
+                recovery = (source_application_retry(j, result, error, now, worker)
+                            or wisconsin_worker_retry(j, result, error, now, worker))
                 if recovery and not c.execute('SELECT 1 FROM cc_lab_workers WHERE id<>%s AND source_version=%s AND retired=false AND heartbeat>%s LIMIT 1',
                                               (worker,j['source_version'],now-20)).fetchone():
                     recovery = None
@@ -774,8 +786,8 @@ class Queue:
                         # Only already-reaped, identity/release-validated tasks reach here.
                         # Keep the original workflow deadline and every admission limit.
                         c.execute("UPDATE cc_lab_jobs SET phase='queued',owner=NULL,token=NULL,claimed=NULL,lease_until=NULL,run_until=NULL,finished=NULL,result=%s,error=NULL WHERE id=%s",
-                                  (Jsonb({**result, 'lab_source_retry': recovery}), j['id']))
-                        self.event(c,now,'source_application_retry',j['workflow_id'],j['id'],
+                                  (Jsonb({**(result or {}), 'lab_source_retry': recovery}), j['id']))
+                        self.event(c,now,'worker_task_retry' if error else 'source_application_retry',j['workflow_id'],j['id'],
                                    failed_worker=worker,not_before=recovery['not_before'],first_attempt=recovery['first_attempt'])
                         continue
                     prior_recovery = (j.get('result') or {}).get('lab_source_retry')
