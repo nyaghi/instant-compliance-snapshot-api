@@ -21299,10 +21299,11 @@ def search_mn(page, org):
 
         name_fallback_started = time.perf_counter()
         mn_name_stop = name_fallback_started + 20.0
+        mn_exact_unavailable = False
         if len(ein_digits) == 9 and result.success and public_status(result) == "Not Registered":
             from deployment.mn_exact_detail import find as mn_find_exact_detail
             from playwright.sync_api import Error as PlaywrightError
-            exact_detail_stop = min(mn_name_stop, time.perf_counter() + 1.5)
+            exact_detail_stop = min(mn_name_stop, time.perf_counter() + 5.0)
 
             def mn_detail_timeout():
                 remaining_ms = int((exact_detail_stop - time.perf_counter()) * 1000)
@@ -21317,6 +21318,7 @@ def search_mn(page, org):
                 )
             except (TimeoutError, PlaywrightError):
                 exact_detail = None
+                mn_exact_unavailable = True
             if exact_detail:
                 registry_name, status, raw_status, detail_url = exact_detail
                 result.status = status
@@ -21540,6 +21542,9 @@ def search_mn(page, org):
             result.success = True
             return result
         if result.success and public_status(result) == "Not Registered":
+            if mn_exact_unavailable:
+                from deployment.mn_exact_detail import unavailable
+                return unavailable(result)
             if not name_plan_complete:
                 return mn_unconfirmed_alias_result(result, name_plan_failure + " The empty EIN search alone does not establish absence.")
             result.raw_status_text = "No qualifying Minnesota EIN or organization-name registration found"
@@ -21552,6 +21557,9 @@ def search_mn(page, org):
                 and result.success and public_status(result) == "Not Registered"
                 and time.perf_counter() >= mn_name_stop
                 and isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError))):
+            if locals().get("mn_exact_unavailable"):
+                from deployment.mn_exact_detail import unavailable
+                return unavailable(result)
             result.reason_code = "MN_EIN_EMPTY_LIGHT_NAME_LIMIT"
             result.source_note = "Minnesota's EIN search completed with no matching record. No verified match was found within the light name fallback's 20-second maximum."
             return result

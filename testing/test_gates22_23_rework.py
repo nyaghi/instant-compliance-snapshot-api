@@ -108,6 +108,11 @@ class ObservedPages(unittest.TestCase):
         form='<form action="Results.asp" method="post"><input id="txtEIN" name="txtEIN"><input id="txtOrg" name="txtOrg"><input type="submit" name="cmdSearch" value="Search"></form>'
         def route(r):
             if r.request.resource_type != 'document': return r.abort()
+            if 'CHR_GeneralInfo.asp?FederalID=' in r.request.url:
+                # Minnesota returns a 200 detail shell with empty identity
+                # fields for an unknown EIN. Its search form is a different page.
+                return r.fulfill(status=200,content_type='text/html',
+                    body='<div id="content"><h6>Federal ID#</h6><h1></h1><table><tr><td>Status</td><td></td></tr></table></div>')
             fields=parse_qs(r.request.post_data or '')
             query=(fields.get('txtOrg') or fields.get('txtEIN') or [name])[0]
             body=fixture.replace(name,html.escape(query)) if r.request.method=='POST' else form

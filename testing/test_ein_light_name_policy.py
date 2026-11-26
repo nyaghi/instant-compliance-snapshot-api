@@ -172,6 +172,9 @@ class OtherEinFallbacks(unittest.TestCase):
         self.assertTrue(all(not name for name,_,_ in calls[:2]));self.assertEqual(c.public_status(result),'Not Registered');self.assertEqual(clock[0],20)
 
     def test_minnesota_name_navigation_cannot_extend_allowance(self):
+        # This control times the name lookup after the exact-detail check has
+        # completed without a match. An unavailable detail is a different case.
+        self.enterContext(patch('deployment.mn_exact_detail.find',return_value=None))
         org=c.checker.Organization('Example Relief','123456789');page=MagicMock();clock=[0.0];calls=[]
         def navigate(*args,**kw):
             calls.append(kw['timeout'])

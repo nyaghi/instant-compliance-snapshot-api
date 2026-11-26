@@ -1,4 +1,5 @@
 """Bind an explicit Minnesota exemption or withdrawal to the requested EIN."""
+import re
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 DETAIL_URL = "https://www.ag.state.mn.us/Charity/Search/CHR_GeneralInfo.asp"
@@ -13,7 +14,9 @@ def find(page, ein, trusted_names, name_key, timeout_ms):
     url = DETAIL_URL + "?" + urlencode({"FederalID": ein, "Yr": "CURR", "cmdSearch": "View"})
     response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms())
     actual = urlsplit(page.url)
-    if (response is None or response.status != 200 or actual.scheme != "https"
+    if response is None or response.status in (403, 408, 429) or response.status >= 500:
+        raise TimeoutError("Minnesota exact-EIN detail did not return a usable response")
+    if (response.status != 200 or actual.scheme != "https"
             or actual.netloc != "www.ag.state.mn.us"
             or actual.path.lower() != urlsplit(DETAIL_URL).path.lower()
             or parse_qs(actual.query) != parse_qs(urlsplit(url).query)):
@@ -37,7 +40,21 @@ def find(page, ein, trusted_names, name_key, timeout_ms):
     status = EXPLICIT_STATUSES.get(raw_status)
     if raw_status == "undefined" and not fields["emptyPeriod"]:
         return None
-    trusted_keys = {name_key(name) for name in trusted_names} - {""}
-    if not status or name_key(fields["name"]) not in trusted_keys:
+    def identity_key(name):
+        # Only after the detail itself has shown the exact requested EIN.
+        return name_key(re.sub(r"(?<=\w)['’](?=s\b)", "", name, flags=re.I))
+    trusted_keys = {identity_key(name) for name in trusted_names if isinstance(name,str)} - {""}
+    if not status or identity_key(fields["name"]) not in trusted_keys:
         return None
     return fields["name"], status, fields["status"], url
+
+
+def unavailable(result):
+    result.status = "Site Not Reachable"
+    result.reason_code = "MN_EXACT_DETAIL_UNAVAILABLE"
+    result.raw_status_text = "Exact-EIN detail unavailable"
+    result.source_note = ("Minnesota’s search listed no qualifying match, but its current detail for the "
+                          "requested EIN could not be checked. Retry Minnesota to verify the registration.")
+    result.success = False
+    result.error = ""
+    return result
