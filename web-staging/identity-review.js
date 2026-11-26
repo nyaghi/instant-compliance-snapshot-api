@@ -122,7 +122,7 @@
       const fallback = confirmedMAFilingConflict
         ? 'The Massachusetts filing attachment shows a different EIN. Confirm the filing directly with the state.'
         : 'The state lookup did not provide enough confirmed information to establish a status. Review the explanation and available evidence, then retry this state or check its official lookup.';
-      add(box, 'p', result.source_note || fallback, 'mt-1 text-xs text-slate-600');
+      if (statusLabel(result) !== 'Review required') add(box, 'p', result.source_note || fallback, 'mt-1 text-xs text-slate-600');
       try {
         const url = new URL(result.source_url);
         if (url.protocol === 'https:' && !url.username && !url.password) {
@@ -189,5 +189,52 @@
     }
     return inconclusive ? 'Review required' : result.status || 'Unknown';
   }
-  window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel, usesSearchHistoryOnly, usesIncompleteSearchHistory});
+  function reviewHandoff(result) {
+    if (statusLabel(result) !== 'Review required') return '';
+    const genericNote = text => !text || /^(?:The registry check did not provide enough information|The registry search or selected record did not return complete|No explanation accompanied)/i.test(text);
+    const notes = [result.source_note, result.comments].map(value => String(value || '').trim());
+    const note = notes.find(text => !genericNote(text)) || notes.find(Boolean) || '';
+    const diagnostic = result.lab_diagnostic || {};
+    const codes = [result.status_reason, result.reason_code, diagnostic.code].filter(Boolean).join(' ');
+    let reason = '';
+    let action = '';
+    if (result.state === 'NV' && /charitable solicitation registration or exemption|Review the entity's filing scope/i.test(note)) {
+      action = 'Check Nevada filing history for a charitable solicitation registration or exemption under the legal name shown above. Compare the filing year and organization before assigning a status.';
+    } else if (/EIN_CONFLICT|TAX_ID_CONFLICT|ATTACHMENT_IDENTITY_CONFLICT/.test(codes)) {
+      reason = 'The tax ID on the state record or filing conflicts with the entered EIN.';
+      action = 'Compare the EIN on the state filing with the entered EIN. Use a filing belonging to the entered organization before assigning its status.';
+    } else if (/FILING_PERIOD_UNVERIFIED|FILING_DATE_UNCONFIRMED|PC_DETAIL_UNCONFIRMED/.test(codes)) {
+      reason = 'Aurora could not verify a filing period for the matched organization.';
+      action = 'Open the filing history for the matched record and check the most recent filing for this EIN and fiscal period.';
+    } else if (/CONNECTOR_(?:UNAVAILABLE|UPDATE_REQUIRED|INTERRUPTED)/.test(codes)) {
+      reason = 'Aurora lost the browser connector or could not start it for this check.';
+      action = 'Restore the registry connector connection in Aurora, then retry this state.';
+    } else if (/VERIFICATION_PENDING|VERIFICATION_REQUIRED|RATE_LIMIT|TIMEOUT|TIMED_OUT/.test(codes)) {
+      reason = /RATE_LIMIT/.test(codes) ? 'The registry limited further requests.' :
+        /VERIFICATION/.test(codes) ? 'The registry verification step did not finish.' : 'The state check exceeded its time limit.';
+      action = 'Retry this state. If the check still stalls, use the official registry to verify the organization and its latest status.';
+    } else if (/CARD_CHANGED|DETAIL_UNAVAILABLE|RESULT_LIMIT|SEARCH_INCOMPLETE|INVALID_SEQUENCE|RESPONSE_PENDING/.test(codes)) {
+      reason = /CARD_CHANGED|DETAIL_UNAVAILABLE/.test(codes) ? 'Aurora could not read the required details from the state record.' :
+        /RESULT_LIMIT/.test(codes) ? 'The registry limited the results returned for this search.' : 'The registry search stopped before Aurora could confirm the result.';
+      action = 'Check the relevant record in the state registry and verify its current registration. You can also retry this state.';
+    } else if (/identity|different (?:organization|EIN)|multiple (?:records|matches)|unique safe match/i.test(note)) {
+      action = 'Compare the state records with the entered legal name and EIN. If the registry omits the EIN, check the registered address or an original filing.';
+    } else {
+      action = 'Check the latest registration or filing for this organization in the state registry. If the result is still unclear, confirm it with the registry.';
+    }
+    const raw = String(result.raw_status_text || '').trim();
+    const recordedFailure = /failed|incomplete|conflict|could not|timed out|unavailable|missing/i.test(raw) ? raw : '';
+    const description = genericNote(note) ? reason || recordedFailure || note || 'The check ended without a confirmed registry status or a recorded cause.' : note;
+    const locator = [result.matched_registry_name, result.matched_registry_identifier].filter(Boolean).join(' · ');
+    const entered = [result.organization_name, result.ein && 'EIN ' + result.ein].filter(Boolean).join(' · ');
+    const anchor = locator ? 'Registry record: ' + locator : entered ? 'Organization checked: ' + entered : '';
+    const pending = diagnostic.pending_identifier;
+    const inProgress = pending && !description.includes(pending) && pending !== result.matched_registry_identifier
+      ? 'Record being checked when the lookup stopped: ' + pending : '';
+    const evidence = /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/.test(result.evidence_url || '')
+      ? 'Start with the linked state snapshot.' : usesIncompleteSearchHistory(result) && result.search_history_url
+        ? 'Start with the recorded search terms.' : '';
+    return [description, anchor, inProgress, 'Next step: ' + [evidence, action].filter(Boolean).join(' ')].filter(Boolean).join('\n');
+  }
+  window.CCIdentityReview = Object.freeze({render, renderEvidence, statusLabel, reviewHandoff, usesSearchHistoryOnly, usesIncompleteSearchHistory});
 })();

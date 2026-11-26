@@ -960,6 +960,8 @@
 
 
     function commentsWithRegistryFooter(result) {
+      const handoff = window.CCIdentityReview?.reviewHandoff?.(result);
+      if (handoff) return handoff;
 
       const comments = result.comments || `No explanation accompanied the ${result.status || "unconfirmed"} result. The supporting state evidence should be confirmed before relying on this result.`;
 

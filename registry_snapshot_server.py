@@ -8863,8 +8863,12 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     # Do not open a registered-agent/other entity detail.
                     missing_nv_business_id |= row.get("business_identifier_missing") is True
                     unreviewed_scope = True
+                    facts = {}
+                    if bound_scope_detail:
+                        facts = {key: scope_detail["fields"].get(key) for key in (
+                            "Entity Status", "Annual Renewal Due Date/Expiration Date", "Solicits Charitable Contribution?")}
                     scope_reviews.append({"name": row["name"], "identifier": row["identifier"],
-                                          "category": row["entity_type"], "bound_detail": bound_scope_detail,
+                                          "category": row["entity_type"], "bound_detail": bound_scope_detail, "_license_facts": facts,
                                           "missing_business_id": bool(row.get("business_identifier_missing"))})
                     seen.add(row["identifier"])
                     continue
@@ -9098,9 +9102,17 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                          complete_name_identity_key(org.organization_name).removeprefix("the ")}
             if len(exact)==1:
                 result._nv_scope_detail = next(iter(exact))
-                result.source_note += " The business license alone does not establish a charitable solicitation registration or exemption."
+                identifier, name = result._nv_scope_detail
+                facts = next(r["_license_facts"] for r in scope_reviews
+                             if r.get("bound_detail") and (r["identifier"], r["name"]) == (identifier, name))
+                result.source_note = nv_business_license_note(name, identifier, facts)
         labels = [f"{row['name']} ({row['identifier']}; {row['category']})" for row in scope_reviews[:3]]
-        if labels:
+        if getattr(result, "_nv_scope_detail", None):
+            other = [row for row in scope_reviews if (row["identifier"], row["name"]) != result._nv_scope_detail]
+            if other:
+                result.source_note += " Other records returned: " + "; ".join(
+                    f"{row['name']} ({row['identifier']})" for row in other[:3]) + "."
+        elif labels:
             result.source_note += " Review candidates: " + "; ".join(labels) + "."
     if result.status == "Not Registered" and state == "TN":
         # The current official FAQ links both registered and $50,000-and-under
@@ -9850,6 +9862,21 @@ def al_completed_candidates_for_review(record):
             checker.Organization(record["organization_name"], record["ein"]), list(retained.values()))
     finally:
         REVIEWED_NAME_CONTEXT.reset(token)
+
+
+def nv_business_license_note(name, identifier, fields):
+    parts = [f"Nevada returned a business license for {name} ({identifier})."]
+    status = fields.get("Entity Status")
+    date = fields.get("Annual Renewal Due Date/Expiration Date")
+    solicits = fields.get("Solicits Charitable Contribution?")
+    if isinstance(status, str) and status.strip() not in {"", "-", "—"}:
+        parts.append(f"Business license status: {status.strip()}.")
+    if isinstance(date, str) and re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", date.strip()):
+        parts.append(f"License renewal or expiration date: {date.strip()}.")
+    if isinstance(solicits, str) and solicits.strip().lower() in {"yes", "no"}:
+        parts.append(f"The license lists “{solicits.strip().capitalize()}” for charitable solicitation.")
+    parts.append("Aurora could not verify a charitable solicitation registration or exemption for this organization.")
+    return " ".join(parts)
 
 
 def nv_bound_scope_detail(row, detail, query, ein):

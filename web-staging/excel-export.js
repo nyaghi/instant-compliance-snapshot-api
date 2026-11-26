@@ -43,7 +43,7 @@
   function build(results, options={}) {
     const label=r=>window.CCIdentityReview?.statusLabel(r)||(r.status==='Closed / Withdrawn / Canceled'?'Closed / Withdrawn / Canceled / Inactive':r.status||'Unknown');
     const ein=v=>{const s=String(v||'').replace(/\D/g,'');return s.length===9?s.slice(0,2)+'-'+s.slice(2):String(v||'');};
-    const rows=results.map(r=>[r.organization_name,ein(r.ein),r.state,label(r),r.registration_date,r.renewal_filing_value||r.renewal_date,r.matched_registry_name,r.matched_registry_identifier,options.comments?.(r)||r.comments||r.source_note||'']);
+    const rows=results.map(r=>[r.organization_name,ein(r.ein),r.state,label(r),r.registration_date,r.renewal_filing_value||r.renewal_date,r.matched_registry_name,r.matched_registry_identifier,options.comments?.(r)||window.CCIdentityReview?.reviewHandoff?.(r)||r.comments||r.source_note||'']);
     const candidateRows = [];
     const snapshotPath = /^\/state-snapshots\/[a-f0-9]{64}\.pdf$/;
     const evidence=results.map(r=>{
