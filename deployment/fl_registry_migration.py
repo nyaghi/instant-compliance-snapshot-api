@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import date, datetime
+from html import unescape
 from html.parser import HTMLParser
 import re
 from threading import Event
@@ -91,7 +92,11 @@ def parse(source, query):
     page = CharityPage()
     page.feed(source)
     text = " ".join(" ".join(page.text).split())
-    if (page.criteria != [query] or page.scopes != 1 or page.scope is not None
+    # FDACS sometimes encodes punctuation before escaping the form attribute.
+    # Accept one extra entity decode only when it reproduces the exact query.
+    bound_query = (len(page.criteria) == 1 and page.criteria[0] is not None
+                   and (page.criteria[0] == query or unescape(page.criteria[0]) == query))
+    if (not bound_query or page.scopes != 1 or page.scope is not None
             or "Search Licenses" not in text
             or re.search(r"verify you are human|access denied|unable to load licenses", text, re.I)):
         raise ValueError("FDACS response was not bound to the submitted search")

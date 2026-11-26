@@ -190,6 +190,15 @@ class FloridaMigration(unittest.TestCase):
         self.assertEqual(cards[0], ("CH3385", "CH3385", "Registered", "10/22/2027", "N/A", ""))
         self.assertEqual(parse((root / "new-pittsburgh-id.html").read_text(encoding="utf-8"), "CH52211"), ())
 
+    def test_double_escaped_query_still_requires_exact_match(self):
+        name = "Children's Hunger Fund"
+        source = document(name).replace("&#x27;", "&amp;#39;")
+        self.assertEqual(parse(source, name), ())
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            parse(source, "Childrens Hunger Fund")
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            parse(source.replace("&amp;#39;", "&amp;amp;#39;"), name)
+
     def test_recorded_organization_matrix(self):
         path = os.environ.get("CC_FL_MIGRATION_ROSTER")
         if not path:

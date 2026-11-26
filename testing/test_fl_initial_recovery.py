@@ -9,14 +9,17 @@ from deployment.fl_initial_recovery import initial_transport_failure
 ROOT=Path(__file__).resolve().parents[1]
 CASES=json.loads((ROOT/'testing/fixtures/gate54-state-controls.json').read_text())['cases'][:70]
 
-def run_case(case,first_error=None,unavailable=False,negative=False,wrong_ein=False,partial=False,post_timeout=False,master=c):
+def run_case(case,first_error=None,unavailable=False,negative=False,wrong_ein=False,partial=False,post_timeout=False,master=c,
+             *, migration=False, verified_entry_failures=0, business_delay=0, absolute_stop=44):
     now=[0.];page=MagicMock();visits=[];routes=[];wire=[];registered=[]
     def response():
         r=MagicMock();r.status=200;r.headers=Message();r.headers['Content-Type']='text/html';r.read1.side_effect=[b'<html>Complete registry response</html>',b''];r.__enter__.return_value=r;return r
     opener=MagicMock()
     def open_request(req,**kw):
-        wire.append({'method':req.method,'url':req.full_url,'timeout':kw['timeout'],'data':req.data});now[0]+=.2
-        if unavailable:now[0]+=kw['timeout'];raise TimeoutError('HTTPS source unavailable')
+        wire.append({'method':req.method,'url':req.full_url,'timeout':kw['timeout'],'data':req.data,'start':now[0]})
+        if unavailable or len(wire)<=verified_entry_failures:
+            now[0]+=kw['timeout'];raise TimeoutError('HTTPS source unavailable')
+        now[0]+=.2
         r=response()
         if partial:r.read1.side_effect=[b'partial',TimeoutError('Incomplete document')]
         return r
@@ -32,7 +35,8 @@ def run_case(case,first_error=None,unavailable=False,negative=False,wrong_ein=Fa
             assert route.fulfill.called
             return SimpleNamespace(status=200)
         if first_error is not None:
-            now[0]+=kw['timeout']/1000;raise first_error
+            if isinstance(first_error,TimeoutError):now[0]+=max(0,kw['timeout']/1000-.1)
+            raise first_error
         return SimpleNamespace(status=200)
     page.goto.side_effect=goto
     page.expect_navigation.return_value.__enter__.return_value.value=SimpleNamespace(status=200)
@@ -45,8 +49,24 @@ def run_case(case,first_error=None,unavailable=False,negative=False,wrong_ein=Fa
         page.expect_navigation.return_value.__exit__.side_effect = finish_submit
     row=case['name']+' License/Registration Number CH12345 Expiration Date 12/31/2027 Status Current EIN '+('999999999' if wrong_ein else case['ein'])
     page.evaluate.return_value=[{'index':0,'text':row}]
+    page.url=master.FL_CHECK_A_CHARITY_URL
+    page.input_value.return_value=case['name']
+    page.locator.return_value.inner_text.return_value='No records found' if negative else row
+    def business(*args):
+        now[0]+=business_delay
+        return []
     with patch.object(master.time,'monotonic',side_effect=lambda:now[0]),patch.object(master.time,'sleep',side_effect=lambda seconds:now.__setitem__(0,now[0]+seconds)),patch.object(master,'fl_business_lookup_enabled',return_value=False),patch.object(master,'reviewed_queries_first',return_value=[case['name']]),patch.object(master.checker,'find_visible_input',return_value=page),patch.object(master,'readable_page_text',return_value='No records found' if negative else row),patch.object(master,'no_registry_results_seen',return_value=negative),patch.object(master,'registry_candidate_fields',return_value={'status':'Current'}),patch.object(master.urllib.request,'build_opener',return_value=opener):
-        r=master.search_fl(page,SimpleNamespace(organization_name=case['name'],ein=case['ein']))
+        org=SimpleNamespace(organization_name=case['name'],ein=case['ein'])
+        if migration:
+            migration_check=MagicMock()
+            transport=master.FloridaVerifiedTransport(page)
+            try:
+                with patch.object(master,'fl_business_lookup_enabled',return_value=bool(business_delay)), patch.object(master,'fl_business_public_rows',side_effect=business), patch.object(master,'fl_shared_lookup_deadline',return_value=absolute_stop), patch.object(master,'CAPTURE_EVIDENCE_SCREENSHOTS',False), patch.object(master,'CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT',False):
+                    r=master.search_fl_with_transport(page,org,transport,migration=migration_check)
+            finally:
+                transport.close()
+        else:
+            r=master.search_fl(page,org)
     return r,visits,wire,now[0],page,routes
 
 class InitialRecovery(unittest.TestCase):

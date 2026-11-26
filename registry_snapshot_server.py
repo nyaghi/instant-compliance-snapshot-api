@@ -20755,15 +20755,19 @@ def search_fl_with_transport(page, org, transport, *, migration=None):
             return False
         return True
 
+    delayed_entry_used = False
+
     def load_fl_search_page():
+        nonlocal delayed_entry_used
         last_error = None
-        for attempt in range(2):
+        for attempt in range(3 if migration is not None else 2):
             if deadline_expired():
                 raise TimeoutError("FL lookup exceeded its bounded search window")
             try:
                 if fl_verified_transport_first():
                     transport.enable()
-                fl_access_call("browser_entry", page.goto, url, wait_until="commit", timeout=remaining_ms(12000))
+                entry_step = "browser_entry_delayed" if attempt == 2 else "browser_entry"
+                fl_access_call(entry_step, page.goto, url, wait_until="commit", timeout=remaining_ms(12000))
                 if transport.error:
                     raise transport.error
                 return
@@ -20771,6 +20775,13 @@ def search_fl_with_transport(page, org, transport, *, migration=None):
                 if transport.error:
                     cause = getattr(transport.error, "reason", transport.error)
                     if transport.initial_timeout_recovery and initial_transport_failure(cause):
+                        if (migration is not None and attempt == 1 and not delayed_entry_used
+                                and remaining_seconds() >= 9):
+                            # Leave six seconds after a short pause for a fresh,
+                            # TLS-verified entry and the existing search plan.
+                            delayed_entry_used = True
+                            time.sleep(3)
+                            continue
                         raise FloridaEntryTimeout("Florida Check-A-Charity recovery form did not respond") from transport.error
                     raise transport.error
                 if "ERR_CERT_AUTHORITY_INVALID" in str(exc):
@@ -20791,6 +20802,8 @@ def search_fl_with_transport(page, org, transport, *, migration=None):
                     pass
                 if attempt == 0:
                     time.sleep(min(1, remaining_seconds()))
+                else:
+                    break
         raise last_error
 
     def select_fl_candidate(candidate_rows):
