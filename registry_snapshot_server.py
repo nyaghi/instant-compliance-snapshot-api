@@ -7947,6 +7947,8 @@ def nv_charity_filings_evidence(record, payload):
         raise ValueError("Nevada filing history is incomplete or belongs to another entity")
     dates, qualifications, solicitation_dates, withdrawals, seen = [], [], [], [], set()
     exemption_dates = []
+    statement_effective = []
+    exemption_effective = []
     unlabelled_filings = 0
     for cells in payload["rows"]:
         if not isinstance(cells, list) or len(cells) != len(headers) or not all(isinstance(v, str) for v in cells):
@@ -7982,6 +7984,7 @@ def nv_charity_filings_evidence(record, payload):
             if filed is None or filed > date.today():
                 raise ValueError("Nevada charitable solicitation filing date is invalid")
             solicitation_dates.append(filed)
+            statement_effective.append(fields["Effective Date"])
         elif (nv_entity_number_detail_allowed(record["identifier"], record.get("entity_type", ""),
                   "", record["identifier"]) and fields["Filing Type"] == "Exemption to Charitable Solicitation Statement"):
             filed = final_four_source_date(fields["Filed Date"], "Nevada exemption filed")
@@ -7991,6 +7994,7 @@ def nv_charity_filings_evidence(record, payload):
                     or int(fields["No. of Pages"]) < 1):
                 raise ValueError("Nevada exemption filing is incomplete")
             exemption_dates.append(filed)
+            exemption_effective.append(effective)
         elif (nv_entity_type_in(record.get("entity_type"), {"Foreign Non-Profit Corporation (80)"})
               and fields["Filing Type"] == "Withdrawal of Foreign Non-Profit Corporation (80)"):
             filed = final_four_source_date(fields["Filed Date"], "Nevada withdrawal filed")
@@ -8009,6 +8013,32 @@ def nv_charity_filings_evidence(record, payload):
         result.update(initial=qualifications[0], initial_label="Foreign Qualification — Filed Date",
                       initial_type="initial_registration_filing_date")
     if record.get("requires_solicitation_history"):
+        if exemption_dates and solicitation_dates:
+            # Both types occur in the same validated entity history. Filing
+            # order and duplicate filing dates do not establish legal effect.
+            effective = [final_four_source_date(value, "Nevada statement effective date")
+                         for value in statement_effective]
+            if any(day is None or day > date.today() for day in effective):
+                raise ValueError("Nevada mixed filing history has an unverified effective date")
+            statement, exemption = max(effective), max(exemption_effective)
+            raw = record["raw_status"].casefold()
+            standing = "Delinquent" if raw == "default" else licensed_charity_status(raw, None)
+            if raw not in {"active", "registered", "current"} and standing in {
+                    "Revoked", "Suspended", "Closed / Withdrawn / Canceled", "Delinquent"}:
+                result.update(status=standing, solicitation_statement_filed=max(zip(effective, solicitation_dates))[1])
+                return result
+            if (statement == exemption or raw not in {"active", "registered", "current"}
+                    or not record["expiration"] or record["expiration"] < date.today()
+                    or record["solicitation_declared"] is not (statement > exemption)):
+                raise ValueError(f"Nevada registration effective {statement} and exemption effective {exemption} require review")
+            if statement > exemption:
+                result.update(status=licensed_charity_status("Active", record["expiration"]),
+                              solicitation_statement_filed=max(zip(effective, solicitation_dates))[1])
+            else:
+                result.update(status="Exempt", solicitation_exemption_filed=max(zip(exemption_effective, exemption_dates))[1])
+            result["date_evidence_note"] = (f"Nevada shows a registration statement effective {statement} "
+                                            f"and an exemption effective {exemption}. The later filing applies.")
+            return result
         if exemption_dates:
             # Limit the newly supported entity-number path to an unopposed,
             # dated exemption in the complete same-entity history. A corporate
@@ -8923,8 +8953,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                     if record.get("requires_solicitation_history") and detail.get("filings") is not None:
                         try:
                             record = nv_charity_filings_evidence(record, detail["filings"])
-                        except ValueError:
-                            record["date_evidence_note"] = "Nevada's required charity filing history could not be verified; no filing date or charity status was inferred."
+                        except ValueError as exc:
+                            record["date_evidence_note"] = str(exc)
                     if record.get("non_charity_withdrawal_history"):
                         excluded_nv_entities.append({"name": record["name"], "identifier": record["identifier"],
                             "entity_type": record["entity_type"],
@@ -8936,7 +8966,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
                         unreviewed_scope = True
                         nv_scope_records[record["identifier"]] = record
                         scope_reviews.append({"name": record["name"], "identifier": record["identifier"],
-                                              "category": "Unconfirmed charitable-solicitation filing history", "source_url": record["url"]})
+                                              "category": "Unconfirmed charitable-solicitation filing history", "source_url": record["url"],
+                                              "bound_detail": (not record.get("ein") or record["ein"] == canonical_ein_digits(org.ein)),
+                                              "_history_note": record.get("date_evidence_note")})
                         seen.add(row["identifier"])
                         continue
             records.append(record); seen.add(row["identifier"])
@@ -9103,9 +9135,13 @@ def final_four_browser_lookup(org, state, evidence, deadline=None, *, nc_specifi
             if len(exact)==1:
                 result._nv_scope_detail = next(iter(exact))
                 identifier, name = result._nv_scope_detail
-                facts = next(r["_license_facts"] for r in scope_reviews
+                detail_row = next(r for r in scope_reviews
                              if r.get("bound_detail") and (r["identifier"], r["name"]) == (identifier, name))
-                result.source_note = nv_business_license_note(name, identifier, facts)
+                if "_history_note" in detail_row:
+                    result.source_note = (f"Nevada returned {name} ({identifier}). "
+                                          f"{detail_row['_history_note'] or 'The charitable filing history is incomplete.'}")
+                else:
+                    result.source_note = nv_business_license_note(name, identifier, detail_row["_license_facts"])
         labels = [f"{row['name']} ({row['identifier']}; {row['category']})" for row in scope_reviews[:3]]
         if getattr(result, "_nv_scope_detail", None):
             other = [row for row in scope_reviews if (row["identifier"], row["name"]) != result._nv_scope_detail]
@@ -10720,6 +10756,11 @@ def final_four_connector_request(payload, origin):
         if record.get('_al_scope_row'):
             from deployment.state_snapshots import attach_al_scope_original
             response['result'] = attach_al_scope_original(record, response['result'])
+        if record.get('nv_capture_audit') and record['state']=='NV':
+            attached_url=response['result'].get('evidence_url')
+            attached=next((r.get('identifier') for r in record.get('source_snapshots',[])
+                           if attached_url and r.get('operation')=='detail' and r.get('url')==attached_url),None)
+            response['result']['nv_capture_audit']={'details':record['nv_capture_audit'],'attached_identifier':attached}
     from deployment.al_final_empty import prepare
     response = prepare(sys.modules[__name__],record,response)
     return 200, response

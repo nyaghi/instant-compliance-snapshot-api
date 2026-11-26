@@ -20,6 +20,9 @@ class PeriodBrowser(unittest.TestCase):
         number='999999999999'if wrong=='number'else d['identifier']
         activity='Charitable Exempt'if wrong=='activity'else'Charitable Solicitation'
         row='<tr><td class="mat-column-licenseNumber">'+number+'</td><td class="mat-column-licenseeName"><a href="'+DETAIL+'">'+html.escape(rowname)+'</a></td><td class="mat-column-licenseActivity">'+activity+'</td></tr>'
+        # The real portal performs a client-side transition. Allow the evaluated
+        # selection to return before this two-document fixture navigates.
+        row=row.replace('<a href=', '<a onclick="event.preventDefault();setTimeout(()=>location.assign(this.href),50)" href=')
         source='''<h1>LOCAL MODELED FIXTURE — NOT STATE EVIDENCE</h1>
 <button id="entityApplicantType" onclick="document.getElementById('options').hidden=false">Business Name</button>
 <div id="options" hidden><button role="option" onclick="document.getElementById('entityApplicantType').textContent=this.textContent;this.parentElement.hidden=true">License Number</button></div>
@@ -42,16 +45,18 @@ class PeriodBrowser(unittest.TestCase):
             result=page.evaluate(self.step,{'phase':phase,'d':d})
             if result.get('error'):return result
             phase=result.get('next',phase)
-            if phase=='row':break
-        self.assertEqual(phase,'row')
+            if phase=='licensing':break
+        self.assertEqual(phase,'licensing')
         self.assertEqual(page.locator('#receipt').inner_text(),'License Number|'+d['identifier']+'|Exact Match')
-        return page.evaluate(self.step,{'phase':'row','d':d})
+        return page.evaluate(self.step,{'phase':'licensing','d':d})
     def test_thirty_exact_license_workflows_select_one_bound_row_and_retain_original_pixels(self):
         texts=[]
         for i,case in enumerate(self.cases):
             context,page,d,requests=self.page(case)
             with page.expect_navigation(wait_until='domcontentloaded'):result=self.search(page,d)
-            self.assertEqual(result,{'next':'metadata'});metadata=page.evaluate(self.step,{'phase':'capture_position','d':d})
+            self.assertEqual(result['next'],'metadata')
+            self.assertEqual(result['selection']['matching_rows'],1)
+            metadata=page.evaluate(self.step,{'phase':'capture_position','d':d})
             self.assertEqual(metadata['url'],DETAIL);self.assertEqual(requests,[URL,DETAIL])
             image=page.screenshot(type='jpeg',full_page=True)
             texts.append({'d':d,'url':metadata['url'],'text':metadata['text']})
@@ -64,6 +69,8 @@ class PeriodBrowser(unittest.TestCase):
     def test_wrong_or_nonunique_record_never_opens_a_detail(self):
         for wrong in ['name','number','duplicate','activity']:
             context,page,d,requests=self.page(self.cases[0],wrong=wrong);r=self.search(page,d)
-            self.assertEqual(r,{'error':'selected_license_not_unique_or_absent'});self.assertEqual(requests,[URL]);context.close()
+            self.assertEqual(r['error'],'selected_license_not_unique_or_absent')
+            self.assertNotEqual(r['selection']['matching_rows'],1)
+            self.assertEqual(requests,[URL]);context.close()
 
 if __name__=='__main__':unittest.main()

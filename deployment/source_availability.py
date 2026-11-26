@@ -125,6 +125,11 @@ def apply(data):
         explanation = "Mississippi's public search page displayed a host error (520)."
     elif data.get('status_reason') == 'NH_DATASET_UNAVAILABLE':
         explanation = 'The verified New Hampshire registry download is unavailable or needs refresh.'
+    elif data.get('state') == 'DC' and fact['signal'] == 'DC_LICENSE_SOURCE_UNREACHABLE':
+        attempts = [a.get('attempt') for a in (data.get('source_attempts') or [])
+                    if isinstance(a, dict) and a.get('source') == 'DC_LICENSE_API']
+        count = ' after two attempts' if 2 in attempts else ' after one attempt' if 1 in attempts else ''
+        explanation = f"DC’s public business license feed returned no completed search{count}."
     # Do not claim the entire site is down, nor publish raw exception payloads.
     data['comments'] = explanation + ' No registration status was established. Retry this state later.'
     return data

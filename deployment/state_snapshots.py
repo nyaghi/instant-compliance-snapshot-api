@@ -1338,12 +1338,13 @@ def il_selected_detail_snapshot(query,evidence,url,text,expected_ein=None):
 def _connector_archive(record,payload,query,evidence):
     """Called only after the original query ID and source schema were validated."""
     incoming=payload.get('state_snapshot')
-    if not incoming or STORE is None:return
+    if not incoming:return 'no_pixels'
+    if STORE is None:return 'store_unavailable'
     started=time.perf_counter()
     try:
-        if incoming.get('query')!=query:return
+        if incoming.get('query')!=query:return 'query_mismatch'
         stamp=incoming.get('captured_at')
-        if type(stamp) not in (int,float) or stamp<record['issued']-60 or stamp>time.time()+60:return
+        if type(stamp) not in (int,float) or stamp<record['issued']-60 or stamp>time.time()+60:return 'invalid_capture_time'
         run_id=record.setdefault('source_archive_run_id',secrets.token_hex(16))
         url=public_url(incoming.get('source_url',''),record['state'])
         if record['state']=='NY' and query.get('orgID'):
@@ -1369,7 +1370,7 @@ def _connector_archive(record,payload,query,evidence):
                     or (not application and fields.get('Registration #')!=identifier)):
                 return
         text=incoming.get('public_text','')
-        if not isinstance(text,str) or len(text)>20000:return
+        if not isinstance(text,str) or len(text)>20000:return 'invalid_public_text'
         if record['state']=='MS' and query.get('operation')=='search':
             ms_rows=evidence.get('rows',[])
             exact_single=(len(ms_rows)==1 and evidence.get('complete') is True and evidence.get('total')==1
@@ -1429,6 +1430,7 @@ def _connector_archive(record,payload,query,evidence):
             rows=[('@completed-search',''),*rows]
         identifier=str(query.get('identifier') or query.get('orgID') or '')
         if identifier and rows:rows=[(identifier,rows[0][1])]
+        disposition='identity_unbound'
         for ident,name in rows[:12]:
             # Do not attach a screenshot of the last page to records only seen
             # on an earlier page, or a different record behind a detail dialog.
@@ -1460,7 +1462,8 @@ def _connector_archive(record,payload,query,evidence):
             try:
                 ref=archive(asset,ein=record['ein'],state=record['state'],run_id=run_id,provisional=True)
             except LoadingFrame:
-                if re.fullmatch(r'NV[0-9]{1,16}',ident):
+                disposition='loading_frame'
+                if re.fullmatch(r'(?:NV[0-9]{1,16}|E[0-9]{7,14}-[0-9])',ident):
                     seen=record.setdefault('nv_loading_frames',[])
                     if ident not in seen and len(seen)<8:seen.append(ident)
                 continue
@@ -1469,19 +1472,30 @@ def _connector_archive(record,payload,query,evidence):
             record.setdefault('source_snapshots',[]).append({
                 **{k:ref[k] for k in ('url','identifier','record_name','captured_at','ein','state','provisional') if k in ref},
                 'operation':'detail' if ga_detail or il_detail or (record['state']=='NY' and query.get('orgID')) else query.get('operation','')})
+            disposition='retained'
         refs=record.get('source_snapshots',[])
         if record['state']=='TN':refs=sorted(refs,key=lambda r:r.get('operation')=='detail')
         if record['state'] == 'AL':
             refs = sorted(refs, key=lambda ref: str(ref.get('identifier', '')).startswith('ALROW-'))
         record['source_snapshots']=refs[-24:]
+        return disposition
     except Exception:
         record['snapshot_capture_unavailable']=True
+        return 'archive_error'
     finally:
         record['source_archive_ms']=round(record.get('source_archive_ms',0)+(time.perf_counter()-started)*1000,2)
 
 
 def connector_archive(record,payload,query,evidence):
-    """Passive, bounded IL empty-receipt observation; archive decisions unchanged."""
+    """Record bounded diagnostics for Nevada details and Illinois empty searches."""
+    if record.get('state')=='NV' and query.get('operation')=='detail':
+        disposition=_connector_archive(record,payload,query,evidence)
+        audit=record.setdefault('nv_capture_audit',[])
+        audit.append({'query_id':str(payload.get('query_id',''))[:100],
+                      'identifier':str(query.get('identifier',''))[:48],
+                      'disposition':disposition or 'unbound'})
+        del audit[:-16]
+        return
     observe=(isinstance(record,dict) and record.get('state')=='IL'
         and isinstance(query,dict) and query.get('state')=='IL'
         and 'identifier' not in query and evidence=={'rows':[]})

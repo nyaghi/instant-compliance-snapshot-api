@@ -64,7 +64,7 @@ class EntityNumberControls(unittest.TestCase):
             with self.subTest(column=col), self.assertRaises(ValueError):
                 cc.nv_charity_filings_evidence(cc.nv_charity_detail_evidence(self.fields, self.identifier), history)
         history = self.history()
-        history['rows'].append(['03/01/2026', '03/01/2026', '456', 'Charitable Solicitation Registration Statement', 'Email', '1'])
+        history['rows'].append(['03/01/2026', '02/20/2026', '456', 'Charitable Solicitation Registration Statement', 'Email', '1'])
         history['total'] = 2
         with self.assertRaises(ValueError):
             cc.nv_charity_filings_evidence(cc.nv_charity_detail_evidence(self.fields, self.identifier), history)

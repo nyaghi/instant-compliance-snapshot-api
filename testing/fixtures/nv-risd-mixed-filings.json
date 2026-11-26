@@ -1,0 +1,85 @@
+{
+  "query": {
+    "state": "NV",
+    "operation": "detail",
+    "identifier": "E6609212020-7"
+  },
+  "fields": {
+    "Entity Name": "Rhode Island School of Design",
+    "Entity Status": "Registered",
+    "Entity Number": "E6609212020-7",
+    "NV Business ID": "-",
+    "Entity Type": "Foreign Entities Not Required to Register In Nevada",
+    "Formation Date in Nevada": "04/27/2020",
+    "Annual Renewal Due Date/Expiration Date": "04/30/2027",
+    "Solicits Charitable Contribution?": "Yes",
+    "IRS Registered Name": "Rhode Island School of Design",
+    "Campaign Name": "-",
+    "FEIN": "-"
+  },
+  "filings": {
+    "identifier": "E6609212020-7",
+    "name": "Rhode Island School of Design",
+    "complete": true,
+    "total": 7,
+    "headers": [
+      "Filed Date",
+      "Effective Date",
+      "Filing Number",
+      "Filing Type",
+      "No. of Pages"
+    ],
+    "rows": [
+      [
+        "03/04/2026",
+        "03/04/2026",
+        "20265580550",
+        "Charitable Solicitation Registration Statement",
+        "4"
+      ],
+      [
+        "02/27/2025",
+        "02/27/2025",
+        "20254710058",
+        "Charitable Solicitation Registration Statement",
+        "6"
+      ],
+      [
+        "06/10/2024",
+        "06/10/2024",
+        "20254709693",
+        "Charitable Solicitation Registration Statement",
+        "3"
+      ],
+      [
+        "06/10/2024",
+        "06/10/2024",
+        "20254709688",
+        "Charitable Solicitation Registration Statement",
+        "3"
+      ],
+      [
+        "06/10/2024",
+        "06/10/2024",
+        "20244130611",
+        "Charitable Solicitation Registration Statement",
+        "3"
+      ],
+      [
+        "06/10/2024",
+        "06/10/2024",
+        "20254709683",
+        "Charitable Solicitation Registration Statement",
+        "3"
+      ],
+      [
+        "04/27/2020",
+        "04/27/2020",
+        "20200660920",
+        "Exemption to Charitable Solicitation Statement",
+        "1"
+      ]
+    ]
+  },
+  "source": "https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=0aa0009c-dcd5-486a-81a9-ee38eeb70dbe"
+}

@@ -102,7 +102,24 @@ const CCOwnedSourcePixels=(()=>{
     }
     return blueCenter>=Math.max(8,pixels*.00005);
   }
-  async function nvDetailVeiled(data) {
+  function nvFirstPanelEmpty(rgba,width,height) {
+    if(width<320||height<220)return false;
+    let headerInk=0,menuBlue=false;
+    const count=(left,top,right,bottom,visit)=>{
+      for(let y=Math.floor(top*height);y<Math.floor(bottom*height);y++)
+        for(let x=Math.floor(left*width);x<Math.floor(right*width);x++){
+          const k=4*(y*width+x);
+          if(visit(rgba[k],rgba[k+1],rgba[k+2]))return true;
+        }
+      return false;
+    };
+    const luma=(r,g,b)=>Math.round(.299*r+.587*g+.114*b);
+    if(count(.26,.30,.90,.72,(r,g,b)=>luma(r,g,b)<200))return false;
+    count(.04,.04,.94,.20,(r,g,b)=>luma(r,g,b)<150 && ++headerInk>=40);
+    menuBlue=count(.01,.12,.24,.40,(r,g,b)=>b>115&&b-r>65&&b-g>20);
+    return headerInk>=40 && menuBlue;
+  }
+  async function nvDetailVeiled(data,firstPanel=false) {
     if(!image(data))throw Error('invalid_nv_detail_image');
     const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));
     const bitmap=await createImageBitmap(new Blob([bytes],{type:'image/jpeg'}));
@@ -111,9 +128,10 @@ const CCOwnedSourcePixels=(()=>{
       const w=Math.max(1,Math.round(bitmap.width*scale)),h=Math.max(1,Math.round(bitmap.height*scale));
       const ctx=new OffscreenCanvas(w,h).getContext('2d',{willReadFrequently:true});
       ctx.drawImage(bitmap,0,0,w,h);
-      return nvVeilInPixels(ctx.getImageData(0,0,w,h).data,w,h);
+      const rgba=ctx.getImageData(0,0,w,h).data;
+      return (firstPanel&&nvFirstPanelEmpty(rgba,w,h))||nvVeilInPixels(rgba,w,h);
     } finally {bitmap.close();}
   }
-  if(typeof module!=='undefined')module.exports={coversViewport,image,capture,nvDetailVeiled,nvVeilInPixels,pendingCount:()=>receivers.size};
+  if(typeof module!=='undefined')module.exports={coversViewport,image,capture,nvDetailVeiled,nvVeilInPixels,nvFirstPanelEmpty,pendingCount:()=>receivers.size};
   return {capture,coversViewport,nvDetailVeiled};
 })();

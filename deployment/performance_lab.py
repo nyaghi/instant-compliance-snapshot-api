@@ -358,6 +358,7 @@ def final_four_asset(name, text):
       trace("state result",{state:result.state,status:result.status||"",reason:result.status_reason||"",
         reason_code:result.reason_code||"",evidence_link_present:!!result.evidence_url,
         ...(attempts.length?{source_attempts:attempts}:{}),
+        ...(result.state==='NV' && result.nv_capture_audit?{nv_capture_audit:result.nv_capture_audit}:{}),
         ...(result.state==='MI' && result.group_lookup_timing?{group_lookup_timing:result.group_lookup_timing}:{})});
       const observed=window.__CCWorkflowObservations ||= {};
       if(result.workflow_observation)observed['server-'+result.state]=result.workflow_observation;

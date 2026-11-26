@@ -773,7 +773,7 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
         } else image=await captureImage(screenshotOptions);
 
         if(boundNvDetail&&image?.data&&typeof CCOwnedSourcePixels!=='undefined'
-            &&await CCOwnedSourcePixels.nvDetailVeiled(image.data)) {
+            &&await CCOwnedSourcePixels.nvDetailVeiled(image.data,completedViews===0)) {
           observed.phase='NV-loading-frame';
           if(retriedNvPixels||cancelled||!alive()||started+captureBudgetMs-Date.now()<1200)return null;
           retriedNvPixels=true;
@@ -814,9 +814,9 @@ async function captureStateSnapshot(job, query, commandId, prepared = null, sett
             }));
           } catch { /* The existing direct screenshot remains available. */ }
           if(cancelled||!alive())return null;
-          if(freshFrame?.data&&!await CCOwnedSourcePixels.nvDetailVeiled(freshFrame.data))image=freshFrame;
+          if(freshFrame?.data&&!await CCOwnedSourcePixels.nvDetailVeiled(freshFrame.data,completedViews===0))image=freshFrame;
           else image=await sampled('NV-fresh-pixels',()=>chrome.debugger.sendCommand({tabId},'Page.captureScreenshot',screenshotOptions));
-          if(!image?.data||cancelled||!alive()||await CCOwnedSourcePixels.nvDetailVeiled(image.data))return null;
+          if(!image?.data||cancelled||!alive()||await CCOwnedSourcePixels.nvDetailVeiled(image.data,completedViews===0))return null;
           observed.phase='NV-fresh-pixels-verified';
         }
         if(state==='NM')wfEvent(job,'NM image validation','started',{image_characters:typeof image?.data==='string'?image.data.length:null});
