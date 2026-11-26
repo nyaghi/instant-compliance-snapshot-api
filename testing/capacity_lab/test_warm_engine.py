@@ -81,7 +81,10 @@ def fixture(job,output,log,ready,supervisor,env):
         master._warm_test_previous_organization=ein
         if job.get('hang'):
             child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])
-            Path(output+'.descendant').write_text(str(child.pid))
+            ready = Path(output+'.descendant')
+            pending = Path(output+'.descendant.tmp')
+            pending.write_text(str(child.pid))
+            pending.replace(ready)
             time.sleep(60)
         return {'ein':ein,'state':state,'status':'Current','app_version':master.APP_VERSION,
             'matched_registry_name':name,'aliases':master.known_names_for_ein(ein),
