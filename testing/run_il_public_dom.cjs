@@ -19,15 +19,20 @@ async function run({total=0,activity=true,truncated=false,ready=true,disabled=fa
  const fields=['Name','FileNumber','Street1','City','State','PostalCode'];
  const openDetail=()=>schedule(()=>{
   if(detail==='absent')return;
-  const body=detail==='blank'?'':"Fixture Foundation\nCO Number: "+(detail==='wrong-id'?'99999999':'10000000')+"\nFEIN: 123456789\n"+(detail==='incomplete'?'':'Status: Good Standing')+"\n"+(detail==='missing-date'?'':'Annual Report Due Date: 12/31/2026');
-  dialog={innerText:body,getClientRects:()=>[{}]};mutate('childList',renderTarget);
+  const coNumber=detail==='wrong-id'?'99999999':'10000000';
+  const body=detail==='blank'?'':"Fixture Foundation\nCO Number: "+coNumber+"\nFEIN: 123456789\nRegistration Date: 1/1/2020\n"+(detail==='incomplete'?'':'Status: Good Standing')+"\n"+(detail==='missing-date'?'':'Annual Report Due Date: 12/31/2026');
+  dialog={innerText:body,getClientRects:()=>[{}],
+    querySelector:selector=>selector==='#DetailsTabStrip' ? {} : null,
+    querySelectorAll:selector=>selector==='h4' ? [{innerText:'CO Number: '+coNumber}] : []};
+  mutate('childList',renderTarget);
  },detailDelay);
  const grid={
   querySelectorAll(selector){
    if(selector==='.k-loading-mask')return [{getClientRects:()=>loading?[{}]:[]}];
    if(selector==='.k-grid-header thead th')return fields.map(field=>({dataset:{field}}));
    if(selector==='.k-grid-content tbody > tr[data-uid]')return Array.from({length:Math.min(size,Math.max(0,total-page*size))},(_,i)=>({
-    children:['Veterans organization '+(page*size+i),String(10000000+page*size+i),'Street','Chicago','IL','60601'].map(innerText=>({innerText})),querySelector:()=>({click:openDetail})
+    children:['Veterans organization '+(page*size+i),String(10000000+page*size+i),'Street','Chicago','IL','60601'].map(innerText=>({innerText})),
+    querySelectorAll:selector=>selector==='button[title="View Details"]' ? [{click:openDetail,getClientRects:()=>[{}]}] : []
    }));
    throw Error('Unexpected selector '+selector);
   },
@@ -38,7 +43,7 @@ async function run({total=0,activity=true,truncated=false,ready=true,disabled=fa
    throw Error('Unexpected selector '+selector);
   }
  };
- const document={documentElement:root,visibilityState:timerClamp?'hidden':'visible',querySelectorAll:()=>[button],
+ const document={documentElement:root,readyState:'complete',visibilityState:timerClamp?'hidden':'visible',querySelectorAll:()=>[button],
   getElementById:()=>({querySelectorAll:()=>[{innerText:'100',getClientRects:()=>menu?[{}]:[],click:()=>{size=100;page=0;menu=false;if(resizeTotalChange)total++;begin();}}]}),
   querySelector(selector){
    if(selector.startsWith('input['))return inputs[selector.match(/name="([^"]+)"/i)[1]];

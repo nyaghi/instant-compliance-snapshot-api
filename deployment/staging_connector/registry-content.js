@@ -136,6 +136,62 @@
     const row=rows[0],proof=JSON.stringify([...row.children].map(text));
     return ilCompletedSearch.rows.get(query.identifier)===proof?row:null;
   }
+  function ilObserveDetailClick(query, row, button, allowance) {
+    // A finished same-origin detail response is stronger evidence than an
+    // empty dialog. Resource Timing does not expose requests still in flight.
+    const retryableStatuses = new Set([408, 500, 502, 504]);
+    const deadline = Date.now() + allowance;
+    let observer, timer, started, responses = 0, retried = false, stopped = false;
+    const event = (outcome, fields = {}) => {
+      for (const scope of wfcActive.values()) {
+        wfcEvent(scope, "illinois.detail-request", outcome, fields);
+      }
+    };
+    const retry = () => {
+      if (stopped || retried || responses !== 1 || Date.now() + 4000 >= deadline
+          || ilSelectedVisibleRow(query) !== row || button.disabled || !visible(button)
+          || button.getAttribute("aria-disabled") === "true"
+          || visible(document.querySelector("#KendoWindowLevel1"))
+          || [...document.querySelectorAll("#main_screen .k-loading-mask")].some(visible)
+          || ![...document.querySelectorAll("button")].some(el => text(el) === "Search" && visible(el) && !el.disabled)) return;
+      retried = true;
+      event("same-row-retry");
+      button.click();
+    };
+    const observe = entries => {
+      for (const entry of entries.getEntries()) {
+        if (entry.startTime < started || entry.initiatorType !== "xmlhttprequest") continue;
+        let source;
+        try { source = new URL(entry.name); } catch { continue; }
+        if (source.origin !== location.origin || source.pathname !== "/RegistrationSearch/Details") continue;
+        responses++;
+        event("response-finished", {http_status: entry.responseStatus, response_ms: Math.round(entry.duration)});
+        if (responses === 1 && retryableStatuses.has(entry.responseStatus)) timer = setTimeout(retry, 250);
+      }
+    };
+    return {
+      click() {
+        if (typeof PerformanceObserver === "function" && typeof globalThis.performance?.now === "function") {
+          try {
+            started = performance.now();
+            observer = new PerformanceObserver(observe);
+            observer.observe({type:"resource"});
+          } catch { /* Older browsers keep the existing behavior. */ }
+        }
+        button.click();
+        event("clicked", {
+          loading_visible: [...document.querySelectorAll("#main_screen .k-loading-mask")].some(visible),
+        });
+      },
+      stop() {
+        stopped = true;
+        clearTimeout(timer);
+        observer?.disconnect();
+        event("stopped", {completed_responses:responses, retried});
+      },
+    };
+  }
+
   async function ilOpenSelectedDetail(query,tr,trace) {
     const buttons=[...tr.querySelectorAll('button[title="View Details"]')].filter(el=>visible(el)&&!el.disabled);
     if(buttons.length!==1)throw new Error('REGISTRY_RESULTS_INCOMPLETE');
@@ -144,12 +200,16 @@
       &&document.readyState==='complete'&&d.querySelector('#DetailsTabStrip')
       &&![...d.querySelectorAll('[aria-busy="true"],.k-loading-mask,.k-loading-image')].some(visible)
       &&/Registration Date:/.test(d.innerText)&&/Status:\s*\S/.test(d.innerText)&&d.innerText;};
+    const detailAllowance = 25000;
+    const observation = ilObserveDetailClick(query,tr,buttons[0],detailAllowance);
     try {
-      const body=await wfcAwait("content:ilOpenSelectedDetail:141:17",()=>(wait(readDetail,25000,{action:()=>buttons[0].click(),trace})));
+      const body=await wfcAwait("content:ilOpenSelectedDetail:141:17",()=>(wait(readDetail,detailAllowance,{action:observation.click,trace})));
       return {query,complete:true,body};
     } catch {
       const d=document.querySelector('#KendoWindowLevel1');
       throw new Error(!visible(d)?'NY_CONNECTOR_IL_DETAIL_NOT_OPENED':!text(d)?'NY_CONNECTOR_IL_DETAIL_BLANK':readDetail()?'NY_CONNECTOR_IL_DETAIL_RESPONSE_TIMEOUT':'NY_CONNECTOR_IL_DETAIL_IDENTITY_INCOMPLETE');
+    } finally {
+      observation.stop();
     }
   }
   async function ilReturnToSearch() {
