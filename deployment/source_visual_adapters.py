@@ -1753,6 +1753,9 @@ def allow_owned_mn_screenshot(master, run, result, page, deadline):
 
 def capture_owned_fl_page(master,run,result,page,context,deadline):
  """Photograph the already-selected FL license in the existing owned browser."""
+ if run is not None and run.state=='FL' and getattr(run,'fl_modern_selected',None):
+  from deployment.fl_registry_migration import capture
+  return capture(run,result,page,deadline)
  if run is not None and run.state=='FL' and workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:991:44:get',result.get,locals(), 'status')=='Not Registered':
   return trace_return('deployment/source_visual_adapters.py:capture_owned_fl_page:992:2:return',(workflow_call('deployment/source_visual_adapters.py:capture_owned_fl_page:992:9:capture_owned_fl_empty',capture_owned_fl_empty,locals(), master,run,result,page,deadline)))
  if run is not None and run.state == 'FL':

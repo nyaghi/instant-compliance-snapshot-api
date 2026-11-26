@@ -20325,9 +20325,25 @@ def fl_verified_transport_first() -> bool:
 
 def search_fl(page, org):
     transport = FloridaVerifiedTransport(page)
+    from deployment.state_snapshots import CURRENT
+    identity = trial_identity()
+    run = CURRENT.get()
+    migration = None
+    if (isinstance(identity, dict) and identity.get("permanent_staging")
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "standard" and run is not None
+            and run.state == "FL" and getattr(run, "semantic_history_scope", False)
+            and run.ein == canonical_ein_digits(org.ein)
+            and canonical_name_punctuation(run.name) == org.organization_name):
+        from deployment.fl_registry_migration import MigrationCheck
+        migration = MigrationCheck(sys.modules[__name__], run)
     try:
-        return search_fl_with_transport(page, org, transport)
+        if migration is None:
+            return search_fl_with_transport(page, org, transport)
+        result = search_fl_with_transport(page, org, transport, migration=migration)
+        return migration.finish(result, org)
     finally:
+        if migration is not None:
+            migration.close()
         transport.close()
 
 
@@ -20596,7 +20612,7 @@ def fl_shared_lookup_deadline(organization_name, ein):
     return float('inf')
 
 
-def search_fl_with_transport(page, org, transport):
+def search_fl_with_transport(page, org, transport, *, migration=None):
     url = FL_CHECK_A_CHARITY_URL
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
@@ -20919,6 +20935,8 @@ def search_fl_with_transport(page, org, transport):
     fl_ein_checks = {}
     rejected_eins = {}
     search_variants = reviewed_queries_first(original_name, org.ein, variants, limit=8)
+    if migration is not None:
+        migration.start(search_variants, deadline)
     failed_queries = {}
     retried_queries = set()
     completed_search_form = False
@@ -27667,7 +27685,8 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
     if (getattr(result, "state", "") != "FL" or not registration_date_result_confirmed(result, final_status)
             or curl_requests is None or not registration_date_budget_available(lookup_started)):
         return
-    if getattr(result, "_cc_fl_business_source_verified", False):
+    if (getattr(result, "_cc_fl_business_source_verified", False)
+            or getattr(result, "status_reason", "") == "FL_MODERN_VERIFIED_LICENSE"):
         return
     identifier = str(getattr(result, "matched_registry_identifier", "") or "")
     if not re.fullmatch(r"CH\d+", identifier):

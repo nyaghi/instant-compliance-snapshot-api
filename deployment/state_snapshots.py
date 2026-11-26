@@ -58,6 +58,8 @@ OFFICIAL_HOSTS = {
 def public_url(value, state):
     if not isinstance(value,str) or len(value)>5000:raise ValueError('Invalid source URL')
     u = urlsplit(str(value))
+    fl_charity = (state == 'FL' and u.hostname == 'consumercompliance.fdacs.gov'
+                  and u.path == '/Check-A-Charity/' and not u.fragment)
     # The exact native viewer linked by DC's official layer, not arbitrary ArcGIS.
     dc_viewer=False
     if state=='DC' and u.hostname=='www.arcgis.com':
@@ -69,7 +71,7 @@ def public_url(value, state):
         from deployment.co_dataset_evidence import dataset_ein
         co_dataset=bool(dataset_ein(value))
         if not co_dataset:raise ValueError('Unbound CO dataset URL')
-    if (u.scheme != 'https' or (u.hostname not in OFFICIAL_HOSTS.get(state, set()) and not dc_viewer and not co_dataset)
+    if (u.scheme != 'https' or (u.hostname not in OFFICIAL_HOSTS.get(state, set()) and not dc_viewer and not co_dataset and not fl_charity)
             or u.username or u.password or u.port not in (None,443)
             or re.search(r'(?:/auth/|/logout|/login|/signin|challenge-platform)',u.path,re.I)):
         raise ValueError('Snapshot must originate at this state public registry')
