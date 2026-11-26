@@ -20779,8 +20779,11 @@ def search_fl_with_transport(page, org, transport, *, migration=None):
                     transport.enable()
                 elif (attempt == 0 and not transport.enabled and remaining_seconds() > 0
                       and initial_transport_failure(exc)):
-                    # Spend the existing second attempt on an independent,
-                    # verified connection instead of the same failed browser path.
+                    recovered = recover_fl_business_after_entry_timeout()
+                    if recovered is not None:
+                        return recovered
+                    # Use the existing verified connection if Business Lookup
+                    # cannot establish a matching record.
                     transport.recover_initial_timeout()
                 last_error = exc
                 # A timed-out document may never acquire a JavaScript context.
@@ -21027,12 +21030,43 @@ def search_fl_with_transport(page, org, transport, *, migration=None):
                     return confirmed
         return None
 
+    business_query = canonical_name_punctuation(original_name)
+    business_recovery_attempted = False
+
+    def recover_fl_business_after_entry_timeout():
+        nonlocal business_recovery_attempted
+        if (migration is None or shared_run is None or not business_attempted
+                or business_recovery_attempted or completed_queries or remaining_seconds() < 9):
+            return None
+        literal_forms = literal_name_retrieval_forms(business_query)
+        if not literal_forms:
+            return None
+        query = literal_forms[0]
+        if query == business_query or complete_name_identity_key(query) != complete_name_identity_key(business_query):
+            return None
+        from deployment.fl_initial_recovery import completed_empty_business_query
+        if not completed_empty_business_query(shared_run, business_query):
+            return None
+        business_recovery_attempted = True
+        try:
+            rows = _fl_business_public_rows_once(query, min(deadline, time.monotonic() + 5))
+        except (OSError, ValueError, http.client.HTTPException):
+            return None
+        # A retrieval spelling that lacks the suffix still needs one exact
+        # whole-name license and the existing FL candidate checks.
+        exact = [row for row in rows if complete_name_identity_key(row["business_evidence"]["name"])
+                 == complete_name_identity_key(business_query)]
+        confirmed = confirmed_business_result(exact)
+        if confirmed is not None:
+            confirmed.source_note += " Florida Business Lookup confirmed the license using the name without its legal suffix."
+        return confirmed
+
     business_attempted = (not completed_queries and fl_business_lookup_enabled()
                           and bool(search_variants) and not getattr(org, "evidence_mode", False)
                           and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT)
     if business_attempted:
         confirmed = confirmed_business_result(
-            fl_business_public_rows(canonical_name_punctuation(original_name), deadline))
+            fl_business_public_rows(business_query, deadline))
         if confirmed is not None:
             return confirmed
     for variant in search_variants:
@@ -21049,7 +21083,9 @@ def search_fl_with_transport(page, org, transport, *, migration=None):
             except Exception:
                 pass
             if not (completed_search_form and fl_completed_search_form_available(page)):
-                load_fl_search_page()
+                recovered = load_fl_search_page()
+                if recovered is not None:
+                    return recovered
             # Any failed fill, submission, or parse requires a fresh document.
             completed_search_form = False
             try:
