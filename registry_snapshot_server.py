@@ -19723,6 +19723,8 @@ def _search_ct_direct(org):
     completed_variants = 0
     incomplete_results = False
     source_unavailable = False
+    form_failures = 0
+    form_opened = False
     searched_variants: list[str] = []
     session = None
     fields = None
@@ -19740,7 +19742,12 @@ def _search_ct_direct(org):
             query_deadline = min(deadline, time.perf_counter() + 8) if first_service_spelling else deadline
             attempt_timeout = min(CT_DIRECT_TIMEOUT_SECONDS, max(4.0, query_deadline - time.perf_counter() - 1))
             if session is None or fields is None or headers is None:
-                session, fields, headers = ct_direct_prepare_session(attempt_timeout)
+                try:
+                    session, fields, headers = ct_direct_prepare_session(attempt_timeout)
+                except Exception:
+                    form_failures += 1
+                    raise
+                form_opened = True
             if first_service_spelling:
                 attempt_timeout = min(attempt_timeout, query_deadline - time.perf_counter() - 1)
                 if attempt_timeout < 2:
@@ -19841,6 +19848,10 @@ def _search_ct_direct(org):
     result.raw_status_text = "Connecticut returned results, but result-page or record review could not be completed" if partial_results else "Connecticut direct registry lookup could not be completed"
     if partial_results:
         result.source_note = "Connecticut responded, but the complete result set could not be reviewed within the lookup limits."
+    elif form_failures and not form_opened:
+        attempts = "one attempt" if form_failures == 1 else f"{form_failures} attempts"
+        result.source_note = f"CharityClarity could not open Connecticut's registry search form after {attempts}. No registration status was determined."
+        result.reason_code = "CT_SEARCH_FORM_UNAVAILABLE"
     elif saw_zero_results and (exhausted_budget or attempted_variants < len(variants)):
         result.source_note = "Connecticut public registry AJAX lookup ended before all prioritized name variants could be checked."
     else:
@@ -32940,6 +32951,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     f"{extension}{comment_date_conclusion(due, status)}{historical_note}")
 
     if status == "Site Not Reachable":
+        if state == "CT" and getattr(result, "reason_code", "") == "CT_SEARCH_FORM_UNAVAILABLE":
+            return note
         if state == "OK" and "certificate" in combined.lower() and matched:
             return "The organization was found, but its registration certificate could not be retrieved and the available filing history did not support a calculated expiration. CharityClarity reports Site Not Reachable because registration status could not be confirmed."
         failure = "did not respond in time" if re.search(r"timeout|timed out", combined + " " + (getattr(result, "error", "") or ""), re.I) else "could not be accessed"
@@ -38206,35 +38219,46 @@ def wv_completed_no_match_result(result, completed_queries: list[str], reason_co
     return result
 
 
+def md_primary_name_key(value: str) -> str:
+    """Normalize Maryland's leading or filed-after-name article."""
+    name = re.sub(r"\s*(?:,\s*the|\(the\))\s*$", "", value, flags=re.I)
+    return complete_name_identity_key(name).removeprefix("the ")
+
+
 def md_prefer_active_entry_body(body: str, org) -> str:
-    """Keep Maryland's exact-EIN entry boundary while comparing duplicate statuses."""
+    """Rank the entered legal entity ahead of same-EIN aliases and chapters."""
     try:
         payload, _ = json.JSONDecoder().raw_decode(body[body.index('{'):])
         entries = payload.get("entries", [])
         if len(entries) < 2:
             return body
         candidates = []
+        primary = md_primary_name_key(getattr(org, "original_organization_name", org.organization_name))
         targets = organization_match_target_variants(org.organization_name, org.ein)
+        exact_targets = {normalized_match_name(target) for target in targets}
+        requested_ein = canonical_ein_digits(org.ein)
         for entry in entries:
             fields = entry.get("view_data", {}).get("content_element_data", {})
             status = ""
-            ein = ""
+            eins = set()
             for value in fields.values():
                 text = html_fragment_text(str(value))
                 if text.startswith("Registration Status:"):
                     status = text.split(":", 1)[1].strip()
                 elif text.startswith("Charity EIN:"):
-                    ein = re.sub(r"\D", "", text.split(":", 1)[1])
-            if ein != re.sub(r"\D", "", org.ein or ""):
+                    eins.add(canonical_ein_digits(text.split(":", 1)[1]))
+            if len(requested_ein) != 9 or eins != {requested_ein}:
                 continue
             name = str(entry.get("f_aedd5545-808f-4725-9b1d-5fa61e994a75") or "")
-            exact_name = normalized_match_name(name) in {normalized_match_name(target) for target in targets}
-            candidates.append(((target_name_score(name, targets), registry_exact_active_tiebreak(name, targets, status)), entry, status.casefold().strip(), exact_name))
+            exact_name = normalized_match_name(name) in exact_targets
+            priority = (bool(primary and md_primary_name_key(name) == primary),
+                        target_name_score(name, targets), registry_exact_active_tiebreak(name, targets, status))
+            candidates.append((priority, entry, status.casefold().strip(), exact_name))
         if not candidates:
             return body
         best = max(candidates, key=lambda item: item[0])
         selected = best[1]
-        strongest = [item for item in candidates if item[0][0] == best[0][0]]
+        strongest = [item for item in candidates if item[0][:2] == best[0][:2]]
         # MD's Not Current record remains nonclosed even though its filings are
         # delinquent. Resolve only this exact-EIN/exact-name pair; other status
         # combinations and stronger identities retain the existing selection.
@@ -38344,6 +38368,7 @@ def registry_active_tiebreak(status: str) -> int:
 checker.registry_active_tiebreak = registry_active_tiebreak
 checker.registry_exact_active_tiebreak = registry_exact_active_tiebreak
 checker.registry_candidate_fields = registry_candidate_fields
+checker.md_primary_name_key = md_primary_name_key
 checker.md_prefer_active_entry_body = md_prefer_active_entry_body
 
 

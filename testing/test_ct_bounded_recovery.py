@@ -68,7 +68,10 @@ class ConnecticutBudget(unittest.TestCase):
         self.assertEqual(result.status, 'Site Not Reachable')
         self.assertFalse(result.success)
         self.assertLessEqual(now[0], 30)
-        self.assertLessEqual(len(calls), 2)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result.reason_code, 'CT_SEARCH_FORM_UNAVAILABLE')
+        self.assertIn('could not open Connecticut\'s registry search form after 2 attempts',
+                      app.comments_for_result(result, '', result.status))
 
     def test_outer_loop_does_not_restart_failed_connecticut(self):
         failure = {'state': 'CT', 'status': 'Site Not Reachable', 'success': False}

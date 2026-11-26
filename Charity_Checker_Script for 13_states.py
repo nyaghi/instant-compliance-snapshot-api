@@ -2965,7 +2965,29 @@ def search_md(page, org: Organization) -> StateResult:
             return result
 
         clicked_result = False
-        if md_body_has_record(body):
+        primary_key = globals().get("md_primary_name_key")
+        ein_label = re.compile(r"\bCharity\s+EIN:\s*(\d{2}-?\d{7})\b", re.I)
+        same_ein_rows = sum(digits_only(value) == ein for value in ein_label.findall(body))
+        if ein_confirmed_search and primary_key and same_ein_rows > 1:
+            # Read rendered same-EIN rows in one pass. An alias or local
+            # chapter in the first row must not override the entered entity.
+            try:
+                rows = page.get_by_role("row")
+                listing = rows.evaluate_all("""rows => rows.map(row => ({
+                    text: row.innerText,
+                    links: Array.from(row.querySelectorAll('a[href]'), a => a.innerText.trim())
+                }))""")
+                primary = primary_key(getattr(org, "original_organization_name", org.organization_name))
+                exact_links = [(index, name) for index, row in enumerate(listing)
+                               if {digits_only(value) for value in ein_label.findall(row["text"])} == {ein}
+                               for name in row["links"] if name and primary and primary_key(name) == primary]
+                if len(exact_links) == 1:
+                    index, name = exact_links[0]
+                    rows.nth(index).get_by_role("link", name=name, exact=True).click(timeout=md_timeout(3000))
+                    clicked_result = True
+            except Exception:
+                pass
+        if not clicked_result and md_body_has_record(body):
             fast_result_selectors = []
             if org.organization_name:
                 escaped_name = org.organization_name.replace('"', '\\"')
@@ -3006,6 +3028,8 @@ def search_md(page, org: Organization) -> StateResult:
             "a[href]",
         ]
         for selector in row_selectors:
+            if clicked_result:
+                break
             try:
                 rows = page.locator(selector)
                 count = min(rows.count(), 25)

@@ -1,5 +1,5 @@
 """MD exact-EIN duplicates: retain nonclosed Not Current; preserve other rules."""
-import copy,json,sys,unittest
+import copy,itertools,json,sys,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -41,4 +41,20 @@ class MarylandDuplicates(unittest.TestCase):
  def test_malformed_payload_is_unchanged(self):
   for body in ['not json','{"entries": null}']:
    self.assertEqual(c.md_prefer_active_entry_body(body,self.org),body)
+
+ def test_same_ein_chapters_cannot_override_the_entered_entity(self):
+  ein='53-0196605'
+  national='American National Red Cross'
+  chapter='American Red Cross, Washington County Maryland Chapter'
+  rows=[
+   entry('1510',national,'Exempt',ein),
+   entry('402',chapter,'Closed',ein),
+   entry('3434','American Red Cross, Frederick County Maryland','Closed',ein),
+   entry('unrelated',national,'Current','99-9999999'),
+  ]
+  self.target.return_value=[row['f_aedd5545-808f-4725-9b1d-5fa61e994a75'] for row in rows]
+  for name,expected in [(f'The {national}','1510'),(chapter,'402')]:
+   self.org=SimpleNamespace(organization_name=chapter, original_organization_name=name,ein=ein)
+   for order in itertools.permutations(rows):
+    self.assertEqual(self.selected(order)[0]['id'],expected)
 if __name__=='__main__':unittest.main(verbosity=2)
