@@ -23509,10 +23509,12 @@ def search_ma_master(page, org, completed):
                     candidate['label'], org.organization_name, org.ein):
                 candidate = None
             if candidate:
-                selections.append((combo, candidate))
+                account_options = [option for option in options
+                                   if option.get("value") and option.get("label") != "-- Select --"]
+                selections.append((combo, candidate, len(account_options)))
         if len(selections) != 1:
             return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED", "Massachusetts returned charity choices, but a unique safe match could not be selected.")
-        combo, candidate = selections[0]
+        combo, candidate, account_count = selections[0]
         completed.clear()
         combo.select_option(value=candidate["value"], timeout=5000)
         page.get_by_role("button", name="Get Filings", exact=True).click(timeout=5000)
@@ -23564,6 +23566,21 @@ def search_ma_master(page, org, completed):
             attachment = ma_confirm_filing_attachment(page, org, completed, conflict)
             if not attachment:
                 body = registry_page_body(page)
+                other_ein = canonical_ein_digits(conflict["source_tax_id"])
+                if (name_fallback and account_count == 1 and len(requested_ein) == len(other_ein) == 9
+                        and other_ein != requested_ein and other_ein != "000000000"
+                        and completed.get("filings", {}).get(account, {}).get("complete") is True
+                        and completed.get("registration_documents", {}).get(account, {}).get("complete") is True):
+                    result.status = checker.STATUS_NOT_REGISTERED
+                    result.raw_status_text = "No matching EIN result"
+                    result.status_reason = "MA_ONLY_ACCOUNT_DIFFERENT_EIN"
+                    result.source_note = (
+                        f"Massachusetts found no record for EIN {format_ein(requested_ein)}. "
+                        f"The name search found one account, {account}, with a different EIN "
+                        f"({format_ein(other_ein)}). CharityClarity excluded that account."
+                    )
+                    result.success = True
+                    return result, ""
                 return incomplete(
                     "MA_SOURCE_TAX_ID_CONFLICT",
                     f"Massachusetts account {conflict['ago_account']} displays Tax ID "
@@ -32739,6 +32756,9 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if (result.state == "MA" and public_facing_status == "Not Registered"
+            and getattr(result, "status_reason", "") == "MA_ONLY_ACCOUNT_DIFFERENT_EIN"):
+        return result.source_note
     if result.state == "AR" and getattr(result, "status_reason", "") == "AR_OPEN_STANDING_UNVERIFIED":
         return result.source_note
     if result.state == "MN" and getattr(result, "status_reason", "") == "MN_CONFIRMED_CHARITY_EXTENSION":

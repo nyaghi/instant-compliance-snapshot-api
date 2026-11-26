@@ -326,6 +326,40 @@ class MassachusettsSelectionTests(unittest.TestCase):
         self.assertIn("40428-30242", cc.source_note_for_result(result))
         self.assertIn("12-3456789", cc.source_note_for_result(result))
 
+    def test_completed_absence_excludes_only_verified_namesake(self):
+        for multiple, catalog_complete, expected in (
+            (False, True, "Not Registered"),
+            (True, True, "Unable to Confirm"),
+            (False, False, "Unable to Confirm"),
+        ):
+            with self.subTest(multiple=multiple, catalog_complete=catalog_complete):
+                completed = {}
+                page, _ = self.page(completed, finish=False)
+                combo = page.get_by_role.return_value.all.return_value[0]
+                if multiple:
+                    combo.locator.return_value.evaluate_all.return_value.append(
+                        {"label": "Other Example", "value": "alternate"})
+                click = page.get_by_role.return_value.click.side_effect
+
+                def click_with_public_details(**kwargs):
+                    click(**kwargs)
+                    completed.update(
+                        tax_id_conflict={"record_id": "right", "ago_account": "009534",
+                                         "source_tax_id": "04-2103638", "name": "Example Foundation"},
+                        filings={"009534": {"complete": catalog_complete}},
+                        registration_documents={"009534": {"complete": catalog_complete}},
+                    )
+
+                page.get_by_role.return_value.click.side_effect = click_with_public_details
+                with patch.object(cc, "registry_page_body", side_effect=[
+                        "No Charity Found", "Select a Charity", "AG Account Number 009534"]), \
+                     patch.object(cc, "ma_confirm_filing_attachment", return_value=None):
+                    result, body = cc.search_ma_master(page, self.org, completed)
+
+                self.assertEqual(cc.true_status_from_body(result, body), expected)
+                self.assertIn("04-2103638", cc.comments_for_result(result, body, expected))
+                self.assertFalse(result.matched_registry_identifier)
+
     def test_mismatch_recovery_requires_same_filing_and_two_return_headers(self):
         account = "040659"
         official = "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm000010nqjJIAQ"
