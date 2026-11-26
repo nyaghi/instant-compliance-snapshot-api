@@ -23,6 +23,13 @@ def old(name):
 
 
 class Gate55(unittest.TestCase):
+    def test_tn_complete_contains_can_cover_reviewed_article_placement(self):
+        from deployment.gate55_repairs import tn_contains_coverage_order
+        names = ["The Jed Foundation", "JED FOUNDATION", "Jed Foundation (The)"]
+        self.assertEqual(tn_contains_coverage_order(names), [names[1], names[0], names[2]])
+        distinct = [*names, "Jed Research Institute"]
+        self.assertEqual(tn_contains_coverage_order(distinct), distinct)
+
     def setUp(self):
         self.net=patch.object(socket.socket,'connect',side_effect=AssertionError('Offline network forbidden'));self.net.start()
     def tearDown(self):self.net.stop()

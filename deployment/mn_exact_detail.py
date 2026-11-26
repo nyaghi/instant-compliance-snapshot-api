@@ -10,6 +10,25 @@ EXPLICIT_STATUSES = {
 }
 
 
+
+def _legacy_abbreviation(registry_name, trusted_names, name_key):
+    """Compare a registry acronym only after the detail supplies the exact EIN."""
+    def parts(name):
+        return re.split(r"\s*[-–—]\s*", name, maxsplit=1)
+
+    target = parts(registry_name)
+    if (len(target) != 2 or len(name_key(target[0]).split()) < 3
+            or not re.fullmatch(r"[A-Z]{3,8}", target[1])):
+        return False
+    for reviewed in trusted_names:
+        base = parts(reviewed)
+        if len(base) != 2 or name_key(base[0]) != name_key(target[0]):
+            continue
+        tokens = re.findall(r"[A-Za-z]+", base[1])
+        if len(tokens) >= 3 and "".join(word[0].upper() for word in tokens) == target[1]:
+            return True
+    return False
+
 def find(page, ein, trusted_names, name_key, timeout_ms):
     url = DETAIL_URL + "?" + urlencode({"FederalID": ein, "Yr": "CURR", "cmdSearch": "View"})
     response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms())
@@ -43,8 +62,11 @@ def find(page, ein, trusted_names, name_key, timeout_ms):
     def identity_key(name):
         # Only after the detail itself has shown the exact requested EIN.
         return name_key(re.sub(r"(?<=\w)['’](?=s\b)", "", name, flags=re.I))
-    trusted_keys = {identity_key(name) for name in trusted_names if isinstance(name,str)} - {""}
-    if not status or identity_key(fields["name"]) not in trusted_keys:
+    names = [name for name in trusted_names if isinstance(name, str)]
+    trusted_keys = {identity_key(name) for name in names} - {""}
+    if not status:
+        return None
+    if identity_key(fields["name"]) not in trusted_keys and not _legacy_abbreviation(fields["name"], names, identity_key):
         return None
     return fields["name"], status, fields["status"], url
 

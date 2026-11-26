@@ -10139,6 +10139,15 @@ def final_four_connector_failure(record, reason="", diagnostic="", *, tn_candida
         result.status = "Site Not Reachable"
         result.success = False
         result.source_note = "Mississippi's public search page displayed a host error (520). No registration status was established."
+    elif (state == "MS" and reason in {"NY_CONNECTOR_INCOMPLETE", "NY_CONNECTOR_MS_DETAIL_UNAVAILABLE"}
+          and ((record.get("pending") or {}).get("query") or {}).get("operation") == "detail"):
+        query = record["pending"]["query"]
+        identifier = str(query.get("identifier") or "")
+        filing = f" {identifier}" if re.fullmatch(r"\d{1,20}", identifier) else ""
+        result.source_note = (
+            f"Mississippi returned a matching search row, but its filing detail{filing} did not open. "
+            "Retry Mississippi or open that filing in the state registry to verify its status."
+        )
     elif nv_startup_failure:
         result.status = "Site Not Reachable"
         result.success = False
@@ -12312,6 +12321,7 @@ def search_dc(org):
     deadline = time.monotonic() + 35.5
     primary_completed = False
     generic_core = False
+    phase = "primary license search"
     try:
         # Complete primary-name spelling first. Never collapse it into a
         # generated one-word predicate before the first source request.
@@ -12326,6 +12336,7 @@ def search_dc(org):
         patterns = fallback if generic_core else dc_license_query_patterns(primary)
         rows, freshness = dc_charity_records(org, deadline, patterns)
         primary_completed = True
+        phase = "primary candidate selection"
         if generic_core:
             dc_screen_generic_candidates(org, rows, deadline)
         result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
@@ -12334,7 +12345,9 @@ def search_dc(org):
                 and licensed_primary_positive_complete(org, selected, rows, state="DC")):
             # No negative/adverse/alias-only conclusion from the primary
             # search. The complete old alias/fallback coverage is retained.
+            phase = "reviewed-name license search"
             rows, freshness = dc_charity_records(org, deadline, fallback)
+            phase = "reviewed-name candidate selection"
             result = licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
         try:
             from deployment.dc_native_evidence import capture_dc
@@ -12343,16 +12356,19 @@ def search_dc(org):
         return result
     except Exception as exc:
         result = licensed_charity_failure(org, "DC", DC_LICENSE_API, exc)
-        if generic_core and type(exc) is TimeoutError:
+        transport = getattr(exc, "_cc_dc_transport", None) or getattr(exc.__cause__, "_cc_dc_transport", None)
+        result.lab_diagnostic = {"path": "public license feed", "stage": phase,
+                                 "failure_type": type(exc).__name__, "primary_completed": primary_completed}
+        if transport:
+            result.source_attempts = [transport]
+        result.source_note = (f"D.C. could not complete {phase}. "
+                              "A complete search or confirmed license was unavailable.")
+        if generic_core and type(exc) is TimeoutError and phase.endswith("selection"):
             result.source_note = ("D.C. returned candidate licenses, but their identities could not all be checked "
                                   "within the allowed time. No registration was confirmed.")
         if isinstance(exc, DcLicenseSourceUnavailable) and not primary_completed:
             result.status = "Site Not Reachable"
             result.reason_code = "DC_LICENSE_SOURCE_UNREACHABLE"
-            cause = exc.__cause__
-            transport = getattr(cause, "_cc_dc_transport", None)
-            if transport:
-                result.source_attempts = [transport]
             result.source_note = ("D.C.'s public license feed was unavailable before any search results were returned. "
                                   "CharityClarity reports Site Not Reachable.")
         return result
@@ -13965,6 +13981,44 @@ def sc_result_page_stream(body, post, deadline, expected_query):
     raise ValueError('SC result paging exceeds bounded allowance')
 
 
+def sc_corrob_same_record_alias(org, list_name, detail_name, detail_html, deadline):
+    """Reconcile a DBA heading with its exact-name list row and a bound office."""
+    if (complete_name_identity_key(list_name) != complete_name_identity_key(org.organization_name)
+            or len(distinctive_match_tokens(list_name)) < 3):
+        return False
+    # The two headings share one already-bound source ID. Limit this check to
+    # an explicit DBA with a plausible spelling variation in its main name.
+    main, separator, dba = re.sub(r"\s*/\s*", " / ", detail_name).partition(" / ")
+    if not separator or not re.match(r"DBA\s+\S+", dba, re.I):
+        return False
+    full_key = complete_name_identity_key(list_name)
+    detail_key = complete_name_identity_key(main)
+    if (len(full_key) != len(detail_key)
+            or sum(a != b for a, b in zip(full_key, detail_key)) != 2
+            or not any(full_key[:i] + full_key[i + 1] + full_key[i] + full_key[i + 2:] == detail_key
+                       for i in range(len(full_key) - 1))):
+        return False
+    def label(suffix):
+        values = re.findall(rf'<span\b[^>]*\bid=["\']MainContent_lblCharity_Contact_{suffix}["\'][^>]*>(.*?)</span>',
+                            detail_html, re.I | re.S)
+        return sc_html_to_text(values[0]).strip() if len(values) == 1 else ""
+    street = registry_street_key(label("Address1"))
+    location = registry_street_key(label("Address2"))
+    if not re.match(r"^\d+\s", street) or not re.search(r"\b[A-Z]{2}\s+\d{5}$", location):
+        return False
+    confirmed = search_oh_direct_details(org, deadline=min(deadline, time.monotonic() + 5))
+    if not confirmed:
+        return False
+    record, body = confirmed
+    if complete_name_identity_key(record.matched_registry_name) != full_key:
+        return False
+    address = text_between_labels(body, "Street Address", ["City, State and Zip"])
+    office = text_between_labels(body, "City, State and Zip", [
+        "Is Organization in Compliance", "Organization Phone", "Annual Reports Filed",
+    ])
+    return street == registry_street_key(address) and location == registry_street_key(office)
+
+
 def sc_official_detail_lookup(org) -> object | None:
     """Use the SC WebForms result list to choose the strongest safe candidate."""
     from deployment.search_observation import observed_http_call as _history_http_call
@@ -14209,6 +14263,7 @@ def sc_official_detail_lookup(org) -> object | None:
                         lookup_incomplete = True
                         continue
                     filing_ein = ""
+                    same_record_alias = False
                     scope_review = separator_entity_scope_gap(original_name, registry_name, org.ein)
                     changed_heading = (
                         normalized_match_name(re.sub(r"^the\s+", "", registry_name, flags=re.I))
@@ -14216,7 +14271,9 @@ def sc_official_detail_lookup(org) -> object | None:
                     )
                     if changed_heading or sc_related_entity_requires_ein(original_name, registry_name, org.ein):
                         filing_ein = sc_detail_filing_ein(detail_html, min(deadline, time.monotonic() + 10), fetch_bytes=fetch_filing_bytes)
-                        if filing_ein != canonical_ein_digits(org.ein):
+                        same_record_alias = (trial_identity() and changed_heading and not filing_ein
+                            and sc_corrob_same_record_alias(org, str(best["name"]), registry_name, detail_html, deadline))
+                        if filing_ein != canonical_ein_digits(org.ein) and not same_record_alias:
                             if (trial_identity() and not changed_heading and not filing_ein
                                     and sc_exempt_office_review(original_name, registry_name, raw_status, detail_text)):
                                 scope_review = True
@@ -14279,7 +14336,7 @@ def sc_official_detail_lookup(org) -> object | None:
                         matched_registry_identifier=public_id,
                         success=interpreted not in {"Site Not Reachable", "Unknown", ""},
                     )
-                    if scope_review and not filing_ein:
+                    if scope_review and not filing_ein and not same_record_alias:
                         scope_candidates[public_id] = dict(name=registry_name, identifier=public_id, ein="", location="",
                             url=url, raw_status=raw_status, status=interpreted, expiration=due_date, initial=None,
                             _identity_outcome="possible")
@@ -14308,6 +14365,9 @@ def sc_official_detail_lookup(org) -> object | None:
                         result.identity_anchor = "EIN"
                         result.reason_code = "MATCH_SC_FILING_EIN"
                         result.source_note += " The state-filed Form 990 confirms the requested EIN."
+                    elif same_record_alias:
+                        result.reason_code = result.identity_anchor = "MATCH_SC_SAME_RECORD_DBA_OFFICE"
+                        result.source_note += " The exact-name search row and DBA detail share the same South Carolina ID. Ohio's exact-EIN record corroborates the full office address."
                     elif sc_reviewed_parenthetical_alias(original_name, registry_name, org.ein):
                         result.reason_code = result.identity_anchor = "MATCH_SC_REVIEWED_PARENTHETICAL_ALIAS"
                         result.source_note += " The selected detail displays the complete legal name and its reviewed abbreviation."
@@ -21806,12 +21866,12 @@ def ohio_detail_url(page_name: str, detail_id: str) -> str:
     return f"https://charitableregistration.ohioago.gov/Charities/{quote(page_name)}?Id={quote(detail_id)}"
 
 
-def search_oh_direct_details(org):
+def search_oh_direct_details(org, *, deadline=None):
     """Use the public EIN form and detail HTML; incomplete evidence falls back."""
     ein = canonical_ein_digits(org.ein)
     if len(ein) != 9:
         return None
-    deadline = time.monotonic() + 10.0
+    deadline = min(deadline or float("inf"), time.monotonic() + 10.0)
     try:
         url, source = oh_ein_search_source(ein, deadline)
         if not re.search(r"</html\s*>", source, re.I):
@@ -23508,7 +23568,7 @@ def search_ma_master(page, org, completed):
                     "MA_SOURCE_TAX_ID_CONFLICT",
                     f"Massachusetts account {conflict['ago_account']} displays Tax ID "
                     f"{conflict['source_tax_id']}; the search used EIN {format_ein(requested_ein)}. "
-                    "The selected state record could not be verified for the entered EIN.",
+                    "CharityClarity excluded that account. A filing for the entered EIN is still unverified.",
                 )
             record = {"record_id": conflict["record_id"], "ago_account": account,
                       "ein": requested_ein, "name": conflict["name"],
@@ -28927,6 +28987,7 @@ def nj_name_exemption_result(data, org, deadline):
     result.success = True; result.raw_status_text = "Exempt"
     result.matched_registry_name = name; result.matched_registry_identifier = ""
     result.reason_code = "NJ_COMPLETE_UNNUMBERED_EXEMPTION"
+    result._cc_nj_exemption_row = row
     result.address_evidence = row.get("address_evidence", {})
     result.identity_evidence = {"name": row.get("match", {}), "address": result.address_evidence}
     result.source_note = ("New Jersey's completed public search lists this organization as Exempt and leaves its registration number blank. "
@@ -29725,13 +29786,22 @@ def search_nj_direct(page, org, identity_org=None):
                 from deployment.nj_unnumbered_review import capture
                 review = getattr(exemption, "_cc_identity_review", {})
                 reviewed_rows = review.get("records", []) if isinstance(review, dict) else []
-                bound_candidate = next(iter(reviewed_rows), None)
-                try: capture(sys.modules[__name__],page,identity_org or org,
-                             getattr(page,"_cc_nj_completed_data",None), candidate=bound_candidate)
+                bound_candidate = next(iter(reviewed_rows), getattr(exemption, "_cc_nj_exemption_row", None))
+                from deployment.state_snapshots import CURRENT
+                run = CURRENT.get()
+                first_fact = len(run.visual_adapter_facts) if run and run.state == "NJ" else 0
+                try:
+                    capture(sys.modules[__name__], page, identity_org or org,
+                            getattr(page, "_cc_nj_completed_data", None), candidate=bound_candidate)
                 except Exception:
-                    from deployment.state_snapshots import CURRENT
-                    run = CURRENT.get()
-                    if run is not None and run.state == "NJ": run.errors.append("nj_unnumbered_capture_unavailable")
+                    if run is not None and run.state == "NJ":
+                        run.errors.append("nj_unnumbered_capture_unavailable")
+                if run and run.state == "NJ":
+                    facts = run.visual_adapter_facts[first_fact:]
+                    exemption.lab_diagnostic = {
+                        "path": "completed public exemption row", "stage": "evidence",
+                        "capture_outcome": facts[-1]["outcome"] if facts else "source_binding_not_available",
+                    }
             return exemption
         if re.search(r"no records found|no records|no matching|0 results", body, re.I):
             result.raw_status_text = "No record found"

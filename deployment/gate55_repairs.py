@@ -28,6 +28,16 @@ def wi_delimiter_variants(plan,required=()):
 def tn_contains_coverage_order(names):
     """Earlier existing literal coverage; no new names or identity assumptions."""
     if len(names)<3:return names
+    # A reviewed literal can cover article placement in every required name.
+    # The caller still requires a complete Contains response before reuse.
+    def article_core(name):
+        return re.sub(r"^the\s+|\s+\(the\)$", "", name.strip().casefold())
+    primary_core = article_core(names[0])
+    if (len(primary_core.split()) >= 2 and len(primary_core) >= 12
+            and all(article_core(name) == primary_core for name in names)):
+        covering = next((name for name in names if name.strip().casefold() == primary_core), None)
+        if covering:
+            return [covering, *(name for name in names if name != covering)]
     scored=[]
     for index,name in enumerate(names[1:],1):
         words=re.findall(r'[A-Za-z]+',name)

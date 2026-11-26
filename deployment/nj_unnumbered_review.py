@@ -66,7 +66,14 @@ def capture(master,page,org,data,*,candidate=None):
                    and not candidate.get('ein') and candidate.get('identifier')=='')
     evidence_ein='' if field_ein=='000000000' else fields['crsm_federalein']
     if evidence_ein and field_ein!=run.ein:return
-    if not signed_legacy and master.score_candidate(org.organization_name,org.ein,{'name':fields['name'],'ein':evidence_ein})['decision']=='rejected':return
+    bound_office = (not evidence_ein and isinstance(candidate, dict)
+                    and candidate.get('name') == fields['name'] and candidate.get('raw_status') == 'Exempt'
+                    and candidate.get('identifier') == '' and not candidate.get('ein')
+                    and candidate.get('match', {}).get('decision') == 'accepted'
+                    and candidate.get('address_evidence', {}).get('decision') == 'corroborated')
+    if (not signed_legacy and not bound_office and master.score_candidate(
+            org.organization_name, org.ein, {'name': fields['name'], 'ein': evidence_ein})['decision'] == 'rejected'):
+        return
     query=getattr(page,'_cc_nj_query_diagnostic',{}).get('query')
     if not isinstance(query,str)or not query or page.url!=URL:return
     run.nj_unnumbered_capture_guard=True
