@@ -12130,11 +12130,11 @@ def licensed_charity_failure(org, state, source, exc):
     return result
 
 
-def dc_irs_office_conflict(org, row, deadline, cache):
+def irs_office_conflict(org, row, deadline, cache, *, street_key=registry_street_key, max_offices=None):
     """Identify a different filer only from its complete name and street address."""
     region = row.get("region", "").upper()
     postal = str(row.get("postal_code", ""))[:5]
-    street = registry_street_key(row.get("street"))
+    street = street_key(row.get("street"))
     name = row["name"]
     key = public_filer_name_key(name)
     if (not re.fullmatch(r"[A-Z]{2}", region) or not re.fullmatch(r"\d{5}", postal)
@@ -12143,6 +12143,8 @@ def dc_irs_office_conflict(org, row, deadline, cache):
     binding = (key, region, postal, street)
     if binding in cache:
         return cache[binding]
+    if max_offices is not None and len(cache) >= max_offices:
+        return {}
     cache[binding] = {}
     deadline = min(deadline, time.monotonic() + 4)
     lookup = "https://projects.propublica.org/nonprofits/api/v2/search.json?" + urlencode(
@@ -12163,7 +12165,7 @@ def dc_irs_office_conflict(org, row, deadline, cache):
             return {}
         irs = identity_irs_names(ein, deadline, latest_only=True)
         filer = irs.get("filer_address") or {}
-        filing_street = registry_street_key(filer.get("street"))
+        filing_street = street_key(filer.get("street"))
         if (filer.get("ein") != ein or filer.get("state", "").upper() != region
                 or str(filer.get("zipcode", ""))[:5] != postal
                 or not (street == filing_street or re.fullmatch(
@@ -12309,7 +12311,7 @@ def dc_screen_generic_candidates(org, rows, deadline):
         if row.get("location") or row.get("region") != "DC" or row.get("ein"):
             continue
         if len(cache) < 4 and deadline - time.monotonic() > 2:
-            row["_dc_generic_office_conflict"] = dc_irs_office_conflict(org, row, deadline, cache)
+            row["_dc_generic_office_conflict"] = irs_office_conflict(org, row, deadline, cache)
         row["_dc_generic_local_name"] = (
             bool(primary_key) and normalized_match_name(row["name"]) == primary_key
             and len(re.findall(r"[a-z0-9]+", row["name"].casefold().removeprefix("the "))) < primary_words)
@@ -19233,7 +19235,34 @@ def ct_identity_names_from_detail(detail_text: str) -> list[str]:
     return names
 
 
-def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str, session=None, deadline=None):
+def ct_street_key(value):
+    # The CT address can place the mailing box before the street. Verify
+    # ownership against the physical street, city/state, and ZIP.
+    street = re.sub(r"\bP ?O BOX \d+\b", "", registry_street_key(value))
+    return " ".join(re.sub(r"\bPLAZA\b", "PLZ", street).split())
+
+
+def ct_irs_namesake(org, row_name, credential, city, detail, deadline, cache):
+    original = getattr(org, "original_organization_name", org.organization_name)
+    if (not city or normalized_match_name(row_name) != normalized_match_name(original)
+            or public_filer_name_key(row_name) == public_filer_name_key(original)):
+        return {}
+    if {value.upper() for value in re.findall(r"\bCHR\.\d{7}(?:-EXEMPT)?(?![\w.-])", detail, re.I)} != {credential.upper()}:
+        return {}
+    address = re.search(r"\bAddress\s+((?:\d|P\.?\s*O\.?\s+BOX\b).{3,145}?)\s+" +
+                        re.escape(city) + r",?\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b", detail, re.I)
+    if not address:
+        return {}
+    row = dict(name=row_name, street=address[1].rstrip(", "), region=address[2],
+               postal_code=address[3])
+    remaining = deadline - time.perf_counter() - 2
+    if remaining <= 1:
+        return {}
+    return irs_office_conflict(org, row, time.monotonic() + remaining, cache, street_key=ct_street_key, max_offices=1)
+
+
+def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str, session=None, deadline=None,
+                              *, excluded_namesakes=None, office_cache=None):
     row_text = html_fragment_text(row_html)
     # CT signed rejection continuation: exclude only this request's credential.
     rejected_id = re.search(r"\bCHR\.[0-9A-Z.-]+", row_text, re.I)
@@ -19241,6 +19270,8 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
         return None, -10000
     name_match = re.search(r"<b[^>]*headline6[^>]*>(.*?)</b>", row_html, re.I | re.S)
     row_name = clean_registry_name(html_fragment_text(name_match.group(1)) if name_match else re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0])
+    if excluded_namesakes and rejected_id and (rejected_id.group(0).upper(), public_filer_name_key(row_name)) in excluded_namesakes:
+        return None, -10000
     if institution_location_conflict(getattr(org, "original_organization_name", org.organization_name), row_name):
         return None, -10000
     detail_timeout = CT_DIRECT_TIMEOUT_SECONDS
@@ -19293,6 +19324,13 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     credential_ids = set(re.findall(r"\bCHR\.\d{7}(?:-EXEMPT)?(?![\w.-])", combined, re.I))
     valid_credential = credential.upper() if re.fullmatch(r"CHR\.\d{7}(?:-EXEMPT)?", credential, re.I) else ""
     result.matched_registry_identifier = valid_credential or (next(iter(credential_ids)).upper() if len(credential_ids) == 1 else "")
+    if (result.matched_registry_identifier and deadline is not None
+            and excluded_namesakes is not None and office_cache is not None):
+        proof = ct_irs_namesake(org, row_name, result.matched_registry_identifier, pairs.get("City", ""),
+                               detail_text, deadline, office_cache)
+        if proof:
+            excluded_namesakes[(result.matched_registry_identifier, public_filer_name_key(row_name))] = (row_name, proof["ein"])
+            return None, -10000
     exp_date = first_date_near_label(" ".join([row_text, detail_text]), ["Expiration Date", "Expiration", "Expires", "Expire Date"])
     terminal_status_text = " ".join([status_text, status_reason, credential_description])
     if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description]), re.I):
@@ -19725,6 +19763,8 @@ def _search_ct_direct(org):
     source_unavailable = False
     form_failures = 0
     form_opened = False
+    excluded_namesakes = {}
+    office_cache = {}
     searched_variants: list[str] = []
     session = None
     fields = None
@@ -19789,7 +19829,8 @@ def _search_ct_direct(org):
                 continue
             has_charity_rows = True
             try:
-                result, score = ct_direct_result_from_row(org, row_html, safe_targets, url, session=session, deadline=deadline)
+                result, score = ct_direct_result_from_row(org, row_html, safe_targets, url, session=session, deadline=deadline,
+                    excluded_namesakes=excluded_namesakes, office_cache=office_cache)
             except CTIncompleteResults as exc:
                 incomplete_results = review_incomplete = True
                 last_error = str(exc)
@@ -19838,6 +19879,12 @@ def _search_ct_direct(org):
             source_note="Connecticut public registry AJAX search returned no safely matching public-charity row for the generated name variants.",
             success=True,
         )
+        if excluded_namesakes:
+            (credential, _), (name, other_ein) = next(iter(excluded_namesakes.items()))
+            result.reason_code = "CT_VERIFIED_DIFFERENT_EIN"
+            result.source_note = (f"Connecticut returned {name} ({credential}). Its name and office match an IRS filing "
+                                  f"for EIN {format_ein(other_ein)}. The completed Connecticut searches found no record "
+                                  f"for the entered EIN {format_ein(org.ein)}.")
         result.queries_attempted = list(searched_variants)
         result.source_attempts = [
             f"Connecticut attempted prioritized name queries: {', '.join(searched_variants)}."
@@ -32767,6 +32814,9 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if (result.state == "CT" and public_facing_status == "Not Registered"
+            and getattr(result, "reason_code", "") == "CT_VERIFIED_DIFFERENT_EIN"):
+        return result.source_note
     if (result.state == "MA" and public_facing_status == "Not Registered"
             and getattr(result, "status_reason", "") == "MA_ONLY_ACCOUNT_DIFFERENT_EIN"):
         return result.source_note

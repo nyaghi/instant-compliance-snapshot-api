@@ -9,6 +9,42 @@ from deployment import ct_budget
 
 
 class ConnecticutBudget(unittest.TestCase):
+    def test_excludes_verified_different_ein_then_keeps_searching(self):
+        def row(name, number, city):
+            return (f'<tr><b class="headline6">{name}</b><b>Credential</b><p>{number}</p>'
+                    f'<b>Credential Description</b><p>PUBLIC CHARITY EXEMPT</p>'
+                    f'<b>Status</b><p>ACTIVE</p><b>City</b><p>{city}</p></tr>')
+
+        namesake = row("SAINT JOHN'S UNIVERSITY", "CHR.0058868-EXEMPT", "COLLEGEVILLE")
+        requested = row("ST JOHNS UNIVERSITY", "CHR.0056154-EXEMPT", "JAMAICA")
+        details = {
+            namesake: "Address PO BOX 2222 2850 ABBEY PLZ COLLEGEVILLE, MN 56321-2222 Registration CHR.0058868-EXEMPT",
+            requested: "Address 8000 UTOPIA PKWY JAMAICA, NY 11439 Registration CHR.0056154-EXEMPT",
+        }
+        first = "ST. JOHN'S UNIVERSITY"
+        second = "ST JOHNS UNIVERSITY"
+        org = app.checker.Organization(first, "11-1630830")
+        for second_row in [requested, None]:
+            def post(session, fields, headers, query, timeout):
+                selected = namesake if query == first else second_row
+                return 'Showing 1 result.' + selected if selected else 'Showing 0 results.'
+
+            with (patch.object(app, 'known_names_for_ein', return_value=[]),
+                  patch.object(app, 'ct_direct_prepare_session', return_value=(object(), {}, {})),
+                  patch.object(app, 'ct_direct_post_query', side_effect=post),
+                  patch.object(app, 'ct_direct_detail_text', side_effect=lambda html, **_: details[html]),
+                  patch.object(app, 'irs_office_conflict', return_value={"ein": "453656162"}) as proof):
+                result = app.search_ct_direct(org)
+            self.assertEqual(proof.call_count, 1)
+            self.assertEqual(proof.call_args.args[1]["street"], "PO BOX 2222 2850 ABBEY PLZ")
+            self.assertIn(second, result.queries_attempted)
+            if second_row:
+                self.assertEqual(result.status, 'Exempt')
+                self.assertEqual(result.matched_registry_identifier, 'CHR.0056154-EXEMPT')
+            else:
+                self.assertEqual(app.public_status(result), 'Not Registered')
+                self.assertIn('45-3656162', app.comments_for_result(result, '', 'Not Registered'))
+
     def test_actual_error_redirect_is_unavailable_not_negative(self):
         body = '1|#||4|60|pageRedirect||%2fErrorPage.aspx%3fe%3d70d10745-e771-41c6-b76f-128df308311b|'
         response = Mock(text=body)
