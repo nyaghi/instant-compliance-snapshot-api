@@ -1,12 +1,16 @@
 """Private lab boundary controls; uses loopback fixtures only."""
 import base64
 import importlib.util
+import http.client
+import os
 import json
 from pathlib import Path
 import threading
 import types
 import unittest
 import urllib.request
+from urllib.parse import urlencode
+from unittest.mock import patch
 import concurrent.futures
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -126,6 +130,78 @@ class LabTests(unittest.TestCase):
         self.assertTrue(lab.valid_authorization('Basic '+base64.b64encode(('lab:'+KEY).encode()).decode(),KEY))
         for value in ('', 'Bearer '+KEY+'x', 'Basic @@@', 'Basic '+base64.b64encode(('other:'+KEY).encode()).decode()):
             self.assertFalse(lab.valid_authorization(value,KEY))
+
+    def test_staging_browser_sign_in_limits_session_to_aurora(self):
+        auth = lab.staging_browser_sign_in
+        master = types.SimpleNamespace(RegistrySnapshotHandler=Base, APP_VERSION='test-performance-lab')
+        environment = patch.dict(os.environ, {'CE_PERMANENT_STAGING':'1'})
+        identity = patch.object(lab, 'trial_identity', return_value={'permanent_staging':True})
+        with environment, identity:
+            handler = lab.build_handler(master, KEY)
+            with ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                def request(method, path, body=None, **headers):
+                    with_connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+                    try:
+                        with_connection.request(method, path, body, headers)
+                        response = with_connection.getresponse()
+                        return response.status, dict(response.getheaders()), response.read()
+                    finally:
+                        with_connection.close()
+                try:
+                    status, page_headers, body = request('GET', auth.PATH)
+                    self.assertEqual(status, 200)
+                    self.assertIn(b'type="password"', body)
+                    self.assertNotIn(KEY.encode(), body)
+                    self.assertEqual(page_headers['Cache-Control'], 'no-store')
+                    self.assertEqual(page_headers['Referrer-Policy'], 'same-origin')
+                    self.assertEqual(request('GET', '/?collector_layout=duo')[0], 401)
+                    for method in ('GET', 'HEAD'):
+                        for icon_path in auth.EMPTY_ICONS:
+                            icon_status, icon_headers, icon_body = request(method, icon_path)
+                            self.assertEqual((icon_status, icon_body), (204, b''))
+                            self.assertNotIn('WWW-Authenticate', icon_headers)
+                    form_type = {'Content-Type':'application/x-www-form-urlencoded'}
+                    for origin, passcode in [('https://other.example', KEY), ('null', KEY), (lab.LAB_ORIGIN, 'wrong')]:
+                        denied, headers, _ = request('POST', auth.PATH, urlencode({'passcode':passcode}),
+                                                      Origin=origin, **form_type)
+                        self.assertEqual(denied, 403)
+                        self.assertNotIn('Set-Cookie', headers)
+                        self.assertNotIn('WWW-Authenticate', headers)
+                    signed_in, headers, _ = request('POST', auth.PATH, urlencode({'passcode':KEY}),
+                                                    Origin=lab.LAB_ORIGIN, **form_type)
+                    self.assertEqual(signed_in, 303)
+                    self.assertEqual(headers['Location'], '/?collector_layout=duo')
+                    for flag in ('Secure', 'HttpOnly', 'SameSite=Strict', 'Path=/'):
+                        self.assertIn(flag, headers['Set-Cookie'])
+                    cookie = headers['Set-Cookie'].split(';', 1)[0]
+                    self.assertNotIn(KEY, cookie)
+                    status, _, aurora = request('GET', headers['Location'], Cookie=cookie)
+                    self.assertEqual(status, 200)
+                    self.assertIn(b'CharityClarity staging', aurora)
+                    self.assertEqual(request('GET', '/identity-review.js', Cookie=cookie)[0], 200)
+                    self.assertEqual(request('GET', '/api/lab/metrics', Cookie=cookie)[0], 401)
+                    self.assertEqual(request('POST', '/api/workflow', '{}', Cookie=cookie)[0], 401)
+                    aurora_headers = {'Origin':lab.LAB_ORIGIN, 'Sec-Fetch-Site':'same-origin',
+                                      'Content-Type':'application/json', 'Cookie':cookie}
+                    self.assertEqual(request('POST', '/api/discover-names', '{}', **aurora_headers)[0], 200)
+                    for overrides in ({'Origin':'https://another.example'}, {'Sec-Fetch-Site':'cross-site'},
+                                      {'Content-Type':'text/plain'}, {'Cookie':''}, {'Authorization':'Bearer invalid'}):
+                        self.assertEqual(request('POST', '/api/discover-names', '{}', **(aurora_headers|overrides))[0], 401)
+                    self.assertEqual(request('POST', '/api/lab/workflows', '{}', **aurora_headers)[0], 401)
+                    self.assertEqual(request('POST', '/admin/leads.csv', '{}', **aurora_headers)[0], 401)
+                    self.assertEqual(request('GET', '/admin/leads.csv', Cookie=cookie)[0], 401)
+                    replacement = 'a' if cookie[-1] != 'a' else 'b'
+                    self.assertEqual(request('GET', '/?collector_layout=duo', Cookie=cookie[:-1]+replacement)[0], 401)
+                finally:
+                    server.shutdown()
+                    thread.join()
+        old_now = 1790000000
+        issued = auth.new_session(KEY, old_now).split(';', 1)[0]
+        self.assertTrue(auth.valid_session(issued, KEY, old_now))
+        self.assertFalse(auth.valid_session(issued, KEY, old_now+auth.SESSION_SECONDS))
+        self.assertFalse(auth.valid_session(issued, KEY+'rotated', old_now))
 
     def test_application_hosts_blocked_registry_hosts_unchanged(self):
         for host in ['staging.compliance-express.com','compliance-express.com','anything.onrender.com','old.trycloudflare.com']:
