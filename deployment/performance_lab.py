@@ -377,24 +377,24 @@ def final_four_asset(name, text):
       new URLSearchParams(location.search).get('aurora_connector_test')!=='popup';
     const tennesseeRetryDeadline = quietTennessee ? performance.now()+120000 : 0;
     let connector=Promise.resolve(),connectorStarted=false;''')
-        replace('          let result=await externalLookup(state,names,signal);', '''          let result=await externalLookup(state,names,signal);
+        replace('          let result=await externalLookup(state,names,browserSignal);', '''          let result=await externalLookup(state,names,browserSignal);
           const diagnostic=result?.lab_diagnostic;
           if(quietTennessee && state==='TN' && result?.state==='TN' && result.success===false &&
               ['NY_CONNECTOR_TN_VERIFICATION_PENDING','NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'].includes(diagnostic?.code) &&
               diagnostic.completed_count===0 && diagnostic.pending_operation==='search' &&
-              tennesseeRetryDeadline-performance.now()>=43000 && !signal?.aborted) {
+              tennesseeRetryDeadline-performance.now()>=43000 && !browserSignal?.aborted) {
             // The first search never completed. Retry the normal source check
             // in the same quiet mode, with the same names and a bounded clock.
             await new Promise(resolve=>{
               const finish=()=>{
                 clearTimeout(timer);
-                signal?.removeEventListener('abort',finish);
+                browserSignal?.removeEventListener('abort',finish);
                 resolve();
               };
               const timer=setTimeout(finish,3000);
-              signal?.addEventListener('abort',finish,{once:true});
+              browserSignal?.addEventListener('abort',finish,{once:true});
             });
-            signal?.throwIfAborted();
+            browserSignal?.throwIfAborted();
             const remaining=Math.floor(tennesseeRetryDeadline-performance.now());
             if(remaining>=40000) {
               trace("quiet Tennessee retry started",{state,reason:diagnostic.code,remaining_ms:remaining});
@@ -402,15 +402,15 @@ def final_four_asset(name, text):
               // plan share the original 120-second deadline. A second 60-second
               // cutoff discarded in-time recovery after queue/verification waits.
               const timeout=AbortSignal.timeout(remaining);
-              const retrySignal=signal?AbortSignal.any([signal,timeout]):timeout;
+              const retrySignal=browserSignal?AbortSignal.any([browserSignal,timeout]):timeout;
               try {
                 const retry=await externalLookup(state,names,retrySignal);
-                if(retry?.state===state && (!retrySignal.aborted || (!signal?.aborted &&
+                if(retry?.state===state && (!retrySignal.aborted || (!browserSignal?.aborted &&
                     retrySignal.reason?.name==='TimeoutError' && retry.identity_review?.candidates?.length &&
                     retry.lab_diagnostic?.code==='NY_CONNECTOR_TIMEOUT')))result=retry;
               } catch(error) {
                 if(error?.stopCleanupFailed)throw error;
-                signal?.throwIfAborted();
+                browserSignal?.throwIfAborted();
               }
             }
           }''')
@@ -600,7 +600,11 @@ def final_four_asset(name, text):
   }
   async function setup() {''')
         replace('action === "ping" ? 5000', '["ping","foreground-start","foreground-end"].includes(action) ? 5000')
-        replace('Object.freeze({ setup, lookup, refresh })', 'Object.freeze({ setup, lookup, refresh, preflight, release })')
+        replace('Object.freeze({ setup, lookup, refresh })',
+                'Object.freeze({ setup, lookup, refresh, preflight, release, probe: () => bridge("ping") })')
+    if name == "index.html" and identity.get("permanent_staging"):
+        from deployment.aurora_recovery_assets import bind
+        text = bind(text)
     return insight_asset(name, text)
 
 

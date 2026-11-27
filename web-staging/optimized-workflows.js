@@ -8,6 +8,12 @@
     const results=new Map(), external=states.filter(s=>s==='IL'||s==='GA');
     const evidenceTasks=[];
     const needsIdentity=mode==='sales'&&external.length>0&&aliases.length===0;
+    const recovery = options.recovery;
+    const browserSignal = recovery?.signal
+      ? (signal ? AbortSignal.any([signal,recovery.signal]) : recovery.signal) : signal;
+    const recordedForRecovery = recovery && new Set();
+    const isInterrupted = row => ['WORKFLOW_INCOMPLETE','WORKER_TASK_FAILED'].includes(row.status_reason);
+    const savedRows = () => [...results.values()].filter(row=>recordedForRecovery?.has(row.state));
     let token=null, externalDone=false, released=false;
     const settledExternal=new Set();
     let progressiveRelease=false, releasedCount=0;
@@ -16,8 +22,12 @@
     let submission=null;
     const missing=state=>({state,ein,organization_name:name,status:'Unable to Confirm',success:false,
       comments:'The state check did not provide a complete response. Registration status remains unconfirmed.'});
-    const record=result=>{
+    const record=(result, placeholder=false)=>{
       if(signal?.aborted || !states.includes(result.state) || results.has(result.state)) return;
+      if(recovery && !placeholder && !isInterrupted(result)) {
+        recordedForRecovery.add(result.state);
+        recovery.record(result);
+      }
       results.set(result.state,result);onResult(result);
       if(['WI','DC'].includes(result.state) && result.desktop_evidence_request && !result.evidence_url)
         evidenceTasks.push(captureOriginal(result));
@@ -213,6 +223,13 @@
         const deadline=Date.now()+15000;
         while (true) {
           const progress=await call('poll',{},true);
+          if(recovery) for(const row of progress.results||[]) {
+            if(!states.includes(row.state) || results.has(row.state) ||
+                isInterrupted(row))continue;
+            results.set(row.state,row);
+            recordedForRecovery.add(row.state);
+            recovery.record(row);
+          }
           if (Number.isFinite(progress.finished)) break;
           if (Date.now()>=deadline) throw new Error('The server has not confirmed the stop.');
           await new Promise(resolve=>setTimeout(resolve,500));
@@ -226,19 +243,19 @@
       connectorStarted=true;
       connector=Promise.all(external.map(async state=>{
         try{
-          let result=await externalLookup(state,names,signal);
+          let result=await externalLookup(state,names,browserSignal);
           if(!confirmed&&/^Not Registered/.test(result.status||''))result={...missing(state),
             status_reason:'SALES_IDENTITY_INCOMPLETE',
             comments:'The Sales name-evidence step was incomplete. A negative name-only search cannot confirm non-registration. Run Standard for a full check.'};
           record(result);
         }catch(error){
           if(error?.stopCleanupFailed) stopCleanupFailed=true;
-          if(!signal?.aborted)record(missing(state));
+          if(!browserSignal?.aborted)record(missing(state),true);
         }
         finally{settledExternal.add(state);}
       })).then(()=>{externalDone=true;});
     };
-    let stopCleanupFailed=false;
+    let stopCleanupFailed=false, serverSettled=states.length===external.length&&!needsIdentity;
     if(!needsIdentity)startConnector(aliases);
     try {
       if(states.length>external.length||needsIdentity) {
@@ -271,14 +288,19 @@
               startConnector(identity.names,identity.confirmed===true);
             }
             for(const result of progress.results)record(result);
-            if(progress.finished!==null)break;
+            if(Number.isFinite(progress.finished)){serverSettled=true;break;}
           }
           await new Promise(resolve=>setTimeout(resolve,500));
         }
       }
       await connector;
       if(userStop)signal?.throwIfAborted();
-      for(const state of states)if(!results.has(state))record(missing(state));
+      if(recovery?.signal?.aborted) {
+        await Promise.all(evidenceTasks);
+        await reconcileSavedEvidence();
+        return {paused:true,partialResults:savedRows(),cleanupConfirmed:serverSettled&&!stopCleanupFailed};
+      }
+      for(const state of states)if(!results.has(state))record(missing(state),true);
       await Promise.all(evidenceTasks);
       await reconcileSavedEvidence();
       if(userStop)signal?.throwIfAborted();
@@ -286,9 +308,10 @@
     } catch(error) {
       if(userStop && signal?.aborted) {
         const stopped=new Error('Run stopped.');
-        stopped.partialResults=states.filter(state=>results.has(state)).map(state=>results.get(state));
+        stopped.partialResults=recovery?savedRows():states.filter(state=>results.has(state)).map(state=>results.get(state));
         try {
           try { await confirmStop(); } finally { await connector; }
+          stopped.partialResults=recovery?savedRows():states.filter(state=>results.has(state)).map(state=>results.get(state));
           if(stopCleanupFailed)throw new Error('Browser cleanup was not confirmed.');
           stopped.runStopped=true;
         } catch {
@@ -298,11 +321,21 @@
         throw stopped;
       }
       cancel();
-      if(userStop && token) await call('cancel',{},true).catch(()=>{});
+      let terminalConfirmed = false;
+      if(userStop && token) {
+        if(recovery?.signal?.aborted) {
+          try { await confirmStop(); terminalConfirmed = true; } catch {}
+        } else await call('cancel',{},true).catch(()=>{});
+      }
       if(signal?.aborted)throw error;
       if(error.code==='PERFORMANCE_LAB_EXPIRED')throw error;
       await connector;
-      for(const state of states)if(!results.has(state))record(missing(state));
+      if(recovery?.signal?.aborted) {
+        await Promise.all(evidenceTasks);
+        await reconcileSavedEvidence();
+        return {paused:true,partialResults:savedRows(),cleanupConfirmed:terminalConfirmed&&!stopCleanupFailed};
+      }
+      for(const state of states)if(!results.has(state))record(missing(state),true);
       await Promise.all(evidenceTasks);
       await reconcileSavedEvidence();
       return states.map(state=>results.get(state));
