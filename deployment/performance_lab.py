@@ -20,6 +20,7 @@ from urllib.parse import parse_qsl, unquote, urlparse, urlunparse
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from deployment.lab_identity import configured_lab_origin, trial_identity, trial_access_expired, TRIAL_RELEASE_LABEL
+from deployment import staging_browser_sign_in
 
 LAB_ORIGIN = configured_lab_origin()
 LAB_SERVICE_ID = 'srv-d8u0hsu7r5hc73aqfsg0'
@@ -732,6 +733,8 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
         from deployment import state_snapshots
         state_snapshots.STORE = state_snapshots.PostgresStore(
             durable.pool,provisional_enabled=os.environ.get('CE_PERMANENT_STAGING')=='1')
+    staging = trial_identity() if os.environ.get('CE_PERMANENT_STAGING') == '1' else None
+    browser_sign_in = bool(staging and staging.get('permanent_staging'))
     lock = threading.Lock()
     telemetry = {'started_epoch': time.time(), 'active_requests': 0, 'peak_requests': 0, 'completed_requests': 0}
 
@@ -812,6 +815,8 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
             # calls still require the private trial key, including the master
             # passcode checks. No customer/backend data becomes public.
             asset_path=urlparse(self.path).path
+            if browser_sign_in and self.path == staging_browser_sign_in.PATH:
+                return staging_browser_sign_in.form(self, include_body=include_body)
             test_assets={'/connector/final-four-validation.html','/ny-connector.js','/optimized-workflows.js'}
             if alerts is not None:
                 test_assets.update(('/alerts-runner.html','/alerts-runner.js','/alerts-browser.js'))
@@ -828,7 +833,14 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
             if alerts is not None and os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity() and self.path.startswith('/api/tn-extension-demo/'):
                 from deployment.tn_extensions_demo import handle
                 return handle(alerts,self,origin=LAB_ORIGIN,include_body=include_body)
-            if not self.authorized(): return
+            session_asset = None
+            session_evidence = False
+            if (browser_sign_in and not asset_path.startswith(('/api/', '/admin/'))
+                    and staging_browser_sign_in.valid_session(self.headers.get('Cookie', ''), key)):
+                session_evidence = asset_path.startswith(('/state-snapshots/', '/state-evidence/'))
+                if not session_evidence:
+                    session_asset = lab_asset(self.path)
+            if not session_evidence and session_asset is None and not self.authorized(): return
             if os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity():
                 target = staging_collector_entry(self.path)
                 if target:
@@ -890,7 +902,7 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
                 return self._send_json(200, data, {'Cache-Control': 'no-store'})
             if durable is not None and self.path.startswith('/evidence/'):
                 return self._send_json(409, {'error': 'Evidence execution is not enabled in the durable queue experiment'})
-            asset = lab_asset(self.path)
+            asset = session_asset if session_asset is not None else lab_asset(self.path)
             if asset:
                 body, kind = asset
                 self.send_response(200)
@@ -907,6 +919,8 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
         def do_HEAD(self): return self._get(False)
 
         def do_POST(self):
+            if browser_sign_in and self.path == staging_browser_sign_in.PATH:
+                return staging_browser_sign_in.sign_in(self, key, LAB_ORIGIN)
             if alerts is not None and os.environ.get('CE_PERMANENT_STAGING') == '1' and trial_identity() and self.path == '/api/tn-extension-source':
                 from deployment.tn_extension_refresh import handle_source
                 return handle_source(alerts,master,self,LAB_ORIGIN)
