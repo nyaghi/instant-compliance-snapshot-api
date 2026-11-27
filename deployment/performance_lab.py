@@ -817,6 +817,11 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
             asset_path=urlparse(self.path).path
             if browser_sign_in and self.path == staging_browser_sign_in.PATH:
                 return staging_browser_sign_in.form(self, include_body=include_body)
+            if browser_sign_in and asset_path in staging_browser_sign_in.EMPTY_ICONS:
+                self.send_response(204)
+                self.send_header('Cache-Control', 'public, max-age=300')
+                self.end_headers()
+                return
             test_assets={'/connector/final-four-validation.html','/ny-connector.js','/optimized-workflows.js'}
             if alerts is not None:
                 test_assets.update(('/alerts-runner.html','/alerts-runner.js','/alerts-browser.js'))

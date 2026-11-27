@@ -157,6 +157,11 @@ class LabTests(unittest.TestCase):
                     self.assertEqual(page_headers['Cache-Control'], 'no-store')
                     self.assertEqual(page_headers['Referrer-Policy'], 'same-origin')
                     self.assertEqual(request('GET', '/?collector_layout=duo')[0], 401)
+                    for method in ('GET', 'HEAD'):
+                        for icon_path in auth.EMPTY_ICONS:
+                            icon_status, icon_headers, icon_body = request(method, icon_path)
+                            self.assertEqual((icon_status, icon_body), (204, b''))
+                            self.assertNotIn('WWW-Authenticate', icon_headers)
                     form_type = {'Content-Type':'application/x-www-form-urlencoded'}
                     for origin, passcode in [('https://other.example', KEY), ('null', KEY), (lab.LAB_ORIGIN, 'wrong')]:
                         denied, headers, _ = request('POST', auth.PATH, urlencode({'passcode':passcode}),

@@ -11,6 +11,9 @@ import time
 from urllib.parse import parse_qs
 
 PATH = '/staging-sign-in'
+# Aurora refers to these optional icons, which are absent from the staging assets.
+EMPTY_ICONS = frozenset({'/favicon.ico', '/favicon-16x16.png',
+                         '/favicon-32x32.png', '/favicon-192x192.png'})
 COOKIE = '__Host-cc-staging-browser'
 SESSION_SECONDS = 3600
 TOKEN = re.compile(r'(\d{10})\.([a-f0-9]{32})\.([a-f0-9]{64})')
