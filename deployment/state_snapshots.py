@@ -966,6 +966,10 @@ class CaptureRun:
                 if self.state=='FL' and source_note=='Original verified FDACS response from this lookup, rendered without changing its source HTML.':
                     from deployment.fl_response_evidence import image_bound as fl_response_image_bound
                     matched=not negative and fl_response_image_bound(self,row,url,raw,kind)
+                if self.state == 'FL' and getattr(self, 'fl_verified_license_image', None):
+                    from deployment.fl_registry_migration import LICENSE_EVIDENCE_NOTE, verified_license_image_bound
+                    if source_note == LICENSE_EVIDENCE_NOTE:
+                        matched = not negative and verified_license_image_bound(self, row, url, raw, kind)
                 if self.state=='CO' and urlsplit(str(row.get('source_url') or '')).hostname=='data.colorado.gov':
                     from deployment.co_dataset_evidence import image_bound
                     matched=not negative and image_bound(self,row,url,raw,kind)

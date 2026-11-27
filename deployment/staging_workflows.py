@@ -189,6 +189,12 @@ def handle(master, handler, *, trial_queue=None):
         scope = 'private-performance-lab'
         if path == '/api/lab/workflows':
             prepared = normalize_submission(payload, master.SUPPORTED_STATES)
+            if (trial.get('permanent_staging') and prepared['mode'] == 'standard'
+                    and 'FL' in prepared['states'] and fl_license_token):
+                from deployment.fl_license_proof import verify
+                proof = verify(master, fl_license_token, owner, prepared['organization_name'], prepared['ein'])
+                if proof is not None:
+                    prepared['_fl_verified_license'] = proof
             ident, created = trial_queue.submit(scope, key, prepared, master.APP_VERSION, (*master.IDENTITY_STATES, 'IRS'))
             return {'id': ident, 'created': created}
         match = re.fullmatch(r'/api/lab/workflows/([a-f0-9-]{36})(?:/(cancel|release-external))?', path)
@@ -210,6 +216,7 @@ def handle(master, handler, *, trial_queue=None):
             handler._send_json(403, {'error': 'Sign in with authorized Compliance Express access.'}); return
         owner = [email, device]
         action = payload.get('action')
+        fl_license_token = payload.get('fl_license_token')
         if action == 'start':
             if payload.get('consent') is not True: raise ValueError('Consent is required')
             from deployment.lab_identity import trial_sales_cutoff
@@ -231,6 +238,13 @@ def handle(master, handler, *, trial_queue=None):
                         or status.get('ein') != record['ein']): raise ValueError('Worker release mismatch')
                 data = {key: status[key] for key in ('phase','completed','total','submitted','deadline','started','finished')}
                 data['results'] = poll_results(master, status['jobs'], record, payload.get('received_states', []))
+                if trial and trial.get('permanent_staging') and record['mode'] == 'standard' and 'FL' in record['states']:
+                    florida = next((row for row in data['results'] if row['state'] == 'FL'), None)
+                    if florida is not None:
+                        from deployment.fl_license_proof import issue
+                        proof = issue(master, record, florida)
+                        if proof:
+                            data['fl_license_proof'] = proof
                 identity = connector_identity(status, record)
                 if identity is not None: data['connector_identity'] = identity
             elif action in ('cancel', 'release-external'):

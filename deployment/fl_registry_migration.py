@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import date, datetime
 from html import unescape
 from html.parser import HTMLParser
+import hashlib
 import re
 from threading import Event
 import time
@@ -16,6 +17,8 @@ MAX_BYTES = 2_000_000
 EMPTY = "No licenses found matching your search."
 FIELD_EIN = {"ein", "fein", "federal employer identification number"}
 NUMBER = re.compile(r"CH[0-9]+")
+LICENSE_EVIDENCE_NOTE = ("Original new FDACS card for the license number. "
+                         "Aurora verified the organization and license in a recent Florida check.")
 
 
 class CharityPage(HTMLParser):
@@ -257,6 +260,9 @@ class MigrationCheck:
                 result.source_note += " The new and legacy Florida Check-A-Charity searches completed."
                 return result
         elif not suspect and not matching:
+            recovered = self.recover_verified_license(result, org)
+            if recovered is not None:
+                return recovered
             if pages:
                 result.source_note += " The new Florida portal was checked. The legacy search still needs a usable response."
             return result
@@ -274,7 +280,43 @@ class MigrationCheck:
         )
         return result
 
-    def selected_result(self, org, card, query, source, office):
+    def recover_verified_license(self, legacy, org):
+        from deployment.fl_license_proof import PROOF
+        proof = PROOF.get()
+        master = self.master
+        if (not proof or legacy.success is True
+                or getattr(legacy, "reason_code", "") != "FL_SOURCE_NOT_RESPONDING"
+                or getattr(legacy, "matched_registry_identifier", "")
+                or getattr(legacy, "rejected_candidates", None)
+                or proof["expires"] <= time.time()
+                or proof["ein"] != master.canonical_ein_digits(org.ein)
+                or master.complete_name_identity_key(proof["name"]) != master.complete_name_identity_key(org.organization_name)):
+            return None
+        # Reserve time for the existing original-card capture in the same run.
+        stop = min(self.deadline - 3, time.monotonic() + 3)
+        if stop - time.monotonic() < 1:
+            return None
+        identifier = proof["id"]
+        try:
+            source = fetch(master, identifier, stop)
+            cards = parse(source, identifier)
+        except (OSError, ValueError):
+            return None
+        if len(cards) != 1:
+            return None
+        card = cards[0]
+        number, name, _, _, _, public_ein = card
+        if (number != identifier or (name != identifier and
+                master.complete_name_identity_key(name) != master.complete_name_identity_key(proof["name"]))
+                or (public_ein and master.canonical_ein_digits(public_ein) != proof["ein"])):
+            return None
+        from deployment.search_history import SourceQueryReceipt
+        receipt = SourceQueryReceipt(self.run, {"state": "FL", "operation": "search", "name": identifier,
+            "url": query_url(identifier), "source_kind": "state_portal", "filter_label": "New FDACS, verified license"})
+        receipt.complete(1, rows=[dict(identifier=number, name=name, status=card[2])])
+        return self.selected_result(org, card, identifier, source, {}, verified_name=proof["name"])
+
+    def selected_result(self, org, card, query, source, office, *, verified_name=None):
         identifier, name, label, expires, _, public_ein = card
         status = {"Law NA - Educational": "Exempt", "Suspended": "Suspended", "Revoked": "Revoked",
                   "Denied": "Delinquent"}.get(label)
@@ -299,8 +341,12 @@ class MigrationCheck:
             raw_status_text=raw,
             source_note=f"Florida's new Check-A-Charity portal lists {name} ({identifier}) as {label}.",
             success=True)
-        result.matched_registry_name, result.matched_registry_identifier = name, identifier
+        result.matched_registry_name, result.matched_registry_identifier = verified_name or name, identifier
         result.status_reason = "FL_MODERN_VERIFIED_LICENSE"
+        if verified_name:
+            result.source_note = (f"Florida's new Check-A-Charity portal lists license {identifier} as {label}. "
+                                  "The license number was verified for this organization in a recent Florida check.")
+            self.run.fl_modern_verified_name = verified_name
         if public_ein:
             result.source_note += " The listed EIN matches the requested organization."
         if office:
@@ -314,8 +360,9 @@ def capture(run, result, page, deadline):
     """Capture the unchanged response that supplied the matched license."""
     url, query, source, card = run.fl_modern_selected
     identifier, name, *_ = card
+    verified_name = getattr(run, "fl_modern_verified_name", None)
     if (result.get("source_url"), result.get("matched_registry_identifier"),
-            result.get("matched_registry_name")) != (url, identifier, name):
+            result.get("matched_registry_name")) != (url, identifier, verified_name or name):
         return
     stop = min(deadline - 0.5, time.monotonic() + 8)
 
@@ -345,7 +392,22 @@ def capture(run, result, page, deadline):
         text = locator.inner_text(timeout=budget())
         raw = locator.screenshot(type="jpeg", quality=82, timeout=budget())
         if page.url == url and locator.inner_text(timeout=budget()) == text and card in parse(page.content(), query):
-            run.document(url, raw, "image", text,
-                         note="Original card from the new FDACS Check-A-Charity response.")
+            note = "Original card from the new FDACS Check-A-Charity response."
+            if verified_name:
+                note = LICENSE_EVIDENCE_NOTE
+                run.fl_verified_license_image = (
+                    hashlib.sha256(raw).digest(), url, run.ein, identifier,
+                    verified_name, result.get("raw_status_text"))
+            run.document(url, raw, "image", text, note=note)
     finally:
         page.unroute(url, original)
+
+
+def verified_license_image_bound(run, result, url, raw, kind):
+    """The live card may display the verified license number in place of its name."""
+    return (kind == "image" and result.get("status_reason") == "FL_MODERN_VERIFIED_LICENSE"
+            and result.get("source_url") == url
+            and getattr(run, "fl_verified_license_image", None) == (
+                hashlib.sha256(raw).digest(), url, re.sub(r"[^0-9]", "", result.get("ein") or ""),
+                result.get("matched_registry_identifier"), result.get("matched_registry_name"),
+                result.get("raw_status_text")))

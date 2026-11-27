@@ -5,7 +5,7 @@ import sys
 import json
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -537,7 +537,11 @@ def execute(master, job, source_finished=None, trace_path=None):
     mode_context = getattr(master, 'LAB_LOOKUP_MODE_CONTEXT', None)
     mode_token = mode_context.set(p.get('mode', 'standard')) if mode_context is not None else None
     from deployment.state_snapshots import task_deadline
-    with task_deadline(job), observe_fl_headers(master, trace), observe_transport(master, job['state'], trace_path) as transport_trace, observe_browser_transport(master, job['state'], trace_path) as browser_trace:
+    fl_license = nullcontext()
+    if job['state'] == 'FL' and p.get('_fl_verified_license'):
+        from deployment.fl_license_proof import use
+        fl_license = use(p['_fl_verified_license'])
+    with task_deadline(job), fl_license, observe_fl_headers(master, trace), observe_transport(master, job['state'], trace_path) as transport_trace, observe_browser_transport(master, job['state'], trace_path) as browser_trace:
         try:
             results = (master.run_sales_lookups_with_source_evidence(organizations, [job['state']], identity)
                        if identity is not None else master.run_state_lookups_parallel(organizations, [job['state']]))

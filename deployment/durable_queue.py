@@ -463,7 +463,9 @@ class Queue:
     def submit(self, scope, key, payload, version, discovery_sources=()):
         if not scope or not isinstance(key, str) or not 1 <= len(key) <= 128:
             raise ValueError('Idempotency-Key required (1–128 characters)')
-        fingerprint = digest({'payload': payload, 'version': version})
+        # A verified Florida lookup hint does not change the requested workflow.
+        scheduling_payload = {k: v for k, v in payload.items() if k != '_fl_verified_license'} if '_fl_verified_license' in payload else payload
+        fingerprint = digest({'payload': scheduling_payload, 'version': version})
         with self.transaction() as (c, now):
             if os.environ.get('CE_PERMANENT_STAGING')=='1':
                 maintenance=c.execute('SELECT busy_until FROM cc_storage_maintenance WHERE id=1').fetchone()

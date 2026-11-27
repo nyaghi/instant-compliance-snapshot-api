@@ -40578,6 +40578,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         'matched_registry_name':result.matched_registry_name,
                         'matched_registry_identifier':result.matched_registry_identifier,
                         'source_url':result.source_url,
+                        'raw_status_text':result.raw_status_text,
                         'selected_legacy_row':getattr(result, '_cc_fl_selected_row_text', '')},page,context,workflow_call('registry_snapshot_server.py:_run_state_lookup_source:34456:69:get',DEADLINE.get,locals()))
                 except Exception:pass
             elif state == "NJ":

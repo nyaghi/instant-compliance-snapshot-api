@@ -421,6 +421,41 @@ def final_four_asset(name, text):
         replace("const needsIdentity=mode==='sales'&&external.length>0&&aliases.length===0;", "const needsIdentity=false;")
         replace('signal, onResult=()=>{}, externalLookup} = options;', 'signal, onResult=()=>{}, externalLookup, sales_cutoff_seconds} = options;')
         replace('mode,consent:true,request_id:', 'mode,...(sales_cutoff_seconds!==undefined?{sales_cutoff_seconds}:{}),consent:true,request_id:')
+        if identity.get('permanent_staging'):
+            replace("  async function run(options) {", '''  const flCacheKey = 'cc-fl-license-proof-v1';
+  function readFlProofs() {
+    try {
+      const items=JSON.parse(localStorage.getItem(flCacheKey)||'[]');
+      if(!Array.isArray(items))return [];
+      const now=Date.now()/1000;
+      return items.filter(r=>typeof r?.ein==='string' && typeof r.token==='string' &&
+        typeof r.id==='string' && Number.isFinite(r.expires) && r.expires>now).slice(-40);
+    } catch { return []; }
+  }
+  function saveFlProof(ein, proof, florida) {
+    try {
+      const rows=readFlProofs();
+      const prior=rows.find(r=>r.ein===ein);
+      if(!proof && (!prior || (florida.success!==true && !florida.confirmation_required && !florida.identity_review)
+          || florida.matched_registry_identifier===prior.id))return;
+      const next=rows.filter(r=>r.ein!==ein);
+      if(proof && typeof proof.token==='string' && typeof proof.id==='string' && Number.isFinite(proof.expires))
+        next.push({ein,token:proof.token,id:proof.id,expires:proof.expires});
+      localStorage.setItem(flCacheKey,JSON.stringify(next.slice(-40)));
+    } catch { /* The state check still works with browser storage unavailable. */ }
+  }
+  async function run(options) {''')
+            replace('        submission=payload;', '''        const floridaEin=mode==='standard'&&states.includes('FL')?String(ein).replace(/\\D/g,''):null;
+        if(floridaEin) {
+          const prior=readFlProofs().find(r=>r.ein===floridaEin);
+          if(prior)payload.fl_license_token=prior.token;
+        }
+        submission=payload;''')
+            replace('            for(const result of progress.results)record(result);', '''            if(floridaEin) {
+              const florida=progress.results.find(result=>result.state==='FL');
+              if(florida)saveFlProof(floridaEin,progress.fl_license_proof,florida);
+            }
+            for(const result of progress.results)record(result);''')
         replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(s))")
         replace("headers:{'Content-Type':'application/json'}", "headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode}")
     elif name == 'sales-mode.js':
