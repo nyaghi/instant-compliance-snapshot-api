@@ -1,7 +1,7 @@
 """Staging browser sign-in with the existing private staging key.
 
-The session only authorizes browser reads. Workflow and admin APIs retain their
-existing Authorization checks.
+The session authorizes browser assets and same-origin Aurora form requests.
+The application still verifies request credentials and ownership.
 """
 import hmac
 from http.cookies import CookieError, SimpleCookie
@@ -17,6 +17,23 @@ EMPTY_ICONS = frozenset({'/favicon.ico', '/favicon-16x16.png',
 COOKIE = '__Host-cc-staging-browser'
 SESSION_SECONDS = 3600
 TOKEN = re.compile(r'(\d{10})\.([a-f0-9]{32})\.([a-f0-9]{64})')
+
+
+AURORA_POSTS = frozenset({
+    '/api/check', '/api/checks-completed', '/api/discover-names',
+    '/api/final-four-connector', '/api/funnel/event', '/api/identity-review',
+    '/api/ny-connector', '/api/report', '/api/workflow',
+})
+
+
+def valid_aurora_post(handler, key, origin):
+    return (handler.command == 'POST'
+            and handler.path in AURORA_POSTS
+            and not handler.headers.get('Authorization')
+            and handler.headers.get('Origin') == origin
+            and handler.headers.get('Sec-Fetch-Site') == 'same-origin'
+            and handler.headers.get_content_type() == 'application/json'
+            and valid_session(handler.headers.get('Cookie', ''), key))
 
 
 def signature(key, value):

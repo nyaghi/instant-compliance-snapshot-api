@@ -131,7 +131,7 @@ class LabTests(unittest.TestCase):
         for value in ('', 'Bearer '+KEY+'x', 'Basic @@@', 'Basic '+base64.b64encode(('other:'+KEY).encode()).decode()):
             self.assertFalse(lab.valid_authorization(value,KEY))
 
-    def test_staging_browser_sign_in_keeps_api_authorization_separate(self):
+    def test_staging_browser_sign_in_limits_session_to_aurora(self):
         auth = lab.staging_browser_sign_in
         master = types.SimpleNamespace(RegistrySnapshotHandler=Base, APP_VERSION='test-performance-lab')
         environment = patch.dict(os.environ, {'CE_PERMANENT_STAGING':'1'})
@@ -183,6 +183,14 @@ class LabTests(unittest.TestCase):
                     self.assertEqual(request('GET', '/identity-review.js', Cookie=cookie)[0], 200)
                     self.assertEqual(request('GET', '/api/lab/metrics', Cookie=cookie)[0], 401)
                     self.assertEqual(request('POST', '/api/workflow', '{}', Cookie=cookie)[0], 401)
+                    aurora_headers = {'Origin':lab.LAB_ORIGIN, 'Sec-Fetch-Site':'same-origin',
+                                      'Content-Type':'application/json', 'Cookie':cookie}
+                    self.assertEqual(request('POST', '/api/discover-names', '{}', **aurora_headers)[0], 200)
+                    for overrides in ({'Origin':'https://another.example'}, {'Sec-Fetch-Site':'cross-site'},
+                                      {'Content-Type':'text/plain'}, {'Cookie':''}, {'Authorization':'Bearer invalid'}):
+                        self.assertEqual(request('POST', '/api/discover-names', '{}', **(aurora_headers|overrides))[0], 401)
+                    self.assertEqual(request('POST', '/api/lab/workflows', '{}', **aurora_headers)[0], 401)
+                    self.assertEqual(request('POST', '/admin/leads.csv', '{}', **aurora_headers)[0], 401)
                     self.assertEqual(request('GET', '/admin/leads.csv', Cookie=cookie)[0], 401)
                     replacement = 'a' if cookie[-1] != 'a' else 'b'
                     self.assertEqual(request('GET', '/?collector_layout=duo', Cookie=cookie[:-1]+replacement)[0], 401)

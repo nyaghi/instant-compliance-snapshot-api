@@ -760,6 +760,8 @@ def build_handler(master, key, capacity=None, durable=None, alerts=None):
         def authorized(self):
             if valid_authorization(self.headers.get('Authorization', ''), key):
                 return True
+            if browser_sign_in and staging_browser_sign_in.valid_aurora_post(self, key, LAB_ORIGIN):
+                return True
             if getattr(self, 'command', '') == 'POST':
                 # Closing with unread request bytes can reset the connection
                 # before the caller receives the denial. Drain only a small,
