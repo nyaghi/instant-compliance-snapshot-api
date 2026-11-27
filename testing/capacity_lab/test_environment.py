@@ -155,9 +155,10 @@ class LabTests(unittest.TestCase):
                     self.assertIn(b'type="password"', body)
                     self.assertNotIn(KEY.encode(), body)
                     self.assertEqual(page_headers['Cache-Control'], 'no-store')
+                    self.assertEqual(page_headers['Referrer-Policy'], 'same-origin')
                     self.assertEqual(request('GET', '/?collector_layout=duo')[0], 401)
                     form_type = {'Content-Type':'application/x-www-form-urlencoded'}
-                    for origin, passcode in [('https://other.example', KEY), (lab.LAB_ORIGIN, 'wrong')]:
+                    for origin, passcode in [('https://other.example', KEY), ('null', KEY), (lab.LAB_ORIGIN, 'wrong')]:
                         denied, headers, _ = request('POST', auth.PATH, urlencode({'passcode':passcode}),
                                                       Origin=origin, **form_type)
                         self.assertEqual(denied, 403)

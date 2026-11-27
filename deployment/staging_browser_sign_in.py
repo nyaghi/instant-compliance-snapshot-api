@@ -58,7 +58,7 @@ def form(handler, status=200, include_body=True):
     handler.send_header('Content-Type', 'text/html; charset=utf-8')
     handler.send_header('Content-Length', str(len(body)))
     handler.send_header('Cache-Control', 'no-store')
-    handler.send_header('Referrer-Policy', 'no-referrer')
+    handler.send_header('Referrer-Policy', 'same-origin')
     handler.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
     handler.end_headers()
     if include_body:
@@ -69,17 +69,18 @@ def sign_in(handler, key, origin):
     # A same-origin HTML form is the only session-issuing operation.
     try:
         length = int(handler.headers.get('Content-Length', 0))
-        if (handler.headers.get('Origin') != origin or handler.headers.get('Transfer-Encoding')
-                or handler.headers.get_content_type() != 'application/x-www-form-urlencoded'
-                or not 1 <= length <= 2048):
+        if handler.headers.get('Transfer-Encoding') or not 1 <= length <= 2048:
             raise ValueError('Invalid sign-in request')
         timeout = handler.connection.gettimeout()
         handler.connection.settimeout(4)
         try:
-            inputs = parse_qs(handler.rfile.read(length).decode('utf-8'),
-                              strict_parsing=True, max_num_fields=1, errors='strict')
+            body = handler.rfile.read(length)
         finally:
             handler.connection.settimeout(timeout)
+        if (len(body) != length or handler.headers.get('Origin') != origin
+                or handler.headers.get_content_type() != 'application/x-www-form-urlencoded'):
+            raise ValueError('Invalid sign-in request')
+        inputs = parse_qs(body.decode('utf-8'), strict_parsing=True, max_num_fields=1, errors='strict')
         if set(inputs) != {'passcode'} or len(inputs['passcode']) != 1:
             raise ValueError('Invalid sign-in request')
         if not hmac.compare_digest(inputs['passcode'][0].encode(), key.encode()):
