@@ -103,6 +103,18 @@ class FloridaVerifiedLicenseFallback(unittest.TestCase):
         fetch.assert_called_once()
         self.assertIsNone(fl_license_proof.PROOF.get())
 
+    def test_prefix_neighbors_do_not_replace_the_exact_verified_license(self):
+        verified = self.proof(self.NAME, self.EIN, self.ID)
+        exact = (self.ID, self.ID, "Registered", self.future_date, "N/A", "")
+        neighbor = (self.ID + "7", self.ID + "7", "Expired", "01/31/2020", "N/A", "")
+        for cards in ([exact, neighbor], [neighbor, exact]):
+            result, run, _ = self.run_check(self.NAME, self.EIN, verified, document(self.ID, cards))
+            self.assertEqual(result.matched_registry_identifier, self.ID)
+            self.assertEqual(run.fl_modern_selected[-1], exact)
+        for cards in ([neighbor], [exact, exact], [neighbor, (*exact[:-1], "88-7654321")]):
+            result, _, _ = self.run_check(self.NAME, self.EIN, verified, document(self.ID, cards))
+            self.assertEqual(result.status, "Site Not Reachable")
+
     def test_conflicts_empty_results_and_network_failures_remain_inconclusive(self):
         verified = self.proof(self.NAME, self.EIN, self.ID)
         base = (self.ID, self.ID, "Registered", self.future_date, "N/A", "")

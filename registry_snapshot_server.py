@@ -7871,9 +7871,10 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
     raw = fields["Status"].strip()
     if not raw:
         raise ValueError("Tennessee selected status is missing")
+    today = datetime.now(ZoneInfo("America/Chicago")).date()
     expiration = final_four_source_date(fields["Expiration Date"], "Tennessee expiration")
     initial = final_four_source_date(fields["Registration Date"], "Tennessee registration")
-    if initial and initial > date.today():
+    if initial and initial > today:
         raise ValueError("Tennessee original registration date is in the future")
     # Read the complete table, not simply the first financial row. Financial
     # periods do not replace the state's displayed expiration date.
@@ -7883,7 +7884,7 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
         if not isinstance(periods, list) or type(fields.get("financial_count")) is not int or fields["financial_count"] != len(periods):
             raise ValueError("Tennessee financial history is incomplete")
         parsed = [final_four_source_date(v, "Tennessee fiscal period") for v in periods]
-        if any(v is None or v > date.today() for v in parsed):
+        if any(v is None or v > today for v in parsed):
             raise ValueError("Tennessee fiscal period is missing or in the future")
         latest_period = max(parsed, default=None)
     city, region = str(search_row.get("city", "")).strip(), str(search_row.get("region", "")).strip().upper()
@@ -7905,7 +7906,7 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
     # TNCaB can show solicitation-name templates, not actual organization
     # names, such as a literal 'CHAPTER NAME'. Do not export those as aliases.
     aliases = [n.strip() for n in aliases if n.strip() and not identity_alias_template(n)]
-    status = licensed_charity_status(raw, expiration)
+    status = licensed_charity_status(raw, expiration, today=today)
     date_note = ""
     if not expiration and status == "Current":
         if "financial_periods" not in fields:
@@ -7913,7 +7914,7 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
             date_note = "Tennessee displays no expiration date and its complete financial history was not obtained; filing currency remains unconfirmed."
         elif latest_period is None:
             inferred_due = add_months(initial, 6) if initial else None
-            status = status_from_calendar_date(inferred_due) if inferred_due else "Delinquent"
+            status = status_from_calendar_date(inferred_due, today=today) if inferred_due else "Delinquent"
             date_note = (f"Tennessee displays Active but provides no expiration date or annual filing. "
                          f"CharityClarity estimates a due date of {inferred_due.isoformat()} (six months from the "
                          f"registration date {initial.isoformat()}); this is not a state-published expiration."
@@ -10842,7 +10843,7 @@ def dc_source_date(value):
     return registration_source_date(str(value or ""))
 
 
-def licensed_charity_status(raw, expiration):
+def licensed_charity_status(raw, expiration, *, today=None):
     """Explicit adverse status precedes the state's own license expiration."""
     text = re.sub(r"\s+", " ", str(raw or "")).strip().lower()
     if re.search(r"\b(closed|withdrawn|cancelled|canceled|inactive|terminated|dissolved)\b", text):
@@ -10858,7 +10859,7 @@ def licensed_charity_status(raw, expiration):
     if "pending" in text or "in process" in text:
         return "Pending"
     if text in {"active", "current", "issued", "approved"}:
-        return status_from_calendar_date(expiration) if expiration else "Current"
+        return status_from_calendar_date(expiration, today=today) if expiration else "Current"
     return "Unable to Confirm"
 
 
@@ -30765,8 +30766,8 @@ def md_detail_page_matched(result, text: str) -> bool:
     )
 
 
-def status_from_calendar_date(value: date) -> str:
-    today = date.today()
+def status_from_calendar_date(value: date, *, today=None) -> str:
+    today = today if today is not None else date.today()
     upcoming_cutoff = add_months(today, 6)
     if value < today:
         return "Delinquent"

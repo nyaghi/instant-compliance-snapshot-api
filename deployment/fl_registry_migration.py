@@ -302,9 +302,12 @@ class MigrationCheck:
             cards = parse(source, identifier)
         except (OSError, ValueError):
             return None
-        if len(cards) != 1:
+        # FDACS searches license numbers by prefix. Only the unique, exact
+        # previously verified identifier can supply status or evidence.
+        exact = [entry for entry in cards if entry[0] == identifier]
+        if len(exact) != 1 or any(not entry[0].startswith(identifier) for entry in cards):
             return None
-        card = cards[0]
+        card = exact[0]
         number, name, _, _, _, public_ein = card
         if (number != identifier or (name != identifier and
                 master.complete_name_identity_key(name) != master.complete_name_identity_key(proof["name"]))
@@ -313,7 +316,7 @@ class MigrationCheck:
         from deployment.search_history import SourceQueryReceipt
         receipt = SourceQueryReceipt(self.run, {"state": "FL", "operation": "search", "name": identifier,
             "url": query_url(identifier), "source_kind": "state_portal", "filter_label": "New FDACS, verified license"})
-        receipt.complete(1, rows=[dict(identifier=number, name=name, status=card[2])])
+        receipt.complete(len(cards), rows=[dict(identifier=c[0], name=c[1], status=c[2]) for c in cards])
         return self.selected_result(org, card, identifier, source, {}, verified_name=proof["name"])
 
     def selected_result(self, org, card, query, source, office, *, verified_name=None):
